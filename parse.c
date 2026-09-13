@@ -1838,29 +1838,53 @@ static Node *assign(Token **rest, Token *tok) {
     return to_assign(expr);
   }
 
-  if (equal(tok, "*="))
-    return to_assign(new_binary(ND_MUL, node, assign(rest, tok->next), tok));
+  if (equal(tok, "*=")) {
+    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    expr->op = ND_MUL;
+    return to_assign(expr);
+  }
 
-  if (equal(tok, "/="))
-    return to_assign(new_binary(ND_DIV, node, assign(rest, tok->next), tok));
+  if (equal(tok, "/=")) {
+    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    expr->op = ND_DIV;
+    return to_assign(expr);
+  }
 
-  if (equal(tok, "%="))
-    return to_assign(new_binary(ND_MOD, node, assign(rest, tok->next), tok));
+  if (equal(tok, "%=")) {
+    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    expr->op = ND_MOD;
+    return to_assign(expr);
+  }
 
-  if (equal(tok, "&="))
-    return to_assign(new_binary(ND_BITAND, node, assign(rest, tok->next), tok));
+  if (equal(tok, "&=")) {
+    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    expr->op = ND_BITAND;
+    return to_assign(expr);
+  }
 
-  if (equal(tok, "|="))
-    return to_assign(new_binary(ND_BITOR, node, assign(rest, tok->next), tok));
+  if (equal(tok, "|=")) {
+    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    expr->op = ND_BITOR;
+    return to_assign(expr);
+  }
 
-  if (equal(tok, "^="))
-    return to_assign(new_binary(ND_BITXOR, node, assign(rest, tok->next), tok));
+  if (equal(tok, "^=")) {
+    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    expr->op = ND_BITXOR;
+    return to_assign(expr);
+  }
 
-  if (equal(tok, "<<="))
-    return to_assign(new_binary(ND_SHL, node, assign(rest, tok->next), tok));
+  if (equal(tok, "<<=")) {
+    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    expr->op = ND_SHL;
+    return to_assign(expr);
+  }
 
-  if (equal(tok, ">>="))
-    return to_assign(new_binary(ND_SHR, node, assign(rest, tok->next), tok));
+  if (equal(tok, ">>=")) {
+    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    expr->op = ND_SHR;
+    return to_assign(expr);
+  }
 
   *rest = tok;
   return node;

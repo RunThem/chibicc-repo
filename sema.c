@@ -11,20 +11,14 @@
 static int64_t eval_rval(Node *node, char ***label);
 double eval_double(Node *node);
 
-// The compound assignment operator a to_assign input carries: the
-// faithful form keeps it in `op`, the transitional bare-arithmetic
-// form in `kind`.
-static NodeKind assign_op(Node *node) {
-  return node->kind == ND_ASSIGN ? node->op : node->kind;
-}
-
-// Build the `lhs op rhs` operand expression for a compound assignment.
-// `+=`/`-=` are routed through new_add/new_sub so that pointer
-// arithmetic is scaled exactly as for plain `+`/`-`; the scaled node
-// is then rebuilt into a fresh untyped node with `lhs` on the left so
-// that the usual arithmetic conversions apply to it as before.
+// Build the `lhs op rhs` operand expression for a compound assignment
+// driven by node->op. `+=`/`-=` are routed through new_add/new_sub so
+// that pointer arithmetic is scaled exactly as for plain `+`/`-`; the
+// scaled node is then rebuilt into a fresh untyped node with `lhs` on
+// the left so that the usual arithmetic conversions apply to it as
+// before.
 static Node *compound_op(Node *node, Node *lhs, Token *tok) {
-  NodeKind op = assign_op(node);
+  NodeKind op = node->op;
 
   if (op == ND_ADD || op == ND_SUB) {
     Node *scaled = op == ND_ADD ? new_add(node->lhs, node->rhs, tok)
@@ -114,7 +108,7 @@ Node *to_assign(Node *node) {
 
     Node *body = new_binary(ND_ASSIGN,
                             new_var_node(new, tok),
-                            new_binary(assign_op(node), new_var_node(old, tok),
+                            new_binary(node->op, new_var_node(old, tok),
                                        new_var_node(val, tok), tok),
                             tok);
 
