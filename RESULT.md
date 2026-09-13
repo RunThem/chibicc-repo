@@ -1,6 +1,6 @@
 # RESULT.md - 语法语义拆分执行记录
 
-本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 1.10 为止, P1(表达式层忠实化)全部完成, 下一步为 P2 2.1 ND_DECL.
+本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 2.3 为止, P2(声明与初始化)全部完成, 下一步为 P3 3.1 清单持有权.
 
 基线: 上游 commit 5f53ed0 的快照建立于 0.1; 本轮从 1f24ab7 开始推进. 每步的三道闸门(make docker-test 含自举 / 汇编快照逐字节 diff / 行为测试)均须全绿后才提交.
 
@@ -21,6 +21,9 @@
 | 95849ac | 1.8 | ND_STRING |
 | f8f14e5 | 1.9 | ND_SIZEOF/ND_ALIGNOF(compute_vla_size 搬 sema) |
 | cb409be | 1.10 | ND_WHILE/ND_BREAK/ND_CONTINUE |
+| 0e779ab | 2.1 | ND_DECL(init 降级函数搬 sema) |
+| e90327a | 2.2 | VLA 忠实化(alloca 降级) |
+| 539dea8 | 2.3 | ND_COMPOUND_LITERAL |
 
 ## 各步详情
 
@@ -110,11 +113,33 @@
 - 测试结果: docker-test 全绿, 快照 diff 为空.
 - 偏差(重要): 计划写"sema 降回 ND_FOR(带合成 brk/cont 标签)", 实际标签仍在 parse 期分配(挂节点 brk_label/cont_label 字段), break/continue 也在 parse 期把绑定目标记到 unique_label 字段, sema 只改 kind. 原因: (1) add_type 自底向上, 到达 ND_BREAK 时外层循环尚未降级, sema 无从得知绑定目标 — break 绑定 switch 的情形也因此走同一路径; (2) 标签与字符串匿名全局共用 new_unique_name 计数器, 分配时机后移会改变 .L..N 编号交织, 快照即漂移. ND_WHILE 的忠实性体现在形状(cond + 体, 无 init/inc), 标签属辅助元数据; break 绑定 switch 的细节随 switch 忠实化(4.x)返工.
 
+### 2.1 ND_DECL (0e779ab)
+
+- 改了什么: NodeKind 新增 ND_DECL, Node 新增 Initializer *decl_init 字段; Initializer/InitDesg 两个结构搬入 chibicc.h; declaration() 每个声明符发一个 ND_DECL — 带初始值时 ND_DECL{var, decl_init}(decl_init 为 initializer() 建好的初始化器树, 其 tok 字段记初始化器首 token), 不再拍平 MEMZERO + comma 链; 无初始值时 ND_DECL{var, lhs = vla-size 树}. init_desg_expr/create_lvar_init 原样搬 sema; lvar_initializer 拆分: 解析半部由 parse 直接调 initializer(), 降级半部成为 sema 的 lvar_init_comma; gvar_initializer/write_gvar_data/read_buf/write_buf 搬 sema, gvar_initializer 拆出 gvar_init_data 供内部复用; initializer() 去 static 跨文件. 树上构造器全家(initializer2/array/struct/union/string_initializer 等)与 static 局部分支留在 parse(3.4 返工).
+- 为什么: "初始化器拍平"是 parse 侧最后一批预降级之一; 忠实层保留声明节点(变量 + 初始化器树), 展开降级到 sema.
+- 测试结果: docker-test 全绿, 快照 diff 为空.
+- 偏差(重要): (1) 计划的"外层 ND_BLOCK 包装取消"未执行 — gen_stmt 对每个语句节点(含 ND_BLOCK)都先按 node->tok 打一行 .loc, 包装取消或 ND_DECL 降级出额外空语句都会改变 .loc 行序列, 字节闸门否决. 因此 declaration() 返回形状不变, for-init 同步免改; ND_DECL 占据旧 ES(init) 的链位(节点锚点 = 初始化器结束后的 token, 与旧 ES 一致), 无初始值时降级为旧 ES(vs) 语句(锚点 = 声明符后 token). (2) compute_vla_size 仍在 parse 期调用, 保证 vla_size lvar 创建先于被声明变量(指针指向 VLA 的声明依赖此顺序). (3) Initializer.tok 原是无用的残留字段, 现用来携带初始化器首 token 供降级锚定. (4) static 局部声明暂不发 ND_DECL(不进树, 3.4 翻转).
+
+### 2.2 VLA 忠实化 (e90327a)
+
+- 改了什么: declaration() 的 VLA 分支改发 ND_DECL{var}, 节点锚点 = ty->name; sema 的 ND_DECL case 新增 VLA 路径, 生成 `x = alloca(<size>)`(new_vla_ptr + new_alloca, 逐节点与旧 parse 产物一致); new_alloca 去 static 加 chibicc.h 声明(留在 parse.c, 属构造器 — extern 化 builtin_alloca 会与 codegen.c 的同名 static 函数冲突).
+- 为什么: VLA 的 alloca 展开属降级; 忠实层只保留"此处声明了变量 x".
+- 测试结果: docker-test 全绿, 快照 diff 为空.
+- 偏差: "EXPR_STMT(NULL_EXPR) 前缀消失"未达成 — 该语句自身也是 .loc 字节输出的一部分, 只能保留为 parse 侧兄弟语句(compute_vla_size 的调用也必须留在 parse, 理由同 2.1 偏差(2)); 由 sema 生成的仅 alloca 赋值语句. array_dimensions 的 const_expr 判定按计划暂留 parse.
+
+### 2.3 ND_COMPOUND_LITERAL (539dea8)
+
+- 改了什么: NodeKind 新增 ND_COMPOUND_LITERAL; postfix() 的复合字面量分支改发 ND_COMPOUND_LITERAL{var, decl_init}, 锚点 = `(`; 域判定(scope->next == NULL)与隐藏变量创建留在 parse(块域 new_lvar, 文件域 new_anon_gvar), 初始化器树经 initializer() 直接建好挂 decl_init. sema 新增 case: 块域降级为 comma(MEMZERO + comma 链 @ init->tok, var 引用 @ `(`), 文件域调 gvar_init_data 后就地改写为 ND_VAR @ `(`; lvar_initializer 失去最后调用方, 删除(chibicc.h 同步).
+- 为什么: 复合字面量的"隐藏变量物化 + 初始化展开"降级到 sema; 忠实层保留 `(type){...}` 写法本身.
+- 测试结果: docker-test 全绿, 快照 diff 为空.
+- 偏差: 计划写"sema 建隐藏 lvar(块内)或匿名全局(文件域)", 实际变量创建仍在 parse — 创建时序后移会翻转它与初始化器内临时变量(elvis/字符串匿名全局等)的分配顺序, 栈偏移即变. 唯一 token 锚点变化: 降级后 rhs 的 var 引用从"初始化器后 token"改为 `(` — 表达式无 .loc, 无错误文案依赖该锚点, 汇编不受影响.
+
 ## 给审核者的提示
 
-- 审核重心建议放 sema.c: add_type 的降级 case(GT/GE, COND elvis, ASSIGN/INCDEC/SUBSCRIPT/ADD/SUB/MEMBER, STRING, SIZEOF/ALIGNOF, WHILE/BREAK/CONTINUE)与 to_assign/compound_op/new_add/new_sub/compute_vla_size/vla_size_expr.
+- 审核重心建议放 sema.c: add_type 的降级 case(GT/GE, COND elvis, ASSIGN/INCDEC/SUBSCRIPT/ADD/SUB/MEMBER, STRING, SIZEOF/ALIGNOF, WHILE/BREAK/CONTINUE, DECL, COMPOUND_LITERAL)与 to_assign/compound_op/new_add/new_sub/compute_vla_size/vla_size_expr/lvar_init_comma/gvar_init_data.
 - 一个待拍板的设计点: op 字段现在对 ND_ADD/ND_SUB 兼任"已缩放"标记. 若接受快照里这类 no-op cast 差异(或在 4.2 收官时统一), 该标记机制可简化; 当前为字节级等价而保留.
 - 时序原则(1.4 确立, 1.8 扩展): 凡降级会创建 lvar 或匿名 gvar 的节点, parse 构造现场立即 add_type 触发降级, 保证创建顺序与旧代码一致; 1.10 进一步表明, 与这些名字共用 new_unique_name 计数器的标签分配同样必须留在 parse.
-- 忠实层的已知残留: ND_WHILE/ND_FOR/ND_DO 带 parse 期分配的 brk/cont 标签, ND_BREAK/ND_CONTINUE 带 parse 期记录的绑定目标(unique_label) — 这些是字节级等价所要求的 parse 期语义残留, 待 3.x/4.x 清理.
+- .loc 原则(2.1 发现): gen_stmt 对每个语句节点(含 ND_BLOCK)先按 node->tok 打一行 .loc, 因此语句链的形状与锚点被字节冻结 — ND_DECL 只能占据既有 ES(init)/ES(alloca) 的链位, 外层 ND_BLOCK 与 vla-size 前缀语句不可取消(PLAN 中"外层 ND_BLOCK 包装取消"与"EXPR_STMT 前缀消失"由字节闸门否决, 见 2.1/2.2 偏差); 无初始值的 ND_DECL 携带 vla-size 树于 lhs 并降级为该语句.
+- 忠实层的已知残留: ND_WHILE/ND_FOR/ND_DO 带 parse 期分配的 brk/cont 标签, ND_BREAK/ND_CONTINUE 带 parse 期记录的绑定目标(unique_label) — 这些是字节级等价所要求的 parse 期语义残留, 待 3.x/4.x 清理. 另有: static 局部声明不发节点(3.4), ND_DECL 的 vla-size 兄弟语句(2.2 已述).
 - codegen.c 全程零改动: git diff 5f53ed0..HEAD -- codegen.c 为空.
 - 常用命令: make docker-test(全量 + 自举), make docker-snapshot-diff(快照 diff), make docker-snapshot(重置基线, 仅在刻意的行为变化后).
