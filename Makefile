@@ -77,4 +77,35 @@ docker-test-thirdparty: docker-image
 	docker run --rm --platform linux/amd64 -v $(CURDIR):/src chibicc:amd64 \
 	  bash -c '$(BOOT) && mkdir -p /work/thirdparty && cd /work && chmod +x /work/test/thirdparty/make && export PATH=/work/test/thirdparty:$$PATH && make -j$$(nproc) chibicc || exit 1; rc=0; for t in $(THIRDPARTY); do echo "=== thirdparty: $$t ==="; [ -d /src/thirdparty/$$t ] && cp -a /src/thirdparty/$$t /work/thirdparty/; bash test/thirdparty/$$t.sh || { echo "thirdparty/$$t.sh FAILED"; rc=1; }; mkdir -p /src/thirdparty && cp -an /work/thirdparty/$$t /src/thirdparty/ 2>/dev/null; done; exit $$rc'
 
-.PHONY: test clean test-stage2 docker-image docker-test docker-test-thirdparty
+# 汇编快照(拆分线的等价性基线): 在 docker 内构建 chibicc 后对全部 test/*.c
+# 跑 ./chibicc -S, 把 .s 存档到 .cache/snapshot(已被 .gitignore 忽略).
+# 每步重构结束跑 docker-snapshot-diff, 与基线逐字节 diff, 防行为回归;
+# 基线需要重置时(如刻意的行为变化提交后)跑 docker-snapshot.
+# 快照在容器内生成: 本机没有 x86-64 Linux 的系统头, -S 需要它们做预处理.
+
+# 容器内构建 chibicc 并生成快照, 以 tar 流输出到 stdout, 由宿主机解包.
+# 快照用固定值覆盖 __TIMESTAMP__/__DATE__/__TIME__: test/macro.c 会把它们编进
+# 字符串字面量, 时钟值会让逐字节 diff 每次都失败. 固定值格式与内置宏一致
+# (11/8/24 字符), 不影响 macro.c 的 strlen 断言; 行为测试(docker-test)不受影响.
+SNAPSHOT_DATEFLAGS = -D__TIMESTAMP__="\"Mon Jan  1 00:00:00 2024\"" -D__DATE__="\"Jan  1 2024\"" -D__TIME__="\"00:00:00\""
+
+SNAPSHOT_RUN = docker run --rm --platform linux/amd64 -v $(CURDIR):/src:ro chibicc:amd64 \
+  bash -c '$(BOOT) && cd /work && make -j$$(nproc) chibicc >&2 && mkdir snapshot \
+    && for f in test/*.c; do ./chibicc -Iinclude -Itest $(SNAPSHOT_DATEFLAGS) -S -o snapshot/$$(basename $$f .c).s $$f || exit 1; done \
+    && tar -C /work -cf - snapshot'
+
+docker-snapshot: docker-image
+	@mkdir -p .cache && rm -rf .cache/snapshot
+	@$(SNAPSHOT_RUN) | tar -C .cache -xf -
+	@echo "snapshot: `ls .cache/snapshot | wc -l | tr -d ' '` files -> .cache/snapshot"
+
+docker-snapshot-diff: docker-image
+	@rm -rf .cache/.snaptmp .cache/snapshot.new && mkdir -p .cache/.snaptmp
+	@$(SNAPSHOT_RUN) | tar -C .cache/.snaptmp -xf - \
+	  && mv .cache/.snaptmp/snapshot .cache/snapshot.new && rmdir .cache/.snaptmp
+	@if [ ! -d .cache/snapshot ]; then rm -rf .cache/snapshot.new; \
+	  echo "snapshot diff: no baseline (.cache/snapshot); run 'make docker-snapshot' first"; exit 1; fi
+	@rc=0; diff -ru .cache/snapshot .cache/snapshot.new || rc=1; rm -rf .cache/snapshot.new; \
+	  [ $$rc -eq 0 ] && echo "snapshot diff: empty" || { echo "snapshot diff: NON-EMPTY (see diff above)"; exit 1; }
+
+.PHONY: test clean test-stage2 docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff
