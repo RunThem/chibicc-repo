@@ -387,6 +387,7 @@ Obj *parse(Token *tok);
 
 // Initializer tree building (parse.c); consumed by sema.c as well.
 Initializer *initializer(Token **rest, Token *tok, Type *ty, Type **new_ty);
+Node *new_alloca(Node *sz);
 
 //
 // sema.c

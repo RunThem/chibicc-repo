@@ -785,12 +785,20 @@ void add_type(Node *node) {
     node->kind = ND_GOTO;
     return;
   case ND_DECL:
-    // Lower a declaration. With an initializer, the parsed initializer
-    // tree becomes the MEMZERO + assignment comma chain the parser used
-    // to flatten directly; the node becomes its expression statement.
-    // Without one, the node carries the VLA-size computation in lhs
-    // and simply becomes that statement.
-    if (node->decl_init) {
+    // Lower a declaration. A VLA becomes `x = alloca(<size>)` (the
+    // VLA-size statement stays a parse-emitted sibling). With an
+    // initializer, the parsed initializer tree becomes the MEMZERO +
+    // assignment comma chain the parser used to flatten directly; the
+    // node becomes its expression statement. Without one, the node
+    // carries the VLA-size computation in lhs and simply becomes that
+    // statement.
+    if (node->var->ty->kind == TY_VLA) {
+      Token *tok = node->tok;
+      node->kind = ND_EXPR_STMT;
+      node->lhs = new_binary(ND_ASSIGN, new_vla_ptr(node->var, tok),
+                             new_alloca(new_var_node(node->var->ty->vla_size, tok)),
+                             tok);
+    } else if (node->decl_init) {
       node->kind = ND_EXPR_STMT;
       node->lhs = lvar_init_comma(node->var, node->decl_init, node->decl_init->tok);
       node->decl_init = NULL;

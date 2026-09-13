@@ -767,7 +767,9 @@ static Type *typeof_specifier(Token **rest, Token *tok) {
   return ty;
 }
 
-static Node *new_alloca(Node *sz) {
+// Build the `alloca(<size>)` call node for a VLA declaration. Also
+// used by sema.c when lowering ND_DECL.
+Node *new_alloca(Node *sz) {
   Node *node = new_unary(ND_FUNCALL, new_var_node(builtin_alloca, sz->tok), sz->tok);
   node->func_ty = builtin_alloca->ty;
   node->ty = builtin_alloca->ty->return_ty;
@@ -820,14 +822,13 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
 
       // Variable length arrays (VLAs) are translated to alloca() calls.
       // For example, `int x[n+2]` is translated to `tmp = n + 2,
-      // x = alloca(tmp)`.
+      // x = alloca(tmp)`. The alloca statement is kept faithful in the
+      // ND_DECL node; add_type generates it when lowering.
       Obj *var = new_lvar(get_ident(ty->name), ty);
-      Token *tok = ty->name;
-      Node *expr = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
-                              new_alloca(new_var_node(ty->vla_size, tok)),
-                              tok);
 
-      cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);
+      Node *decl = new_node(ND_DECL, ty->name);
+      decl->var = var;
+      cur = cur->next = decl;
       continue;
     }
 
