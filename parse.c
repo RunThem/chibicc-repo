@@ -1639,7 +1639,11 @@ static Node *stmt(Token **rest, Token *tok) {
   }
 
   if (equal(tok, "while")) {
-    Node *node = new_node(ND_FOR, tok);
+    // Keep `while` faithful; sema lowers it to the ND_FOR shape. The
+    // labels are still allocated here so that break/continue in the
+    // body can record their targets, and so that the anonymous-name
+    // counter keeps its original interleaving.
+    Node *node = new_node(ND_WHILE, tok);
     tok = skip(tok->next, "(");
     node->cond = expr(&tok, tok);
     tok = skip(tok, ")");
@@ -1700,7 +1704,9 @@ static Node *stmt(Token **rest, Token *tok) {
   if (equal(tok, "break")) {
     if (!brk_label)
       error_tok(tok, "stray break");
-    Node *node = new_node(ND_GOTO, tok);
+    // The binding target is recorded at parse time; sema restores the
+    // ND_GOTO rewrite.
+    Node *node = new_node(ND_BREAK, tok);
     node->unique_label = brk_label;
     *rest = skip(tok->next, ";");
     return node;
@@ -1709,7 +1715,7 @@ static Node *stmt(Token **rest, Token *tok) {
   if (equal(tok, "continue")) {
     if (!cont_label)
       error_tok(tok, "stray continue");
-    Node *node = new_node(ND_GOTO, tok);
+    Node *node = new_node(ND_CONTINUE, tok);
     node->unique_label = cont_label;
     *rest = skip(tok->next, ";");
     return node;

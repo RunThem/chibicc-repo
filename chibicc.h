@@ -206,12 +206,15 @@ typedef enum {
   ND_LOGOR,     // ||
   ND_RETURN,    // "return"
   ND_IF,        // "if"
-  ND_FOR,       // "for" or "while"
+  ND_FOR,       // "for" (also the lowered shape of "while")
+  ND_WHILE,     // "while"; sema lowers it to ND_FOR
   ND_DO,        // "do"
   ND_SWITCH,    // "switch"
   ND_CASE,      // "case"
   ND_BLOCK,     // { ... }
   ND_GOTO,      // "goto"
+  ND_BREAK,     // "break"; sema lowers it to a jump to the break label
+  ND_CONTINUE,  // "continue"; sema lowers it to a jump to the continue label
   ND_GOTO_EXPR, // "goto" labels-as-values
   ND_LABEL,     // Labeled statement
   ND_LABEL_VAL, // [GNU] Labels-as-values

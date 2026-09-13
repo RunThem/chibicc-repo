@@ -577,6 +577,17 @@ void add_type(Node *node) {
       error_tok(node->cas_addr->tok, "pointer expected");
     node->ty = node->lhs->ty->base;
     return;
+  case ND_WHILE:
+    // Lower the faithful `while` back to the ND_FOR shape codegen
+    // understands: no init/inc, so cont_label jumps to the loop top.
+    node->kind = ND_FOR;
+    return;
+  case ND_BREAK:
+  case ND_CONTINUE:
+    // Restore the parse-time rewrite to a jump to the enclosing
+    // loop's label (or the switch's, for break).
+    node->kind = ND_GOTO;
+    return;
   }
 }
 
