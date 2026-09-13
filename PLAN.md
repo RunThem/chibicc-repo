@@ -45,7 +45,7 @@
 
 - [x] **1.6 is_arrow**: `postfix()`(2849-2855) 的 `->` 不再偷插 `DEREF`, 改为 `ND_MEMBER.is_arrow`; sema 补插 DEREF.
 
-- [ ] **1.7 裸指针算术**: `add()/sub()` 直接发 `ND_ADD/ND_SUB`; `new_add`(2350-2377)/`new_sub`(2380-2414) 搬 sema 作降级(缩放乘法/`1+p` 规范化/ptr-ptr 除法, 逐分支与今天一致); 前提: 1.3/1.4/1.5 已切断其余调用者; "invalid operands" 报错随之移入 sema, 位置锚定运算符 token.
+- [x] **1.7 裸指针算术**: `add()/sub()` 直接发 `ND_ADD/ND_SUB`; `new_add`(2350-2377)/`new_sub`(2380-2414) 搬 sema 作降级(缩放乘法/`1+p` 规范化/ptr-ptr 除法, 逐分支与今天一致); 前提: 1.3/1.4/1.5 已切断其余调用者; "invalid operands" 报错随之移入 sema, 位置锚定运算符 token.(实现要点: add_type 的 ND_ADD/ND_SUB case 就地降级; 已缩放的节点用非零 op 字段标记防止二次缩放)
 
 - [ ] **1.8 ND_STRING**: `primary()`(3107-3111) 改发字符串节点; sema 建匿名全局并改写为 `ND_VAR`.
 

@@ -328,8 +328,6 @@ Obj *new_string_literal(char *p, Type *ty);
 char *new_unique_name(void);
 
 Node *conditional(Token **rest, Token *tok);
-Node *new_add(Node *lhs, Node *rhs, Token *tok);
-Node *new_sub(Node *lhs, Node *rhs, Token *tok);
 Obj *parse(Token *tok);
 
 //
