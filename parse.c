@@ -2487,12 +2487,29 @@ static Member *get_struct_member(Type *ty, Token *tok) {
 // member "a" of the anonymous struct as "x.a".
 //
 // This function takes care of anonymous structs.
-static Node *struct_ref(Node *node, Token *tok) {
+// `arrow` is the `->` token if this access is through a pointer, and
+// NULL for a plain `.` access. The dereference itself is not built
+// here: the outermost ND_MEMBER carries is_arrow and add_type
+// re-inserts the dereference.
+static Node *struct_ref(Node *node, Token *tok, Token *arrow) {
   add_type(node);
-  if (node->ty->kind != TY_STRUCT && node->ty->kind != TY_UNION)
-    error_tok(node->tok, "not a struct nor a union");
 
   Type *ty = node->ty;
+  if (arrow) {
+    // `x->y` is `(*x).y`. These checks reproduce the errors the
+    // dereference node used to produce, anchored at the arrow.
+    if (ty->kind != TY_PTR || !ty->base)
+      error_tok(arrow, "invalid pointer dereference");
+    if (ty->base->kind == TY_VOID)
+      error_tok(arrow, "dereferencing a void pointer");
+    if (ty->base->kind != TY_STRUCT && ty->base->kind != TY_UNION)
+      error_tok(arrow, "not a struct nor a union");
+    ty = ty->base;
+  } else if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) {
+    error_tok(node->tok, "not a struct nor a union");
+  }
+
+  bool is_arrow = arrow != NULL;
 
   for (;;) {
     Member *mem = get_struct_member(ty, tok);
@@ -2500,6 +2517,8 @@ static Node *struct_ref(Node *node, Token *tok) {
       error_tok(tok, "no such member");
     node = new_unary(ND_MEMBER, node, tok);
     node->member = mem;
+    node->is_arrow = is_arrow;
+    is_arrow = false;
     if (mem->name)
       break;
     ty = mem->ty;
@@ -2556,15 +2575,14 @@ static Node *postfix(Token **rest, Token *tok) {
     }
 
     if (equal(tok, ".")) {
-      node = struct_ref(node, tok->next);
+      node = struct_ref(node, tok->next, NULL);
       tok = tok->next->next;
       continue;
     }
 
     if (equal(tok, "->")) {
       // x->y is short for (*x).y
-      node = new_unary(ND_DEREF, node, tok);
-      node = struct_ref(node, tok->next);
+      node = struct_ref(node, tok->next, tok);
       tok = tok->next->next;
       continue;
     }

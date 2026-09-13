@@ -329,6 +329,12 @@ void add_type(Node *node) {
     node->ty = node->rhs->ty;
     return;
   case ND_MEMBER:
+    // Re-insert the dereference implied by `->` (`x->y` is (*x).y).
+    if (node->is_arrow) {
+      node->lhs = new_unary(ND_DEREF, node->lhs, node->tok);
+      node->is_arrow = false;
+      add_type(node->lhs);
+    }
     node->ty = node->member->ty;
     return;
   case ND_ADDR: {

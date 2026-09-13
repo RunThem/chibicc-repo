@@ -264,6 +264,7 @@ struct Node {
 
   // Struct member access
   Member *member;
+  bool is_arrow; // member access via `->`; sema re-inserts the deref
 
   // Function call
   Type *func_ty;
