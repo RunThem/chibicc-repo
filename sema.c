@@ -410,6 +410,16 @@ void add_type(Node *node) {
   case ND_SHR:
     node->ty = node->lhs->ty;
     return;
+  case ND_STRING: {
+    // Lower a string literal to a reference to its anonymous global.
+    // The global is created here, where the parser used to create it,
+    // to keep the allocation order of anonymous names intact.
+    Obj *var = new_string_literal(node->tok->str, node->tok->ty);
+    node->kind = ND_VAR;
+    node->var = var;
+    node->ty = var->ty;
+    return;
+  }
   case ND_VAR:
   case ND_VLA_PTR:
     node->ty = node->var->ty;

@@ -221,6 +221,7 @@ typedef enum {
   ND_VAR,       // Variable
   ND_VLA_PTR,   // VLA designator
   ND_NUM,       // Integer
+  ND_STRING,    // String literal; sema lowers it to an anonymous global
   ND_CAST,      // Type cast
   ND_MEMZERO,   // Zero-clear a stack variable
   ND_ASM,       // "asm"

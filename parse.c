@@ -2776,9 +2776,13 @@ static Node *primary(Token **rest, Token *tok) {
   }
 
   if (tok->kind == TK_STR) {
-    Obj *var = new_string_literal(tok->str, tok->ty);
+    // Keep the literal faithful; sema lowers it to a reference to an
+    // anonymous global. add_type is called here so that the global is
+    // created at the exact point the parser used to create it.
+    Node *node = new_node(ND_STRING, tok);
     *rest = tok->next;
-    return new_var_node(var, tok);
+    add_type(node);
+    return node;
   }
 
   if (tok->kind == TK_NUM) {
