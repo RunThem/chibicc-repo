@@ -1,11 +1,52 @@
-# AGENTS.md - chibicc
+# AGENTS.md - chibicc(C 前端库 fork)
 
-Rui Ueyama 的 chibicc: 一个小型 C11 编译器(约 9k 行, 扁平目录布局), 作为一本编译原理书籍的参考实现编写. 除 `test/` 与 `include/` 外没有其他子目录. 动手改代码前先阅读 `README.md`(尤其是 "Design principles" 一节).
+本仓库是 Rui Ueyama 的 chibicc(小型 C11 编译器, 约 9k 行, 扁平目录布局)的 fork. 项目目标已从"教学用编译器"重定位为:
+
+**把 C 前端(tokenize / preprocess / parse / sema)做成一个可复用的库**, 供编译器之外的其他软件使用 - formatter(格式化), C 转 C 的源到源代码生成, linter, 静态分析等. chibicc 本体退化为"驱动器 + x86-64 codegen", 作为这个库的参考消费者. 上游 README(含 "Design principles" 一节)描述的是上游的教学定位; 与本文件冲突时, 以本文件为准. 除 `test/` 与 `include/` 外目前没有子目录, 库化后的目录形态在实施时定.
 
 ## 全局约定
 
 语言: 本文件及所有输出统一使用中文, 代码标识符与专有名词保留英文原文.
 标点: 所有输出(写入文件的注释 / 文档, 以及回显给用户的回复), 无论中文还是英文, 一律使用英文标点(, . : ; ( ) - _ /), 不使用中文标点(如 , 。 ： ； （ ） 、).
+
+## 目标架构与库边界
+
+流水线按"中间表示"划成 5 层; 每层是一个干净的阶段边界, 也是库对外暴露的一种能力:
+
+1. **Token 流(trivia 保留)** - tokenize 的改造目标: 空白/注释/换行作为 trivia 挂在 token 上, 不丢弃; 拼写/位置/编码等文本级信息完整.
+2. **CST(lossless 具体语法树)** - 建立在预处理**之前**的原始文本上, 预处理指令(`#define`/`#if` 等)本身是树的节点; 每个语法 token 与标点都是显式节点, trivia 挂靠; 保证逐字节还原源码. 服务 formatter 与精确重构.
+3. **语法层 AST(忠实, 无类型)** - 从 CST 下降: 消解标点与括号, 但保留每一种源码写法的区分(`a[i]` vs `*(a+i)`, `while` vs `for`, `op=` 复合赋值, `>` vs 交换操作数, 隐式 cast 有标记); 不做降级, 不查名字, 不算类型. 服务 C→C 代码生成等语法级工具. 宏调用在本层的保留策略是开放设计点, 见"开放决策".
+4. **sema 产物(标注 + 降级)** - 名字解析(绑定到 Obj), 类型检查与标注, 常量求值, 结构体布局, 以及为 codegen 服务的降级(临时变量, 指针算术缩放, 隐式 cast). chibicc 的 codegen 消费这一层.
+5. **汇编(codegen)** - x86-64 System V / GAS / ELF, 不属于库.
+
+消费方式: 编译器(驱动器 + codegen)走 1→(展开)→3→4→5 的编译路径; formatter 只消费 1→2; C→C codegen 消费 3; 语义级工具消费 4.
+
+## 面向库的硬性规则(存量代码按路线图收敛, 新代码立即生效)
+
+- 不新增 `exit()` 调用: 现有 `error_tok` 直接 exit(1), 作为库最终要改成可注册的错误回调或错误返回; 新代码不得引入新的 exit 点.
+- 不新增静态全局状态: parse.c 目前靠 static 全局(`locals`, `scope`, `current_fn` 等)承载解析状态, 与库的可重入性冲突; 新代码把状态放进显式的 context 结构.
+- API 纪律: 公共头(未来从 `chibicc.h` 拆出)与内部头分离; 中间表示边界处不泄漏编译器内部假设(Linux 路径, 单次进程生命周期, 直接 exit 等).
+- 库名与对外头文件名属于用户决策; 定名前, 文档与代码注释统一用"前端库"指称, 不擅自更名.
+
+## 路线图
+
+语法语义拆分线(阶段 3 + 4)已细化为 22 步可勾选执行清单, 见 `PLAN.md`; 当前推进顺序: 先拆分线, CST/trivia(阶段 1-2)与库化(阶段 5)暂缓.
+
+每个阶段完成时三道闸门必须全绿: `make docker-test`(含自举), 汇编等价性 diff(阶段 0 建立), 该阶段新增的针对性测试. 阶段内行为不允许变化, 变化只发生在阶段边界并单独提交.
+
+0. **等价性基线**: 在 docker 里对全部 `test/*.c` 与自举产物跑 `./chibicc -S`, 存汇编快照; 之后每阶段结束逐字节 diff, 防行为回归.
+1. **trivia 保留**: tokenize.c 改造, 注释/空白/换行挂到 token; 配 token 层测试.
+2. **CST**: 建立在原始文本(含预处理指令)上的 lossless 树; 验收标准是逐字节 round-trip(打印结果 == 输入文件).
+3. **忠实语法 AST**: 新增约 13 个 NodeKind(`ND_SUBSCRIPT`, `ND_GT/ND_GE`, `ND_INCDEC`, `ND_WHILE`, `ND_BREAK/ND_CONTINUE`, `ND_SIZEOF/ND_ALIGNOF`, `ND_STRING`, `ND_ENUM_CONST`, `ND_DECL`, `ND_COMPOUND_LITERAL`); 现有 48 个 kind 中 5 个加字段(`ND_ASSIGN.op`, `ND_CAST/ND_MEMBER/ND_COND/ND_FOR` 的忠实性标记); `ND_MEMZERO` 退出树. parse.c 已知约 55 处不忠实构造点(复合赋值/自增自减重写, 指针算术缩放, 初始化器拍平, sizeof 折叠, 字符串字面量转匿名全局, 关系运算符交换操作数等)在此阶段消除, 降级逻辑移入 sema.
+4. **sema 独立 pass**: parse.c 去语义化 - 名字解析/类型检查/常量求值/结构体布局/降级全部搬出到新的 sema.c; 解析器只保留 typedef 名字分类 oracle(C 文法要求的最小语义反馈). `eval/eval2/eval_double/is_const_expr`, `add_type`, `struct_decl` 布局, `write_gvar_data` 等随之迁移.
+5. **库边界固化**: 错误处理回调化, static 全局收敛为 context 对象, 公共头/内部头拆分, Makefile 新增库构建目标.
+6. **参考消费者(可选)**: 最小 formatter(消费 CST)与 C→C 打印器(消费语法层 AST)作为示例, 验证库 API 的好用性.
+
+## 开放决策(实施时由用户拍板, 不擅自定)
+
+- 库名与公共头命名.
+- 语法层 AST 对宏调用的保真策略: 保留宏调用为节点(源到源工具需要)还是消费展开后的流.
+- 长驻进程场景下 arena 的整体 reset 时机与 API 形态.
 
 ## 构建与测试
 
@@ -15,6 +56,7 @@ Rui Ueyama 的 chibicc: 一个小型 C11 编译器(约 9k 行, 扁平目录布�
 - `make test-all` - 以上两项合计. `make clean` 用于清理.
 - 单独运行某个特性测试: `make test/sizeof.exe && ./test/sizeof.exe`(模式规则会自动处理).
 - 没有 Linux 后端时只验证前端: `./chibicc -E file.c`(仅预处理)或 `./chibicc -S file.c`(输出汇编文本).
+- 库构建目标(`.a`/`.so` 与目标名)在路线图第 5 阶段加入 Makefile.
 
 ## 平台陷阱与 Docker 测试环境(本工作区为 macOS ARM64)
 
@@ -29,25 +71,27 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 - 为什么一切都要在容器可写层(/work)跑: 实测 tcc 的 `-run`/bcheck 运行时只认 overlayfs - 在 virtiofs 挂载路径或 docker volume(ext4)上会确定性 SIGSEGV(tinycc 112_backtrace 用例, 失败点还会漂移). 因此挂载目录只提供源码与 clone 缓存, 构建与测试全部发生在 /work, 这同时避免 darwin/linux 产物互相污染.
 - 镜像内已把 `git@github.com:` 全局重写为 HTTPS(thirdparty 脚本用的是 SSH 地址, 容器里没有 SSH key); chibicc 运行时只调用 `as` 和 `ld` 并按 Ubuntu 路径找 crt/libgcc, 镜像里的 gcc 工具链满足.
 
-## 架构(流水线; 所有共享类型都定义在 `chibicc.h` 中)
+## 现状与代码地图
 
-各阶段顺序很重要 - 每个阶段消费上一阶段产生的 token 列表 / 语法树:
+路线图尚未开工: 当前代码仍是上游的单遍布局, 上述 5 层边界中只有第 1 层存在(且不保留 trivia). 改动前先了解现状:
 
-1. `tokenize.c` - 把源码字符串切分为 token 列表.
-2. `preprocess.c` - 做宏展开与预处理指令, 输入输出都是 token 列表.
-3. `parse.c` - 递归下降解析器, 把 token 解析成带类型的 AST. 最大的源文件; 大多数语言特性在这里落地.
-4. `codegen.c` - 把 AST 翻译成 x86-64 汇编文本.
+- `chibicc.h` - 所有共享类型(`Token`, `Obj`, `Node`, `Type`, `Member`)与跨文件声明; 未来在此拆分公共头与内部头.
+- `tokenize.c` - 词法; 当前丢弃注释与空白.
+- `preprocess.c` - 宏展开与预处理指令, 输入输出都是 token 列表.
+- `parse.c` - 递归下降解析器(约 3400 行), 目前语法分析/语义分析/常量求值/降级混在单遍里 - 这是拆解的主战场.
+- `type.c` - 类型系统与 `add_type`(目前被 parse 在建树过程中内联调用, 是"语法语义耦合"的核心).
+- `codegen.c` - AST 翻译成 x86-64 汇编文本, 无优化 pass.
+- `main.c` - 驱动器; `hashmap.c`(字符串驻留哈希表), `unicode.c`(UTF 编码表), `strings.c`(字符串辅助)为基础设施.
 
-辅助文件: `main.c`(驱动: 选项解析, 文件 I/O, 调用 `as`/`ld`), `type.c`(类型系统), `hashmap.c`(字符串驻留哈希表), `unicode.c`(UTF 编码表), `strings.c`(字符串辅助函数). 关键结构体: `Token`, `Obj`(变量/函数), `Node`(AST 节点), `Type` - 均定义在 `chibicc.h` 中.
+## 设计原则
 
-## 设计原则(有意为之, 不要去"修复")
-
-- 可读性优先于巧妙. 解析器里大量相似的函数是有意的重复; 不要用宏 / 高阶函数重构合并.
-- 内存: 一律用 `calloc` 分配, 从不调用 `free`. 简单但慢的算法是可接受的设计. codegen 中没有优化 pass - 这是故意的.
-- `include/` 存放 chibicc 自带的自举头文件(`stddef.h`, `stdarg.h`, `stdbool.h`, `float.h`, `stdalign.h`, `stdatomic.h`, `stdnoreturn.h`), 通过 `-Iinclude` 使用.
-- 上游把每个 commit 当作书的一节, 且会重写历史; 不要在无关改动中重组或重新排版已有代码.
+- 可读性优先于巧妙. 路线图内的阶段化重构是本项目明确授权的工作; 除此之外不做顺手的"改进", 不重组无关代码, 不用宏/高阶函数合并解析器里有意的重复.
+- 内存: 一律 `calloc` 的 arena 式分配, 从不逐对象 `free`; 库语境下生命周期按"一次编译会话一个 arena"设计(整体 reset 的 API 见开放决策). 简单但慢的算法是可接受的设计.
+- codegen 中没有优化 pass - 这是故意的, 保留.
+- `include/` 存放 chibicc 自带的自举头文件(`stddef.h`, `stdarg.h`, `stdbool.h`, `float.h`, `stdalign.h`, `stdatomic.h`, `stdnoreturn.h`), 通过 `-Iinclude` 使用, 保持不变.
 
 ## 测试约定
 
 - 每个特性对应一个 `test/<feature>.c`; 测试使用 `test/test.h` 中的 `ASSERT(expected, expr)`(打印表达式与结果, 失败即退出), 并链接 `test/common` 以获得 `assert()` 辅助函数与共享符号. 新测试加到对应的特性文件里; 仅在必要时才扩展 `test/test.h`/`test/common`.
+- 库化新增的测试形态: CST 用逐字节 round-trip 测试; 忠实 AST 用打印/结构断言; 阶段改造期间用汇编快照 diff 防行为回归.
 - `test/thirdparty/*.sh` 用 chibicc 构建真实项目(git, sqlite, libpng, cpython, tinycc) - 很慢, 仅限 Linux, 不属于 `make test`.
