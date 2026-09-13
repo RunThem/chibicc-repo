@@ -1,0 +1,12 @@
+.git
+.cache
+.gitignore
+.codegraph/
+thirdparty/
+stage2/
+chibicc
+tmp*
+*.o
+*.s
+test/*.exe
+compile_commands.json
