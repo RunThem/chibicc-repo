@@ -2258,21 +2258,26 @@ static Node *struct_ref(Node *node, Token *tok, Token *arrow) {
 //              | "--"
 static Node *postfix(Token **rest, Token *tok) {
   if (equal(tok, "(") && is_typename(tok->next)) {
-    // Compound literal
+    // Compound literal. Kept faithful; sema materializes the hidden
+    // variable and lowers the node to a reference of it. The variable
+    // is still created here so that it precedes any temporaries the
+    // initializer builds, exactly as before.
     Token *start = tok;
     Type *ty = typename(&tok, tok->next);
     tok = skip(tok, ")");
 
+    Node *node = new_node(ND_COMPOUND_LITERAL, start);
+
     if (scope->next == NULL) {
       Obj *var = new_anon_gvar(ty);
-      gvar_initializer(rest, tok, var);
-      return new_var_node(var, start);
+      node->var = var;
+    } else {
+      node->var = new_lvar("", ty);
     }
 
-    Obj *var = new_lvar("", ty);
-    Node *lhs = lvar_initializer(rest, tok, var);
-    Node *rhs = new_var_node(var, tok);
-    return new_binary(ND_COMMA, lhs, rhs, start);
+    node->decl_init = initializer(rest, tok, node->var->ty, &node->var->ty);
+    node->decl_init->tok = tok;
+    return node;
   }
 
   Node *node = primary(&tok, tok);

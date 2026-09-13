@@ -349,10 +349,9 @@ static Node *lvar_init_comma(Obj *var, Initializer *init, Token *tok) {
 //   x[0][1] = 7;
 //   x[1][0] = 8;
 //   x[1][1] = 9;
-Node *lvar_initializer(Token **rest, Token *tok, Obj *var) {
-  Initializer *init = initializer(rest, tok, var->ty, &var->ty);
-  return lvar_init_comma(var, init, tok);
-}
+//
+// The parser hands the parsed initializer tree to ND_DECL and this
+// lowering rebuilds the chain from it.
 
 static uint64_t read_buf(char *buf, int sz) {
   if (sz == 1)
@@ -807,6 +806,27 @@ void add_type(Node *node) {
     }
     add_type(node);
     return;
+  case ND_COMPOUND_LITERAL: {
+    // Materialize the compound literal. In block scope it owns the
+    // hidden local variable the parser created, and the node lowers to
+    // `initializer-comma, var`. At file scope it owns an anonymous
+    // global whose data is serialized here, and the node lowers to a
+    // reference of it.
+    Obj *var = node->var;
+    Token *tok = node->tok;
+
+    if (var->is_local) {
+      node->kind = ND_COMMA;
+      node->lhs = lvar_init_comma(var, node->decl_init, node->decl_init->tok);
+      node->rhs = new_var_node(var, tok);
+    } else {
+      gvar_init_data(var, node->decl_init);
+      node->kind = ND_VAR;
+    }
+    node->decl_init = NULL;
+    add_type(node);
+    return;
+  }
   }
 }
 

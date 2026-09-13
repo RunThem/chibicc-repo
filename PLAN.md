@@ -59,7 +59,7 @@
 
 - [x] **2.2 VLA 忠实化**: `declaration()` 的 VLA 分支(873-888)改发 ND_DECL 形状, 树内噪音(`EXPR_STMT(NULL_EXPR)` 前缀, alloca 赋值语句)消失, 由 sema 生成; `array_dimensions`(636-652) 的 `const_expr` 判定暂留 parse(返工点).
 
-- [ ] **2.3 ND_COMPOUND_LITERAL**: `postfix()`(2808-2824) 改发; sema 建隐藏 lvar(块内)或匿名全局(文件域).
+- [x] **2.3 ND_COMPOUND_LITERAL**: `postfix()`(2808-2824) 改发; sema 建隐藏 lvar(块内)或匿名全局(文件域).
 
 ## P3 名字解析出解析器(5 步)
 

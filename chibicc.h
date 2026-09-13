@@ -267,6 +267,7 @@ typedef enum {
   ND_CAST,      // Type cast
   ND_MEMZERO,   // Zero-clear a stack variable
   ND_DECL,      // Declaration of a local variable; sema lowers it to statements
+  ND_COMPOUND_LITERAL, // "(type){...}"; sema materializes its hidden variable
   ND_ASM,       // "asm"
   ND_CAS,       // Atomic compare-and-swap
   ND_EXCH,      // Atomic exchange
@@ -403,11 +404,8 @@ int64_t const_expr(Token **rest, Token *tok);
 Node *to_assign(Node *node);
 Node *compute_vla_size(Type *ty, Token *tok);
 
-// Initializer lowering (sema.c). `lvar_initializer` parses the
-// initializer source and lowers it in one go; the parser uses it for
-// compound literals. ND_DECL instead carries the parsed tree and is
-// lowered when typed.
-Node *lvar_initializer(Token **rest, Token *tok, Obj *var);
+// Initializer lowering (sema.c). ND_DECL carries the parsed tree and
+// is lowered when typed.
 void gvar_initializer(Token **rest, Token *tok, Obj *var);
 
 //
