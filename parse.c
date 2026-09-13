@@ -134,8 +134,6 @@ static Node *equality(Token **rest, Token *tok);
 static Node *relational(Token **rest, Token *tok);
 static Node *shift(Token **rest, Token *tok);
 static Node *add(Token **rest, Token *tok);
-static Node *new_add(Node *lhs, Node *rhs, Token *tok);
-static Node *new_sub(Node *lhs, Node *rhs, Token *tok);
 static Node *mul(Token **rest, Token *tok);
 static Node *cast(Token **rest, Token *tok);
 static Member *get_struct_member(Type *ty, Token *tok);
@@ -1819,121 +1817,6 @@ static Node *expr(Token **rest, Token *tok) {
   return node;
 }
 
-// Convert op= operators to expressions containing an assignment.
-//
-// In general, `A op= C` is converted to ``tmp = &A, *tmp = *tmp op B`.
-// However, if a given expression is of form `A.x op= C`, the input is
-// converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
-// to bitfields.
-static Node *to_assign(Node *binary) {
-  add_type(binary->lhs);
-  add_type(binary->rhs);
-  Token *tok = binary->tok;
-
-  // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
-  if (binary->lhs->kind == ND_MEMBER) {
-    Obj *var = new_lvar("", pointer_to(binary->lhs->lhs->ty));
-
-    Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
-                             new_unary(ND_ADDR, binary->lhs->lhs, tok), tok);
-
-    Node *expr2 = new_unary(ND_MEMBER,
-                            new_unary(ND_DEREF, new_var_node(var, tok), tok),
-                            tok);
-    expr2->member = binary->lhs->member;
-
-    Node *expr3 = new_unary(ND_MEMBER,
-                            new_unary(ND_DEREF, new_var_node(var, tok), tok),
-                            tok);
-    expr3->member = binary->lhs->member;
-
-    Node *expr4 = new_binary(ND_ASSIGN, expr2,
-                             new_binary(binary->kind, expr3, binary->rhs, tok),
-                             tok);
-
-    return new_binary(ND_COMMA, expr1, expr4, tok);
-  }
-
-  // If A is an atomic type, Convert `A op= B` to
-  //
-  // ({
-  //   T1 *addr = &A; T2 val = (B); T1 old = *addr; T1 new;
-  //   do {
-  //    new = old op val;
-  //   } while (!atomic_compare_exchange_strong(addr, &old, new));
-  //   new;
-  // })
-  if (binary->lhs->ty->is_atomic) {
-    Node head = {};
-    Node *cur = &head;
-
-    Obj *addr = new_lvar("", pointer_to(binary->lhs->ty));
-    Obj *val = new_lvar("", binary->rhs->ty);
-    Obj *old = new_lvar("", binary->lhs->ty);
-    Obj *new = new_lvar("", binary->lhs->ty);
-
-    cur = cur->next =
-      new_unary(ND_EXPR_STMT,
-                new_binary(ND_ASSIGN, new_var_node(addr, tok),
-                           new_unary(ND_ADDR, binary->lhs, tok), tok),
-                tok);
-
-    cur = cur->next =
-      new_unary(ND_EXPR_STMT,
-                new_binary(ND_ASSIGN, new_var_node(val, tok), binary->rhs, tok),
-                tok);
-
-    cur = cur->next =
-      new_unary(ND_EXPR_STMT,
-                new_binary(ND_ASSIGN, new_var_node(old, tok),
-                           new_unary(ND_DEREF, new_var_node(addr, tok), tok), tok),
-                tok);
-
-    Node *loop = new_node(ND_DO, tok);
-    loop->brk_label = new_unique_name();
-    loop->cont_label = new_unique_name();
-
-    Node *body = new_binary(ND_ASSIGN,
-                            new_var_node(new, tok),
-                            new_binary(binary->kind, new_var_node(old, tok),
-                                       new_var_node(val, tok), tok),
-                            tok);
-
-    loop->then = new_node(ND_BLOCK, tok);
-    loop->then->body = new_unary(ND_EXPR_STMT, body, tok);
-
-    Node *cas = new_node(ND_CAS, tok);
-    cas->cas_addr = new_var_node(addr, tok);
-    cas->cas_old = new_unary(ND_ADDR, new_var_node(old, tok), tok);
-    cas->cas_new = new_var_node(new, tok);
-    loop->cond = new_unary(ND_NOT, cas, tok);
-
-    cur = cur->next = loop;
-    cur = cur->next = new_unary(ND_EXPR_STMT, new_var_node(new, tok), tok);
-
-    Node *node = new_node(ND_STMT_EXPR, tok);
-    node->body = head.next;
-    return node;
-  }
-
-  // Convert `A op= B` to ``tmp = &A, *tmp = *tmp op B`.
-  Obj *var = new_lvar("", pointer_to(binary->lhs->ty));
-
-  Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
-                           new_unary(ND_ADDR, binary->lhs, tok), tok);
-
-  Node *expr2 =
-    new_binary(ND_ASSIGN,
-               new_unary(ND_DEREF, new_var_node(var, tok), tok),
-               new_binary(binary->kind,
-                          new_unary(ND_DEREF, new_var_node(var, tok), tok),
-                          binary->rhs,
-                          tok),
-               tok);
-
-  return new_binary(ND_COMMA, expr1, expr2, tok);
-}
-
 // assign    = conditional (assign-op assign)?
 // assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^="
 //           | "<<=" | ">>="
@@ -1943,11 +1826,17 @@ static Node *assign(Token **rest, Token *tok) {
   if (equal(tok, "="))
     return new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
 
-  if (equal(tok, "+="))
-    return to_assign(new_add(node, assign(rest, tok->next), tok));
+  if (equal(tok, "+=")) {
+    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    expr->op = ND_ADD;
+    return to_assign(expr);
+  }
 
-  if (equal(tok, "-="))
-    return to_assign(new_sub(node, assign(rest, tok->next), tok));
+  if (equal(tok, "-=")) {
+    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    expr->op = ND_SUB;
+    return to_assign(expr);
+  }
 
   if (equal(tok, "*="))
     return to_assign(new_binary(ND_MUL, node, assign(rest, tok->next), tok));
@@ -2140,7 +2029,7 @@ static Node *shift(Token **rest, Token *tok) {
 // so that p+n points to the location n elements (not bytes) ahead of p.
 // In other words, we need to scale an integer value before adding to a
 // pointer value. This function takes care of the scaling.
-static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
+Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   add_type(lhs);
   add_type(rhs);
 
@@ -2170,7 +2059,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
 }
 
 // Like `+`, `-` is overloaded for the pointer type.
-static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
+Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   add_type(lhs);
   add_type(rhs);
 
@@ -2313,12 +2202,18 @@ static Node *unary(Token **rest, Token *tok) {
     return new_unary(ND_BITNOT, cast(rest, tok->next), tok);
 
   // Read ++i as i+=1
-  if (equal(tok, "++"))
-    return to_assign(new_add(unary(rest, tok->next), new_num(1, tok), tok));
+  if (equal(tok, "++")) {
+    Node *expr = new_binary(ND_ASSIGN, unary(rest, tok->next), new_num(1, tok), tok);
+    expr->op = ND_ADD;
+    return to_assign(expr);
+  }
 
   // Read --i as i-=1
-  if (equal(tok, "--"))
-    return to_assign(new_sub(unary(rest, tok->next), new_num(1, tok), tok));
+  if (equal(tok, "--")) {
+    Node *expr = new_binary(ND_ASSIGN, unary(rest, tok->next), new_num(1, tok), tok);
+    expr->op = ND_SUB;
+    return to_assign(expr);
+  }
 
   // [GNU] labels-as-values
   if (equal(tok, "&&")) {
@@ -2582,8 +2477,9 @@ static Node *struct_ref(Node *node, Token *tok) {
 // Convert A++ to `(typeof A)((A += 1) - 1)`
 static Node *new_inc_dec(Node *node, Token *tok, int addend) {
   add_type(node);
-  return new_cast(new_add(to_assign(new_add(node, new_num(addend, tok), tok)),
-                          new_num(-addend, tok), tok),
+  Node *expr = new_binary(ND_ASSIGN, node, new_num(addend, tok), tok);
+  expr->op = ND_ADD;
+  return new_cast(new_add(to_assign(expr), new_num(-addend, tok), tok),
                   node->ty);
 }
 

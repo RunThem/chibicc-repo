@@ -236,6 +236,10 @@ struct Node {
   Node *lhs;     // Left-hand side
   Node *rhs;     // Right-hand side
 
+  // Compound assignment operator for ND_ASSIGN ("+=", "-=", ...).
+  // 0 means a plain "=".
+  NodeKind op;
+
   // "if" or "for" statement
   Node *cond;
   Node *then;
@@ -315,6 +319,8 @@ Obj *new_string_literal(char *p, Type *ty);
 char *new_unique_name(void);
 
 Node *conditional(Token **rest, Token *tok);
+Node *new_add(Node *lhs, Node *rhs, Token *tok);
+Node *new_sub(Node *lhs, Node *rhs, Token *tok);
 Obj *parse(Token *tok);
 
 //
@@ -328,6 +334,7 @@ int64_t eval2(Node *node, char ***label);
 double eval_double(Node *node);
 bool is_const_expr(Node *node);
 int64_t const_expr(Token **rest, Token *tok);
+Node *to_assign(Node *node);
 
 //
 // type.c

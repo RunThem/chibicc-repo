@@ -11,6 +11,145 @@
 static int64_t eval_rval(Node *node, char ***label);
 double eval_double(Node *node);
 
+// The compound assignment operator a to_assign input carries: the
+// faithful form keeps it in `op`, the transitional bare-arithmetic
+// form in `kind`.
+static NodeKind assign_op(Node *node) {
+  return node->kind == ND_ASSIGN ? node->op : node->kind;
+}
+
+// Build the `lhs op rhs` operand expression for a compound assignment.
+// `+=`/`-=` are routed through new_add/new_sub so that pointer
+// arithmetic is scaled exactly as for plain `+`/`-`; the scaled node
+// is then rebuilt into a fresh untyped node with `lhs` on the left so
+// that the usual arithmetic conversions apply to it as before.
+static Node *compound_op(Node *node, Node *lhs, Token *tok) {
+  NodeKind op = assign_op(node);
+
+  if (op == ND_ADD || op == ND_SUB) {
+    Node *scaled = op == ND_ADD ? new_add(node->lhs, node->rhs, tok)
+                                : new_sub(node->lhs, node->rhs, tok);
+    add_type(scaled->rhs);
+    return new_binary(op, lhs, scaled->rhs, tok);
+  }
+  return new_binary(op, lhs, node->rhs, tok);
+}
+
+// Convert op= operators to expressions containing an assignment.
+//
+// `node` is an ND_ASSIGN whose `op` holds the compound assignment
+// operator. In general, `A op= C` is converted to
+// ``tmp = &A, *tmp = *tmp op C`.
+// However, if a given expression is of form `A.x op= C`, the input is
+// converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
+// to bitfields.
+Node *to_assign(Node *node) {
+  add_type(node->lhs);
+  add_type(node->rhs);
+  Token *tok = node->tok;
+
+  // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
+  if (node->lhs->kind == ND_MEMBER) {
+    Obj *var = new_lvar("", pointer_to(node->lhs->lhs->ty));
+
+    Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
+                             new_unary(ND_ADDR, node->lhs->lhs, tok), tok);
+
+    Node *expr2 = new_unary(ND_MEMBER,
+                            new_unary(ND_DEREF, new_var_node(var, tok), tok),
+                            tok);
+    expr2->member = node->lhs->member;
+
+    Node *expr3 = new_unary(ND_MEMBER,
+                            new_unary(ND_DEREF, new_var_node(var, tok), tok),
+                            tok);
+    expr3->member = node->lhs->member;
+
+    Node *expr4 = new_binary(ND_ASSIGN, expr2,
+                             compound_op(node, expr3, tok),
+                             tok);
+
+    return new_binary(ND_COMMA, expr1, expr4, tok);
+  }
+
+  // If A is an atomic type, Convert `A op= B` to
+  //
+  // ({
+  //   T1 *addr = &A; T2 val = (B); T1 old = *addr; T1 new;
+  //   do {
+  //    new = old op val;
+  //   } while (!atomic_compare_exchange_strong(addr, &old, new));
+  //   new;
+  // })
+  if (node->lhs->ty->is_atomic) {
+    Node *operand = compound_op(node, node->lhs, tok);
+    Node head = {};
+    Node *cur = &head;
+
+    Obj *addr = new_lvar("", pointer_to(node->lhs->ty));
+    Obj *val = new_lvar("", operand->rhs->ty);
+    Obj *old = new_lvar("", node->lhs->ty);
+    Obj *new = new_lvar("", node->lhs->ty);
+
+    cur = cur->next =
+      new_unary(ND_EXPR_STMT,
+                new_binary(ND_ASSIGN, new_var_node(addr, tok),
+                           new_unary(ND_ADDR, node->lhs, tok), tok),
+                tok);
+
+    cur = cur->next =
+      new_unary(ND_EXPR_STMT,
+                new_binary(ND_ASSIGN, new_var_node(val, tok), operand->rhs, tok),
+                tok);
+
+    cur = cur->next =
+      new_unary(ND_EXPR_STMT,
+                new_binary(ND_ASSIGN, new_var_node(old, tok),
+                           new_unary(ND_DEREF, new_var_node(addr, tok), tok), tok),
+                tok);
+
+    Node *loop = new_node(ND_DO, tok);
+    loop->brk_label = new_unique_name();
+    loop->cont_label = new_unique_name();
+
+    Node *body = new_binary(ND_ASSIGN,
+                            new_var_node(new, tok),
+                            new_binary(assign_op(node), new_var_node(old, tok),
+                                       new_var_node(val, tok), tok),
+                            tok);
+
+    loop->then = new_node(ND_BLOCK, tok);
+    loop->then->body = new_unary(ND_EXPR_STMT, body, tok);
+
+    Node *cas = new_node(ND_CAS, tok);
+    cas->cas_addr = new_var_node(addr, tok);
+    cas->cas_old = new_unary(ND_ADDR, new_var_node(old, tok), tok);
+    cas->cas_new = new_var_node(new, tok);
+    loop->cond = new_unary(ND_NOT, cas, tok);
+
+    cur = cur->next = loop;
+    cur = cur->next = new_unary(ND_EXPR_STMT, new_var_node(new, tok), tok);
+
+    Node *stmt_expr = new_node(ND_STMT_EXPR, tok);
+    stmt_expr->body = head.next;
+    return stmt_expr;
+  }
+
+  // Convert `A op= B` to ``tmp = &A, *tmp = *tmp op B`.
+  Obj *var = new_lvar("", pointer_to(node->lhs->ty));
+
+  Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
+                           new_unary(ND_ADDR, node->lhs, tok), tok);
+
+  Node *expr2 =
+    new_binary(ND_ASSIGN,
+               new_unary(ND_DEREF, new_var_node(var, tok), tok),
+               compound_op(node, new_unary(ND_DEREF, new_var_node(var, tok), tok), tok),
+               tok);
+
+  return new_binary(ND_COMMA, expr1, expr2, tok);
+}
+
 static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->base)
     return pointer_to(ty1->base);
