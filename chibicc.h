@@ -193,6 +193,7 @@ typedef enum {
   ND_GT,        // >
   ND_GE,        // >=
   ND_ASSIGN,    // =
+  ND_INCDEC,    // "++" and "--"
   ND_COND,      // ?:
   ND_COMMA,     // ,
   ND_MEMBER,    // . (struct member access)
@@ -239,6 +240,12 @@ struct Node {
   // Compound assignment operator for ND_ASSIGN ("+=", "-=", ...).
   // 0 means a plain "=".
   NodeKind op;
+
+  // Increment/decrement for ND_INCDEC: postfix (`i++`) or prefix
+  // (`++i`), with an addend of +1 or -1. sema lowers the node to a
+  // compound assignment.
+  bool is_post;
+  int addend;
 
   // "if" or "for" statement
   Node *cond;

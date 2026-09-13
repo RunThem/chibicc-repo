@@ -1901,11 +1901,14 @@ Node *conditional(Token **rest, Token *tok) {
 
   if (equal(tok->next, ":")) {
     // [GNU] `a ?: b`. Kept as-is in the tree with is_elvis set;
-    // sema lowers it to `tmp = a, tmp ? tmp : b`.
+    // add_type lowers it to `tmp = a, tmp ? tmp : b`. It is typed
+    // eagerly here so that the temporary is created at the same point
+    // as it used to be.
     Node *node = new_node(ND_COND, tok);
     node->is_elvis = true;
     node->cond = cond;
     node->els = conditional(rest, tok->next->next);
+    add_type(node);
     return node;
   }
 
@@ -2225,18 +2228,22 @@ static Node *unary(Token **rest, Token *tok) {
   if (equal(tok, "~"))
     return new_unary(ND_BITNOT, cast(rest, tok->next), tok);
 
-  // Read ++i as i+=1
+  // Read ++i as a faithful prefix increment; add_type lowers it to i+=1
   if (equal(tok, "++")) {
-    Node *expr = new_binary(ND_ASSIGN, unary(rest, tok->next), new_num(1, tok), tok);
-    expr->op = ND_ADD;
-    return to_assign(expr);
+    Node *node = new_node(ND_INCDEC, tok);
+    node->lhs = unary(rest, tok->next);
+    node->addend = 1;
+    add_type(node);
+    return node;
   }
 
-  // Read --i as i-=1
+  // Read --i as a faithful prefix decrement; add_type lowers it to i-=1
   if (equal(tok, "--")) {
-    Node *expr = new_binary(ND_ASSIGN, unary(rest, tok->next), new_num(1, tok), tok);
-    expr->op = ND_SUB;
-    return to_assign(expr);
+    Node *node = new_node(ND_INCDEC, tok);
+    node->lhs = unary(rest, tok->next);
+    node->addend = -1;
+    add_type(node);
+    return node;
   }
 
   // [GNU] labels-as-values
@@ -2498,15 +2505,6 @@ static Node *struct_ref(Node *node, Token *tok) {
   return node;
 }
 
-// Convert A++ to `(typeof A)((A += 1) - 1)`
-static Node *new_inc_dec(Node *node, Token *tok, int addend) {
-  add_type(node);
-  Node *expr = new_binary(ND_ASSIGN, node, new_num(addend, tok), tok);
-  expr->op = ND_ADD;
-  return new_cast(new_add(to_assign(expr), new_num(-addend, tok), tok),
-                  node->ty);
-}
-
 // postfix = "(" type-name ")" "{" initializer-list "}"
 //         = ident "(" func-args ")" postfix-tail*
 //         | primary postfix-tail*
@@ -2568,13 +2566,23 @@ static Node *postfix(Token **rest, Token *tok) {
     }
 
     if (equal(tok, "++")) {
-      node = new_inc_dec(node, tok, 1);
+      Node *incdec = new_node(ND_INCDEC, tok);
+      incdec->lhs = node;
+      incdec->is_post = true;
+      incdec->addend = 1;
+      add_type(incdec);
+      node = incdec;
       tok = tok->next;
       continue;
     }
 
     if (equal(tok, "--")) {
-      node = new_inc_dec(node, tok, -1);
+      Node *incdec = new_node(ND_INCDEC, tok);
+      incdec->lhs = node;
+      incdec->is_post = true;
+      incdec->addend = -1;
+      add_type(incdec);
+      node = incdec;
       tok = tok->next;
       continue;
     }

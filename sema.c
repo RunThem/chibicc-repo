@@ -144,6 +144,15 @@ Node *to_assign(Node *node) {
   return new_binary(ND_COMMA, expr1, expr2, tok);
 }
 
+// Convert A++ to `(typeof A)((A += 1) - 1)`. Moved from parse.c.
+static Node *new_inc_dec(Node *node, Token *tok, int addend) {
+  add_type(node);
+  Node *expr = new_binary(ND_ASSIGN, node, new_num(addend, tok), tok);
+  expr->op = ND_ADD;
+  return new_cast(new_add(to_assign(expr), new_num(-addend, tok), tok),
+                  node->ty);
+}
+
 static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->base)
     return pointer_to(ty1->base);
@@ -231,6 +240,29 @@ void add_type(Node *node) {
       node->rhs = new_cast(node->rhs, node->lhs->ty);
     node->ty = node->lhs->ty;
     return;
+  case ND_INCDEC: {
+    // Lower `++i`/`i--` to the compound-assignment form, rewriting
+    // the node in place.
+    Node *operand = node->lhs;
+    Token *tok = node->tok;
+
+    if (node->is_post) {
+      Node *result = new_inc_dec(operand, tok, node->addend);
+      node->kind = result->kind;
+      node->lhs = result->lhs;
+      node->ty = result->ty;
+      return;
+    }
+
+    Node *expr = new_binary(ND_ASSIGN, operand, new_num(1, tok), tok);
+    expr->op = node->addend < 0 ? ND_SUB : ND_ADD;
+    Node *result = to_assign(expr);
+    node->kind = result->kind;
+    node->lhs = result->lhs;
+    node->rhs = result->rhs;
+    add_type(node);
+    return;
+  }
   case ND_GT:
   case ND_GE:
     // Downgrade the faithful `>` / `>=` back to `<` / `<=` with
