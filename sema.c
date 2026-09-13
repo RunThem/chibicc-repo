@@ -339,6 +339,16 @@ void add_type(Node *node) {
       node->ty = pointer_to(ty);
     return;
   }
+  case ND_SUBSCRIPT: {
+    // Downgrade `x[y]` to `*(x+y)` (with pointer scaling), the only
+    // subscript form codegen understands. The node is rewritten in
+    // place.
+    Node *add = new_add(node->lhs, node->rhs, node->tok);
+    node->kind = ND_DEREF;
+    node->lhs = add;
+    add_type(node);
+    return;
+  }
   case ND_DEREF:
     if (!node->lhs->ty->base)
       error_tok(node->tok, "invalid pointer dereference");

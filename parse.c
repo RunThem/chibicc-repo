@@ -1316,8 +1316,10 @@ static Node *init_desg_expr(InitDesg *desg, Token *tok) {
   }
 
   Node *lhs = init_desg_expr(desg->next, tok);
-  Node *rhs = new_num(desg->idx, tok);
-  return new_unary(ND_DEREF, new_add(lhs, rhs, tok), tok);
+  Node *node = new_node(ND_SUBSCRIPT, tok);
+  node->lhs = lhs;
+  node->rhs = new_num(desg->idx, tok);
+  return node;
 }
 
 static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token *tok) {
@@ -2543,11 +2545,13 @@ static Node *postfix(Token **rest, Token *tok) {
     }
 
     if (equal(tok, "[")) {
-      // x[y] is short for *(x+y)
       Token *start = tok;
       Node *idx = expr(&tok, tok->next);
       tok = skip(tok, "]");
-      node = new_unary(ND_DEREF, new_add(node, idx, start), start);
+      Node *subscript = new_node(ND_SUBSCRIPT, start);
+      subscript->lhs = node;
+      subscript->rhs = idx;
+      node = subscript;
       continue;
     }
 

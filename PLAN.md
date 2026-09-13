@@ -41,7 +41,7 @@
 
 - [x] **1.4 ND_INCDEC**: 新 kind + `is_post`/addend 字段; 前缀(`unary()` 2523-2528)与后缀(`postfix()` 2857-2867)改发; `new_inc_dec`(2790-2795) 搬 sema 作降级.(parse 侧在构造现场立即 add_type 触发降级, 使临时 lvar 创建时机与旧代码一致 — elvis 同步加固)
 
-- [ ] **1.5 ND_SUBSCRIPT**: `postfix()`(2834-2841) 改发; `init_desg_expr`(1316-1329) 的数组分支同步; sema 降回 `DEREF(ADD)`(含指针缩放).
+- [x] **1.5 ND_SUBSCRIPT**: `postfix()`(2834-2841) 改发; `init_desg_expr`(1316-1329) 的数组分支同步; sema 降回 `DEREF(ADD)`(含指针缩放).
 
 - [ ] **1.6 is_arrow**: `postfix()`(2849-2855) 的 `->` 不再偷插 `DEREF`, 改为 `ND_MEMBER.is_arrow`; sema 补插 DEREF.
 

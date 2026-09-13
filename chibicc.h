@@ -194,6 +194,7 @@ typedef enum {
   ND_GE,        // >=
   ND_ASSIGN,    // =
   ND_INCDEC,    // "++" and "--"
+  ND_SUBSCRIPT, // x[y]
   ND_COND,      // ?:
   ND_COMMA,     // ,
   ND_MEMBER,    // . (struct member access)
