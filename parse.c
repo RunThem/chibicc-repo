@@ -801,28 +801,6 @@ static Type *typeof_specifier(Token **rest, Token *tok) {
   return ty;
 }
 
-// Generate code for computing a VLA size.
-static Node *compute_vla_size(Type *ty, Token *tok) {
-  Node *node = new_node(ND_NULL_EXPR, tok);
-  if (ty->base)
-    node = new_binary(ND_COMMA, node, compute_vla_size(ty->base, tok), tok);
-
-  if (ty->kind != TY_VLA)
-    return node;
-
-  Node *base_sz;
-  if (ty->base->kind == TY_VLA)
-    base_sz = new_var_node(ty->base->vla_size, tok);
-  else
-    base_sz = new_num(ty->base->size, tok);
-
-  ty->vla_size = new_lvar("", ty_ulong);
-  Node *expr = new_binary(ND_ASSIGN, new_var_node(ty->vla_size, tok),
-                          new_binary(ND_MUL, ty->vla_len, base_sz, tok),
-                          tok);
-  return new_binary(ND_COMMA, node, expr, tok);
-}
-
 static Node *new_alloca(Node *sz) {
   Node *node = new_unary(ND_FUNCALL, new_var_node(builtin_alloca, sz->tok), sz->tok);
   node->func_ty = builtin_alloca->ty;
@@ -2672,36 +2650,35 @@ static Node *primary(Token **rest, Token *tok) {
     Type *ty = typename(&tok, tok->next->next);
     *rest = skip(tok, ")");
 
-    if (ty->kind == TY_VLA) {
-      if (ty->vla_size)
-        return new_var_node(ty->vla_size, tok);
-
-      Node *lhs = compute_vla_size(ty, tok);
-      Node *rhs = new_var_node(ty->vla_size, tok);
-      return new_binary(ND_COMMA, lhs, rhs, tok);
-    }
-
-    return new_ulong(ty->size, start);
+    // Keep sizeof faithful; sema folds it to its value.
+    Node *node = new_node(ND_SIZEOF, start);
+    node->ty_op = ty;
+    add_type(node);
+    return node;
   }
 
   if (equal(tok, "sizeof")) {
-    Node *node = unary(rest, tok->next);
+    Node *node = new_node(ND_SIZEOF, tok);
+    node->lhs = unary(rest, tok->next);
     add_type(node);
-    if (node->ty->kind == TY_VLA)
-      return new_var_node(node->ty->vla_size, tok);
-    return new_ulong(node->ty->size, tok);
+    return node;
   }
 
   if (equal(tok, "_Alignof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
     Type *ty = typename(&tok, tok->next->next);
     *rest = skip(tok, ")");
-    return new_ulong(ty->align, tok);
+
+    Node *node = new_node(ND_ALIGNOF, start);
+    node->ty_op = ty;
+    add_type(node);
+    return node;
   }
 
   if (equal(tok, "_Alignof")) {
-    Node *node = unary(rest, tok->next);
+    Node *node = new_node(ND_ALIGNOF, tok);
+    node->lhs = unary(rest, tok->next);
     add_type(node);
-    return new_ulong(node->ty->align, tok);
+    return node;
   }
 
   if (equal(tok, "_Generic"))

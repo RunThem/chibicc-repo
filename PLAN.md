@@ -49,7 +49,7 @@
 
 - [x] **1.8 ND_STRING**: `primary()`(3107-3111) 改发字符串节点; sema 建匿名全局并改写为 `ND_VAR`.
 
-- [ ] **1.9 ND_SIZEOF/ND_ALIGNOF**: `primary()` 四个分支(3000-3034)改发(节点保留操作数类型/未求值操作数); `compute_vla_size`(813-832) 搬 sema; sema 折叠(定长 -> `new_ulong`, VLA -> vla_size 引用). `__builtin_types_compatible_p`/`__builtin_reg_class` 的折叠暂留 parse(返工点).
+- [x] **1.9 ND_SIZEOF/ND_ALIGNOF**: `primary()` 四个分支(3000-3034)改发(节点保留操作数类型/未求值操作数); `compute_vla_size`(813-832) 搬 sema; sema 折叠(定长 -> `new_ulong`, VLA -> vla_size 引用). `__builtin_types_compatible_p`/`__builtin_reg_class` 的折叠暂留 parse(返工点).
 
 - [ ] **1.10 ND_WHILE/ND_BREAK/ND_CONTINUE**: `stmt()`(1669-1685, 1728-1744)改发; sema 降回 `ND_FOR`(带合成 brk/cont 标签)/`ND_GOTO`; "stray break/continue" 合法性检查暂留 parse(返工点).
 

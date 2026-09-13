@@ -222,6 +222,8 @@ typedef enum {
   ND_VLA_PTR,   // VLA designator
   ND_NUM,       // Integer
   ND_STRING,    // String literal; sema lowers it to an anonymous global
+  ND_SIZEOF,    // "sizeof"; sema folds it to its value
+  ND_ALIGNOF,   // "_Alignof"; sema folds it to its value
   ND_CAST,      // Type cast
   ND_MEMZERO,   // Zero-clear a stack variable
   ND_ASM,       // "asm"
@@ -286,6 +288,11 @@ struct Node {
   // `tmp = a, tmp ? tmp : b`.
   bool is_elvis;
 
+  // ND_SIZEOF/ND_ALIGNOF: the operand type for the `sizeof(type)`
+  // form. The `sizeof expr` form carries its unevaluated operand in
+  // `lhs` instead. sema folds the node to its value.
+  Type *ty_op;
+
   // Case
   long begin;
   long end;
@@ -343,6 +350,7 @@ double eval_double(Node *node);
 bool is_const_expr(Node *node);
 int64_t const_expr(Token **rest, Token *tok);
 Node *to_assign(Node *node);
+Node *compute_vla_size(Type *ty, Token *tok);
 
 //
 // type.c

@@ -236,6 +236,39 @@ static Node *new_inc_dec(Node *node, Token *tok, int addend) {
   return new_cast(sub, node->ty);
 }
 
+// Generate code for computing a VLA size. Moved from parse.c; the
+// parser still calls it for every declarator it declares.
+Node *compute_vla_size(Type *ty, Token *tok) {
+  Node *node = new_node(ND_NULL_EXPR, tok);
+  if (ty->base)
+    node = new_binary(ND_COMMA, node, compute_vla_size(ty->base, tok), tok);
+
+  if (ty->kind != TY_VLA)
+    return node;
+
+  Node *base_sz;
+  if (ty->base->kind == TY_VLA)
+    base_sz = new_var_node(ty->base->vla_size, tok);
+  else
+    base_sz = new_num(ty->base->size, tok);
+
+  ty->vla_size = new_lvar("", ty_ulong);
+  Node *expr = new_binary(ND_ASSIGN, new_var_node(ty->vla_size, tok),
+                          new_binary(ND_MUL, ty->vla_len, base_sz, tok),
+                          tok);
+  return new_binary(ND_COMMA, node, expr, tok);
+}
+
+// `sizeof` of a VLA type: a reference to its runtime size variable,
+// computed first if this type has not had its size computed yet
+// (e.g. `sizeof(int[n])` with a fresh type).
+static Node *vla_size_expr(Type *ty, Token *tok) {
+  if (ty->vla_size)
+    return new_var_node(ty->vla_size, tok);
+  Node *lhs = compute_vla_size(ty, tok);
+  return new_binary(ND_COMMA, lhs, new_var_node(ty->vla_size, tok), tok);
+}
+
 static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->base)
     return pointer_to(ty1->base);
@@ -424,6 +457,32 @@ void add_type(Node *node) {
   case ND_VLA_PTR:
     node->ty = node->var->ty;
     return;
+  case ND_SIZEOF:
+  case ND_ALIGNOF: {
+    // Fold sizeof/_Alignof to their values. A fixed-length type folds
+    // to a number and a VLA folds to a reference of its runtime size
+    // variable; a `sizeof expr` operand is typed but never evaluated.
+    Type *ty = node->ty_op;
+    if (!ty) {
+      add_type(node->lhs);
+      ty = node->lhs->ty;
+    }
+
+    Node *folded;
+    if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
+      folded = vla_size_expr(ty, node->tok);
+    else
+      folded = new_ulong(node->kind == ND_SIZEOF ? ty->size : ty->align, node->tok);
+
+    node->kind = folded->kind;
+    node->lhs = folded->lhs;
+    node->rhs = folded->rhs;
+    node->var = folded->var;
+    node->val = folded->val;
+    node->ty = folded->ty;
+    node->ty_op = NULL;
+    return;
+  }
   case ND_COND:
     if (node->is_elvis) {
       // Lower the GNU `a ?: b` to `tmp = a, tmp ? tmp : b`.
