@@ -269,6 +269,202 @@ static Node *vla_size_expr(Type *ty, Token *tok) {
   return new_binary(ND_COMMA, lhs, new_var_node(ty->vla_size, tok), tok);
 }
 
+static Node *init_desg_expr(InitDesg *desg, Token *tok) {
+  if (desg->var)
+    return new_var_node(desg->var, tok);
+
+  if (desg->member) {
+    Node *node = new_unary(ND_MEMBER, init_desg_expr(desg->next, tok), tok);
+    node->member = desg->member;
+    return node;
+  }
+
+  Node *lhs = init_desg_expr(desg->next, tok);
+  Node *node = new_node(ND_SUBSCRIPT, tok);
+  node->lhs = lhs;
+  node->rhs = new_num(desg->idx, tok);
+  return node;
+}
+
+static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token *tok) {
+  if (ty->kind == TY_ARRAY) {
+    Node *node = new_node(ND_NULL_EXPR, tok);
+    for (int i = 0; i < ty->array_len; i++) {
+      InitDesg desg2 = {desg, i};
+      Node *rhs = create_lvar_init(init->children[i], ty->base, &desg2, tok);
+      node = new_binary(ND_COMMA, node, rhs, tok);
+    }
+    return node;
+  }
+
+  if (ty->kind == TY_STRUCT && !init->expr) {
+    Node *node = new_node(ND_NULL_EXPR, tok);
+
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+      InitDesg desg2 = {desg, 0, mem};
+      Node *rhs = create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
+      node = new_binary(ND_COMMA, node, rhs, tok);
+    }
+    return node;
+  }
+
+  if (ty->kind == TY_UNION) {
+    Member *mem = init->mem ? init->mem : ty->members;
+    InitDesg desg2 = {desg, 0, mem};
+    return create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
+  }
+
+  if (!init->expr)
+    return new_node(ND_NULL_EXPR, tok);
+
+  Node *lhs = init_desg_expr(desg, tok);
+  return new_binary(ND_ASSIGN, lhs, init->expr, tok);
+}
+
+// Build the MEMZERO + assignment comma chain that initializes a local
+// variable from its parsed initializer tree. `tok` anchors the
+// synthesized nodes; the parser anchors them at the first token of
+// the initializer source (Initializer::tok of an ND_DECL's tree).
+static Node *lvar_init_comma(Obj *var, Initializer *init, Token *tok) {
+  InitDesg desg = {NULL, 0, NULL, var};
+
+  // If a partial initializer list is given, the standard requires
+  // that unspecified elements are set to 0. Here, we simply
+  // zero-initialize the entire memory region of a variable before
+  // initializing it with user-supplied values.
+  Node *lhs = new_node(ND_MEMZERO, tok);
+  lhs->var = var;
+
+  Node *rhs = create_lvar_init(init, var->ty, &desg, tok);
+  return new_binary(ND_COMMA, lhs, rhs, tok);
+}
+
+// A variable definition with an initializer is a shorthand notation
+// for a variable definition followed by assignments. This function
+// generates assignment expressions for an initializer. For example,
+// `int x[2][2] = {{6, 7}, {8, 9}}` is converted to the following
+// expressions:
+//
+//   x[0][0] = 6;
+//   x[0][1] = 7;
+//   x[1][0] = 8;
+//   x[1][1] = 9;
+Node *lvar_initializer(Token **rest, Token *tok, Obj *var) {
+  Initializer *init = initializer(rest, tok, var->ty, &var->ty);
+  return lvar_init_comma(var, init, tok);
+}
+
+static uint64_t read_buf(char *buf, int sz) {
+  if (sz == 1)
+    return *buf;
+  if (sz == 2)
+    return *(uint16_t *)buf;
+  if (sz == 4)
+    return *(uint32_t *)buf;
+  if (sz == 8)
+    return *(uint64_t *)buf;
+  unreachable();
+}
+
+static void write_buf(char *buf, uint64_t val, int sz) {
+  if (sz == 1)
+    *buf = val;
+  else if (sz == 2)
+    *(uint16_t *)buf = val;
+  else if (sz == 4)
+    *(uint32_t *)buf = val;
+  else if (sz == 8)
+    *(uint64_t *)buf = val;
+  else
+    unreachable();
+}
+
+static Relocation *
+write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int offset) {
+  if (ty->kind == TY_ARRAY) {
+    int sz = ty->base->size;
+    for (int i = 0; i < ty->array_len; i++)
+      cur = write_gvar_data(cur, init->children[i], ty->base, buf, offset + sz * i);
+    return cur;
+  }
+
+  if (ty->kind == TY_STRUCT) {
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+      if (mem->is_bitfield) {
+        Node *expr = init->children[mem->idx]->expr;
+        if (!expr)
+          break;
+
+        char *loc = buf + offset + mem->offset;
+        uint64_t oldval = read_buf(loc, mem->ty->size);
+        uint64_t newval = eval(expr);
+        uint64_t mask = (1L << mem->bit_width) - 1;
+        uint64_t combined = oldval | ((newval & mask) << mem->bit_offset);
+        write_buf(loc, combined, mem->ty->size);
+      } else {
+        cur = write_gvar_data(cur, init->children[mem->idx], mem->ty, buf,
+                              offset + mem->offset);
+      }
+    }
+    return cur;
+  }
+
+  if (ty->kind == TY_UNION) {
+    if (!init->mem)
+      return cur;
+    return write_gvar_data(cur, init->children[init->mem->idx],
+                           init->mem->ty, buf, offset);
+  }
+
+  if (!init->expr)
+    return cur;
+
+  if (ty->kind == TY_FLOAT) {
+    *(float *)(buf + offset) = eval_double(init->expr);
+    return cur;
+  }
+
+  if (ty->kind == TY_DOUBLE) {
+    *(double *)(buf + offset) = eval_double(init->expr);
+    return cur;
+  }
+
+  char **label = NULL;
+  uint64_t val = eval2(init->expr, &label);
+
+  if (!label) {
+    write_buf(buf + offset, val, ty->size);
+    return cur;
+  }
+
+  Relocation *rel = calloc(1, sizeof(Relocation));
+  rel->offset = offset;
+  rel->label = label;
+  rel->addend = val;
+  cur->next = rel;
+  return cur->next;
+}
+
+// Serialize a parsed initializer tree into the .data image of a global
+// variable. Split from gvar_initializer so that sema-internal
+// lowerings (e.g. compound literals) can reuse it.
+static void gvar_init_data(Obj *var, Initializer *init) {
+  Relocation head = {};
+  char *buf = calloc(1, var->ty->size);
+  write_gvar_data(&head, init, var->ty, buf, 0);
+  var->init_data = buf;
+  var->rel = head.next;
+}
+
+// Initializers for global variables are evaluated at compile-time and
+// embedded to .data section. This function serializes Initializer
+// objects to a flat byte array. It is a compile error if an
+// initializer list contains a non-constant expression.
+void gvar_initializer(Token **rest, Token *tok, Obj *var) {
+  Initializer *init = initializer(rest, tok, var->ty, &var->ty);
+  gvar_init_data(var, init);
+}
+
 static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->base)
     return pointer_to(ty1->base);
@@ -587,6 +783,21 @@ void add_type(Node *node) {
     // Restore the parse-time rewrite to a jump to the enclosing
     // loop's label (or the switch's, for break).
     node->kind = ND_GOTO;
+    return;
+  case ND_DECL:
+    // Lower a declaration. With an initializer, the parsed initializer
+    // tree becomes the MEMZERO + assignment comma chain the parser used
+    // to flatten directly; the node becomes its expression statement.
+    // Without one, the node carries the VLA-size computation in lhs
+    // and simply becomes that statement.
+    if (node->decl_init) {
+      node->kind = ND_EXPR_STMT;
+      node->lhs = lvar_init_comma(node->var, node->decl_init, node->decl_init->tok);
+      node->decl_init = NULL;
+    } else {
+      node->kind = ND_EXPR_STMT;
+    }
+    add_type(node);
     return;
   }
 }

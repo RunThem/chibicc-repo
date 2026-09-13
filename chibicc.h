@@ -172,6 +172,43 @@ struct Relocation {
   long addend;
 };
 
+// This struct represents a variable initializer. Since initializers
+// can be nested (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), this struct
+// is a tree data structure.
+typedef struct Initializer Initializer;
+struct Initializer {
+  Initializer *next;
+  Type *ty;
+  Token *tok;
+  bool is_flexible;
+
+  // If it's not an aggregate type and has an initializer,
+  // `expr` has an initialization expression.
+  Node *expr;
+
+  // If it's an initializer for an aggregate type (e.g. array or struct),
+  // `children` has initializers for its children.
+  Initializer **children;
+
+  // Only one member can be initialized for a union.
+  // `mem` is used to clarify which member is initialized.
+  Member *mem;
+
+  // For the top-level initializer of an ND_DECL: the first token of
+  // the initializer source. sema anchors the nodes of the lowered
+  // assignment chain at it.
+};
+
+// Designator chain describing the position of an element within a
+// local variable initializer (e.g. `x[1].y[2]`).
+typedef struct InitDesg InitDesg;
+struct InitDesg {
+  InitDesg *next;
+  int idx;
+  Member *member;
+  Obj *var;
+};
+
 // AST node
 typedef enum {
   ND_NULL_EXPR, // Do nothing
@@ -229,6 +266,7 @@ typedef enum {
   ND_ALIGNOF,   // "_Alignof"; sema folds it to its value
   ND_CAST,      // Type cast
   ND_MEMZERO,   // Zero-clear a stack variable
+  ND_DECL,      // Declaration of a local variable; sema lowers it to statements
   ND_ASM,       // "asm"
   ND_CAS,       // Atomic compare-and-swap
   ND_EXCH,      // Atomic exchange
@@ -296,6 +334,12 @@ struct Node {
   // `lhs` instead. sema folds the node to its value.
   Type *ty_op;
 
+  // ND_DECL: the parsed initializer tree, or NULL if the declarator
+  // has no initializer. sema lowers it to the MEMZERO + assignment
+  // comma chain. Without an initializer, the VLA-size computation
+  // (carried in `lhs`) becomes the lowered statement instead.
+  Initializer *decl_init;
+
   // Case
   long begin;
   long end;
@@ -341,6 +385,9 @@ char *new_unique_name(void);
 Node *conditional(Token **rest, Token *tok);
 Obj *parse(Token *tok);
 
+// Initializer tree building (parse.c); consumed by sema.c as well.
+Initializer *initializer(Token **rest, Token *tok, Type *ty, Type **new_ty);
+
 //
 // sema.c
 //
@@ -354,6 +401,13 @@ bool is_const_expr(Node *node);
 int64_t const_expr(Token **rest, Token *tok);
 Node *to_assign(Node *node);
 Node *compute_vla_size(Type *ty, Token *tok);
+
+// Initializer lowering (sema.c). `lvar_initializer` parses the
+// initializer source and lowers it in one go; the parser uses it for
+// compound literals. ND_DECL instead carries the parsed tree and is
+// lowered when typed.
+Node *lvar_initializer(Token **rest, Token *tok, Obj *var);
+void gvar_initializer(Token **rest, Token *tok, Obj *var);
 
 //
 // type.c

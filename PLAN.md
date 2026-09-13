@@ -55,7 +55,7 @@
 
 ## P2 声明与初始化(3 步)
 
-- [ ] **2.1 ND_DECL**: 新 kind 挂 `Obj *var` + `Initializer *init`; `declaration()`(844-909) 每个声明符发一个 ND_DECL(不再拍平成赋值逗号链; 外层 ND_BLOCK 包装取消; for-init 同步); `create_lvar_init/init_desg_expr/lvar_initializer`(1316-1389) 搬 sema 作降级(MEMZERO + comma 生成与今天逐节点一致); `gvar_initializer/write_gvar_data`(1416-1494) 一并搬 sema. 返工点: `string_initializer` 的字符折叠与 static 局部变量的 gvar 创建暂留 parse(3.4 翻转).
+- [x] **2.1 ND_DECL**: 新 kind 挂 `Obj *var` + `Initializer *init`; `declaration()`(844-909) 每个声明符发一个 ND_DECL(不再拍平成赋值逗号链; 外层 ND_BLOCK 包装取消; for-init 同步); `create_lvar_init/init_desg_expr/lvar_initializer`(1316-1389) 搬 sema 作降级(MEMZERO + comma 生成与今天逐节点一致); `gvar_initializer/write_gvar_data`(1416-1494) 一并搬 sema. 返工点: `string_initializer` 的字符折叠与 static 局部变量的 gvar 创建暂留 parse(3.4 翻转).
 
 - [ ] **2.2 VLA 忠实化**: `declaration()` 的 VLA 分支(873-888)改发 ND_DECL 形状, 树内噪音(`EXPR_STMT(NULL_EXPR)` 前缀, alloca 赋值语句)消失, 由 sema 生成; `array_dimensions`(636-652) 的 `const_expr` 判定暂留 parse(返工点).
 
