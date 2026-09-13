@@ -33,7 +33,7 @@
 
 ## P1 表达式层忠实化(10 步)
 
-- [ ] **1.1 ND_GT/ND_GE**: 新增两个 kind; `relational()`(2292-2321) 的 `>` `>=` 不再交换操作数; sema 在比较运算的 case 处降级(改写回 ND_LT/ND_LE + 交换).
+- [x] **1.1 ND_GT/ND_GE**: 新增两个 kind; `relational()`(2292-2321) 的 `>` `>=` 不再交换操作数; sema 在比较运算的 case 处降级(改写回 ND_LT/ND_LE + 交换).
 
 - [ ] **1.2 elvis**: `conditional()`(2194-2204) 的 GNU `a ?: b` 分支发 `ND_COND{is_elvis}`; sema 展开 `tmp = a, tmp ? tmp : b`(只用纯 `=`, 不依赖 1.3).
 

@@ -2101,12 +2101,12 @@ static Node *relational(Token **rest, Token *tok) {
     }
 
     if (equal(tok, ">")) {
-      node = new_binary(ND_LT, shift(&tok, tok->next), node, start);
+      node = new_binary(ND_GT, node, shift(&tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, ">=")) {
-      node = new_binary(ND_LE, shift(&tok, tok->next), node, start);
+      node = new_binary(ND_GE, node, shift(&tok, tok->next), start);
       continue;
     }
 

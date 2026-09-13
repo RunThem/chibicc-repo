@@ -98,10 +98,25 @@ void add_type(Node *node) {
       node->rhs = new_cast(node->rhs, node->lhs->ty);
     node->ty = node->lhs->ty;
     return;
-  case ND_EQ:
-  case ND_NE:
+  case ND_GT:
+  case ND_GE:
+    // Downgrade the faithful `>` / `>=` back to `<` / `<=` with
+    // swapped operands, which is the only comparison form codegen
+    // understands.
+    {
+      Node *lhs = node->lhs;
+      node->lhs = node->rhs;
+      node->rhs = lhs;
+      node->kind = node->kind == ND_GT ? ND_LT : ND_LE;
+    }
+    // fallthrough
   case ND_LT:
   case ND_LE:
+    usual_arith_conv(&node->lhs, &node->rhs);
+    node->ty = ty_int;
+    return;
+  case ND_EQ:
+  case ND_NE:
     usual_arith_conv(&node->lhs, &node->rhs);
     node->ty = ty_int;
     return;
