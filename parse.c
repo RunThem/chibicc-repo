@@ -1987,15 +1987,13 @@ Node *conditional(Token **rest, Token *tok) {
   }
 
   if (equal(tok->next, ":")) {
-    // [GNU] Compile `a ?: b` as `tmp = a, tmp ? tmp : b`.
-    add_type(cond);
-    Obj *var = new_lvar("", cond->ty);
-    Node *lhs = new_binary(ND_ASSIGN, new_var_node(var, tok), cond, tok);
-    Node *rhs = new_node(ND_COND, tok);
-    rhs->cond = new_var_node(var, tok);
-    rhs->then = new_var_node(var, tok);
-    rhs->els = conditional(rest, tok->next->next);
-    return new_binary(ND_COMMA, lhs, rhs, tok);
+    // [GNU] `a ?: b`. Kept as-is in the tree with is_elvis set;
+    // sema lowers it to `tmp = a, tmp ? tmp : b`.
+    Node *node = new_node(ND_COND, tok);
+    node->is_elvis = true;
+    node->cond = cond;
+    node->els = conditional(rest, tok->next->next);
+    return node;
   }
 
   Node *node = new_node(ND_COND, tok);

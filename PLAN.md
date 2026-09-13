@@ -35,7 +35,7 @@
 
 - [x] **1.1 ND_GT/ND_GE**: 新增两个 kind; `relational()`(2292-2321) 的 `>` `>=` 不再交换操作数; sema 在比较运算的 case 处降级(改写回 ND_LT/ND_LE + 交换).
 
-- [ ] **1.2 elvis**: `conditional()`(2194-2204) 的 GNU `a ?: b` 分支发 `ND_COND{is_elvis}`; sema 展开 `tmp = a, tmp ? tmp : b`(只用纯 `=`, 不依赖 1.3).
+- [x] **1.2 elvis**: `conditional()`(2194-2204) 的 GNU `a ?: b` 分支发 `ND_COND{is_elvis}`; sema 展开 `tmp = a, tmp ? tmp : b`(只用纯 `=`, 不依赖 1.3).
 
 - [ ] **1.3 复合赋值(拆两个提交)**: `Node` 加 `NodeKind op` 字段(0 表示纯 `=`); `assign()`(2145-2183) 的 10 个 `op=` 分支改发 `ND_ASSIGN{op}`(不再经 `new_add/new_sub`, 缩放交给 sema); 第一个提交切 `+= -=`(原走 new_add/new_sub, 改动最大), 第二个提交切其余 8 个; `to_assign`(2033-2140) 搬 sema, 三个分支(member/atomic/plain)原样保留, 由 `node->op` 驱动.
 

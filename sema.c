@@ -138,6 +138,21 @@ void add_type(Node *node) {
     node->ty = node->var->ty;
     return;
   case ND_COND:
+    if (node->is_elvis) {
+      // Lower the GNU `a ?: b` to `tmp = a, tmp ? tmp : b`.
+      // The node itself is rewritten to the comma expression.
+      Obj *var = new_lvar("", node->cond->ty);
+      Node *lhs = new_binary(ND_ASSIGN, new_var_node(var, node->tok), node->cond, node->tok);
+      Node *rhs = new_node(ND_COND, node->tok);
+      rhs->cond = new_var_node(var, node->tok);
+      rhs->then = new_var_node(var, node->tok);
+      rhs->els = node->els;
+      node->kind = ND_COMMA;
+      node->lhs = lhs;
+      node->rhs = rhs;
+      add_type(node);
+      return;
+    }
     if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {
       node->ty = ty_void;
     } else {

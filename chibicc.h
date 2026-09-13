@@ -268,6 +268,10 @@ struct Node {
   Node *case_next;
   Node *default_case;
 
+  // [GNU] `a ?: b` conditional. sema lowers it to
+  // `tmp = a, tmp ? tmp : b`.
+  bool is_elvis;
+
   // Case
   long begin;
   long end;
