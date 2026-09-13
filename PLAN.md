@@ -29,7 +29,7 @@
 
 - [x] **0.1 汇编快照脚本**: 新增 make 目标, 在 docker 内构建 chibicc 后对全部 `test/*.c` 跑 `./chibicc -S` 存档 .s(遵循 docker-test 的 /work 可写层约束, 产物目录加入 .gitignore), 并提供重新生成 + diff 命令. 之后每步额外验证快照 diff 为空.
 
-- [ ] **0.2 建 sema.c(纯搬家, 零行为变化)**: type.c 的 `get_common_type`(134-161), `usual_arith_conv`(170-174), `add_type`(176-307) 移入 sema.c; parse.c 的 `eval` 全家(1828-2025: eval/eval2/eval_rval/is_const_expr/const_expr/eval_double)移入 sema.c, parse.c 保留跨文件调用(`const_expr` 被数组维度/枚举/case/位域宽度/_Alignas/attribute 等处调用); 节点与变量构造器(`new_node/new_binary/new_unary/new_num/new_long/new_ulong/new_var_node/new_vla_ptr/new_cast/new_lvar/new_gvar/new_anon_gvar/new_string_literal/new_unique_name`)提升为跨文件, 声明加入 chibicc.h; static 清单(locals/globals/scope 等)仍留 parse.c.
+- [x] **0.2 建 sema.c(纯搬家, 零行为变化)**: type.c 的 `get_common_type`(134-161), `usual_arith_conv`(170-174), `add_type`(176-307) 移入 sema.c; parse.c 的 `eval` 全家(1828-2025: eval/eval2/eval_rval/is_const_expr/const_expr/eval_double)移入 sema.c, parse.c 保留跨文件调用(`const_expr` 被数组维度/枚举/case/位域宽度/_Alignas/attribute 等处调用); 节点与变量构造器(`new_node/new_binary/new_unary/new_num/new_long/new_ulong/new_var_node/new_vla_ptr/new_cast/new_lvar/new_gvar/new_anon_gvar/new_string_literal/new_unique_name`)提升为跨文件, 声明加入 chibicc.h; static 清单(locals/globals/scope 等)仍留 parse.c.
 
 ## P1 表达式层忠实化(10 步)
 

@@ -124,14 +124,8 @@ static Node *compound_stmt(Token **rest, Token *tok);
 static Node *stmt(Token **rest, Token *tok);
 static Node *expr_stmt(Token **rest, Token *tok);
 static Node *expr(Token **rest, Token *tok);
-static int64_t eval(Node *node);
-static int64_t eval2(Node *node, char ***label);
-static int64_t eval_rval(Node *node, char ***label);
-static bool is_const_expr(Node *node);
 static Node *assign(Token **rest, Token *tok);
 static Node *logor(Token **rest, Token *tok);
-static double eval_double(Node *node);
-static Node *conditional(Token **rest, Token *tok);
 static Node *logand(Token **rest, Token *tok);
 static Node *bitor(Token **rest, Token *tok);
 static Node *bitxor(Token **rest, Token *tok);
@@ -189,53 +183,53 @@ static Type *find_tag(Token *tok) {
   return NULL;
 }
 
-static Node *new_node(NodeKind kind, Token *tok) {
+Node *new_node(NodeKind kind, Token *tok) {
   Node *node = calloc(1, sizeof(Node));
   node->kind = kind;
   node->tok = tok;
   return node;
 }
 
-static Node *new_binary(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
+Node *new_binary(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
   Node *node = new_node(kind, tok);
   node->lhs = lhs;
   node->rhs = rhs;
   return node;
 }
 
-static Node *new_unary(NodeKind kind, Node *expr, Token *tok) {
+Node *new_unary(NodeKind kind, Node *expr, Token *tok) {
   Node *node = new_node(kind, tok);
   node->lhs = expr;
   return node;
 }
 
-static Node *new_num(int64_t val, Token *tok) {
+Node *new_num(int64_t val, Token *tok) {
   Node *node = new_node(ND_NUM, tok);
   node->val = val;
   return node;
 }
 
-static Node *new_long(int64_t val, Token *tok) {
+Node *new_long(int64_t val, Token *tok) {
   Node *node = new_node(ND_NUM, tok);
   node->val = val;
   node->ty = ty_long;
   return node;
 }
 
-static Node *new_ulong(long val, Token *tok) {
+Node *new_ulong(long val, Token *tok) {
   Node *node = new_node(ND_NUM, tok);
   node->val = val;
   node->ty = ty_ulong;
   return node;
 }
 
-static Node *new_var_node(Obj *var, Token *tok) {
+Node *new_var_node(Obj *var, Token *tok) {
   Node *node = new_node(ND_VAR, tok);
   node->var = var;
   return node;
 }
 
-static Node *new_vla_ptr(Obj *var, Token *tok) {
+Node *new_vla_ptr(Obj *var, Token *tok) {
   Node *node = new_node(ND_VLA_PTR, tok);
   node->var = var;
   return node;
@@ -307,7 +301,7 @@ static Obj *new_var(char *name, Type *ty) {
   return var;
 }
 
-static Obj *new_lvar(char *name, Type *ty) {
+Obj *new_lvar(char *name, Type *ty) {
   Obj *var = new_var(name, ty);
   var->is_local = true;
   var->next = locals;
@@ -315,7 +309,7 @@ static Obj *new_lvar(char *name, Type *ty) {
   return var;
 }
 
-static Obj *new_gvar(char *name, Type *ty) {
+Obj *new_gvar(char *name, Type *ty) {
   Obj *var = new_var(name, ty);
   var->next = globals;
   var->is_static = true;
@@ -324,16 +318,16 @@ static Obj *new_gvar(char *name, Type *ty) {
   return var;
 }
 
-static char *new_unique_name(void) {
+char *new_unique_name(void) {
   static int id = 0;
   return format(".L..%d", id++);
 }
 
-static Obj *new_anon_gvar(Type *ty) {
+Obj *new_anon_gvar(Type *ty) {
   return new_gvar(new_unique_name(), ty);
 }
 
-static Obj *new_string_literal(char *p, Type *ty) {
+Obj *new_string_literal(char *p, Type *ty) {
   Obj *var = new_anon_gvar(ty);
   var->init_data = p;
   return var;
@@ -1825,205 +1819,6 @@ static Node *expr(Token **rest, Token *tok) {
   return node;
 }
 
-static int64_t eval(Node *node) {
-  return eval2(node, NULL);
-}
-
-// Evaluate a given node as a constant expression.
-//
-// A constant expression is either just a number or ptr+n where ptr
-// is a pointer to a global variable and n is a postiive/negative
-// number. The latter form is accepted only as an initialization
-// expression for a global variable.
-static int64_t eval2(Node *node, char ***label) {
-  add_type(node);
-
-  if (is_flonum(node->ty))
-    return eval_double(node);
-
-  switch (node->kind) {
-  case ND_ADD:
-    return eval2(node->lhs, label) + eval(node->rhs);
-  case ND_SUB:
-    return eval2(node->lhs, label) - eval(node->rhs);
-  case ND_MUL:
-    return eval(node->lhs) * eval(node->rhs);
-  case ND_DIV:
-    if (node->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) / eval(node->rhs);
-    return eval(node->lhs) / eval(node->rhs);
-  case ND_NEG:
-    return -eval(node->lhs);
-  case ND_MOD:
-    if (node->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) % eval(node->rhs);
-    return eval(node->lhs) % eval(node->rhs);
-  case ND_BITAND:
-    return eval(node->lhs) & eval(node->rhs);
-  case ND_BITOR:
-    return eval(node->lhs) | eval(node->rhs);
-  case ND_BITXOR:
-    return eval(node->lhs) ^ eval(node->rhs);
-  case ND_SHL:
-    return eval(node->lhs) << eval(node->rhs);
-  case ND_SHR:
-    if (node->ty->is_unsigned && node->ty->size == 8)
-      return (uint64_t)eval(node->lhs) >> eval(node->rhs);
-    return eval(node->lhs) >> eval(node->rhs);
-  case ND_EQ:
-    return eval(node->lhs) == eval(node->rhs);
-  case ND_NE:
-    return eval(node->lhs) != eval(node->rhs);
-  case ND_LT:
-    if (node->lhs->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) < eval(node->rhs);
-    return eval(node->lhs) < eval(node->rhs);
-  case ND_LE:
-    if (node->lhs->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) <= eval(node->rhs);
-    return eval(node->lhs) <= eval(node->rhs);
-  case ND_COND:
-    return eval(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
-  case ND_COMMA:
-    return eval2(node->rhs, label);
-  case ND_NOT:
-    return !eval(node->lhs);
-  case ND_BITNOT:
-    return ~eval(node->lhs);
-  case ND_LOGAND:
-    return eval(node->lhs) && eval(node->rhs);
-  case ND_LOGOR:
-    return eval(node->lhs) || eval(node->rhs);
-  case ND_CAST: {
-    int64_t val = eval2(node->lhs, label);
-    if (is_integer(node->ty)) {
-      switch (node->ty->size) {
-      case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
-      case 2: return node->ty->is_unsigned ? (uint16_t)val : (int16_t)val;
-      case 4: return node->ty->is_unsigned ? (uint32_t)val : (int32_t)val;
-      }
-    }
-    return val;
-  }
-  case ND_ADDR:
-    return eval_rval(node->lhs, label);
-  case ND_LABEL_VAL:
-    *label = &node->unique_label;
-    return 0;
-  case ND_MEMBER:
-    if (!label)
-      error_tok(node->tok, "not a compile-time constant");
-    if (node->ty->kind != TY_ARRAY)
-      error_tok(node->tok, "invalid initializer");
-    return eval_rval(node->lhs, label) + node->member->offset;
-  case ND_VAR:
-    if (!label)
-      error_tok(node->tok, "not a compile-time constant");
-    if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
-      error_tok(node->tok, "invalid initializer");
-    *label = &node->var->name;
-    return 0;
-  case ND_NUM:
-    return node->val;
-  }
-
-  error_tok(node->tok, "not a compile-time constant");
-}
-
-static int64_t eval_rval(Node *node, char ***label) {
-  switch (node->kind) {
-  case ND_VAR:
-    if (node->var->is_local)
-      error_tok(node->tok, "not a compile-time constant");
-    *label = &node->var->name;
-    return 0;
-  case ND_DEREF:
-    return eval2(node->lhs, label);
-  case ND_MEMBER:
-    return eval_rval(node->lhs, label) + node->member->offset;
-  }
-
-  error_tok(node->tok, "invalid initializer");
-}
-
-static bool is_const_expr(Node *node) {
-  add_type(node);
-
-  switch (node->kind) {
-  case ND_ADD:
-  case ND_SUB:
-  case ND_MUL:
-  case ND_DIV:
-  case ND_BITAND:
-  case ND_BITOR:
-  case ND_BITXOR:
-  case ND_SHL:
-  case ND_SHR:
-  case ND_EQ:
-  case ND_NE:
-  case ND_LT:
-  case ND_LE:
-  case ND_LOGAND:
-  case ND_LOGOR:
-    return is_const_expr(node->lhs) && is_const_expr(node->rhs);
-  case ND_COND:
-    if (!is_const_expr(node->cond))
-      return false;
-    return is_const_expr(eval(node->cond) ? node->then : node->els);
-  case ND_COMMA:
-    return is_const_expr(node->rhs);
-  case ND_NEG:
-  case ND_NOT:
-  case ND_BITNOT:
-  case ND_CAST:
-    return is_const_expr(node->lhs);
-  case ND_NUM:
-    return true;
-  }
-
-  return false;
-}
-
-int64_t const_expr(Token **rest, Token *tok) {
-  Node *node = conditional(rest, tok);
-  return eval(node);
-}
-
-static double eval_double(Node *node) {
-  add_type(node);
-
-  if (is_integer(node->ty)) {
-    if (node->ty->is_unsigned)
-      return (unsigned long)eval(node);
-    return eval(node);
-  }
-
-  switch (node->kind) {
-  case ND_ADD:
-    return eval_double(node->lhs) + eval_double(node->rhs);
-  case ND_SUB:
-    return eval_double(node->lhs) - eval_double(node->rhs);
-  case ND_MUL:
-    return eval_double(node->lhs) * eval_double(node->rhs);
-  case ND_DIV:
-    return eval_double(node->lhs) / eval_double(node->rhs);
-  case ND_NEG:
-    return -eval_double(node->lhs);
-  case ND_COND:
-    return eval_double(node->cond) ? eval_double(node->then) : eval_double(node->els);
-  case ND_COMMA:
-    return eval_double(node->rhs);
-  case ND_CAST:
-    if (is_flonum(node->lhs->ty))
-      return eval_double(node->lhs);
-    return eval(node->lhs);
-  case ND_NUM:
-    return node->fval;
-  }
-
-  error_tok(node->tok, "not a compile-time constant");
-}
-
 // Convert op= operators to expressions containing an assignment.
 //
 // In general, `A op= C` is converted to ``tmp = &A, *tmp = *tmp op B`.
@@ -2183,7 +1978,7 @@ static Node *assign(Token **rest, Token *tok) {
 }
 
 // conditional = logor ("?" expr? ":" conditional)?
-static Node *conditional(Token **rest, Token *tok) {
+Node *conditional(Token **rest, Token *tok) {
   Node *cond = logor(&tok, tok);
 
   if (!equal(tok, "?")) {

@@ -290,9 +290,38 @@ struct Node {
   long double fval;
 };
 
+// Node constructors. Defined in parse.c, but also used by sema.c.
+Node *new_node(NodeKind kind, Token *tok);
+Node *new_binary(NodeKind kind, Node *lhs, Node *rhs, Token *tok);
+Node *new_unary(NodeKind kind, Node *expr, Token *tok);
+Node *new_num(int64_t val, Token *tok);
+Node *new_long(int64_t val, Token *tok);
+Node *new_ulong(long val, Token *tok);
+Node *new_var_node(Obj *var, Token *tok);
+Node *new_vla_ptr(Obj *var, Token *tok);
 Node *new_cast(Node *expr, Type *ty);
-int64_t const_expr(Token **rest, Token *tok);
+
+// Variable constructors. Defined in parse.c, but also used by sema.c.
+Obj *new_lvar(char *name, Type *ty);
+Obj *new_gvar(char *name, Type *ty);
+Obj *new_anon_gvar(Type *ty);
+Obj *new_string_literal(char *p, Type *ty);
+char *new_unique_name(void);
+
+Node *conditional(Token **rest, Token *tok);
 Obj *parse(Token *tok);
+
+//
+// sema.c
+//
+
+// Semantic analysis: type annotation and constant evaluation.
+void add_type(Node *node);
+int64_t eval(Node *node);
+int64_t eval2(Node *node, char ***label);
+double eval_double(Node *node);
+bool is_const_expr(Node *node);
+int64_t const_expr(Token **rest, Token *tok);
 
 //
 // type.c
@@ -402,7 +431,6 @@ Type *array_of(Type *base, int size);
 Type *vla_of(Type *base, Node *expr);
 Type *enum_type(void);
 Type *struct_type(void);
-void add_type(Node *node);
 
 //
 // codegen.c
