@@ -388,17 +388,35 @@ Obj *new_anon_gvar(Type *ty);
 Obj *new_string_literal(char *p, Type *ty);
 char *new_unique_name(void);
 
-// The parser still owns the scope table that names are registered in.
-void push_var_scope(char *name, Obj *var);
-void push_enum_scope(char *name, Type *ty, int val);
+// Declaration attributes collected by declspec: storage class and
+// _Alignas. The parser fills this in; sema consumes it when it declares
+// the object.
+typedef struct {
+  bool is_typedef;
+  bool is_static;
+  bool is_extern;
+  bool is_inline;
+  bool is_tls;
+  int align;
+} VarAttr;
 
-// Identifier lookup in that scope table. Returns the variable or
-// function a name refers to; for an enum constant it sets *enum_ty and
-// *enum_val and returns NULL, and for a typedef (or an unknown name) it
-// returns NULL leaving both untouched. sema resolves identifiers with
-// this until it rebuilds the scopes itself.
-Obj *find_ident(Token *tok, Type **enum_ty, int *enum_val);
-Obj *find_func(char *name);
+// The scope table belongs to sema: it is what name resolution reads and
+// writes. The parser drives the block structure and asks the grammar
+// questions that only the table can answer (typedef-name
+// classification, tag lookup).
+void enter_scope(void);
+void leave_scope(void);
+bool in_file_scope(void);
+Type *find_typedef(Token *tok);
+Type *find_tag(Token *tok);
+Type *find_current_tag(Token *tok);
+void push_tag_scope(Token *tok, Type *ty);
+
+// Declares a function at file scope, or checks a redeclaration against
+// the object declared before. `tok` is the token following the
+// declarator; `is_definition` says whether a body follows.
+Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
+                      bool is_definition);
 
 // The function the parser is currently parsing, needed by sema when it
 // records a reference to a "static inline" function.
@@ -438,13 +456,13 @@ void set_locals(Obj *vars);
 Obj *get_globals(void);
 void set_globals(Obj *vars);
 
-// Typedef and enum-constant declarations, recorded by the parser in
-// source order. A typedef record carries the name (as `tok`) and the
-// declared type (as `ty`); an enum-constant record carries the name (as
-// `tok`), the optional explicit value (as `lhs`) and the evaluated
-// value (as `val`). They are kept out of the AST statement chain
-// because codegen emits a .loc directive for every node it sees.
-void add_scope_decl(Node *node);
+// Typedef and enum-constant declarations, recorded by sema in source
+// order. A typedef record carries the name (as `tok`) and the declared
+// type (as `ty`); an enum-constant record carries the name (as `tok`),
+// the optional explicit value (as `lhs`) and the evaluated value (as
+// `val`). They are kept out of the AST statement chain because codegen
+// emits a .loc directive for every node it sees.
+void add_typedef(Node *node);
 Node *get_scope_decls(void);
 
 // Evaluates one enum constant and registers it in the parser's scope

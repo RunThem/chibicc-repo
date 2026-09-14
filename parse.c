@@ -18,38 +18,6 @@
 
 #include "chibicc.h"
 
-// Scope for local variables, global variables, typedefs
-// or enum constants
-typedef struct {
-  Obj *var;
-  Type *type_def;
-  Type *enum_ty;
-  int enum_val;
-} VarScope;
-
-// Represents a block scope.
-typedef struct Scope Scope;
-struct Scope {
-  Scope *next;
-
-  // C has two block scopes; one is for variables/typedefs and
-  // the other is for struct/union/enum tags.
-  HashMap vars;
-  HashMap tags;
-};
-
-// Variable attributes such as typedef or extern.
-typedef struct {
-  bool is_typedef;
-  bool is_static;
-  bool is_extern;
-  bool is_inline;
-  bool is_tls;
-  int align;
-} VarAttr;
-
-static Scope *scope = &(Scope){};
-
 // Points to the function object the parser is currently parsing.
 static Obj *current_fn;
 
@@ -106,34 +74,6 @@ static Token *parse_typedef(Token *tok, Type *basety);
 static bool is_function(Token *tok);
 static Token *function(Token *tok, Type *basety, VarAttr *attr);
 static Token *global_variable(Token *tok, Type *basety, VarAttr *attr);
-
-static void enter_scope(void) {  Scope *sc = calloc(1, sizeof(Scope));
-  sc->next = scope;
-  scope = sc;
-}
-
-static void leave_scope(void) {
-  scope = scope->next;
-}
-
-// Find a variable by name.
-static VarScope *find_var(Token *tok) {
-  for (Scope *sc = scope; sc; sc = sc->next) {
-    VarScope *sc2 = hashmap_get2(&sc->vars, tok->loc, tok->len);
-    if (sc2)
-      return sc2;
-  }
-  return NULL;
-}
-
-static Type *find_tag(Token *tok) {
-  for (Scope *sc = scope; sc; sc = sc->next) {
-    Type *ty = hashmap_get2(&sc->tags, tok->loc, tok->len);
-    if (ty)
-      return ty;
-  }
-  return NULL;
-}
 
 Node *new_node(NodeKind kind, Token *tok) {
   Node *node = calloc(1, sizeof(Node));
@@ -198,26 +138,6 @@ Node *new_cast(Node *expr, Type *ty) {
   return node;
 }
 
-static VarScope *push_scope(char *name) {
-  VarScope *sc = calloc(1, sizeof(VarScope));
-  hashmap_put(&scope->vars, name, sc);
-  return sc;
-}
-
-// Registers a variable in the current scope. sema.c creates variables
-// (new_lvar/new_gvar) but the parser's scope table is still the place
-// names are looked up, so the registration is called back here. This
-// goes away once sema owns name resolution.
-void push_var_scope(char *name, Obj *var) {
-  push_scope(name)->var = var;
-}
-
-void push_enum_scope(char *name, Type *ty, int val) {
-  VarScope *sc = push_scope(name);
-  sc->enum_ty = ty;
-  sc->enum_val = val;
-}
-
 static Initializer *new_initializer(Type *ty, bool is_flexible) {
   Initializer *init = calloc(1, sizeof(Initializer));
   init->ty = ty;
@@ -279,39 +199,8 @@ char *get_ident(Token *tok) {
   return strndup(tok->loc, tok->len);
 }
 
-static Type *find_typedef(Token *tok) {
-  if (tok->kind == TK_IDENT) {
-    VarScope *sc = find_var(tok);
-    if (sc)
-      return sc->type_def;
-  }
-  return NULL;
-}
-
-// Identifier lookup for sema. The parser's scope table is still the
-// place names are resolved, so sema asks here; this goes away once sema
-// rebuilds the scopes from the tree.
-Obj *find_ident(Token *tok, Type **enum_ty, int *enum_val) {
-  VarScope *sc = find_var(tok);
-  if (!sc)
-    return NULL;
-
-  if (sc->var)
-    return sc->var;
-
-  if (sc->enum_ty) {
-    *enum_ty = sc->enum_ty;
-    *enum_val = sc->enum_val;
-  }
-  return NULL;
-}
-
 Obj *get_current_fn(void) {
   return current_fn;
-}
-
-static void push_tag_scope(Token *tok, Type *ty) {
-  hashmap_put2(&scope->tags, tok->loc, tok->len, ty);
 }
 
 // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
@@ -2102,7 +1991,7 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
   if (tag) {
     // If this is a redefinition, overwrite a previous type.
     // Otherwise, register the struct type.
-    Type *ty2 = hashmap_get2(&scope->tags, tag->loc, tag->len);
+    Type *ty2 = find_current_tag(tag);
     if (ty2) {
       *ty2 = *ty;
       return ty2;
@@ -2223,7 +2112,7 @@ static Node *postfix(Token **rest, Token *tok) {
 
     Node *node = new_node(ND_COMPOUND_LITERAL, start);
 
-    if (scope->next == NULL) {
+    if (in_file_scope()) {
       Obj *var = new_anon_gvar(ty);
       node->var = var;
     } else {
@@ -2557,12 +2446,11 @@ static Token *parse_typedef(Token *tok, Type *basety) {
     if (!ty->name)
       error_tok(ty->name_pos, "typedef name omitted");
 
-    // Record the declaration as a node for sema's scope reconstruction.
+    // Record the declaration for sema: it registers the name in the
+    // current scope, which the typedef oracle below reads back.
     Node *node = new_node(ND_TYPEDEF, ty->name);
     node->ty = ty;
-    add_scope_decl(node);
-
-    push_scope(get_ident(ty->name))->type_def = ty;
+    add_typedef(node);
   }
   return tok;
 }
@@ -2578,44 +2466,13 @@ static void resolve_goto_labels(void) {
   gotos = labels = NULL;
 }
 
-// Looks up a function in the file scope. Also used by sema to walk the
-// "static inline" reference graph.
-Obj *find_func(char *name) {
-  Scope *sc = scope;
-  while (sc->next)
-    sc = sc->next;
-
-  VarScope *sc2 = hashmap_get(&sc->vars, name);
-  if (sc2 && sc2->var && sc2->var->is_function)
-    return sc2->var;
-  return NULL;
-}
-
 static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   Type *ty = declarator(&tok, tok, basety);
   if (!ty->name)
     error_tok(ty->name_pos, "function name omitted");
   char *name_str = get_ident(ty->name);
 
-  Obj *fn = find_func(name_str);
-  if (fn) {
-    // Redeclaration
-    if (!fn->is_function)
-      error_tok(tok, "redeclared as a different kind of symbol");
-    if (fn->is_definition && equal(tok, "{"))
-      error_tok(tok, "redefinition of %s", name_str);
-    if (!fn->is_static && attr->is_static)
-      error_tok(tok, "static declaration follows a non-static declaration");
-    fn->is_definition = fn->is_definition || equal(tok, "{");
-  } else {
-    fn = new_gvar(name_str, ty);
-    fn->is_function = true;
-    fn->is_definition = equal(tok, "{");
-    fn->is_static = attr->is_static || (attr->is_inline && !attr->is_extern);
-    fn->is_inline = attr->is_inline;
-  }
-
-  fn->is_root = !(fn->is_static && fn->is_inline);
+  Obj *fn = declare_function(name_str, ty, attr, tok, equal(tok, "{"));
 
   if (consume(&tok, tok, ";"))
     return tok;

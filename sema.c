@@ -37,14 +37,104 @@ void set_globals(Obj *vars) {
   globals = vars;
 }
 
+// Scope for local variables, global variables, typedefs
+// or enum constants
+typedef struct {
+  Obj *var;
+  Type *type_def;
+  Type *enum_ty;
+  int enum_val;
+} VarScope;
+
+// Represents a block scope.
+typedef struct Scope Scope;
+struct Scope {
+  Scope *next;
+
+  // C has two block scopes; one is for variables/typedefs and
+  // the other is for struct/union/enum tags.
+  HashMap vars;
+  HashMap tags;
+};
+
+// The scope table lives here because name resolution is sema's: it
+// creates the variables and resolves the names. The parser only drives
+// the block structure (enter_scope/leave_scope) and asks the two
+// grammar questions the table answers - whether an identifier is a
+// typedef name, and what a tag refers to.
+static Scope *scope = &(Scope){};
+
+void enter_scope(void) {
+  Scope *sc = calloc(1, sizeof(Scope));
+  sc->next = scope;
+  scope = sc;
+}
+
+void leave_scope(void) {
+  scope = scope->next;
+}
+
+// True at file scope, where a compound literal declares an anonymous
+// global rather than a hidden local.
+bool in_file_scope(void) {
+  return scope->next == NULL;
+}
+
+// Find a variable by name.
+static VarScope *find_var(Token *tok) {
+  for (Scope *sc = scope; sc; sc = sc->next) {
+    VarScope *sc2 = hashmap_get2(&sc->vars, tok->loc, tok->len);
+    if (sc2)
+      return sc2;
+  }
+  return NULL;
+}
+
+// Find a struct/union/enum tag by name, in any enclosing scope.
+Type *find_tag(Token *tok) {
+  for (Scope *sc = scope; sc; sc = sc->next) {
+    Type *ty = hashmap_get2(&sc->tags, tok->loc, tok->len);
+    if (ty)
+      return ty;
+  }
+  return NULL;
+}
+
+// Find a tag declared in the current scope only; used when a tag is
+// (re)defined, so that a previous forward declaration in the same scope
+// keeps its identity.
+Type *find_current_tag(Token *tok) {
+  return hashmap_get2(&scope->tags, tok->loc, tok->len);
+}
+
+void push_tag_scope(Token *tok, Type *ty) {
+  hashmap_put2(&scope->tags, tok->loc, tok->len, ty);
+}
+
+static VarScope *push_scope(char *name) {
+  VarScope *sc = calloc(1, sizeof(VarScope));
+  hashmap_put(&scope->vars, name, sc);
+  return sc;
+}
+
+// The parser's typedef-name oracle: the C grammar needs to know whether
+// an identifier names a type before it can parse a declaration.
+Type *find_typedef(Token *tok) {
+  if (tok->kind == TK_IDENT) {
+    VarScope *sc = find_var(tok);
+    if (sc)
+      return sc->type_def;
+  }
+  return NULL;
+}
+
 // Declaration records (typedefs and enum constants), in source order.
-// The parser records them as it parses; sema will rebuild scopes from
-// these instead of the parser's scope table. They are not part of the
+// Sema records them as it declares the names; they are not part of the
 // AST statement chain, which codegen walks.
 static Node *scope_decls;
 static Node *scope_decls_tail;
 
-void add_scope_decl(Node *node) {
+static void add_scope_decl(Node *node) {
   if (scope_decls)
     scope_decls_tail = scope_decls_tail->next = node;
   else
@@ -53,6 +143,14 @@ void add_scope_decl(Node *node) {
 
 Node *get_scope_decls(void) {
   return scope_decls;
+}
+
+// Declares a typedef name in the current scope and records the
+// declaration. The name must be visible immediately: the parser needs
+// the typedef oracle to classify the very next identifier.
+void add_typedef(Node *node) {
+  push_scope(get_ident(node->tok))->type_def = node->ty;
+  add_scope_decl(node);
 }
 
 // Evaluates an enum constant's value and registers the name. `val` is
@@ -65,7 +163,9 @@ void add_enum_const(Node *node, Type *ty, int *val) {
   node->val = *val;
   (*val)++;
 
-  push_enum_scope(get_ident(node->tok), ty, node->val);
+  VarScope *sc = push_scope(get_ident(node->tok));
+  sc->enum_ty = ty;
+  sc->enum_val = node->val;
   add_scope_decl(node);
 }
 
@@ -74,8 +174,48 @@ void add_enum_const(Node *node, Type *ty, int *val) {
 // name, but its name is registered like any other local.
 Obj *declare_static_local(char *name, Type *ty) {
   Obj *var = new_anon_gvar(ty);
-  push_var_scope(name, var);
+  push_scope(name)->var = var;
   return var;
+}
+
+// Looks up a function in the file scope.
+static Obj *find_func(char *name) {
+  Scope *sc = scope;
+  while (sc->next)
+    sc = sc->next;
+
+  VarScope *sc2 = hashmap_get(&sc->vars, name);
+  if (sc2 && sc2->var && sc2->var->is_function)
+    return sc2->var;
+  return NULL;
+}
+
+// Declares a function at file scope, or checks a redeclaration against
+// the object declared before. `tok` is the token following the
+// declarator and `is_definition` says whether a body follows.
+Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
+                      bool is_definition) {
+  Obj *fn = find_func(name);
+
+  if (fn) {
+    // Redeclaration
+    if (!fn->is_function)
+      error_tok(tok, "redeclared as a different kind of symbol");
+    if (fn->is_definition && is_definition)
+      error_tok(tok, "redefinition of %s", name);
+    if (!fn->is_static && attr->is_static)
+      error_tok(tok, "static declaration follows a non-static declaration");
+    fn->is_definition = fn->is_definition || is_definition;
+  } else {
+    fn = new_gvar(name, ty);
+    fn->is_function = true;
+    fn->is_definition = is_definition;
+    fn->is_static = attr->is_static || (attr->is_inline && !attr->is_extern);
+    fn->is_inline = attr->is_inline;
+  }
+
+  fn->is_root = !(fn->is_static && fn->is_inline);
+  return fn;
 }
 
 // Sets the unique label of every goto in a function to that of the
@@ -209,14 +349,11 @@ void layout_union(Type *ty) {
 }
 
 // Binds an unresolved name. A variable or function reference becomes
-// ND_VAR; an enum constant becomes ND_NUM. The parser's scope table is
-// still the authority for what a name means, so the lookup goes
-// through it until sema owns the scopes.
+// ND_VAR; an enum constant becomes ND_NUM.
 static void bind_ident(Node *node) {
   Token *tok = node->tok;
-  Type *enum_ty = NULL;
-  int enum_val = 0;
-  Obj *var = find_ident(tok, &enum_ty, &enum_val);
+  VarScope *sc = find_var(tok);
+  Obj *var = sc ? sc->var : NULL;
 
   if (var) {
     // For "static inline" functions, record the reference so that the
@@ -235,9 +372,9 @@ static void bind_ident(Node *node) {
     return;
   }
 
-  if (enum_ty) {
+  if (sc && sc->enum_ty) {
     node->kind = ND_NUM;
-    node->val = enum_val;
+    node->val = sc->enum_val;
     node->ty = ty_int;
     return;
   }
@@ -252,7 +389,7 @@ static Obj *new_var(char *name, Type *ty) {
   var->name = name;
   var->ty = ty;
   var->align = ty->align;
-  push_var_scope(name, var);
+  push_scope(name)->var = var;
   return var;
 }
 
@@ -307,12 +444,12 @@ void begin_function(Obj *fn, Type *ty) {
   // [https://www.sigbus.info/n1570#6.4.2.2p1] "__func__" is
   // automatically defined as a local variable containing the
   // current function name.
-  push_var_scope("__func__",
-                 new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1)));
+  push_scope("__func__")->var =
+    new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
 
   // [GNU] __FUNCTION__ is yet another name of __func__.
-  push_var_scope("__FUNCTION__",
-                 new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1)));
+  push_scope("__FUNCTION__")->var =
+    new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
 }
 
 // In C, `+` operator is overloaded to perform the pointer arithmetic.
