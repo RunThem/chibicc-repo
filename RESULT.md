@@ -184,10 +184,16 @@
 
 ## 给审核者的提示
 
-- 审核重心建议放 sema.c: add_type 的降级 case(GT/GE, COND elvis, ASSIGN/INCDEC/SUBSCRIPT/ADD/SUB/MEMBER, STRING, SIZEOF/ALIGNOF, WHILE/BREAK/CONTINUE, DECL, COMPOUND_LITERAL)与 to_assign/compound_op/new_add/new_sub/compute_vla_size/vla_size_expr/lvar_init_comma/gvar_init_data.
+- 审核重心建议放 sema.c: add_type 的降级 case(GT/GE, COND elvis, ASSIGN/INCDEC/SUBSCRIPT/ADD/SUB/MEMBER, STRING, SIZEOF/ALIGNOF, WHILE/BREAK/CONTINUE, DECL, COMPOUND_LITERAL, IDENT)与 to_assign/compound_op/new_add/new_sub/compute_vla_size/vla_size_expr/lvar_init_comma/gvar_init_data/bind_ident/begin_function/resolve_labels/finalize_globals/array_dimension_type/declare_static_local/add_enum_const.
+- P3 收尾状态: parse.c 2758 行(终态目标约 2100), sema.c 1283 行(终态目标约 1300), chibicc.h 632 行; codegen.c 相对 5f53ed0 仍是 0 行 diff.
+- **名字解析的中间态(oracle 模式, 4.2 清)**: parse 仍持有作用域表, sema 通过六个 parse 侧接口查询/登记 - `find_ident`(解析名字), `find_func`(static inline 引用图), `push_var_scope`/`push_enum_scope`(登记变量与枚举常量), `get_current_fn`(refs 归属), `get_ident`(取标识符拼写). 4.2 让 sema 自建作用域后这些接口应逐步消失. parse 侧另有 `find_typedef`/`find_tag`/`is_typename` 供文法分类(AGENTS 明确保留的 typedef 名字分类 oracle).
+- **声明记录侧链(3.2a/3.4b)**: typedef 与枚举常量以 ND_TYPEDEF/ND_ENUM_CONST 节点记在 sema 的 `scope_decls` 链上(源码顺序), 不进语句链 - 因为块域 typedef/枚举声明今天不产生语句节点, 入链就会多出 .loc 行. 4.2 重建作用域时按需把记录与所属块关联起来(当前不记录作用域归属).
+- **3.2b 的关键约束(值得单独记住)**: 标识符**不能**推迟到一个后置的 resolve 遍历里绑定. parse 的作用域是动态栈(`for` init 的变量在语句解析完就出栈), 而使用点要等到语句级 add_type 才被访问; 同时 sizeof/自增自减/字符串等构造点又要求解析期就能拿到类型. 两条合起来把绑定钉在构造现场. "树结构给出作用域 + 遍历绑定"(即 analyze() 单遍)是 4.2 的任务, 不是 3.2b 能达成的.
+- **parse 侧残余语义(4.1 盘点对象)**: stmt() 的 return 分支经 `current_fn->ty->return_ty` 插隐式 cast; resolve_goto_labels 壳里清空 gotos/labels; `fn->locals = get_locals()`; function() 的 redeclaration 三条诊断("redeclared as a different kind of symbol"/"redefinition of %s"/"static declaration follows a non-static declaration"); declspec 里的 typedef/tag 分类与 `is_typename`; funcall 的实参数量/类型检查; "stray break/continue/case/default" 系列(1.10 起就是返工点).
 - 一个待拍板的设计点: op 字段现在对 ND_ADD/ND_SUB 兼任"已缩放"标记. 若接受快照里这类 no-op cast 差异(或在 4.2 收官时统一), 该标记机制可简化; 当前为字节级等价而保留.
 - 时序原则(1.4 确立, 1.8 扩展): 凡降级会创建 lvar 或匿名 gvar 的节点, parse 构造现场立即 add_type 触发降级, 保证创建顺序与旧代码一致; 1.10 进一步表明, 与这些名字共用 new_unique_name 计数器的标签分配同样必须留在 parse.
-- .loc 原则(2.1 发现): gen_stmt 对每个语句节点(含 ND_BLOCK)先按 node->tok 打一行 .loc, 因此语句链的形状与锚点被字节冻结 — ND_DECL 只能占据既有 ES(init)/ES(alloca) 的链位, 外层 ND_BLOCK 与 vla-size 前缀语句不可取消(PLAN 中"外层 ND_BLOCK 包装取消"与"EXPR_STMT 前缀消失"由字节闸门否决, 见 2.1/2.2 偏差); 无初始值的 ND_DECL 携带 vla-size 树于 lhs 并降级为该语句.
-- 忠实层的已知残留: ND_WHILE/ND_FOR/ND_DO 带 parse 期分配的 brk/cont 标签, ND_BREAK/ND_CONTINUE 带 parse 期记录的绑定目标(unique_label) — 这些是字节级等价所要求的 parse 期语义残留, 待 3.x/4.x 清理. 另有: static 局部声明不发节点(3.4), ND_DECL 的 vla-size 兄弟语句(2.2 已述).
+- .loc 原则(2.1 发现, 3.2a/3.4a/3.4b 反复命中): gen_stmt 对每个语句节点(含 ND_BLOCK)先按 node->tok 打一行 .loc, 因此语句链的形状与锚点被字节冻结. 由此否决了四处计划原文: 2.1 的"外层 ND_BLOCK 取消", 2.2 的"EXPR_STMT 前缀消失", 3.2a/3.4b 的"声明节点进树", 3.4a 的"static 局部走 ND_DECL 降级建 gvar".
+- 忠实层的已知残留: ND_WHILE/ND_FOR/ND_DO 带 parse 期分配的 brk/cont 标签, ND_BREAK/ND_CONTINUE 带 parse 期记录的绑定目标(unique_label) - 这些是字节级等价所要求的 parse 期语义残留, 待 4.x 清理. 另有: ND_DECL 的 vla-size 兄弟语句(2.2 已述), scope_decls 侧链无作用域归属(3.2a/3.4b).
 - codegen.c 全程零改动: git diff 5f53ed0..HEAD -- codegen.c 为空.
 - 常用命令: make docker-test(全量 + 自举), make docker-snapshot-diff(快照 diff), make docker-snapshot(重置基线, 仅在刻意的行为变化后).
+- 逐字节对照的土办法(3.2b 起常用): `git worktree add /tmp/cbase <commit> && make -C /tmp/cbase`, 再对同一组 .c 用两个二进制跑 -S, diff 汇编与 stderr; 样例覆盖 enum/typedef/作用域遮蔽/循环/switch/复合赋值/字符串/复合字面量/VLA/sizeof/static inline/全局初始化器.
