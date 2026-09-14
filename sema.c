@@ -169,10 +169,19 @@ void add_enum_const(Node *node, Type *ty, int *val) {
   add_scope_decl(node);
 }
 
+// A block-scope declaration may not declare a void object. `tok` is the
+// position of the declaration, anchored exactly as the parser used to.
+static void check_declared_void(Token *tok, Type *ty) {
+  if (ty->kind == TY_VOID)
+    error_tok(tok, "variable declared void");
+}
+
 // Declares a block-scope static variable. It has static storage
 // duration, so it lives in the global data section under an anonymous
 // name, but its name is registered like any other local.
-Obj *declare_static_local(char *name, Type *ty) {
+Obj *declare_static_local(Token *tok, char *name, Type *ty) {
+  check_declared_void(tok, ty);
+
   Obj *var = new_anon_gvar(ty);
   push_scope(name)->var = var;
   return var;
@@ -677,6 +686,64 @@ static Node *new_inc_dec(Node *node, Token *tok, int addend) {
   return new_cast(sub, node->ty);
 }
 
+// Turns a faithful call node into the shape codegen expects: the callee
+// must be a function or a pointer to one, each argument is converted to
+// its parameter type (an argument past the parameter list is promoted
+// instead, since it belongs to a variadic tail), and a struct or union
+// return value gets the buffer the caller owns. `tok` is the call's
+// position. The parser calls this at the call site so that the return
+// buffer is created where the call appears, like any other local.
+void lower_funcall(Node *node, Token *tok) {
+  Node *fn = node->lhs;
+  Type *ty = fn->ty;
+
+  if (ty->kind != TY_FUNC &&
+      (ty->kind != TY_PTR || ty->base->kind != TY_FUNC))
+    error_tok(fn->tok, "not a function");
+
+  if (ty->kind != TY_FUNC)
+    ty = ty->base;
+
+  node->func_ty = ty;
+
+  Type *param_ty = ty->params;
+  Node head = {};
+  Node *cur = &head;
+
+  for (Node *arg = node->args; arg;) {
+    Node *next = arg->next;
+    add_type(arg);
+
+    if (!param_ty && !ty->is_variadic)
+      error_tok(tok, "too many arguments");
+
+    if (param_ty) {
+      if (param_ty->kind != TY_STRUCT && param_ty->kind != TY_UNION)
+        arg = new_cast(arg, param_ty);
+      param_ty = param_ty->next;
+    } else if (arg->ty->kind == TY_FLOAT) {
+      // If parameter type is omitted (e.g. in "..."), float
+      // arguments are promoted to double.
+      arg = new_cast(arg, ty_double);
+    }
+
+    arg->next = NULL;
+    cur = cur->next = arg;
+    arg = next;
+  }
+
+  if (param_ty)
+    error_tok(tok, "too few arguments");
+
+  node->args = head.next;
+  node->ty = ty->return_ty;
+
+  // If a function returns a struct, it is caller's responsibility
+  // to allocate a space for the return value.
+  if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
+    node->ret_buffer = new_lvar("", node->ty);
+}
+
 // Generate code for computing a VLA size. Moved from parse.c; the
 // parser still calls it for every declarator it declares.
 Node *compute_vla_size(Type *ty, Token *tok) {
@@ -1160,6 +1227,9 @@ void add_type(Node *node) {
     node->ty = node->member->ty;
     return;
   case ND_ADDR: {
+    if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield)
+      error_tok(node->tok, "cannot take address of bitfield");
+
     Type *ty = node->lhs->ty;
     if (ty->kind == TY_ARRAY)
       node->ty = pointer_to(ty->base);
@@ -1243,11 +1313,17 @@ void add_type(Node *node) {
       node->lhs = new_binary(ND_ASSIGN, new_vla_ptr(node->var, tok),
                              new_alloca(new_var_node(node->var->ty->vla_size, tok)),
                              tok);
-    } else if (node->decl_init) {
-      node->kind = ND_EXPR_STMT;
-      node->lhs = lvar_init_comma(node->var, node->decl_init, node->decl_init->tok);
-      node->decl_init = NULL;
     } else {
+      // A declared object must have a complete, non-void type. The
+      // initializer has already been parsed (it is what completes a
+      // flexible array member), so the type is final by now.
+      check_declared_void(node->tok, node->var->ty);
+      if (node->var->ty->size < 0)
+        error_tok(node->var->ty->name, "variable has incomplete type");
+
+      if (node->decl_init)
+        node->lhs = lvar_init_comma(node->var, node->decl_init, node->decl_init->tok);
+      node->decl_init = NULL;
       node->kind = ND_EXPR_STMT;
     }
     add_type(node);

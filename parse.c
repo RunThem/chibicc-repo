@@ -683,15 +683,14 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       tok = skip(tok, ",");
 
     Type *ty = declarator(&tok, tok, basety);
-    if (ty->kind == TY_VOID)
-      error_tok(tok, "variable declared void");
     if (!ty->name)
       error_tok(ty->name_pos, "variable name omitted");
 
     if (attr && attr->is_static) {
       // A block-scope static variable lives in the global data section
-      // under an anonymous name.
-      Obj *var = declare_static_local(get_ident(ty->name), ty);
+      // under an anonymous name. It is not an AST node of its own, so
+      // sema checks its type here rather than when an ND_DECL lowers.
+      Obj *var = declare_static_local(tok, get_ident(ty->name), ty);
       if (equal(tok, "="))
         gvar_initializer(&tok, tok->next, var);
       continue;
@@ -741,11 +740,6 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       decl->lhs = vla_size;
       cur = cur->next = decl;
     }
-
-    if (var->ty->size < 0)
-      error_tok(ty->name, "variable has incomplete type");
-    if (var->ty->kind == TY_VOID)
-      error_tok(ty->name, "variable declared void");
   }
 
   Node *node = new_node(ND_BLOCK, tok);
@@ -1813,11 +1807,8 @@ static Node *unary(Token **rest, Token *tok) {
     return new_unary(ND_NEG, cast(rest, tok->next), tok);
 
   if (equal(tok, "&")) {
-    Node *lhs = cast(rest, tok->next);
-    add_type(lhs);
-    if (lhs->kind == ND_MEMBER && lhs->member->is_bitfield)
-      error_tok(tok, "cannot take address of bitfield");
-    return new_unary(ND_ADDR, lhs, tok);
+    // The bitfield check lives in sema: it needs the operand's type.
+    return new_unary(ND_ADDR, cast(rest, tok->next), tok);
   }
 
   if (equal(tok, "*")) {
@@ -2187,13 +2178,6 @@ static Node *postfix(Token **rest, Token *tok) {
 static Node *funcall(Token **rest, Token *tok, Node *fn) {
   add_type(fn);
 
-  if (fn->ty->kind != TY_FUNC &&
-      (fn->ty->kind != TY_PTR || fn->ty->base->kind != TY_FUNC))
-    error_tok(fn->tok, "not a function");
-
-  Type *ty = (fn->ty->kind == TY_FUNC) ? fn->ty : fn->ty->base;
-  Type *param_ty = ty->params;
-
   Node head = {};
   Node *cur = &head;
 
@@ -2203,37 +2187,18 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
 
     Node *arg = assign(&tok, tok);
     add_type(arg);
-
-    if (!param_ty && !ty->is_variadic)
-      error_tok(tok, "too many arguments");
-
-    if (param_ty) {
-      if (param_ty->kind != TY_STRUCT && param_ty->kind != TY_UNION)
-        arg = new_cast(arg, param_ty);
-      param_ty = param_ty->next;
-    } else if (arg->ty->kind == TY_FLOAT) {
-      // If parameter type is omitted (e.g. in "..."), float
-      // arguments are promoted to double.
-      arg = new_cast(arg, ty_double);
-    }
-
     cur = cur->next = arg;
   }
-
-  if (param_ty)
-    error_tok(tok, "too few arguments");
 
   *rest = skip(tok, ")");
 
   Node *node = new_unary(ND_FUNCALL, fn, tok);
-  node->func_ty = ty;
-  node->ty = ty->return_ty;
   node->args = head.next;
 
-  // If a function returns a struct, it is caller's responsibility
-  // to allocate a space for the return value.
-  if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
-    node->ret_buffer = new_lvar("", node->ty);
+  // The callee's type, the argument conversions and the return-value
+  // buffer are semantic; sema lowers the node here so that the buffer
+  // is created at the call's position, like any other local.
+  lower_funcall(node, tok);
   return node;
 }
 

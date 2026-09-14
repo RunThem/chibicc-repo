@@ -471,8 +471,13 @@ Node *get_scope_decls(void);
 void add_enum_const(Node *node, Type *ty, int *val);
 
 // Declares a block-scope static variable; it gets an anonymous name in
-// the global data section.
-Obj *declare_static_local(char *name, Type *ty);
+// the global data section. `tok` is the declaration's position.
+Obj *declare_static_local(Token *tok, char *name, Type *ty);
+
+// Turns a faithful call node into the shape codegen expects: callee
+// check, argument conversions, return buffer. Called by the parser at
+// the call site.
+void lower_funcall(Node *node, Token *tok);
 
 // Matches gotos with labels (called once per parsed function) and
 // finishes the translated unit (liveness of "static inline" functions,
