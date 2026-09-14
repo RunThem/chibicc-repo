@@ -396,6 +396,7 @@ void push_var_scope(char *name, Obj *var);
 // returns NULL leaving both untouched. sema resolves identifiers with
 // this until it rebuilds the scopes itself.
 Obj *find_ident(Token *tok, Type **enum_ty, int *enum_val);
+Obj *find_func(char *name);
 
 // The function the parser is currently parsing, needed by sema when it
 // records a reference to a "static inline" function.
@@ -423,10 +424,6 @@ Node *new_alloca(Node *sz);
 
 // Semantic analysis: type annotation and constant evaluation.
 void add_type(Node *node);
-int64_t eval(Node *node);
-int64_t eval2(Node *node, char ***label);
-double eval_double(Node *node);
-bool is_const_expr(Node *node);
 int64_t const_expr(Token **rest, Token *tok);
 Node *to_assign(Node *node);
 Node *compute_vla_size(Type *ty, Token *tok);
@@ -446,6 +443,20 @@ void set_globals(Obj *vars);
 // node it sees.
 void add_typedef(Node *node);
 Node *get_typedefs(void);
+
+// Declares a block-scope static variable; it gets an anonymous name in
+// the global data section.
+Obj *declare_static_local(char *name, Type *ty);
+
+// Matches gotos with labels (called once per parsed function) and
+// finishes the translated unit (liveness of "static inline" functions,
+// redundant tentative definitions).
+void resolve_labels(Node *gotos, Node *labels);
+void finalize_globals(void);
+
+// The type of an array dimension: a fixed-length array for a constant
+// dimension, a VLA otherwise.
+Type *array_dimension_type(Type *base, Node *expr);
 
 // Initializer lowering (sema.c). ND_DECL carries the parsed tree and
 // is lowered when typed.

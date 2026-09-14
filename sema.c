@@ -8,8 +8,11 @@
 
 #include "chibicc.h"
 
+static int64_t eval(Node *node);
+static int64_t eval2(Node *node, char ***label);
 static int64_t eval_rval(Node *node, char ***label);
-double eval_double(Node *node);
+static double eval_double(Node *node);
+static bool is_const_expr(Node *node);
 
 // All local variable instances created during parsing are
 // accumulated to this list.
@@ -49,6 +52,89 @@ void add_typedef(Node *node) {
 
 Node *get_typedefs(void) {
   return typedefs;
+}
+
+// Declares a block-scope static variable. It has static storage
+// duration, so it lives in the global data section under an anonymous
+// name, but its name is registered like any other local.
+Obj *declare_static_local(char *name, Type *ty) {
+  Obj *var = new_anon_gvar(ty);
+  push_var_scope(name, var);
+  return var;
+}
+
+// Sets the unique label of every goto in a function to that of the
+// matching label. Gotos may refer to a label that appears later, so
+// this runs once the whole function has been parsed.
+void resolve_labels(Node *gotos, Node *labels) {
+  for (Node *x = gotos; x; x = x->goto_next) {
+    for (Node *y = labels; y; y = y->goto_next) {
+      if (!strcmp(x->label, y->label)) {
+        x->unique_label = y->unique_label;
+        break;
+      }
+    }
+
+    if (x->unique_label == NULL)
+      error_tok(x->tok->next, "use of undeclared label");
+  }
+}
+
+static void mark_live(Obj *var) {
+  if (!var->is_function || var->is_live)
+    return;
+  var->is_live = true;
+
+  for (int i = 0; i < var->refs.len; i++) {
+    Obj *fn = find_func(var->refs.data[i]);
+    if (fn)
+      mark_live(fn);
+  }
+}
+
+// Remove redundant tentative definitions.
+static void scan_globals(void) {
+  Obj head;
+  Obj *cur = &head;
+
+  for (Obj *var = globals; var; var = var->next) {
+    if (!var->is_tentative) {
+      cur = cur->next = var;
+      continue;
+    }
+
+    // Find another definition of the same identifier.
+    Obj *var2 = globals;
+    for (; var2; var2 = var2->next)
+      if (var != var2 && var2->is_definition && !strcmp(var->name, var2->name))
+        break;
+
+    // If there's another definition, the tentative definition
+    // is redundant
+    if (!var2)
+      cur = cur->next = var;
+  }
+
+  cur->next = NULL;
+  globals = head.next;
+}
+
+// Finishes the translated unit: marks the functions reachable from a
+// root live and drops the redundant tentative definitions.
+void finalize_globals(void) {
+  for (Obj *var = globals; var; var = var->next)
+    if (var->is_root)
+      mark_live(var);
+
+  scan_globals();
+}
+
+// The type of an array dimension: a dimension that is a constant
+// expression gives a fixed-length array, anything else a VLA.
+Type *array_dimension_type(Type *base, Node *expr) {
+  if (base->kind == TY_VLA || !is_const_expr(expr))
+    return vla_of(base, expr);
+  return array_of(base, eval(expr));
 }
 
 // Binds an unresolved name. A variable or function reference becomes
@@ -982,7 +1068,7 @@ void add_type(Node *node) {
   }
 }
 
-int64_t eval(Node *node) {
+static int64_t eval(Node *node) {
   return eval2(node, NULL);
 }
 
@@ -1103,7 +1189,7 @@ static int64_t eval_rval(Node *node, char ***label) {
   error_tok(node->tok, "invalid initializer");
 }
 
-bool is_const_expr(Node *node) {
+static bool is_const_expr(Node *node) {
   add_type(node);
 
   switch (node->kind) {
@@ -1146,7 +1232,7 @@ int64_t const_expr(Token **rest, Token *tok) {
   return eval(node);
 }
 
-double eval_double(Node *node) {
+static double eval_double(Node *node) {
   add_type(node);
 
   if (is_integer(node->ty)) {

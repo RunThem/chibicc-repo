@@ -601,9 +601,10 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
   tok = skip(tok, "]");
   ty = type_suffix(rest, tok, ty);
 
-  if (ty->kind == TY_VLA || !is_const_expr(expr))
-    return vla_of(ty, expr);
-  return array_of(ty, eval(expr));
+  // Whether the dimension denotes a fixed-length array or a VLA is a
+  // semantic question (it depends on constant evaluation), so sema
+  // builds the type.
+  return array_dimension_type(ty, expr);
 }
 
 // type-suffix = "(" func-params
@@ -798,9 +799,9 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       error_tok(ty->name_pos, "variable name omitted");
 
     if (attr && attr->is_static) {
-      // static local variable
-      Obj *var = new_anon_gvar(ty);
-      push_scope(get_ident(ty->name))->var = var;
+      // A block-scope static variable lives in the global data section
+      // under an anonymous name.
+      Obj *var = declare_static_local(get_ident(ty->name), ty);
       if (equal(tok, "="))
         gvar_initializer(&tok, tok->next, var);
       continue;
@@ -2614,23 +2615,15 @@ static Token *parse_typedef(Token *tok, Type *basety) {
 // We cannot resolve gotos as we parse a function because gotos
 // can refer a label that appears later in the function.
 // So, we need to do this after we parse the entire function.
+// The two lists are the parser's; the matching itself is semantic.
 static void resolve_goto_labels(void) {
-  for (Node *x = gotos; x; x = x->goto_next) {
-    for (Node *y = labels; y; y = y->goto_next) {
-      if (!strcmp(x->label, y->label)) {
-        x->unique_label = y->unique_label;
-        break;
-      }
-    }
-
-    if (x->unique_label == NULL)
-      error_tok(x->tok->next, "use of undeclared label");
-  }
-
+  resolve_labels(gotos, labels);
   gotos = labels = NULL;
 }
 
-static Obj *find_func(char *name) {
+// Looks up a function in the file scope. Also used by sema to walk the
+// "static inline" reference graph.
+Obj *find_func(char *name) {
   Scope *sc = scope;
   while (sc->next)
     sc = sc->next;
@@ -2639,18 +2632,6 @@ static Obj *find_func(char *name) {
   if (sc2 && sc2->var && sc2->var->is_function)
     return sc2->var;
   return NULL;
-}
-
-static void mark_live(Obj *var) {
-  if (!var->is_function || var->is_live)
-    return;
-  var->is_live = true;
-
-  for (int i = 0; i < var->refs.len; i++) {
-    Obj *fn = find_func(var->refs.data[i]);
-    if (fn)
-      mark_live(fn);
-  }
 }
 
 static Token *function(Token *tok, Type *basety, VarAttr *attr) {
@@ -2732,33 +2713,6 @@ static bool is_function(Token *tok) {
   return ty->kind == TY_FUNC;
 }
 
-// Remove redundant tentative definitions.
-static void scan_globals(void) {
-  Obj head;
-  Obj *cur = &head;
-
-  for (Obj *var = get_globals(); var; var = var->next) {
-    if (!var->is_tentative) {
-      cur = cur->next = var;
-      continue;
-    }
-
-    // Find another definition of the same identifier.
-    Obj *var2 = get_globals();
-    for (; var2; var2 = var2->next)
-      if (var != var2 && var2->is_definition && !strcmp(var->name, var2->name))
-        break;
-
-    // If there's another definition, the tentative definition
-    // is redundant
-    if (!var2)
-      cur = cur->next = var;
-  }
-
-  cur->next = NULL;
-  set_globals(head.next);
-}
-
 static void declare_builtin_functions(void) {
   Type *ty = func_type(pointer_to(ty_void));
   ty->params = copy_type(ty_int);
@@ -2791,11 +2745,8 @@ Obj *parse(Token *tok) {
     tok = global_variable(tok, basety, &attr);
   }
 
-  for (Obj *var = get_globals(); var; var = var->next)
-    if (var->is_root)
-      mark_live(var);
-
-  // Remove redundant tentative definitions.
-  scan_globals();
+  // Mark the reachable functions live and drop the redundant tentative
+  // definitions.
+  finalize_globals();
   return get_globals();
 }
