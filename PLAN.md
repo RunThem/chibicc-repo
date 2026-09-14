@@ -69,7 +69,7 @@
 
 - [x] **3.2b 标识符翻转(最大单步)**: `primary()`(3082-3105) 的标识符发未解析名字节点(变量/枚举/函数引用共用, 语法期本就无法区分); sema 前置 resolve 遍历: 建作用域栈(块/for 作用域由树结构给出; typedef/tag 仍以 parse 的 oracle 为准, 经传递供 sema 查询), 绑定变量与枚举常量, 收集 static inline 的 refs; "undefined variable" 等错误触发时机后移, 锚定同一标识符 token, 文案不变. 已知中间态: `new_var` 仍会向 parse 的作用域表 push 条目, 与 sema 的解析作用域并存, P4.2 清理.
 
-- [ ] **3.3 函数语义搬家**: `function()`(3199-3262) 只留语法形状; `create_param_lvars`, 隐藏 struct 返回缓冲, `va_area`, `alloca_bottom`, `__func__`/`__FUNCTION__` 移 sema.
+- [x] **3.3 函数语义搬家**: `function()`(3199-3262) 只留语法形状; `create_param_lvars`, 隐藏 struct 返回缓冲, `va_area`, `alloca_bottom`, `__func__`/`__FUNCTION__` 移 sema.
 
 - [ ] **3.4 清返工点**: static 局部 gvar 创建移 sema(ND_DECL 降级时建匿名全局); 枚举忠实化 - `enum_specifier`(751-794) 发声明节点(成员名 + 可选显式值), 值求值与注册移 sema; VLA 判定(`array_dimensions` 的 const_expr 调用)移 sema; `resolve_goto_labels`(3160-3174)/`mark_live`(3187-3197)/`scan_globals`(3303-3327) 归位 sema.
 

@@ -401,6 +401,15 @@ Obj *find_ident(Token *tok, Type **enum_ty, int *enum_val);
 // records a reference to a "static inline" function.
 Obj *get_current_fn(void);
 
+// Identifier spelling, used by sema when it creates the parameter
+// variables of a function definition.
+char *get_ident(Token *tok);
+
+// Creates the variables a function definition owns: parameters, the
+// hidden struct-return buffer, __va_area__, __alloca_size__ and the
+// __func__/__FUNCTION__ strings.
+void begin_function(Obj *fn, Type *ty);
+
 Node *conditional(Token **rest, Token *tok);
 Obj *parse(Token *tok);
 

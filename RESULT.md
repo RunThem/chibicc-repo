@@ -1,6 +1,6 @@
 # RESULT.md - 语法语义拆分执行记录
 
-本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 3.2b 为止, P3(名字解析出解析器)进行中, 下一步为 3.3 函数语义搬家.
+本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 3.3 为止, P3(名字解析出解析器)进行中, 下一步为 3.4 清返工点.
 
 基线: 上游 commit 5f53ed0 的快照建立于 0.1; 本轮从 1f24ab7 开始推进. 每步的三道闸门(make docker-test 含自举 / 汇编快照逐字节 diff / 行为测试)均须全绿后才提交.
 
@@ -27,6 +27,7 @@
 | (本轮) | 3.1 | locals/globals 清单持有权移 sema.c |
 | (本轮) | 3.2a | ND_TYPEDEF 声明记录 |
 | (本轮) | 3.2b | ND_IDENT 标识符翻转(bind_ident 移 sema) |
+| (本轮) | 3.3 | begin_function 函数语义搬家 |
 
 ## 各步详情
 
@@ -157,6 +158,13 @@
 - 为什么: 语法期无法区分"变量/函数/枚举常量"的引用, 解析器不再做名字解析 - 查表判定、错误、refs 收集全部归 sema. 本步过后 parse 只保留 typedef/tag 分类用的查表.
 - 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 另做了行为对照(旧二进制 worktree 于 HEAD 编译后逐字节 diff): 覆盖 enum/typedef/块与 for 作用域遮蔽/while+switch+case 范围/复合赋值全家/条件表达式/字符串/复合字面量/VLA/sizeof/_Alignof/static inline 链(含 driver.sh 的 6 条 liveness 用例)/全局初始化器引用函数 的样例 -S 输出与 stderr 全等; 5 个非法样例(未定义变量/隐式声明/typedef 名当变量/`x + ;`/enum 变量)的错误文案与插入符位置全等.
 - 偏差(重要, 与计划相反): 计划要求"发未解析名字节点"后由 sema 的 resolve **遍历**(块/for 作用域由树结构给出)统一绑定, 并预期错误触发时机后移; 实际实现是**在构造现场立即绑定**(primary -> add_type -> bind_ident), 未解析态只存在于构造的那一瞬间. 原因是不写死动态作用域就会出错: (1) 名字查找依赖 parse 的作用域栈, 而该栈是动态的 - `for (int i = 0; i < 3; i++)` 的 i 在 for 语句解析完就被 leave_scope 弹出, 而它的使用点要等到语句级 add_type 才被访问, 延迟绑定必然报 "undefined variable"(实测: 延迟版本在这条 for 上直接编译失败, 已回退); (2) 反之, 若把绑定提前到 leave_scope 前, 又要为 sizeof/自增自减/字符串等 parse 期 add_type 的构造点各补一次 resolve, 等于把作用域边界重新硬编码进 parse. 因此"树结构给出作用域 + 遍历绑定"要等 4.2 把 add_type 重构成 analyze() 单遍时才成立, 本步只把决策权交给 sema. 副产品: 错误触发时机与今天完全相同(比计划预期更保守, 无回归风险), `x + ;` 这类 doubly-invalid 的输入仍报原错误. sema 侧也**没有**自建作用域栈 - 它查询 parse 的 oracle(计划写的"经传递供 sema 查询"), 双重作用域条目因此尚未产生, 3.1/3.2a 的清单与记录是为 4.2 重建作用域准备的.
+
+### 3.3 begin_function 函数语义搬家 (本轮)
+
+- 改了什么: sema 新增 `begin_function(fn, ty)` - 收拢 function() 里的变量创建: `set_locals(NULL)`, 参数 lvar(原 create_param_lvars 原样搬入 sema, 改名不改体), 大 struct/union 返回值的隐藏缓冲, `fn->params = get_locals()`, variadic 的 `__va_area__`, `__alloca_size__`, 以及 `__func__`/`__FUNCTION__` 两个字符串字面量(创建走 new_string_literal, 名字登记改由既有回调 `push_var_scope` 完成). parse 的 function() 只剩: 声明符解析, redeclaration 诊断, new_gvar/属性, `current_fn = fn`, `enter_scope()`, 调 begin_function, skip("{"), 解 body, `fn->locals = get_locals()`, leave_scope, resolve_goto_labels. `get_ident` 去 static 进 chibicc.h(create_param_lvars 用它取参数名, 保持原来的 TK_IDENT 校验).
+- 为什么: 函数定义的作用域与栈帧布局(参数/隐藏参数/va_area/alloca_bottom)属语义, parse 侧不再决定"这个函数需要哪些变量"; 顺序硬性保持 - lvar 与匿名全局的创建次序直接决定栈偏移与 .L..N 编号.
+- 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 行为对照同 3.2b(旧 HEAD 二进制 vs 新二进制): 4 个样例 -S 与 stderr 全等, 其中 d.c 专门覆盖变参(va_list/va_arg)、>16 字节 struct 返回值(隐藏缓冲)、__func__/__FUNCTION__、多参数调用.
+- 偏差: (1) `fn->locals = get_locals()` 留在 parse 未随搬家 - 它只是把 sema 的清单读回来赋给 Obj, 与 3.1 的访问器用法同性质; (2) `current_fn` 仍留 parse: stmt() 的 return 分支要用 `current_fn->ty->return_ty` 插隐式 cast, 这处 parse 期语义残留未在 3.3 计划范围内, 记入 4.1 盘点; (3) `__func__` 登记从 `push_scope(name)->var = new_string_literal(...)` 改为 `push_var_scope(name, new_string_literal(...))`, 求值次序与作用域表内容不变(匿名名 ".L..N" 与 "__func__" 的入表顺序一致).
 
 ## 给审核者的提示
 

@@ -116,6 +116,48 @@ Obj *new_gvar(char *name, Type *ty) {
   return var;
 }
 
+static void create_param_lvars(Type *param) {
+  if (param) {
+    create_param_lvars(param->next);
+    if (!param->name)
+      error_tok(param->name_pos, "parameter name omitted");
+    new_lvar(get_ident(param->name), param);
+  }
+}
+
+// Sets up the variables a function definition owns: the parameters
+// (including the hidden buffer for a large struct/union return value),
+// the __va_area__ and __alloca_size__ helpers, and the __func__ /
+// __FUNCTION__ strings. The parser calls this once it has seen the
+// function body begin, so that everything is created in the same order
+// as before.
+void begin_function(Obj *fn, Type *ty) {
+  set_locals(NULL);
+  create_param_lvars(ty->params);
+
+  // A buffer for a struct/union return value is passed
+  // as the hidden first parameter.
+  Type *rty = ty->return_ty;
+  if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
+    new_lvar("", pointer_to(rty));
+
+  fn->params = get_locals();
+
+  if (ty->is_variadic)
+    fn->va_area = new_lvar("__va_area__", array_of(ty_char, 136));
+  fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(ty_char));
+
+  // [https://www.sigbus.info/n1570#6.4.2.2p1] "__func__" is
+  // automatically defined as a local variable containing the
+  // current function name.
+  push_var_scope("__func__",
+                 new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1)));
+
+  // [GNU] __FUNCTION__ is yet another name of __func__.
+  push_var_scope("__FUNCTION__",
+                 new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1)));
+}
+
 // In C, `+` operator is overloaded to perform the pointer arithmetic.
 // If p is a pointer, p+n adds not n but sizeof(*p)*n to the value of p,
 // so that p+n points to the location n elements (not bytes) ahead of p.

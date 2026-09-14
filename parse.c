@@ -272,7 +272,7 @@ Obj *new_string_literal(char *p, Type *ty) {
   return var;
 }
 
-static char *get_ident(Token *tok) {
+char *get_ident(Token *tok) {
   if (tok->kind != TK_IDENT)
     error_tok(tok, "expected an identifier");
   return strndup(tok->loc, tok->len);
@@ -2609,15 +2609,6 @@ static Token *parse_typedef(Token *tok, Type *basety) {
   return tok;
 }
 
-static void create_param_lvars(Type *param) {
-  if (param) {
-    create_param_lvars(param->next);
-    if (!param->name)
-      error_tok(param->name_pos, "parameter name omitted");
-    new_lvar(get_ident(param->name), param);
-  }
-}
-
 // This function matches gotos or labels-as-values with labels.
 //
 // We cannot resolve gotos as we parse a function because gotos
@@ -2692,34 +2683,10 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     return tok;
 
   current_fn = fn;
-  set_locals(NULL);
   enter_scope();
-  create_param_lvars(ty->params);
-
-  // A buffer for a struct/union return value is passed
-  // as the hidden first parameter.
-  Type *rty = ty->return_ty;
-  if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
-    new_lvar("", pointer_to(rty));
-
-  fn->params = get_locals();
-
-  if (ty->is_variadic)
-    fn->va_area = new_lvar("__va_area__", array_of(ty_char, 136));
-  fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(ty_char));
+  begin_function(fn, ty);
 
   tok = skip(tok, "{");
-
-  // [https://www.sigbus.info/n1570#6.4.2.2p1] "__func__" is
-  // automatically defined as a local variable containing the
-  // current function name.
-  push_scope("__func__")->var =
-    new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
-
-  // [GNU] __FUNCTION__ is yet another name of __func__.
-  push_scope("__FUNCTION__")->var =
-    new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
-
   fn->body = compound_stmt(&tok, tok);
   fn->locals = get_locals();
   leave_scope();
