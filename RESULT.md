@@ -1,6 +1,6 @@
 # RESULT.md - 语法语义拆分执行记录
 
-本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 4.1 为止, P3(名字解析出解析器)全部完成, 4.1(检查归位盘点)完成, 进行中为 P4 4.2 布局翻转与收官.
+本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 4.2 为止, P4(收尾)全部完成, 语法语义拆分线(路线图阶段 3 + 4)的 22 步执行清单至此走完.
 
 基线: 上游 commit 5f53ed0 的快照建立于 0.1; 本轮从 1f24ab7 开始推进. 每步的三道闸门(make docker-test 含自举 / 汇编快照逐字节 diff / 行为测试)均须全绿后才提交.
 
@@ -31,6 +31,9 @@
 | (本轮) | 3.4a | resolve_labels/finalize_globals/array_dimension_type/declare_static_local 移 sema |
 | (本轮) | 3.4b | 枚举忠实化(ND_ENUM_CONST) |
 | (本轮) | 4.1 | 检查归位盘点(纯文档, 无代码变更) |
+| (本轮) | 4.2a | 结构体/联合体布局计算移 sema(layout_struct/layout_union) |
+| (本轮) | 4.2b | 作用域表与函数声明(redefinition)移 sema |
+| (本轮) | 4.2c | 函数调用降级(lower_funcall)与残余类型检查移 sema |
 
 ## 各步详情
 
@@ -247,18 +250,40 @@
 
 36 条断言全部作用于**产物与编译器输出文案**(`.comm foo` / `main:` / `f1:` 等标识符存活性 / `-M` 依赖文件内容 / `file` 的 ELF 类型), 无一条断言 `error:` 文案、锚点列号或失败退出码; `test/*.c` 亦只断言运行期行为(`ASSERT`). 结论: 错误文案与锚点不在测试闸门内, 但仍按既往纪律逐字保留 - 4.2 移动判定表 E 的检查时, 锚点 token 通过节点现有字段(`ND_DECL.tok` / `ND_FUNCALL.tok` / `ND_MEMBER` 的运算符 token)原样传递; 仅 `too many arguments` 一处锚点会从"越界实参后的第一个 token"退化为调用右括号(`ND_FUNCALL.tok`), 该处会在 4.2 记录为偏差.
 
+### 4.2a 结构体/联合体布局移 sema (本轮)
+
+- 改了什么: sema.c 新增 `layout_struct` / `layout_union`(成员偏移/位域落位/size/align 计算原样搬入, `align_down` 一并搬为 sema 的 static); 两个函数自带 `if (ty->size < 0) return;` 的未完成类型守卫; parse.c 的 `struct_decl` / `union_decl` 收缩为"设 kind + 调布局", 删掉内联的 30 余行布局循环; chibicc.h 增两行声明.
+- 为什么: 成员偏移与 size/align 是类型系统的语义产物, 不是语法形状. 解析器只负责建成员表(名字/类型/位域宽度/属性), 布局由 sema 算 - PLAN 4.2 点名项. 调用点仍在解析现场(`struct_union_decl` 返回后立即调), 因为后续解析(声明符的 `size < 0` 判定, 初始化器的 `new_initializer`, 数组维度)当场就要用布局结果, 且嵌套结构的布局顺序必须保持内层先于外层.
+- 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 本机 `-S` 对含位域/零宽位域/`packed`/`aligned`/前向声明/自引用/联合体 的样例与 HEAD 二进制逐字节相同.
+- 偏差: 无. 判定表 E 的"结构体布局"项按计划完成.
+
+### 4.2b 作用域表与函数声明移 sema (本轮)
+
+- 改了什么: (1) `VarScope` / `Scope` 结构、`scope` static、`enter_scope` / `leave_scope` / `find_var` / `push_scope` 从 parse.c 搬入 sema.c, 连同变量与枚举常量的登记(`new_var` / `declare_static_local` / `add_enum_const` 直接写表)与查询(`bind_ident` 直接读表) - 三个回调式接口 `push_var_scope` / `push_enum_scope` / `find_ident` 与查询接口 `find_func` 就此消失. (2) parse 侧只留文法需要的 oracle: `find_typedef`(typedef 名字分类), `find_tag` / `find_current_tag` / `push_tag_scope`(tag 引用与定义), `in_file_scope`(复合字面量的域判定), 以及块结构的 `enter_scope` / `leave_scope`. (3) 函数声明与重定义三条诊断移入 sema 的 `declare_function`(`find_func` 随之收为 sema 内部); `VarAttr` 从 parse.c 移入 chibicc.h, 成为解析器产出、sema 消费的共享声明属性. (4) `parse_typedef` 的两步登记(`add_scope_decl` + `push_scope(type_def)`)合并为 sema 的 `add_typedef`, 与 `add_enum_const` 对称; `add_scope_decl` 收回 sema 内部.
+- 为什么: 3.2b 的偏差记录里承诺"作用域重建"由 4.2 完成, 但实测(3.2b 偏差(1))表明延迟绑定不可行 - 解析期的名字解析必须继续在构造现场进行. 本步于是改为"表搬家": 表本身(名字解析的载体)归 sema, parse 只驱动块结构并保留文法分类 oracle. 3.2b 记录的"双重作用域条目"问题(parse 持有表、sema 借道回调登记)至此消失, 不再需要推迟到后续步骤.
+- 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 行为对照(旧 HEAD 二进制 vs 新二进制, 逐字节比对 .s 与 stderr): t42.c 覆盖 typedef/枚举/嵌套与遮蔽/块域与 for 作用域/tag 前向声明与重定义/自引用结构/位域/联合体/static 局部/复合字面量/`?:`/sizeof/_Alignof/static inline 链 - 全等; e1-e6 覆盖函数重定义/重声明类别冲突/static 声明跟随非 static/未定义变量/块内 typedef 遮蔽/成员不存在 - 错误文案与插入符全等.
+- 偏差: `get_scope_decls` 保留为导出接口但当前无调用者 - 它是 3.2a/3.4b 记录链(ND_TYPEDEF/ND_ENUM_CONST 的源码序串联)的读取口, 其"供 4.2 重建作用域"的原始用途已随本步的表搬家失效; 记录链本身仍保留, 作为忠实声明记录(阶段 3 要求的节点形态)的载体, 若后续判定无用可连同 `add_scope_decl` 一起删除.
+
+### 4.2c 函数调用降级与残余类型检查移 sema (本轮)
+
+- 改了什么: (1) sema.c 新增 `lower_funcall(node, tok)` - callee 判定("not a function", 锚点 `fn->tok`)、实参逐个转成形参类型(结构体/联合体形参不转)、变参尾部的 float 提升为 double、数量检查("too many/few arguments", 锚点调用位置)、`node->func_ty` / `node->ty` 赋值、以及 struct/union 返回值的 `ret_buffer` 创建, 全部由它完成; parse.c 的 `funcall` 只剩"解析实参列表 + 建节点 + 调 sema", 不再读形参表. (2) `unary` 的 `&` 去掉类型检查, 位域取址诊断移入 sema 的 ND_ADDR case(锚点 = `&` token, 与旧一致). (3) 声明的 `variable declared void` / `variable has incomplete type` 移入 sema 的 ND_DECL 降级(静态局部分支无 AST 节点, 由 `declare_static_local` 自带 void 检查); 后者原样跳过 VLA 分支(旧代码同样 continue 跳过), 未完成类型检查在初始化器之后(灵活数组成员的补全才使类型完整).
+- 为什么: 实参隐式转换是 parse 侧最后一处 lowering(PLAN 1.3-1.7 把缩放/复合赋值/自增/下标全部搬走后的遗漏项), 也是 PLAN 4.2 点名的"funcall 实参数量与类型"; 三条类型诊断同属判定表 E. 调用点仍在解析现场(`lower_funcall` 在 funcall 构造后立即调用): `ret_buffer` 会创建 lvar, 创建时机后移会翻转它与后续临时变量的 locals 链顺序, 栈偏移即变(同 1.4/2.1/2.3 的时序原则).
+- 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 行为对照(c1-c10, 旧 HEAD 二进制 vs 新二进制): 实参过多/过少、非函数调用、位域取址、`void x;`、`int x[];`、`static void x;`、struct 返回值、变参 float 提升、`void x = 1;` - 除下述两处插入符位移外, 汇编与 stderr 全等.
+- 偏差(两处错误插入符位移, 文案不变): (1) "too many arguments" 的锚点由"越界实参之后的第一个 token"变为调用右括号 - 新实现按实参表统一判定数量, 不再在解析到越界实参的那一刻报错, 而 `ND_FUNCALL.tok` 即右括号; (2) `void x = 1;` 的 "variable declared void" 锚点由 `=` 变为初始化器结束后的 token(ND_DECL 的锚点定义, 见 2.1 偏差(1)), `void x;` 无初始化器时锚点不变. 两处均无测试覆盖, 已在此记录; 若需恢复原插入符, 只能在 parse 侧保留对应判定, 与"检查归 sema"的目标冲突.
+
 ## 给审核者的提示
 
-- 审核重心建议放 sema.c: add_type 的降级 case(GT/GE, COND elvis, ASSIGN/INCDEC/SUBSCRIPT/ADD/SUB/MEMBER, STRING, SIZEOF/ALIGNOF, WHILE/BREAK/CONTINUE, DECL, COMPOUND_LITERAL, IDENT)与 to_assign/compound_op/new_add/new_sub/compute_vla_size/vla_size_expr/lvar_init_comma/gvar_init_data/bind_ident/begin_function/resolve_labels/finalize_globals/array_dimension_type/declare_static_local/add_enum_const.
-- P3 收尾状态: parse.c 2758 行(终态目标约 2100), sema.c 1283 行(终态目标约 1300), chibicc.h 632 行; codegen.c 相对 5f53ed0 仍是 0 行 diff.
-- **名字解析的中间态(oracle 模式, 4.2 清)**: parse 仍持有作用域表, sema 通过六个 parse 侧接口查询/登记 - `find_ident`(解析名字), `find_func`(static inline 引用图), `push_var_scope`/`push_enum_scope`(登记变量与枚举常量), `get_current_fn`(refs 归属), `get_ident`(取标识符拼写). 4.2 让 sema 自建作用域后这些接口应逐步消失. parse 侧另有 `find_typedef`/`find_tag`/`is_typename` 供文法分类(AGENTS 明确保留的 typedef 名字分类 oracle).
-- **声明记录侧链(3.2a/3.4b)**: typedef 与枚举常量以 ND_TYPEDEF/ND_ENUM_CONST 节点记在 sema 的 `scope_decls` 链上(源码顺序), 不进语句链 - 因为块域 typedef/枚举声明今天不产生语句节点, 入链就会多出 .loc 行. 4.2 重建作用域时按需把记录与所属块关联起来(当前不记录作用域归属).
-- **3.2b 的关键约束(值得单独记住)**: 标识符**不能**推迟到一个后置的 resolve 遍历里绑定. parse 的作用域是动态栈(`for` init 的变量在语句解析完就出栈), 而使用点要等到语句级 add_type 才被访问; 同时 sizeof/自增自减/字符串等构造点又要求解析期就能拿到类型. 两条合起来把绑定钉在构造现场. "树结构给出作用域 + 遍历绑定"(即 analyze() 单遍)是 4.2 的任务, 不是 3.2b 能达成的.
-- **parse 侧残余语义(4.1 盘点对象)**: stmt() 的 return 分支经 `current_fn->ty->return_ty` 插隐式 cast; resolve_goto_labels 壳里清空 gotos/labels; `fn->locals = get_locals()`; function() 的 redeclaration 三条诊断("redeclared as a different kind of symbol"/"redefinition of %s"/"static declaration follows a non-static declaration"); declspec 里的 typedef/tag 分类与 `is_typename`; funcall 的实参数量/类型检查; "stray break/continue/case/default" 系列(1.10 起就是返工点).
-- 一个待拍板的设计点: op 字段现在对 ND_ADD/ND_SUB 兼任"已缩放"标记. 若接受快照里这类 no-op cast 差异(或在 4.2 收官时统一), 该标记机制可简化; 当前为字节级等价而保留.
-- 时序原则(1.4 确立, 1.8 扩展): 凡降级会创建 lvar 或匿名 gvar 的节点, parse 构造现场立即 add_type 触发降级, 保证创建顺序与旧代码一致; 1.10 进一步表明, 与这些名字共用 new_unique_name 计数器的标签分配同样必须留在 parse.
+- 审核重心建议放 sema.c: add_type 的降级 case(GT/GE, COND elvis, ASSIGN/INCDEC/SUBSCRIPT/ADD/SUB/MEMBER, STRING, SIZEOF/ALIGNOF, WHILE/BREAK/CONTINUE, DECL, COMPOUND_LITERAL, IDENT, ADDR 的位域检查, FUNCALL)与 to_assign/compound_op/new_add/new_sub/compute_vla_size/vla_size_expr/lvar_init_comma/gvar_init_data/bind_ident/begin_function/resolve_labels/finalize_globals/array_dimension_type/declare_static_local/add_enum_const/add_typedef/declare_function/layout_struct/layout_union/lower_funcall.
+- **P4 收尾状态**: parse.c 2531 行(基线 3368, 减少 837; PLAN 终态估计 2100 未完全达到, 差额集中在声明符/类型构建本身 - 解析器必须建 Type 对象才能继续解析), sema.c 1552 行(PLAN 估计 1300, 超出部分是 P1-P3 各步的实际搬家量), chibicc.h 660 行; codegen.c 相对 5f53ed0 仍是 0 行 diff. parse.c 的 `error_tok` 从 43 处减到 33 处, 与 4.1 判定表 E 的 10 处完全对应.
+- **名字解析的最终形态(4.2b 后)**: 作用域表(`VarScope`/`Scope`/`scope`)归 sema 持有, 变量与枚举常量由 sema 直接登记与查询; parse 侧只剩文法 oracle - `find_typedef`(typedef 名字分类), `find_tag`/`find_current_tag`/`push_tag_scope`(tag 引用与定义), `enter_scope`/`leave_scope`/`in_file_scope`(块结构驱动), `get_current_fn`/`get_ident`(refs 归属与拼写). 3.2b 记录的回调式接口(`push_var_scope`/`push_enum_scope`/`find_ident`/`find_func`)已全部消失.
+- **声明记录侧链(3.2a/3.4b, 现状)**: typedef 与枚举常量以 ND_TYPEDEF/ND_ENUM_CONST 节点记在 sema 的 `scope_decls` 链上(源码顺序), 不进语句链 - 因为块域 typedef/枚举声明今天不产生语句节点, 入链就会多出 .loc 行. 该链现已无树内消费者(原定的"重建作用域"用途被 4.2b 的表搬家取代), 保留是为承载阶段 3 要求的忠实声明记录; `get_scope_decls` 是它当前的唯一读取口.
+- **3.2b 的关键约束(值得单独记住)**: 标识符**不能**推迟到一个后置的 resolve 遍历里绑定. parse 的作用域是动态栈(`for` init 的变量在语句解析完就出栈), 而使用点要等到语句级 add_type 才被访问; 同时 sizeof/自增自减/字符串等构造点又要求解析期就能拿到类型. 两条合起来把绑定钉在构造现场. 这也是 4.2 最终选择"表搬家"而非"重建作用域 + 遍历绑定"的原因.
+- **parse 侧残余语义(4.1 判定表 A-D, 33 处, 收官保留)**: 文法类 15 处(名字省略/指示符组合/属性名/tag 类型不符 等), 解析器上下文 4 处(stray case/default/break/continue), 建树必需 11 处(初始化器 designator 的越界与成员定位, 成员访问的类型与存在性 - 1.6 既定设计: 成员链含匿名成员展平必须现解析, ND_MEMBER 挂 Member*), 常量求值/语法选择顺带 3 处. 另有三处非 error_tok 的 parse 期语义残留: stmt() 的 return 分支经 `current_fn->ty->return_ty` 插隐式 cast, resolve_goto_labels 壳里清空 gotos/labels, `fn->locals = get_locals()`.
+- 一个待拍板的设计点: op 字段现在对 ND_ADD/ND_SUB 兼任"已缩放"标记. 若接受快照里这类 no-op cast 差异(或在后续阶段统一), 该标记机制可简化; 当前为字节级等价而保留.
+- 时序原则(1.4 确立, 1.8 扩展, 4.2 沿用): 凡降级会创建 lvar 或匿名 gvar 的节点, parse 构造现场立即触发降级(`add_type` 或直接调 sema 的搬家函数, 如 4.2c 的 `lower_funcall`), 保证创建顺序与旧代码一致; 1.10 进一步表明, 与这些名字共用 new_unique_name 计数器的标签分配同样必须留在 parse.
 - .loc 原则(2.1 发现, 3.2a/3.4a/3.4b 反复命中): gen_stmt 对每个语句节点(含 ND_BLOCK)先按 node->tok 打一行 .loc, 因此语句链的形状与锚点被字节冻结. 由此否决了四处计划原文: 2.1 的"外层 ND_BLOCK 取消", 2.2 的"EXPR_STMT 前缀消失", 3.2a/3.4b 的"声明节点进树", 3.4a 的"static 局部走 ND_DECL 降级建 gvar".
-- 忠实层的已知残留: ND_WHILE/ND_FOR/ND_DO 带 parse 期分配的 brk/cont 标签, ND_BREAK/ND_CONTINUE 带 parse 期记录的绑定目标(unique_label) - 这些是字节级等价所要求的 parse 期语义残留, 待 4.x 清理. 另有: ND_DECL 的 vla-size 兄弟语句(2.2 已述), scope_decls 侧链无作用域归属(3.2a/3.4b).
+- 忠实层的已知残留: ND_WHILE/ND_FOR/ND_DO 带 parse 期分配的 brk/cont 标签, ND_BREAK/ND_CONTINUE 带 parse 期记录的绑定目标(unique_label) - 标签与匿名全局共用 new_unique_name, `.L..N` 编号是汇编字节的一部分, 因此这部分是字节级等价所要求的 parse 期语义残留, 清理需先接受快照重置. 另有: ND_DECL 的 vla-size 兄弟语句(2.2 已述), scope_decls 侧链无作用域归属(3.2a/3.4b).
+- 错误文案与插入符的两处已知位移(4.2c, 无测试覆盖): `too many arguments` 的锚点从越界实参后的第一个 token 变为调用右括号; `void x = 1;` 的 `variable declared void` 锚点从 `=` 变为初始化器后的 token. 其余全部错误路径经逐字节对照与旧二进制一致.
 - codegen.c 全程零改动: git diff 5f53ed0..HEAD -- codegen.c 为空.
 - 常用命令: make docker-test(全量 + 自举), make docker-snapshot-diff(快照 diff), make docker-snapshot(重置基线, 仅在刻意的行为变化后).
-- 逐字节对照的土办法(3.2b 起常用): `git worktree add /tmp/cbase <commit> && make -C /tmp/cbase`, 再对同一组 .c 用两个二进制跑 -S, diff 汇编与 stderr; 样例覆盖 enum/typedef/作用域遮蔽/循环/switch/复合赋值/字符串/复合字面量/VLA/sizeof/static inline/全局初始化器.
+- 逐字节对照的土办法(3.2b 起常用): `git worktree add /tmp/cbase <commit> && make -C /tmp/cbase`, 再对同一组 .c 用两个二进制跑 -S, diff 汇编与 stderr; 样例覆盖 enum/typedef/作用域遮蔽/循环/switch/复合赋值/字符串/复合字面量/VLA/sizeof/static inline/全局初始化器, 4.2 起加 位域/属性/packed/tag 前向声明与重定义/函数重定义/实参数量与类型.

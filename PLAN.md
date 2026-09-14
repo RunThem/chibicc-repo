@@ -77,9 +77,10 @@
 
 - [x] **4.1 检查归位盘点**: 逐条审视 parse.c 内残余语义检查(`funcall` 实参数量与类型 2878-2912, stray 系列, redefinition, incomplete type 等), 决定留 parse(语法可判)或移 sema; `test/driver.sh` 的精确文案断言逐条核对. (结果见 RESULT.md 判定表 A-E: 33 处留 parse(文法 15 / 解析器上下文 4 / 建树必需 11 / 常量求值顺带 3), 10 处连同伴随的实参 cast 与结构体布局移 sema, 4.2 执行)
 
-- [ ] **4.2 布局翻转与收官**: `struct_decl/union_decl`(2678-2735) 的布局计算改由 sema 驱动(parse 只建语法形状); 删除 parse 残留的类型依赖与 3.2b 遗留的双重作用域条目; `make docker-test` + `make test-stage2` + 快照 diff 全绿收官.
+- [x] **4.2 布局翻转与收官**: `struct_decl/union_decl`(2678-2735) 的布局计算改由 sema 驱动(parse 只建语法形状); 删除 parse 残留的类型依赖与 3.2b 遗留的双重作用域条目; `make docker-test` + `make test-stage2` + 快照 diff 全绿收官. (分三个提交: 4.2a 布局搬 sema, 4.2b 作用域表与 `declare_function` 搬 sema, 4.2c `lower_funcall` 与判定表 E 的残余检查搬 sema. 类型依赖的结果: parse 的 `error_tok` 43 -> 33, 与 4.1 判定表 E 的 10 处一一对应; 保留的 33 处按表 A-D 归为文法/解析器上下文/建树必需/常量求值顺带. "双重作用域条目"以表搬家方式消除 - 见 RESULT.md 4.2b 偏差. 详见 RESULT.md.)
 
 ## 终态验收
 
-- parse.c 3368 -> 约 2100 行(纯语法); sema.c 约 1300 行; chibicc.h 增约 60 行; **codegen.c 0 行 diff**.
-- 全部测试 + 自举 + 汇编快照 diff 三道闸门全绿.
+- parse.c 3368 -> 2531 行(减少 837; 纯语法, 残留语义按 4.1 判定表 A-D 逐条有据 - 差额集中在解析器必须构建 Type 对象才能继续解析的声明符/类型构建部分); sema.c 1552 行; chibicc.h 660 行; **codegen.c 0 行 diff**.
+- 全部测试 + 自举 + 汇编快照 diff 三道闸门全绿(每步各自全绿, 见 RESULT.md 各步记录).
+- 22 步执行清单(0.1 - 4.2)全部完成.

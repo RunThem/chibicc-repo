@@ -24,13 +24,13 @@
 ## 面向库的硬性规则(存量代码按路线图收敛, 新代码立即生效)
 
 - 不新增 `exit()` 调用: 现有 `error_tok` 直接 exit(1), 作为库最终要改成可注册的错误回调或错误返回; 新代码不得引入新的 exit 点.
-- 不新增静态全局状态: parse.c 目前靠 static 全局(`locals`, `scope`, `current_fn` 等)承载解析状态, 与库的可重入性冲突; 新代码把状态放进显式的 context 结构.
+- 不新增静态全局状态: parse.c / sema.c 目前靠 static 全局承载解析与语义状态(parse.c 有 `current_fn`, `gotos`/`labels`, `brk_label`/`cont_label`, `current_switch`; sema.c 有 `locals`/`globals`, 作用域表 `scope`, `scope_decls`), 与库的可重入性冲突; 新代码把状态放进显式的 context 结构.
 - API 纪律: 公共头(未来从 `chibicc.h` 拆出)与内部头分离; 中间表示边界处不泄漏编译器内部假设(Linux 路径, 单次进程生命周期, 直接 exit 等).
 - 库名与对外头文件名属于用户决策; 定名前, 文档与代码注释统一用"前端库"指称, 不擅自更名.
 
 ## 路线图
 
-语法语义拆分线(阶段 3 + 4)已细化为 22 步可勾选执行清单, 见 `PLAN.md`; 当前推进顺序: 先拆分线, CST/trivia(阶段 1-2)与库化(阶段 5)暂缓.
+语法语义拆分线(阶段 3 + 4)已细化为 22 步可勾选执行清单, 见 `PLAN.md`; **该线已全部完成**(各步详情见 `RESULT.md`, 终态: parse.c 2531 行纯语法 + sema.c 1552 行, codegen.c 零改动). 当前推进顺序: 下一步待定 - CST/trivia(阶段 1-2)与库化(阶段 5)均未开工, 由用户拍板先后.
 
 每个阶段完成时三道闸门必须全绿: `make docker-test`(含自举), 汇编等价性 diff(阶段 0 建立), 该阶段新增的针对性测试. 阶段内行为不允许变化, 变化只发生在阶段边界并单独提交.
 
@@ -73,14 +73,15 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 
 ## 现状与代码地图
 
-路线图尚未开工: 当前代码仍是上游的单遍布局, 上述 5 层边界中只有第 1 层存在(且不保留 trivia). 改动前先了解现状:
+现状: 语法语义拆分线已完成 - 第 3 层(忠实语法 AST)与第 4 层(sema 产物)已在 parse.c / sema.c 之间分开, sema.c 持有名字解析(作用域表)、类型检查、常量求值、结构体布局与全部降级; parse.c 只建忠实语法形状, 保留文法分类 oracle(typedef 名 / tag)与少量判定表 A-D 列明的语法可判检查. 改动前先了解现状:
 
-- `chibicc.h` - 所有共享类型(`Token`, `Obj`, `Node`, `Type`, `Member`)与跨文件声明; 未来在此拆分公共头与内部头.
-- `tokenize.c` - 词法; 当前丢弃注释与空白.
+- `chibicc.h` - 所有共享类型(`Token`, `Obj`, `Node`, `Type`, `Member`, `VarAttr`)与跨文件声明; 未来在此拆分公共头与内部头.
+- `tokenize.c` - 词法; 当前丢弃注释与空白(阶段 1 的改造对象).
 - `preprocess.c` - 宏展开与预处理指令, 输入输出都是 token 列表.
-- `parse.c` - 递归下降解析器(约 3400 行), 目前语法分析/语义分析/常量求值/降级混在单遍里 - 这是拆解的主战场.
-- `type.c` - 类型系统与 `add_type`(目前被 parse 在建树过程中内联调用, 是"语法语义耦合"的核心).
-- `codegen.c` - AST 翻译成 x86-64 汇编文本, 无优化 pass.
+- `parse.c` - 递归下降解析器(2531 行), 只做语法分析与忠实建树; 语义残留按 RESULT.md 的 4.1 判定表 A-D 逐条有据. 降级函数在 sema.c, 由 parse 在解析现场调用(时序原因见 RESULT.md 的时序原则).
+- `sema.c` - 语义分析与降级: 作用域/名字解析, `add_type` 标注, `eval` 常量求值, 结构体布局, 初始化器/复合字面量/VLA/函数调用等全部降级.
+- `type.c` - 类型构造器与类型谓词(`is_compatible`/`is_integer` 等).
+- `codegen.c` - AST 翻译成 x86-64 汇编文本, 无优化 pass; 拆分全程零改动.
 - `main.c` - 驱动器; `hashmap.c`(字符串驻留哈希表), `unicode.c`(UTF 编码表), `strings.c`(字符串辅助)为基础设施.
 
 ## 设计原则
