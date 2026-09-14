@@ -25,6 +25,7 @@
 | e90327a | 2.2 | VLA 忠实化(alloca 降级) |
 | 539dea8 | 2.3 | ND_COMPOUND_LITERAL |
 | (本轮) | 3.1 | locals/globals 清单持有权移 sema.c |
+| (本轮) | 3.2a | ND_TYPEDEF 声明记录 |
 
 ## 各步详情
 
@@ -141,6 +142,13 @@
 - 为什么: 变量清单是名字解析的载体, 先把它交给 sema, 3.2b 的解析作用域才有落点. parse 侧净减 43 行, 对清单只剩读写访问器调用.
 - 测试结果: docker-test 全绿(含自举, 分钟级), 快照 diff 为空, 本机构建仅剩既有 codegen 格式告警.
 - 偏差: 计划写"parse 经由已跨文件的 new_lvar 等间接使用", 实际 parse 仍需直接读/重置列表(function() 与 parse() 两处), 故保留四个访问器而非纯间接调用; `new_var` 的作用域登记以 `push_var_scope` 回调形式留在 parse(该调用随 4.2 删除). 属实现形态调整, 无行为差异.
+
+### 3.2a ND_TYPEDEF 节点 (本轮)
+
+- 改了什么: NodeKind 新增 ND_TYPEDEF; parse_typedef 每个声明符构造一个 ND_TYPEDEF 节点(tok = 声明符名字 token, ty = 被声明的类型), 经 sema 新增的 `add_typedef` 按源码顺序追加到 sema 持有的 `typedefs` 链(配 `get_typedefs` 读取); parse 侧 `push_scope(...)->type_def = ty` 的 oracle 登记原样保留.
+- 为什么: 忠实层要能表达"此处有一个 typedef 声明(名字 + Type)", 供 sema 重建作用域取代 oracle(4.2). P3.2b 的 resolve 遍历仍以 oracle 判定 typedef, 本步只做记录.
+- 测试结果: docker-test 全绿(含自举), 快照 diff 为空; 本机 `-S` 对含块域 typedef 的小样例逐字节不变. 记录内容用临时 fprintf 验证: test/typedef.c 产出 8 条, 名字与 Type kind(4=int/12=array/14=struct)均正确, 文件域与块域都在列, 顺序为源码序; 验证后已移除该临时代码.
+- 偏差(重要): 计划写"发声明形状节点", 节点实际**不进语句链**, 而是进 sema 持有的侧链. 原因: compound_stmt 对链上每个语句都调 add_type, 而 gen_stmt 对链上每个节点先打一行 .loc(codegen 零改动的硬约束), 块域 typedef 今天不产生任何节点, 一旦入链就多出一行 .loc, 快照闸门必红. 实测确认: 含块域 typedef 的函数体里, ND_BLOCK 的 .loc 已落在 typedef 所在行, 入链必然产生重复 .loc 行. 因此忠实层保留"声明记录", 承载在侧链而非树内 - 与 2.1/2.2 因 .loc 字节冻结而做的取舍同源. 作用域归属(哪条记录属于哪个块)当前不记录, 待 4.2 由 sema 重建作用域时按需扩展(届时节点可挂到所属 ND_BLOCK 或由 resolve 遍历顺序对齐).
 
 ## 给审核者的提示
 

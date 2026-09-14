@@ -267,6 +267,7 @@ typedef enum {
   ND_CAST,      // Type cast
   ND_MEMZERO,   // Zero-clear a stack variable
   ND_DECL,      // Declaration of a local variable; sema lowers it to statements
+  ND_TYPEDEF,   // Typedef declaration; a record for sema, never codegen'd
   ND_COMPOUND_LITERAL, // "(type){...}"; sema materializes its hidden variable
   ND_ASM,       // "asm"
   ND_CAS,       // Atomic compare-and-swap
@@ -415,6 +416,14 @@ Obj *get_locals(void);
 void set_locals(Obj *vars);
 Obj *get_globals(void);
 void set_globals(Obj *vars);
+
+// Typedef declarations, recorded by the parser in source order. They
+// carry the name (as `tok`) and the declared type (as `ty`), which is
+// what sema needs to rebuild scopes. They are kept out of the AST
+// statement chain because codegen emits a .loc directive for every
+// node it sees.
+void add_typedef(Node *node);
+Node *get_typedefs(void);
 
 // Initializer lowering (sema.c). ND_DECL carries the parsed tree and
 // is lowered when typed.

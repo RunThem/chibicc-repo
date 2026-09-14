@@ -65,7 +65,7 @@
 
 - [x] **3.1 清单持有权**: `locals/globals` 移 sema.c 持有(纯搬家; parse 经由已跨文件的 `new_lvar` 等间接使用).
 
-- [ ] **3.2a ND_TYPEDEF 节点**: `parse_typedef`(3130-3144) 发声明形状节点(名字 + Type), 为 sema 重建作用域铺路; parse 自身仍同步登记 oracle.
+- [x] **3.2a ND_TYPEDEF 节点**: `parse_typedef`(3130-3144) 发声明形状节点(名字 + Type), 为 sema 重建作用域铺路; parse 自身仍同步登记 oracle.
 
 - [ ] **3.2b 标识符翻转(最大单步)**: `primary()`(3082-3105) 的标识符发未解析名字节点(变量/枚举/函数引用共用, 语法期本就无法区分); sema 前置 resolve 遍历: 建作用域栈(块/for 作用域由树结构给出; typedef/tag 仍以 parse 的 oracle 为准, 经传递供 sema 查询), 绑定变量与枚举常量, 收集 static inline 的 refs; "undefined variable" 等错误触发时机后移, 锚定同一标识符 token, 文案不变. 已知中间态: `new_var` 仍会向 parse 的作用域表 push 条目, 与 sema 的解析作用域并存, P4.2 清理.
 

@@ -34,6 +34,23 @@ void set_globals(Obj *vars) {
   globals = vars;
 }
 
+// Typedef declarations, in source order. The parser records them here
+// as it parses; sema will rebuild scopes from these records instead of
+// the parser's scope table.
+static Node *typedefs;
+static Node *typedefs_tail;
+
+void add_typedef(Node *node) {
+  if (typedefs)
+    typedefs_tail = typedefs_tail->next = node;
+  else
+    typedefs = typedefs_tail = node;
+}
+
+Node *get_typedefs(void) {
+  return typedefs;
+}
+
 static Obj *new_var(char *name, Type *ty) {
   Obj *var = calloc(1, sizeof(Obj));
   var->name = name;

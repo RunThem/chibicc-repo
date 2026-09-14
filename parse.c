@@ -2584,6 +2584,12 @@ static Token *parse_typedef(Token *tok, Type *basety) {
     Type *ty = declarator(&tok, tok, basety);
     if (!ty->name)
       error_tok(ty->name_pos, "typedef name omitted");
+
+    // Record the declaration as a node for sema's scope reconstruction.
+    Node *node = new_node(ND_TYPEDEF, ty->name);
+    node->ty = ty;
+    add_typedef(node);
+
     push_scope(get_ident(ty->name))->type_def = ty;
   }
   return tok;
