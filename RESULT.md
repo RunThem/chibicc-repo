@@ -268,8 +268,8 @@
 
 - 改了什么: (1) sema.c 新增 `lower_funcall(node, tok)` - callee 判定("not a function", 锚点 `fn->tok`)、实参逐个转成形参类型(结构体/联合体形参不转)、变参尾部的 float 提升为 double、数量检查("too many/few arguments", 锚点调用位置)、`node->func_ty` / `node->ty` 赋值、以及 struct/union 返回值的 `ret_buffer` 创建, 全部由它完成; parse.c 的 `funcall` 只剩"解析实参列表 + 建节点 + 调 sema", 不再读形参表. (2) `unary` 的 `&` 去掉类型检查, 位域取址诊断移入 sema 的 ND_ADDR case(锚点 = `&` token, 与旧一致). (3) 声明的 `variable declared void` / `variable has incomplete type` 移入 sema 的 ND_DECL 降级(静态局部分支无 AST 节点, 由 `declare_static_local` 自带 void 检查); 后者原样跳过 VLA 分支(旧代码同样 continue 跳过), 未完成类型检查在初始化器之后(灵活数组成员的补全才使类型完整).
 - 为什么: 实参隐式转换是 parse 侧最后一处 lowering(PLAN 1.3-1.7 把缩放/复合赋值/自增/下标全部搬走后的遗漏项), 也是 PLAN 4.2 点名的"funcall 实参数量与类型"; 三条类型诊断同属判定表 E. 调用点仍在解析现场(`lower_funcall` 在 funcall 构造后立即调用): `ret_buffer` 会创建 lvar, 创建时机后移会翻转它与后续临时变量的 locals 链顺序, 栈偏移即变(同 1.4/2.1/2.3 的时序原则).
-- 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 行为对照(c1-c10, 旧 HEAD 二进制 vs 新二进制): 实参过多/过少、非函数调用、位域取址、`void x;`、`int x[];`、`static void x;`、struct 返回值、变参 float 提升、`void x = 1;` - 除下述两处插入符位移外, 汇编与 stderr 全等.
-- 偏差(两处错误插入符位移, 文案不变): (1) "too many arguments" 的锚点由"越界实参之后的第一个 token"变为调用右括号 - 新实现按实参表统一判定数量, 不再在解析到越界实参的那一刻报错, 而 `ND_FUNCALL.tok` 即右括号; (2) `void x = 1;` 的 "variable declared void" 锚点由 `=` 变为初始化器结束后的 token(ND_DECL 的锚点定义, 见 2.1 偏差(1)), `void x;` 无初始化器时锚点不变. 两处均无测试覆盖, 已在此记录; 若需恢复原插入符, 只能在 parse 侧保留对应判定, 与"检查归 sema"的目标冲突.
+- 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 行为对照(c1-c10 + v1-v5, 旧 HEAD 二进制 vs 新二进制): 实参过多/过少、非函数调用、位域取址、`void x;`、`int x[];`、`static void x;`、struct 返回值、变参 float 提升、未完成 struct、`static void x = ...` - 汇编与 stderr 全等; 差异仅限下述偏差条列出的 `void x = <初始化器>;` 与 "too many arguments" 两类诊断时机.
+- 偏差(错误诊断的时机位移, 仅 "variable declared void" 一处): 该检查从"解析到声明符之后立即"改为"ND_DECL 降级时", 因此对**块域非静态**的 `void x = <初始化器>;` 有三点可见变化: (1) 插入符由 `=` 变为初始化器结束后的 token(ND_DECL 的锚点定义, 见 2.1 偏差(1)); (2) 若初始化器本身也非法, 报出的错误随之改变 - 实测 `void x = undefined_thing;` 旧版报 "variable declared void", 新版先报 "undefined variable"; (3) `void x;`(无初始化器)插入符不变, 块域 static 路径(`static void x = ...;` 仍由 `declare_static_local` 在声明现场检查)与文件域行为均不变. 另有 "too many arguments" 一处插入符位移: 锚点由"越界实参之后的第一个 token"变为调用右括号 - 新实现按实参表统一判定数量, 不再在解析到越界实参的那一刻报错, 而 `ND_FUNCALL.tok` 即右括号. 两处均无测试覆盖; 若需恢复原诊断时机与插入符, 只能在 parse 侧保留对应判定, 与"检查归 sema"的目标冲突.
 
 ## 给审核者的提示
 
@@ -283,7 +283,7 @@
 - 时序原则(1.4 确立, 1.8 扩展, 4.2 沿用): 凡降级会创建 lvar 或匿名 gvar 的节点, parse 构造现场立即触发降级(`add_type` 或直接调 sema 的搬家函数, 如 4.2c 的 `lower_funcall`), 保证创建顺序与旧代码一致; 1.10 进一步表明, 与这些名字共用 new_unique_name 计数器的标签分配同样必须留在 parse.
 - .loc 原则(2.1 发现, 3.2a/3.4a/3.4b 反复命中): gen_stmt 对每个语句节点(含 ND_BLOCK)先按 node->tok 打一行 .loc, 因此语句链的形状与锚点被字节冻结. 由此否决了四处计划原文: 2.1 的"外层 ND_BLOCK 取消", 2.2 的"EXPR_STMT 前缀消失", 3.2a/3.4b 的"声明节点进树", 3.4a 的"static 局部走 ND_DECL 降级建 gvar".
 - 忠实层的已知残留: ND_WHILE/ND_FOR/ND_DO 带 parse 期分配的 brk/cont 标签, ND_BREAK/ND_CONTINUE 带 parse 期记录的绑定目标(unique_label) - 标签与匿名全局共用 new_unique_name, `.L..N` 编号是汇编字节的一部分, 因此这部分是字节级等价所要求的 parse 期语义残留, 清理需先接受快照重置. 另有: ND_DECL 的 vla-size 兄弟语句(2.2 已述), scope_decls 侧链无作用域归属(3.2a/3.4b).
-- 错误文案与插入符的两处已知位移(4.2c, 无测试覆盖): `too many arguments` 的锚点从越界实参后的第一个 token 变为调用右括号; `void x = 1;` 的 `variable declared void` 锚点从 `=` 变为初始化器后的 token. 其余全部错误路径经逐字节对照与旧二进制一致.
+- 错误诊断的两处已知时机位移(4.2c, 无测试覆盖): `too many arguments` 的锚点从越界实参后的第一个 token 变为调用右括号; 块域非静态的 `void x = <初始化器>;` 的 `variable declared void` 延后到初始化器之后(插入符随 ND_DECL 锚点变化, 初始化器本身非法时报错内容也会变). 其余全部错误路径经逐字节对照与旧二进制一致.
 - codegen.c 全程零改动: git diff 5f53ed0..HEAD -- codegen.c 为空.
 - 常用命令: make docker-test(全量 + 自举), make docker-snapshot-diff(快照 diff), make docker-snapshot(重置基线, 仅在刻意的行为变化后).
 - 逐字节对照的土办法(3.2b 起常用): `git worktree add /tmp/cbase <commit> && make -C /tmp/cbase`, 再对同一组 .c 用两个二进制跑 -S, diff 汇编与 stderr; 样例覆盖 enum/typedef/作用域遮蔽/循环/switch/复合赋值/字符串/复合字面量/VLA/sizeof/static inline/全局初始化器, 4.2 起加 位域/属性/packed/tag 前向声明与重定义/函数重定义/实参数量与类型.
