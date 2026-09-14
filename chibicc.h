@@ -258,6 +258,8 @@ typedef enum {
   ND_FUNCALL,   // Function call
   ND_EXPR_STMT, // Expression statement
   ND_STMT_EXPR, // Statement expression
+  ND_IDENT,     // An unresolved name; sema binds it to a variable,
+                // a function or an enum constant
   ND_VAR,       // Variable
   ND_VLA_PTR,   // VLA designator
   ND_NUM,       // Integer
@@ -387,6 +389,17 @@ char *new_unique_name(void);
 
 // The parser still owns the scope table that names are registered in.
 void push_var_scope(char *name, Obj *var);
+
+// Identifier lookup in that scope table. Returns the variable or
+// function a name refers to; for an enum constant it sets *enum_ty and
+// *enum_val and returns NULL, and for a typedef (or an unknown name) it
+// returns NULL leaving both untouched. sema resolves identifiers with
+// this until it rebuilds the scopes itself.
+Obj *find_ident(Token *tok, Type **enum_ty, int *enum_val);
+
+// The function the parser is currently parsing, needed by sema when it
+// records a reference to a "static inline" function.
+Obj *get_current_fn(void);
 
 Node *conditional(Token **rest, Token *tok);
 Obj *parse(Token *tok);

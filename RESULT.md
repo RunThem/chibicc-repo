@@ -1,6 +1,6 @@
 # RESULT.md - 语法语义拆分执行记录
 
-本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 3.1 为止, P3(名字解析出解析器)进行中, 下一步为 3.2a ND_TYPEDEF 节点.
+本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 3.2b 为止, P3(名字解析出解析器)进行中, 下一步为 3.3 函数语义搬家.
 
 基线: 上游 commit 5f53ed0 的快照建立于 0.1; 本轮从 1f24ab7 开始推进. 每步的三道闸门(make docker-test 含自举 / 汇编快照逐字节 diff / 行为测试)均须全绿后才提交.
 
@@ -26,6 +26,7 @@
 | 539dea8 | 2.3 | ND_COMPOUND_LITERAL |
 | (本轮) | 3.1 | locals/globals 清单持有权移 sema.c |
 | (本轮) | 3.2a | ND_TYPEDEF 声明记录 |
+| (本轮) | 3.2b | ND_IDENT 标识符翻转(bind_ident 移 sema) |
 
 ## 各步详情
 
@@ -149,6 +150,13 @@
 - 为什么: 忠实层要能表达"此处有一个 typedef 声明(名字 + Type)", 供 sema 重建作用域取代 oracle(4.2). P3.2b 的 resolve 遍历仍以 oracle 判定 typedef, 本步只做记录.
 - 测试结果: docker-test 全绿(含自举), 快照 diff 为空; 本机 `-S` 对含块域 typedef 的小样例逐字节不变. 记录内容用临时 fprintf 验证: test/typedef.c 产出 8 条, 名字与 Type kind(4=int/12=array/14=struct)均正确, 文件域与块域都在列, 顺序为源码序; 验证后已移除该临时代码.
 - 偏差(重要): 计划写"发声明形状节点", 节点实际**不进语句链**, 而是进 sema 持有的侧链. 原因: compound_stmt 对链上每个语句都调 add_type, 而 gen_stmt 对链上每个节点先打一行 .loc(codegen 零改动的硬约束), 块域 typedef 今天不产生任何节点, 一旦入链就多出一行 .loc, 快照闸门必红. 实测确认: 含块域 typedef 的函数体里, ND_BLOCK 的 .loc 已落在 typedef 所在行, 入链必然产生重复 .loc 行. 因此忠实层保留"声明记录", 承载在侧链而非树内 - 与 2.1/2.2 因 .loc 字节冻结而做的取舍同源. 作用域归属(哪条记录属于哪个块)当前不记录, 待 4.2 由 sema 重建作用域时按需扩展(届时节点可挂到所属 ND_BLOCK 或由 resolve 遍历顺序对齐).
+
+### 3.2b ND_IDENT 标识符翻转 (本轮)
+
+- 改了什么: NodeKind 新增 ND_IDENT; `primary()` 的 TK_IDENT 分支不再自己查表, 只发 ND_IDENT{tok}, 随即在同一现场调 `add_type(node)` 触发 sema 绑定; sema 新增 `bind_ident`(add_type 的 ND_IDENT case): 经 parse 新增的查询 `find_ident(tok, &enum_ty, &enum_val)` 拿结果 - 变量/函数 -> 就地改写为 ND_VAR 并 `ty = var->ty`; 枚举常量 -> 就地改写为 ND_NUM 并 `ty = ty_int`; 两者皆无 -> 保持原有两条错误("implicit declaration of a function" / "undefined variable", 同一 token). "static inline" 的 refs 收集随之移入 sema(经 parse 新增的 `get_current_fn()` 取当前函数), 语义与旧 primary 逐字一致. parse 侧 `find_var` 保留给 `find_typedef`(typedef 分类 oracle).
+- 为什么: 语法期无法区分"变量/函数/枚举常量"的引用, 解析器不再做名字解析 - 查表判定、错误、refs 收集全部归 sema. 本步过后 parse 只保留 typedef/tag 分类用的查表.
+- 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 另做了行为对照(旧二进制 worktree 于 HEAD 编译后逐字节 diff): 覆盖 enum/typedef/块与 for 作用域遮蔽/while+switch+case 范围/复合赋值全家/条件表达式/字符串/复合字面量/VLA/sizeof/_Alignof/static inline 链(含 driver.sh 的 6 条 liveness 用例)/全局初始化器引用函数 的样例 -S 输出与 stderr 全等; 5 个非法样例(未定义变量/隐式声明/typedef 名当变量/`x + ;`/enum 变量)的错误文案与插入符位置全等.
+- 偏差(重要, 与计划相反): 计划要求"发未解析名字节点"后由 sema 的 resolve **遍历**(块/for 作用域由树结构给出)统一绑定, 并预期错误触发时机后移; 实际实现是**在构造现场立即绑定**(primary -> add_type -> bind_ident), 未解析态只存在于构造的那一瞬间. 原因是不写死动态作用域就会出错: (1) 名字查找依赖 parse 的作用域栈, 而该栈是动态的 - `for (int i = 0; i < 3; i++)` 的 i 在 for 语句解析完就被 leave_scope 弹出, 而它的使用点要等到语句级 add_type 才被访问, 延迟绑定必然报 "undefined variable"(实测: 延迟版本在这条 for 上直接编译失败, 已回退); (2) 反之, 若把绑定提前到 leave_scope 前, 又要为 sizeof/自增自减/字符串等 parse 期 add_type 的构造点各补一次 resolve, 等于把作用域边界重新硬编码进 parse. 因此"树结构给出作用域 + 遍历绑定"要等 4.2 把 add_type 重构成 analyze() 单遍时才成立, 本步只把决策权交给 sema. 副产品: 错误触发时机与今天完全相同(比计划预期更保守, 无回归风险), `x + ;` 这类 doubly-invalid 的输入仍报原错误. sema 侧也**没有**自建作用域栈 - 它查询 parse 的 oracle(计划写的"经传递供 sema 查询"), 双重作用域条目因此尚未产生, 3.1/3.2a 的清单与记录是为 4.2 重建作用域准备的.
 
 ## 给审核者的提示
 

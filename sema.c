@@ -51,6 +51,45 @@ Node *get_typedefs(void) {
   return typedefs;
 }
 
+// Binds an unresolved name. A variable or function reference becomes
+// ND_VAR; an enum constant becomes ND_NUM. The parser's scope table is
+// still the authority for what a name means, so the lookup goes
+// through it until sema owns the scopes.
+static void bind_ident(Node *node) {
+  Token *tok = node->tok;
+  Type *enum_ty = NULL;
+  int enum_val = 0;
+  Obj *var = find_ident(tok, &enum_ty, &enum_val);
+
+  if (var) {
+    // For "static inline" functions, record the reference so that the
+    // liveness analysis can tell which ones are actually needed.
+    if (var->is_function) {
+      Obj *fn = get_current_fn();
+      if (fn)
+        strarray_push(&fn->refs, var->name);
+      else
+        var->is_root = true;
+    }
+
+    node->kind = ND_VAR;
+    node->var = var;
+    node->ty = var->ty;
+    return;
+  }
+
+  if (enum_ty) {
+    node->kind = ND_NUM;
+    node->val = enum_val;
+    node->ty = ty_int;
+    return;
+  }
+
+  if (equal(tok->next, "("))
+    error_tok(tok, "implicit declaration of a function");
+  error_tok(tok, "undefined variable");
+}
+
 static Obj *new_var(char *name, Type *ty) {
   Obj *var = calloc(1, sizeof(Obj));
   var->name = name;
@@ -714,6 +753,11 @@ void add_type(Node *node) {
     node->ty = var->ty;
     return;
   }
+  case ND_IDENT:
+    // Bind the name (variable, function or enum constant), rewriting
+    // the node into the shape codegen understands.
+    bind_ident(node);
+    return;
   case ND_VAR:
   case ND_VLA_PTR:
     node->ty = node->var->ty;

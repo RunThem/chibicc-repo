@@ -287,6 +287,28 @@ static Type *find_typedef(Token *tok) {
   return NULL;
 }
 
+// Identifier lookup for sema. The parser's scope table is still the
+// place names are resolved, so sema asks here; this goes away once sema
+// rebuilds the scopes from the tree.
+Obj *find_ident(Token *tok, Type **enum_ty, int *enum_val) {
+  VarScope *sc = find_var(tok);
+  if (!sc)
+    return NULL;
+
+  if (sc->var)
+    return sc->var;
+
+  if (sc->enum_ty) {
+    *enum_ty = sc->enum_ty;
+    *enum_val = sc->enum_val;
+  }
+  return NULL;
+}
+
+Obj *get_current_fn(void) {
+  return current_fn;
+}
+
 static void push_tag_scope(Token *tok, Type *ty) {
   hashmap_put2(&scope->tags, tok->loc, tok->len, ty);
 }
@@ -2522,28 +2544,20 @@ static Node *primary(Token **rest, Token *tok) {
   }
 
   if (tok->kind == TK_IDENT) {
-    // Variable or enum constant
-    VarScope *sc = find_var(tok);
+    // A reference to a variable, a function or an enum constant. Which
+    // one it denotes is not a syntax question, so the parser keeps the
+    // reference faithful and sema binds it through add_type.
+    //
+    // The binding has to happen at this point rather than in a later
+    // pass: name lookup needs the parser's scope stack, which is a
+    // dynamic one. A variable declared in a `for` init is out of scope
+    // once the statement is parsed, but its uses are typed later than
+    // that, so the name must be resolved while the scope is still
+    // alive.
+    Node *node = new_node(ND_IDENT, tok);
     *rest = tok->next;
-
-    // For "static inline" function
-    if (sc && sc->var && sc->var->is_function) {
-      if (current_fn)
-        strarray_push(&current_fn->refs, sc->var->name);
-      else
-        sc->var->is_root = true;
-    }
-
-    if (sc) {
-      if (sc->var)
-        return new_var_node(sc->var, tok);
-      if (sc->enum_ty)
-        return new_num(sc->enum_val, tok);
-    }
-
-    if (equal(tok->next, "("))
-      error_tok(tok, "implicit declaration of a function");
-    error_tok(tok, "undefined variable");
+    add_type(node);
+    return node;
   }
 
   if (tok->kind == TK_STR) {
