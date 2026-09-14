@@ -1,6 +1,6 @@
 # RESULT.md - 语法语义拆分执行记录
 
-本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 3.4 为止, P3(名字解析出解析器)全部完成, 下一步为 P4 4.1 检查归位盘点.
+本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 4.1 为止, P3(名字解析出解析器)全部完成, 4.1(检查归位盘点)完成, 进行中为 P4 4.2 布局翻转与收官.
 
 基线: 上游 commit 5f53ed0 的快照建立于 0.1; 本轮从 1f24ab7 开始推进. 每步的三道闸门(make docker-test 含自举 / 汇编快照逐字节 diff / 行为测试)均须全绿后才提交.
 
@@ -30,6 +30,7 @@
 | (本轮) | 3.3 | begin_function 函数语义搬家 |
 | (本轮) | 3.4a | resolve_labels/finalize_globals/array_dimension_type/declare_static_local 移 sema |
 | (本轮) | 3.4b | 枚举忠实化(ND_ENUM_CONST) |
+| (本轮) | 4.1 | 检查归位盘点(纯文档, 无代码变更) |
 
 ## 各步详情
 
@@ -181,6 +182,70 @@
 - 为什么: 枚举常量的"值求值 + 作用域登记"是语义, 语法层只需要忠实记下"这里声明了常量 X, 显式值是 expr"; 与 3.2a 的 typedef 记录合为一条链, 才能在 4.2 按源码顺序重放一个作用域里的全部引入名字.
 - 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 行为对照 f.c 覆盖: 隐式/显式值交替、显式值引用同枚举前面的成员(`W = X + Y`)、负值、文件域与块域枚举、枚举常量作数组维度与 case 标签、typedef 上的匿名 enum - 与旧二进制逐字节相同且 stderr 相同. 记录内容用临时 fprintf 验证(X=0/Y=1/Z=5/W=1/V=2/U=3/P=-1/Q=0/L1=3/L2=7/L3=8, 显式标记正确), 验证后已移除.
 - 偏差: (1) 记录仍走 sema 侧链而非语句链, 理由同 3.2a(.loc 字节冻结); (2) 计划只写"发声明节点", 实际额外做了记录链的合并与更名 - 属实现形态调整, 无行为差异, 3.2a 记录中的接口名(add_typedef/get_typedefs)以此为准; (3) 枚举值的求值时机与今天完全一致(仍在解析该成员的那一刻, 因为后续成员与同一声明内的数组维度都依赖它), 未出现计划未预期的时机后移.
+
+### 4.1 检查归位盘点 (本轮)
+
+- 改了什么: 只改文档, 无代码变更. 逐条盘点了 parse.c 内全部 43 处 `error_tok` 与残余的类型依赖, 按"文法可判 / 解析器上下文 / 建树必需 / 需要类型"四类归档, 并对需要类型的 10 处给出 4.2 的执行清单; 核对 `test/driver.sh` 的 36 条断言与 `test/*.c`, 确认没有任何一处断言错误文案或失败退出码.
+- 为什么: P4 是收官前的定位步; 4.2 要按本步判定执行(布局翻转 + 类型依赖清除), 判定先落成文字, 避免 4.2 边改边定. 判定标准: 能从 token/文法推出的留 parse; 需要类型、成员表或符号表才能判定的移 sema.
+- 测试结果: 无代码变更. 开工前复验基线 `make docker-test` 全绿(含自举), `make docker-snapshot-diff` 为空.
+- 偏差: 无.
+
+#### 判定表 A: 留 parse - 文法/词法可判(15 处)
+
+| 位置 | 文案 | 理由 |
+|---|---|---|
+| 283 `get_ident` | expected an identifier | TK_IDENT 校验, 词法 |
+| 370 / 410 `declspec` | storage class specifier / `_Alignas` is not allowed in this context | `attr == NULL` 即抽象声明符上下文, 由调用点决定, 文法 |
+| 385 `declspec` | typedef may not be used together with ... | 指示符关键字组合, 文法 |
+| 528 `declspec` | invalid type | 指示符组合表(如 `int int`), 文法 |
+| 726 / 728 `enum_specifier` | unknown enum type / not an enum tag | tag 名字解析, 文法分类 oracle(AGENTS 明确保留) |
+| 805 `declaration` / 2607 / 2646 / 2694 | (variable/typedef/function) name omitted | 抽象声明符出现在必须有名字处, 文法 |
+| 964 `struct_designator` | expected a field designator | `.` 后必须 ident, 文法 |
+| 1310 `array_initializer1` | expected string literal | 文法 |
+| 2068 `attribute_list` | unknown attribute | 属性名表, 文法 |
+| 2594 `primary` | expected an expression | 文法 |
+
+#### 判定表 B: 留 parse - 解析器上下文状态(4 处)
+
+| 位置 | 文案 | 理由 |
+|---|---|---|
+| 1382 / 1409 | stray case / stray default | `current_switch` 是解析器自身的嵌套状态 |
+| 1518 / 1529 | stray break / stray continue | `brk_label` / `cont_label` 同上 |
+
+同属本类(非 error_tok, 但同为"必须留 parse 的语义残留"): `brk_label/cont_label/unique_label` 的分配与 break/continue 的绑定目标记录. 理由与 1.10 偏差一致 - 标签与字符串匿名全局共用 `new_unique_name` 计数器, `.L..N` 编号是汇编字节的一部分, 分配时机后移到 sema 必然改变编号. 清零动作(sema 的 `resolve_labels` 由 parse 的壳调用)同此.
+
+#### 判定表 C: 留 parse - 建树必需, 解析器必须先拿到结果(11 处)
+
+| 位置 | 文案 | 理由 |
+|---|---|---|
+| 944 / 949 / 951 `array_designator` | array designator index exceeds array bounds / range is empty | 解析器要用 begin/end 索引 `init->children[]` 建树, 值必须现算; 越界是顺带诊断 |
+| 983 `struct_designator` / 990 / 1018 `designation` | struct has no such member / array index in non-array initializer / field name not in struct or union initializer | 初始化器按成员 `idx` 定位子节点, 必须先解析出 Member* |
+| 2226 / 2228 / 2230 / 2233 / 2241 `struct_ref` | invalid pointer dereference / dereferencing a void pointer / not a struct nor a union / no such member | 1.6 既定设计: 成员链(含匿名成员展平)在 parse 期解析成 ND_MEMBER 链并挂 Member*, sema 只补插 DEREF. 移到 sema 需要把 ND_MEMBER 改成携带名字 token 的两段式, 超出 4.2 范围 |
+
+#### 判定表 D: 留 parse - 常量求值/语法选择的顺带诊断(3 处)
+
+| 位置 | 文案 | 理由 |
+|---|---|---|
+| 823 `declaration` | variable-sized object may not be initialized | VLA 分类已由 parse 经 `array_dimension_type` 拿到, 判定退化为"声明符后是否紧跟 `=`", 属语法位置 |
+| 1392 `stmt` | empty case range specified | begin/end 两个常量值由 parse 现算(case 标签要写进节点供 codegen) |
+| 2438 `generic_selection` | controlling expression type not compatible ... | `is_compatible` 的结果决定**选中哪个分支**, 是语法选择而非事后诊断 |
+
+#### 判定表 E: 移 sema - 4.2 执行(10 处 + 两项无文案的语义)
+
+| 位置 | 文案 | 归属 |
+|---|---|---|
+| 2352 `funcall` | not a function | 类型判定 |
+| 2368 / 2384 `funcall` | too many / too few arguments | 需要形参表 |
+| (无文案) `funcall` 的实参隐式 cast 与 float 提升 | - | 降级, 是 parse 侧最后一处 lowering |
+| 1935 `unary` | cannot take address of bitfield | 需要 `lhs->member->is_bitfield` |
+| 803 / 864 `declaration` | variable declared void | 类型判定(两处: 静态分支前/普通声明后) |
+| 862 `declaration` | variable has incomplete type | 需要布局后的 `ty->size` |
+| 2653 / 2655 / 2657 `function` | redeclared as a different kind of symbol / redefinition of %s / static declaration follows a non-static declaration | 文件域符号表语义 |
+| (无文案) `struct_decl` / `union_decl` 的成员偏移/位域/size/align 布局 | - | PLAN 4.2 点名项 |
+
+#### driver.sh 核对结果
+
+36 条断言全部作用于**产物与编译器输出文案**(`.comm foo` / `main:` / `f1:` 等标识符存活性 / `-M` 依赖文件内容 / `file` 的 ELF 类型), 无一条断言 `error:` 文案、锚点列号或失败退出码; `test/*.c` 亦只断言运行期行为(`ASSERT`). 结论: 错误文案与锚点不在测试闸门内, 但仍按既往纪律逐字保留 - 4.2 移动判定表 E 的检查时, 锚点 token 通过节点现有字段(`ND_DECL.tok` / `ND_FUNCALL.tok` / `ND_MEMBER` 的运算符 token)原样传递; 仅 `too many arguments` 一处锚点会从"越界实参后的第一个 token"退化为调用右括号(`ND_FUNCALL.tok`), 该处会在 4.2 记录为偏差.
 
 ## 给审核者的提示
 

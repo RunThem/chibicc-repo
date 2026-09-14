@@ -75,7 +75,7 @@
 
 ## P4 收尾(2 步)
 
-- [ ] **4.1 检查归位盘点**: 逐条审视 parse.c 内残余语义检查(`funcall` 实参数量与类型 2878-2912, stray 系列, redefinition, incomplete type 等), 决定留 parse(语法可判)或移 sema; `test/driver.sh` 的精确文案断言逐条核对.
+- [x] **4.1 检查归位盘点**: 逐条审视 parse.c 内残余语义检查(`funcall` 实参数量与类型 2878-2912, stray 系列, redefinition, incomplete type 等), 决定留 parse(语法可判)或移 sema; `test/driver.sh` 的精确文案断言逐条核对. (结果见 RESULT.md 判定表 A-E: 33 处留 parse(文法 15 / 解析器上下文 4 / 建树必需 11 / 常量求值顺带 3), 10 处连同伴随的实参 cast 与结构体布局移 sema, 4.2 执行)
 
 - [ ] **4.2 布局翻转与收官**: `struct_decl/union_decl`(2678-2735) 的布局计算改由 sema 驱动(parse 只建语法形状); 删除 parse 残留的类型依赖与 3.2b 遗留的双重作用域条目; `make docker-test` + `make test-stage2` + 快照 diff 全绿收官.
 
