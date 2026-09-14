@@ -37,21 +37,36 @@ void set_globals(Obj *vars) {
   globals = vars;
 }
 
-// Typedef declarations, in source order. The parser records them here
-// as it parses; sema will rebuild scopes from these records instead of
-// the parser's scope table.
-static Node *typedefs;
-static Node *typedefs_tail;
+// Declaration records (typedefs and enum constants), in source order.
+// The parser records them as it parses; sema will rebuild scopes from
+// these instead of the parser's scope table. They are not part of the
+// AST statement chain, which codegen walks.
+static Node *scope_decls;
+static Node *scope_decls_tail;
 
-void add_typedef(Node *node) {
-  if (typedefs)
-    typedefs_tail = typedefs_tail->next = node;
+void add_scope_decl(Node *node) {
+  if (scope_decls)
+    scope_decls_tail = scope_decls_tail->next = node;
   else
-    typedefs = typedefs_tail = node;
+    scope_decls = scope_decls_tail = node;
 }
 
-Node *get_typedefs(void) {
-  return typedefs;
+Node *get_scope_decls(void) {
+  return scope_decls;
+}
+
+// Evaluates an enum constant's value and registers the name. `val` is
+// the running value of the enum list: a member without an explicit
+// value takes it, and it is advanced past this member either way.
+void add_enum_const(Node *node, Type *ty, int *val) {
+  if (node->lhs)
+    *val = eval(node->lhs);
+
+  node->val = *val;
+  (*val)++;
+
+  push_enum_scope(get_ident(node->tok), ty, node->val);
+  add_scope_decl(node);
 }
 
 // Declares a block-scope static variable. It has static storage

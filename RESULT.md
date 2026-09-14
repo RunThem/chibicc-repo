@@ -1,6 +1,6 @@
 # RESULT.md - 语法语义拆分执行记录
 
-本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 3.3 为止, P3(名字解析出解析器)进行中, 下一步为 3.4 清返工点.
+本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 3.4 为止, P3(名字解析出解析器)全部完成, 下一步为 P4 4.1 检查归位盘点.
 
 基线: 上游 commit 5f53ed0 的快照建立于 0.1; 本轮从 1f24ab7 开始推进. 每步的三道闸门(make docker-test 含自举 / 汇编快照逐字节 diff / 行为测试)均须全绿后才提交.
 
@@ -28,6 +28,8 @@
 | (本轮) | 3.2a | ND_TYPEDEF 声明记录 |
 | (本轮) | 3.2b | ND_IDENT 标识符翻转(bind_ident 移 sema) |
 | (本轮) | 3.3 | begin_function 函数语义搬家 |
+| (本轮) | 3.4a | resolve_labels/finalize_globals/array_dimension_type/declare_static_local 移 sema |
+| (本轮) | 3.4b | 枚举忠实化(ND_ENUM_CONST) |
 
 ## 各步详情
 
@@ -165,6 +167,20 @@
 - 为什么: 函数定义的作用域与栈帧布局(参数/隐藏参数/va_area/alloca_bottom)属语义, parse 侧不再决定"这个函数需要哪些变量"; 顺序硬性保持 - lvar 与匿名全局的创建次序直接决定栈偏移与 .L..N 编号.
 - 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 行为对照同 3.2b(旧 HEAD 二进制 vs 新二进制): 4 个样例 -S 与 stderr 全等, 其中 d.c 专门覆盖变参(va_list/va_arg)、>16 字节 struct 返回值(隐藏缓冲)、__func__/__FUNCTION__、多参数调用.
 - 偏差: (1) `fn->locals = get_locals()` 留在 parse 未随搬家 - 它只是把 sema 的清单读回来赋给 Obj, 与 3.1 的访问器用法同性质; (2) `current_fn` 仍留 parse: stmt() 的 return 分支要用 `current_fn->ty->return_ty` 插隐式 cast, 这处 parse 期语义残留未在 3.3 计划范围内, 记入 4.1 盘点; (3) `__func__` 登记从 `push_scope(name)->var = new_string_literal(...)` 改为 `push_var_scope(name, new_string_literal(...))`, 求值次序与作用域表内容不变(匿名名 ".L..N" 与 "__func__" 的入表顺序一致).
+
+### 3.4a 清返工点(搬家三项) (本轮)
+
+- 改了什么: (1) `resolve_labels(gotos, labels)` 进 sema - 匹配逻辑原样搬, parse 侧的 resolve_goto_labels 变成"调 sema + 清空两个 static 列表"的壳(表仍归 parse, 遵 PLAN 纪律 4"static 全局仅在 P3.1 做持有权搬家"); `mark_live`/`scan_globals` 搬 sema 并合并为 `finalize_globals()`, parse() 末尾只留一句调用; `find_func` 去 static 进 chibicc.h(sema 的 mark_live 要用, 与 find_ident 同属 oracle 类接口). (2) `array_dimension_type(base, expr)` 进 sema - array_dimensions 尾部的 `TY_VLA || !is_const_expr` 判定原样搬走, parse 只收集维度表达式. (3) `declare_static_local(name, ty)` 进 sema - 块域 static 变量的匿名全局创建 + 名字登记. 另: eval 全家(eval/eval2/eval_double/is_const_expr)在 parse 不再直接调用后全部收回 static(0.2 时因 parse 要用才提升), chibicc.h 相应删除四个声明, 文件内补前置声明.
+- 为什么: 这四项都是 0.2-2.3 各步刻意留下的返工点; 至此 parse 侧只剩语法与 oracle 查询, 整单元的收尾(活跃函数标记/冗余 tentative 定义清理)与类型构建的语义判定都在 sema.
+- 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 行为对照: e.c 专门覆盖块域 static(含循环内 static 计数)、goto/标签(含 `&&label` 的 labels-as-values)、二维 VLA, 与旧二进制逐字节相同.
+- 偏差: (1) `resolve_labels` 取参数而非把 gotos/labels 两个 static 搬进 sema - 遵纪律 4(持有权搬家只在 3.1 做), 清空动作因此留在 parse 的壳函数里; (2) 计划写"static 局部 gvar 创建移 sema(ND_DECL 降级时建匿名全局)", 实际是 `declare_static_local()` 在声明现场被调用, 匿名全局仍在 parse 期创建 - 若改由 ND_DECL 降级时创建, 就要为块域 static 声明新增一个语句节点, 而它今天不产生任何节点, 入链必然多一行 .loc(与 2.1/2.2/3.2a 同一条字节闸门约束); 创建时机也不能后移: 匿名名与 .L..N 计数器、globals 链顺序(反向)共同决定输出. 因此本步只把"创建 + 登记"的所有权交给 sema, 保持现场调用.
+
+### 3.4b 枚举忠实化 (本轮)
+
+- 改了什么: NodeKind 新增 ND_ENUM_CONST(名字 token + 可选显式值于 lhs + 求值结果于 val); enum_specifier 每个成员建一个节点(显式值用 conditional() 解析后挂 lhs, 不再由 parse 调 const_expr), 交给 sema 新增的 `add_enum_const(node, ty, &val)`: 有显式值则 `eval(lhs)`, 否则取运行值, 写回 node->val, 推进运行值, 经 parse 新增的 `push_enum_scope(name, ty, val)` 登记名字. 3.2a 的 typedef 记录链与枚举常量记录合并为一条"声明记录"链(sema 侧 `add_scope_decl`/`get_scope_decls`, 原 add_typedef/get_typedefs 更名), 记录按源码顺序串联, 供 4.2 重建作用域.
+- 为什么: 枚举常量的"值求值 + 作用域登记"是语义, 语法层只需要忠实记下"这里声明了常量 X, 显式值是 expr"; 与 3.2a 的 typedef 记录合为一条链, 才能在 4.2 按源码顺序重放一个作用域里的全部引入名字.
+- 测试结果: docker-test 全绿(含自举), 快照 diff 为空. 行为对照 f.c 覆盖: 隐式/显式值交替、显式值引用同枚举前面的成员(`W = X + Y`)、负值、文件域与块域枚举、枚举常量作数组维度与 case 标签、typedef 上的匿名 enum - 与旧二进制逐字节相同且 stderr 相同. 记录内容用临时 fprintf 验证(X=0/Y=1/Z=5/W=1/V=2/U=3/P=-1/Q=0/L1=3/L2=7/L3=8, 显式标记正确), 验证后已移除.
+- 偏差: (1) 记录仍走 sema 侧链而非语句链, 理由同 3.2a(.loc 字节冻结); (2) 计划只写"发声明节点", 实际额外做了记录链的合并与更名 - 属实现形态调整, 无行为差异, 3.2a 记录中的接口名(add_typedef/get_typedefs)以此为准; (3) 枚举值的求值时机与今天完全一致(仍在解析该成员的那一刻, 因为后续成员与同一声明内的数组维度都依赖它), 未出现计划未预期的时机后移.
 
 ## 给审核者的提示
 

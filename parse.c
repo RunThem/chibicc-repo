@@ -217,6 +217,12 @@ void push_var_scope(char *name, Obj *var) {
   push_scope(name)->var = var;
 }
 
+void push_enum_scope(char *name, Type *ty, int val) {
+  VarScope *sc = push_scope(name);
+  sc->enum_ty = ty;
+  sc->enum_val = val;
+}
+
 static Initializer *new_initializer(Type *ty, bool is_flexible) {
   Initializer *init = calloc(1, sizeof(Initializer));
   init->ty = ty;
@@ -726,22 +732,22 @@ static Type *enum_specifier(Token **rest, Token *tok) {
 
   tok = skip(tok, "{");
 
-  // Read an enum-list.
+  // Read an enum-list. Each member becomes a declaration record; sema
+  // evaluates its value and registers the name.
   int i = 0;
   int val = 0;
   while (!consume_end(rest, tok)) {
     if (i++ > 0)
       tok = skip(tok, ",");
 
-    char *name = get_ident(tok);
+    Token *name = tok;
     tok = tok->next;
 
+    Node *node = new_node(ND_ENUM_CONST, name);
     if (equal(tok, "="))
-      val = const_expr(&tok, tok->next);
+      node->lhs = conditional(&tok, tok->next);
 
-    VarScope *sc = push_scope(name);
-    sc->enum_ty = ty;
-    sc->enum_val = val++;
+    add_enum_const(node, ty, &val);
   }
 
   if (tag)
@@ -2603,7 +2609,7 @@ static Token *parse_typedef(Token *tok, Type *basety) {
     // Record the declaration as a node for sema's scope reconstruction.
     Node *node = new_node(ND_TYPEDEF, ty->name);
     node->ty = ty;
-    add_typedef(node);
+    add_scope_decl(node);
 
     push_scope(get_ident(ty->name))->type_def = ty;
   }

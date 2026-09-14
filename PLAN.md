@@ -71,7 +71,7 @@
 
 - [x] **3.3 函数语义搬家**: `function()`(3199-3262) 只留语法形状; `create_param_lvars`, 隐藏 struct 返回缓冲, `va_area`, `alloca_bottom`, `__func__`/`__FUNCTION__` 移 sema.
 
-- [ ] **3.4 清返工点**: static 局部 gvar 创建移 sema(ND_DECL 降级时建匿名全局); 枚举忠实化 - `enum_specifier`(751-794) 发声明节点(成员名 + 可选显式值), 值求值与注册移 sema; VLA 判定(`array_dimensions` 的 const_expr 调用)移 sema; `resolve_goto_labels`(3160-3174)/`mark_live`(3187-3197)/`scan_globals`(3303-3327) 归位 sema.
+- [x] **3.4 清返工点**: static 局部 gvar 创建移 sema(ND_DECL 降级时建匿名全局); 枚举忠实化 - `enum_specifier`(751-794) 发声明节点(成员名 + 可选显式值), 值求值与注册移 sema; VLA 判定(`array_dimensions` 的 const_expr 调用)移 sema; `resolve_goto_labels`(3160-3174)/`mark_live`(3187-3197)/`scan_globals`(3303-3327) 归位 sema.
 
 ## P4 收尾(2 步)
 

@@ -270,6 +270,7 @@ typedef enum {
   ND_MEMZERO,   // Zero-clear a stack variable
   ND_DECL,      // Declaration of a local variable; sema lowers it to statements
   ND_TYPEDEF,   // Typedef declaration; a record for sema, never codegen'd
+  ND_ENUM_CONST, // Enum constant declaration (member name + optional value)
   ND_COMPOUND_LITERAL, // "(type){...}"; sema materializes its hidden variable
   ND_ASM,       // "asm"
   ND_CAS,       // Atomic compare-and-swap
@@ -389,6 +390,7 @@ char *new_unique_name(void);
 
 // The parser still owns the scope table that names are registered in.
 void push_var_scope(char *name, Obj *var);
+void push_enum_scope(char *name, Type *ty, int val);
 
 // Identifier lookup in that scope table. Returns the variable or
 // function a name refers to; for an enum constant it sets *enum_ty and
@@ -436,13 +438,19 @@ void set_locals(Obj *vars);
 Obj *get_globals(void);
 void set_globals(Obj *vars);
 
-// Typedef declarations, recorded by the parser in source order. They
-// carry the name (as `tok`) and the declared type (as `ty`), which is
-// what sema needs to rebuild scopes. They are kept out of the AST
-// statement chain because codegen emits a .loc directive for every
-// node it sees.
-void add_typedef(Node *node);
-Node *get_typedefs(void);
+// Typedef and enum-constant declarations, recorded by the parser in
+// source order. A typedef record carries the name (as `tok`) and the
+// declared type (as `ty`); an enum-constant record carries the name (as
+// `tok`), the optional explicit value (as `lhs`) and the evaluated
+// value (as `val`). They are kept out of the AST statement chain
+// because codegen emits a .loc directive for every node it sees.
+void add_scope_decl(Node *node);
+Node *get_scope_decls(void);
+
+// Evaluates one enum constant and registers it in the parser's scope
+// table. `val` holds the value of the preceding member and is advanced
+// past this one.
+void add_enum_const(Node *node, Type *ty, int *val);
 
 // Declares a block-scope static variable; it gets an anonymous name in
 // the global data section.
