@@ -107,12 +107,7 @@ static bool is_function(Token *tok);
 static Token *function(Token *tok, Type *basety, VarAttr *attr);
 static Token *global_variable(Token *tok, Type *basety, VarAttr *attr);
 
-static int align_down(int n, int align) {
-  return align_to(n - align + 1, align);
-}
-
-static void enter_scope(void) {
-  Scope *sc = calloc(1, sizeof(Scope));
+static void enter_scope(void) {  Scope *sc = calloc(1, sizeof(Scope));
   sc->next = scope;
   scope = sc;
 }
@@ -2123,38 +2118,7 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
 static Type *struct_decl(Token **rest, Token *tok) {
   Type *ty = struct_union_decl(rest, tok);
   ty->kind = TY_STRUCT;
-
-  if (ty->size < 0)
-    return ty;
-
-  // Assign offsets within the struct to members.
-  int bits = 0;
-
-  for (Member *mem = ty->members; mem; mem = mem->next) {
-    if (mem->is_bitfield && mem->bit_width == 0) {
-      // Zero-width anonymous bitfield has a special meaning.
-      // It affects only alignment.
-      bits = align_to(bits, mem->ty->size * 8);
-    } else if (mem->is_bitfield) {
-      int sz = mem->ty->size;
-      if (bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
-        bits = align_to(bits, sz * 8);
-
-      mem->offset = align_down(bits / 8, sz);
-      mem->bit_offset = bits % (sz * 8);
-      bits += mem->bit_width;
-    } else {
-      if (!ty->is_packed)
-        bits = align_to(bits, mem->align * 8);
-      mem->offset = bits / 8;
-      bits += mem->ty->size * 8;
-    }
-
-    if (!ty->is_packed && ty->align < mem->align)
-      ty->align = mem->align;
-  }
-
-  ty->size = align_to(bits, ty->align * 8) / 8;
+  layout_struct(ty);
   return ty;
 }
 
@@ -2162,20 +2126,7 @@ static Type *struct_decl(Token **rest, Token *tok) {
 static Type *union_decl(Token **rest, Token *tok) {
   Type *ty = struct_union_decl(rest, tok);
   ty->kind = TY_UNION;
-
-  if (ty->size < 0)
-    return ty;
-
-  // If union, we don't have to assign offsets because they
-  // are already initialized to zero. We need to compute the
-  // alignment and the size though.
-  for (Member *mem = ty->members; mem; mem = mem->next) {
-    if (ty->align < mem->align)
-      ty->align = mem->align;
-    if (ty->size < mem->ty->size)
-      ty->size = mem->ty->size;
-  }
-  ty->size = align_to(ty->size, ty->align);
+  layout_union(ty);
   return ty;
 }
 

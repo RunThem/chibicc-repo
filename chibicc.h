@@ -466,6 +466,11 @@ void finalize_globals(void);
 // dimension, a VLA otherwise.
 Type *array_dimension_type(Type *base, Node *expr);
 
+// Member placement for aggregates: the parser builds the member list
+// and calls these once it is complete.
+void layout_struct(Type *ty);
+void layout_union(Type *ty);
+
 // Initializer lowering (sema.c). ND_DECL carries the parsed tree and
 // is lowered when typed.
 void gvar_initializer(Token **rest, Token *tok, Obj *var);

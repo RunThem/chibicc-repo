@@ -152,6 +152,62 @@ Type *array_dimension_type(Type *base, Node *expr) {
   return array_of(base, eval(expr));
 }
 
+static int align_down(int n, int align) {
+  return align_to(n - align + 1, align);
+}
+
+// Assigns an offset to every member of a struct and computes its size
+// and alignment. The parser builds the member list (the syntax shape)
+// and calls this once the list is complete and the attributes are
+// known; an incomplete type (size < 0) has no members to place yet.
+void layout_struct(Type *ty) {
+  if (ty->size < 0)
+    return;
+
+  int bits = 0;
+
+  for (Member *mem = ty->members; mem; mem = mem->next) {
+    if (mem->is_bitfield && mem->bit_width == 0) {
+      // Zero-width anonymous bitfield has a special meaning.
+      // It affects only alignment.
+      bits = align_to(bits, mem->ty->size * 8);
+    } else if (mem->is_bitfield) {
+      int sz = mem->ty->size;
+      if (bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
+        bits = align_to(bits, sz * 8);
+
+      mem->offset = align_down(bits / 8, sz);
+      mem->bit_offset = bits % (sz * 8);
+      bits += mem->bit_width;
+    } else {
+      if (!ty->is_packed)
+        bits = align_to(bits, mem->align * 8);
+      mem->offset = bits / 8;
+      bits += mem->ty->size * 8;
+    }
+
+    if (!ty->is_packed && ty->align < mem->align)
+      ty->align = mem->align;
+  }
+
+  ty->size = align_to(bits, ty->align * 8) / 8;
+}
+
+// Unions need no member offsets (they are all zero), only the union
+// of the member sizes and the largest member alignment.
+void layout_union(Type *ty) {
+  if (ty->size < 0)
+    return;
+
+  for (Member *mem = ty->members; mem; mem = mem->next) {
+    if (ty->align < mem->align)
+      ty->align = mem->align;
+    if (ty->size < mem->ty->size)
+      ty->size = mem->ty->size;
+  }
+  ty->size = align_to(ty->size, ty->align);
+}
+
 // Binds an unresolved name. A variable or function reference becomes
 // ND_VAR; an enum constant becomes ND_NUM. The parser's scope table is
 // still the authority for what a name means, so the lookup goes
