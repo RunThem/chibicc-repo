@@ -63,7 +63,7 @@
 
 ## P3 名字解析出解析器(5 步)
 
-- [ ] **3.1 清单持有权**: `locals/globals` 移 sema.c 持有(纯搬家; parse 经由已跨文件的 `new_lvar` 等间接使用).
+- [x] **3.1 清单持有权**: `locals/globals` 移 sema.c 持有(纯搬家; parse 经由已跨文件的 `new_lvar` 等间接使用).
 
 - [ ] **3.2a ND_TYPEDEF 节点**: `parse_typedef`(3130-3144) 发声明形状节点(名字 + Type), 为 sema 重建作用域铺路; parse 自身仍同步登记 oracle.
 

@@ -48,13 +48,6 @@ typedef struct {
   int align;
 } VarAttr;
 
-// All local variable instances created during parsing are
-// accumulated to this list.
-static Obj *locals;
-
-// Likewise, global variables are accumulated to this list.
-static Obj *globals;
-
 static Scope *scope = &(Scope){};
 
 // Points to the function object the parser is currently parsing.
@@ -216,6 +209,14 @@ static VarScope *push_scope(char *name) {
   return sc;
 }
 
+// Registers a variable in the current scope. sema.c creates variables
+// (new_lvar/new_gvar) but the parser's scope table is still the place
+// names are looked up, so the registration is called back here. This
+// goes away once sema owns name resolution.
+void push_var_scope(char *name, Obj *var) {
+  push_scope(name)->var = var;
+}
+
 static Initializer *new_initializer(Type *ty, bool is_flexible) {
   Initializer *init = calloc(1, sizeof(Initializer));
   init->ty = ty;
@@ -254,32 +255,6 @@ static Initializer *new_initializer(Type *ty, bool is_flexible) {
   }
 
   return init;
-}
-
-static Obj *new_var(char *name, Type *ty) {
-  Obj *var = calloc(1, sizeof(Obj));
-  var->name = name;
-  var->ty = ty;
-  var->align = ty->align;
-  push_scope(name)->var = var;
-  return var;
-}
-
-Obj *new_lvar(char *name, Type *ty) {
-  Obj *var = new_var(name, ty);
-  var->is_local = true;
-  var->next = locals;
-  locals = var;
-  return var;
-}
-
-Obj *new_gvar(char *name, Type *ty) {
-  Obj *var = new_var(name, ty);
-  var->next = globals;
-  var->is_static = true;
-  var->is_definition = true;
-  globals = var;
-  return var;
 }
 
 char *new_unique_name(void) {
@@ -2697,7 +2672,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     return tok;
 
   current_fn = fn;
-  locals = NULL;
+  set_locals(NULL);
   enter_scope();
   create_param_lvars(ty->params);
 
@@ -2707,7 +2682,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
     new_lvar("", pointer_to(rty));
 
-  fn->params = locals;
+  fn->params = get_locals();
 
   if (ty->is_variadic)
     fn->va_area = new_lvar("__va_area__", array_of(ty_char, 136));
@@ -2726,7 +2701,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
 
   fn->body = compound_stmt(&tok, tok);
-  fn->locals = locals;
+  fn->locals = get_locals();
   leave_scope();
   resolve_goto_labels();
   return tok;
@@ -2775,14 +2750,14 @@ static void scan_globals(void) {
   Obj head;
   Obj *cur = &head;
 
-  for (Obj *var = globals; var; var = var->next) {
+  for (Obj *var = get_globals(); var; var = var->next) {
     if (!var->is_tentative) {
       cur = cur->next = var;
       continue;
     }
 
     // Find another definition of the same identifier.
-    Obj *var2 = globals;
+    Obj *var2 = get_globals();
     for (; var2; var2 = var2->next)
       if (var != var2 && var2->is_definition && !strcmp(var->name, var2->name))
         break;
@@ -2794,7 +2769,7 @@ static void scan_globals(void) {
   }
 
   cur->next = NULL;
-  globals = head.next;
+  set_globals(head.next);
 }
 
 static void declare_builtin_functions(void) {
@@ -2807,7 +2782,7 @@ static void declare_builtin_functions(void) {
 // program = (typedef | function-definition | global-variable)*
 Obj *parse(Token *tok) {
   declare_builtin_functions();
-  globals = NULL;
+  set_globals(NULL);
 
   while (tok->kind != TK_EOF) {
     VarAttr attr = {};
@@ -2829,11 +2804,11 @@ Obj *parse(Token *tok) {
     tok = global_variable(tok, basety, &attr);
   }
 
-  for (Obj *var = globals; var; var = var->next)
+  for (Obj *var = get_globals(); var; var = var->next)
     if (var->is_root)
       mark_live(var);
 
   // Remove redundant tentative definitions.
   scan_globals();
-  return globals;
+  return get_globals();
 }

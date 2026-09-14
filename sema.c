@@ -11,6 +11,55 @@
 static int64_t eval_rval(Node *node, char ***label);
 double eval_double(Node *node);
 
+// All local variable instances created during parsing are
+// accumulated to this list.
+static Obj *locals;
+
+// Likewise, global variables are accumulated to this list.
+static Obj *globals;
+
+Obj *get_locals(void) {
+  return locals;
+}
+
+void set_locals(Obj *vars) {
+  locals = vars;
+}
+
+Obj *get_globals(void) {
+  return globals;
+}
+
+void set_globals(Obj *vars) {
+  globals = vars;
+}
+
+static Obj *new_var(char *name, Type *ty) {
+  Obj *var = calloc(1, sizeof(Obj));
+  var->name = name;
+  var->ty = ty;
+  var->align = ty->align;
+  push_var_scope(name, var);
+  return var;
+}
+
+Obj *new_lvar(char *name, Type *ty) {
+  Obj *var = new_var(name, ty);
+  var->is_local = true;
+  var->next = locals;
+  locals = var;
+  return var;
+}
+
+Obj *new_gvar(char *name, Type *ty) {
+  Obj *var = new_var(name, ty);
+  var->next = globals;
+  var->is_static = true;
+  var->is_definition = true;
+  globals = var;
+  return var;
+}
+
 // In C, `+` operator is overloaded to perform the pointer arithmetic.
 // If p is a pointer, p+n adds not n but sizeof(*p)*n to the value of p,
 // so that p+n points to the location n elements (not bytes) ahead of p.

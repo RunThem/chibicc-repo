@@ -376,12 +376,16 @@ Node *new_var_node(Obj *var, Token *tok);
 Node *new_vla_ptr(Obj *var, Token *tok);
 Node *new_cast(Node *expr, Type *ty);
 
-// Variable constructors. Defined in parse.c, but also used by sema.c.
+// Variable constructors. Defined in sema.c, which owns the lists of
+// local and global variables.
 Obj *new_lvar(char *name, Type *ty);
 Obj *new_gvar(char *name, Type *ty);
 Obj *new_anon_gvar(Type *ty);
 Obj *new_string_literal(char *p, Type *ty);
 char *new_unique_name(void);
+
+// The parser still owns the scope table that names are registered in.
+void push_var_scope(char *name, Obj *var);
 
 Node *conditional(Token **rest, Token *tok);
 Obj *parse(Token *tok);
@@ -403,6 +407,14 @@ bool is_const_expr(Node *node);
 int64_t const_expr(Token **rest, Token *tok);
 Node *to_assign(Node *node);
 Node *compute_vla_size(Type *ty, Token *tok);
+
+// The parser-side list of local variables and the list of global
+// variables are held here; the parser reads and resets them through
+// these accessors.
+Obj *get_locals(void);
+void set_locals(Obj *vars);
+Obj *get_globals(void);
+void set_globals(Obj *vars);
 
 // Initializer lowering (sema.c). ND_DECL carries the parsed tree and
 // is lowered when typed.

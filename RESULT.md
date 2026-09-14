@@ -1,6 +1,6 @@
 # RESULT.md - 语法语义拆分执行记录
 
-本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 2.3 为止, P2(声明与初始化)全部完成, 下一步为 P3 3.1 清单持有权.
+本文件记录 PLAN.md 各步骤的实际执行结果, 供审核与后续会话接续参考. 以下记录到 3.1 为止, P3(名字解析出解析器)进行中, 下一步为 3.2a ND_TYPEDEF 节点.
 
 基线: 上游 commit 5f53ed0 的快照建立于 0.1; 本轮从 1f24ab7 开始推进. 每步的三道闸门(make docker-test 含自举 / 汇编快照逐字节 diff / 行为测试)均须全绿后才提交.
 
@@ -24,6 +24,7 @@
 | 0e779ab | 2.1 | ND_DECL(init 降级函数搬 sema) |
 | e90327a | 2.2 | VLA 忠实化(alloca 降级) |
 | 539dea8 | 2.3 | ND_COMPOUND_LITERAL |
+| (本轮) | 3.1 | locals/globals 清单持有权移 sema.c |
 
 ## 各步详情
 
@@ -133,6 +134,13 @@
 - 为什么: 复合字面量的"隐藏变量物化 + 初始化展开"降级到 sema; 忠实层保留 `(type){...}` 写法本身.
 - 测试结果: docker-test 全绿, 快照 diff 为空.
 - 偏差: 计划写"sema 建隐藏 lvar(块内)或匿名全局(文件域)", 实际变量创建仍在 parse — 创建时序后移会翻转它与初始化器内临时变量(elvis/字符串匿名全局等)的分配顺序, 栈偏移即变. 唯一 token 锚点变化: 降级后 rhs 的 var 引用从"初始化器后 token"改为 `(` — 表达式无 .loc, 无错误文案依赖该锚点, 汇编不受影响.
+
+### 3.1 清单持有权 (本轮)
+
+- 改了什么: `locals`/`globals` 两个 static 列表与 `new_var`/`new_lvar`/`new_gvar` 三个构造器从 parse.c 移入 sema.c; 新增四个访问器 `get_locals/set_locals/get_globals/set_globals` 供 parse 侧读/重置列表(function() 的复位与 `fn->params`/`fn->locals` 取值, scan_globals 的遍历与改写, parse() 的复位/遍历/返回值); parse.c 新增 `push_var_scope(name, var)` 回调 - sema 建变量时仍借用 parse 的作用域表登记名字.
+- 为什么: 变量清单是名字解析的载体, 先把它交给 sema, 3.2b 的解析作用域才有落点. parse 侧净减 43 行, 对清单只剩读写访问器调用.
+- 测试结果: docker-test 全绿(含自举, 分钟级), 快照 diff 为空, 本机构建仅剩既有 codegen 格式告警.
+- 偏差: 计划写"parse 经由已跨文件的 new_lvar 等间接使用", 实际 parse 仍需直接读/重置列表(function() 与 parse() 两处), 故保留四个访问器而非纯间接调用; `new_var` 的作用域登记以 `push_var_scope` 回调形式留在 parse(该调用随 4.2 删除). 属实现形态调整, 无行为差异.
 
 ## 给审核者的提示
 
