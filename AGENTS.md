@@ -30,7 +30,7 @@
 
 ## 路线图
 
-语法语义拆分线(阶段 3 + 4)已细化为 22 步可勾选执行清单, 见 `PLAN.md`; **该线已全部完成**(各步详情见 `RESULT.md`, 终态: parse.c 2531 行纯语法 + sema.c 1552 行, codegen.c 零改动). 当前推进顺序: 下一步待定 - CST/trivia(阶段 1-2)与库化(阶段 5)均未开工, 由用户拍板先后.
+语法语义拆分线(阶段 3 + 4)已细化为 22 步可勾选执行清单并**全部完成**(终态: parse.c 2531 行纯语法 + sema.c 1552 行, codegen.c 零改动; 计划与执行记录已归档为 `PLAN-split.md` / `RESULT-split.md`). 当前推进线: 忠实层收尾(阀门口径放宽, 见 `PLAN.md`, 执行记录 `RESULT.md`) - 解除字节冻结造成的忠实层偏差, 使 parse.c 的表达式层达到"无类型标注, 无名字绑定"的第 3 层形态. CST/trivia(阶段 1-2)与库化(阶段 5)在该线完成后由用户拍板先后.
 
 每个阶段完成时三道闸门必须全绿: `make docker-test`(含自举), 汇编等价性 diff(阶段 0 建立), 该阶段新增的针对性测试. 阶段内行为不允许变化, 变化只发生在阶段边界并单独提交.
 
@@ -78,7 +78,7 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 - `chibicc.h` - 所有共享类型(`Token`, `Obj`, `Node`, `Type`, `Member`, `VarAttr`)与跨文件声明; 未来在此拆分公共头与内部头.
 - `tokenize.c` - 词法; 当前丢弃注释与空白(阶段 1 的改造对象).
 - `preprocess.c` - 宏展开与预处理指令, 输入输出都是 token 列表.
-- `parse.c` - 递归下降解析器(2531 行), 只做语法分析与忠实建树; 语义残留按 RESULT.md 的 4.1 判定表 A-D 逐条有据. 降级函数在 sema.c, 由 parse 在解析现场调用(时序原因见 RESULT.md 的时序原则).
+- `parse.c` - 递归下降解析器(2531 行), 只做语法分析与忠实建树; 语义残留按 RESULT-split.md 的 4.1 判定表 A-D 逐条有据. 降级函数在 sema.c, 由 parse 在解析现场调用(时序原因见 RESULT-split.md 的时序原则).
 - `sema.c` - 语义分析与降级: 作用域/名字解析, `add_type` 标注, `eval` 常量求值, 结构体布局, 初始化器/复合字面量/VLA/函数调用等全部降级.
 - `type.c` - 类型构造器与类型谓词(`is_compatible`/`is_integer` 等).
 - `codegen.c` - AST 翻译成 x86-64 汇编文本, 无优化 pass; 拆分全程零改动.
