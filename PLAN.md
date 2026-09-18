@@ -26,7 +26,7 @@
 
 ## R0 基线与闸门改造
 
-- [ ] **R0.1 诊断锁定测试**: 新增 test/diagnostic.c(或等价脚本), 对全部错误路径断言"stderr 文案 + 插入符位置"(编译失败输出逐字节比对), 先锁定拆分线终态行为; 4.2c 的两处新锚点(`too many arguments` 锚调用右括号, 块域 `void x = <初始化器>;` 报错延后)借此**拍板为规范**. 覆盖目标: parse.c 33 处 error_tok 全部 + sema.c 判定表 E 的 10 处代表性样例. 此测试此后每步必跑; R2 移动检查时同步更新期望锚点(仅当"文案 + 锚点"保真).
+- [x] **R0.1 诊断锁定测试**: 新增 test/diagnostic.c(或等价脚本), 对全部错误路径断言"stderr 文案 + 插入符位置"(编译失败输出逐字节比对), 先锁定拆分线终态行为; 4.2c 的两处新锚点(`too many arguments` 锚调用右括号, 块域 `void x = <初始化器>;` 报错延后)借此**拍板为规范**. 覆盖目标: parse.c 33 处 error_tok 全部 + sema.c 判定表 E 的 10 处代表性样例. 此测试此后每步必跑; R2 移动检查时同步更新期望锚点(仅当"文案 + 锚点"保真).
 - [ ] **R0.2 归一化 diff 目标**: Makefile 新增目标, 对 .s 规范化后 diff: `.L..N` 标签按首现顺序重编号(吃掉标签分配重排), 负 rbp 局部偏移按每函数首现顺序映射为序号(吃掉 lvar 顺序重排), `.loc`/`.file` 行折叠(吃掉语句链整形). raw diff(`docker-snapshot-diff`)保留不动. 验收: 对当前 HEAD, raw 与归一化 diff 均为空.
 - [ ] **R0.3 基线复验**: `make docker-test` + `make docker-test-thirdparty THIRDPARTY=tinycc` + raw/归一化 diff 双空 + 诊断测试全绿, 四项留档于 RESULT.md 作为本线基线记录.
 
