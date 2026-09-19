@@ -110,4 +110,27 @@ docker-snapshot-diff: docker-image
 	@rc=0; diff -ru .cache/snapshot .cache/snapshot.new || rc=1; rm -rf .cache/snapshot.new; \
 	  [ $$rc -eq 0 ] && echo "snapshot diff: empty" || { echo "snapshot diff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: test clean test-stage2 docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff
+# 归一化 diff (PLAN R0.2): 与 docker-snapshot-diff 同源生成新快照, 但 diff 前
+# 对基线与新快照施加同一变换(snapshot-normalize.awk), 吃掉三类预期字节变化:
+# .loc/.file 行折叠, 末段为纯数字的 .L 标签按首现顺序重编号, 负 rbp 偏移按
+# 每函数首现顺序序号化. [重组] 步骤以本目标为形状闸门; raw 闸门
+# (docker-snapshot-diff)与本目标并存, 基线仍是 .cache/snapshot 的 raw 快照.
+docker-snapshot-ndiff: docker-image
+	@rm -rf .cache/.ndtmp && mkdir -p .cache/.ndtmp
+	@$(SNAPSHOT_RUN) | tar -C .cache/.ndtmp -xf - \
+	  && mv .cache/.ndtmp/snapshot .cache/.ndtmp/snapshot.new
+	@if [ ! -d .cache/snapshot ]; then rm -rf .cache/.ndtmp; \
+	  echo "snapshot ndiff: no baseline (.cache/snapshot); run 'make docker-snapshot' first"; exit 1; fi
+	@mkdir -p .cache/.ndtmp/base .cache/.ndtmp/new
+	@rc=0; for b in `ls .cache/snapshot`; do \
+	  if [ ! -f .cache/.ndtmp/snapshot.new/$$b ]; then echo "snapshot ndiff: file only in baseline: $$b"; rc=1; continue; fi; \
+	  awk -f snapshot-normalize.awk .cache/snapshot/$$b > .cache/.ndtmp/base/$$b || exit 1; \
+	  awk -f snapshot-normalize.awk .cache/.ndtmp/snapshot.new/$$b > .cache/.ndtmp/new/$$b || exit 1; \
+	done; \
+	for b in `ls .cache/.ndtmp/snapshot.new`; do [ -f .cache/snapshot/$$b ] || \
+	  { echo "snapshot ndiff: file only in new snapshot: $$b"; rc=1; }; done; \
+	if [ $$rc -eq 1 ]; then rm -rf .cache/.ndtmp; echo "snapshot ndiff: FILE-SET MISMATCH"; exit 1; fi
+	@rc=0; diff -ru .cache/.ndtmp/base .cache/.ndtmp/new || rc=1; rm -rf .cache/.ndtmp; \
+	  [ $$rc -eq 0 ] && echo "snapshot ndiff: empty" || { echo "snapshot ndiff: NON-EMPTY (see diff above)"; exit 1; }
+
+.PHONY: test clean test-stage2 docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff

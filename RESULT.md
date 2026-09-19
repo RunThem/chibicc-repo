@@ -5,7 +5,7 @@
 ## 闸门口径(本线生效)
 
 - 常规步骤: `make docker-test`(含自举) + `make docker-snapshot-diff` 为空 + 诊断锁定测试.
-- **[重组]** 步骤: 行为三闸门(docker-test / tinycc / 诊断测试) + 归一化 diff 为空, 同提交内 `make docker-snapshot` 重置 raw 基线, 提交说明声明"含预期字节变化".
+- **[重组]** 步骤: 行为三闸门(docker-test / tinycc / 诊断测试) + 归一化 diff(`make docker-snapshot-ndiff`)为空, 同提交内 `make docker-snapshot` 重置 raw 基线, 提交说明声明"含预期字节变化".
 
 ## 基线记录(R0.3 完成后填写)
 
@@ -18,11 +18,19 @@
 
 | 提交 | 步骤 | 内容 |
 |---|---|---|
-| (本提交) | R0.1 | 诊断锁定测试(test/diagnostic.sh, 43 用例) |
+| 16a6719 | R0.1 | 诊断锁定测试(test/diagnostic.sh, 43 用例) |
+| (本提交) | R0.2 | 归一化快照 diff 闸门(snapshot-normalize.awk + docker-snapshot-ndiff) |
 
 ## 各步详情
 
-### R0.1 诊断锁定测试 (本提交)
+### R0.2 归一化 diff 目标 (本提交)
+
+- 改了什么: 新增根目录 `snapshot-normalize.awk` - 汇编快照归一化器, 三条规则: (1) 折叠 `.loc`/`.file` 行; (2) 末段为 ".纯数字" 的 `.L` 标签按文件内首现顺序重编号; (3) 负 rbp 局部偏移按每函数首现顺序映射为 `-N(%rbp)` 序号, 函数边界 = 列 0 的非点号标签. 新增 Makefile 目标 `docker-snapshot-ndiff` - 与 `docker-snapshot-diff` 同源生成新快照, 对基线与新快照施加同一归一化后 `diff -ru`, 文件集不一致单独报 FILE-SET MISMATCH. raw 闸门与 raw 基线 `.cache/snapshot` 不动. 另入库 `snapshot-normalize-test.sh` - 归一化器性质自测脚本(需先 `make docker-snapshot` 生成基线, 手动运行).
+- 为什么改: [重组] 步骤(R1 起)允许汇编字节变化, 形状闸门改用归一化 diff - 三规则分别吃掉 R3 语句链整形的调试行号重排, R1.1/R2.6 的标签计数器交织与分配后置, R2.6/R2.8 的隐藏变量创建时机变化引起的 lvar 偏移重排; 同时结构性变化(指令增删, 标签前缀, 符号名, 数据内容)必须仍然可见.
+- 测试结果: 本地性质自测 7 项全绿(snapshot-normalize-test.sh): 41 文件幂等; 同前缀标签双射互换(`.L..0` <-> `.L..1`)被吃; 偏移双射互换(`-112(%rbp)` <-> `-224(%rbp)`)被吃; 跨前缀互换(`.L..N` <-> `.L.end.M`)仍被抓; 删除 mov/jump 指令仍被抓; `.loc`/`.file` 折叠(单文件 462 行). 对当前 HEAD: `docker-snapshot-diff` 空 + `docker-snapshot-ndiff` 空 - R0.2 验收达标(四闸门之二, 其余两项 R0.3 补齐).
+- 偏差说明: PLAN 原文 "`.L..N` 标签按首现顺序重编号" 实现为 "末段为 '.纯数字' 的 `.L` 标签" - 覆盖全部六族计数器标签(`.L..N` 与 `.L.begin/end/else/true/false.N`), 同时保证 `.L.return.<函数名>` 永不重编号(函数名是语义; 即使函数名以数字结尾, 尾段也不是 '.纯数字'). 标签映射按完整 token 建键, 跨前缀互换(前缀变化 = 结构变化)仍被抓, 这是故意的. 负偏移渲染为 `-N(%rbp)`, 映射逐值唯一无歧义, 不做对齐假设(实测存在 -1/-10 等非对齐值). awk 只用 POSIX 特性, 归一化在宿主机侧执行, 两侧同一实现.
+
+### R0.1 诊断锁定测试 (16a6719)
 
 - 改了什么: 新增 test/diagnostic.sh - 43 个用例, 每个用例 = 触发一处诊断的独立源码片段 + 期望 stderr 原文, 在临时目录以 `<用例名>.c` 编译后与期望逐字节 diff; 随 make test 与 make test-stage2 对 chibicc 与自举编译器各跑一遍(Makefile 两处接线). 编译器源码零改动.
 - 为什么改: R2 各步要把大量检查从 parse 移入 sema, 移动纪律是 "文案 + 锚点" 保真 - 本测试是该纪律的回归闸门; 同时把拆分线 4.2c 的两处诊断时机偏差拍板为规范(锁进用例): "too many arguments" 锚调用右括号(ND_FUNCALL.tok), 块域 `void x = <初始化器>;` 锚初始化器之后的 token, 块域 static 路径(declare_static_local)仍锚 `=`.
