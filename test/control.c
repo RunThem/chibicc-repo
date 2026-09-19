@@ -95,6 +95,24 @@ int main() {
   ASSERT(2, ({ static void *p[]={&&v52,&&v52,&&v53}; int i=0; goto *p[1]; v51:i++; v52:i++; v53:i++; i; }));
   ASSERT(1, ({ static void *p[]={&&v62,&&v62,&&v63}; int i=0; goto *p[2]; v61:i++; v62:i++; v63:i++; i; }));
 
+  // A case label buried in the switch body: inside a loop, and inside a block.
+  ASSERT(3, ({ int i=0; switch(0) { case 0: while (i<3) { i++; case 1: ; } } i; }));
+  ASSERT(6, ({ int i=0; int j=0; switch(1) { case 0: while (j<5) { j++; case 1: i++; } } i; }));
+  ASSERT(3, ({ int i=0; switch(1) { { case 1: i=3; break; } } i; }));
+
+  // Nested switches: the inner break belongs to the inner switch, and the
+  // cases of the two switches must not be linked to the wrong one.
+  ASSERT(7, ({ int i=0; switch(1) { case 1: switch(2) { case 2: i=5; break; case 3: i=6; break; } case 2: i=7; break; } i; }));
+  ASSERT(7, ({ int i=0; switch(1) { case 1: switch(9) { case 2: i=5; break; default: i=6; } case 2: i=7; break; } i; }));
+  ASSERT(10, ({ int i=0; int j=0; for(;i<4;i++) { ({ switch(i) { case 2: j=9; break; default: j++; } 0; }); } j; }));
+
+  // break and continue reaching their loop out of a statement expression.
+  ASSERT(3, ({ int i=0; for(;i<10;i++) { ({ if (i==3) break; 0; }); } i; }));
+  ASSERT(6, ({ int i=0; int j=0; for(;i<10;i++) { ({ if (i>5) continue; 0; }); j++; } j; }));
+
+  // A goto leaving a statement expression for a label outside it.
+  ASSERT(1, ({ int i=0; ({ goto out; i++; }); out: i++; i; }));
+
   printf("OK\n");
   return 0;
 }
