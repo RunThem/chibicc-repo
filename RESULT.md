@@ -24,7 +24,8 @@
 | 9d66036 | R1.1 | 匿名名计数器与名字物化三函数迁 sema.c |
 | 956a662 | R1.2 前置 | test/control.c 补控制流形状覆盖(纯测试) |
 | 4bf8aec | R1.2 | analyze 前序语句下降入 sema: 标签分配 + break/continue/case 绑定 + stray 四检查 |
-| (本提交) | R2.1 | 成员访问两段式: ND_MEMBER 留未绑定名字, 成员链/四类检查/DEREF 补插归 sema |
+| 162cd2a | R2.1 | 成员访问两段式: ND_MEMBER 留未绑定名字, 成员链/四类检查/DEREF 补插归 sema |
+| (本提交) | R2.2 | `_Generic` 改发忠实节点(ND_GENERIC + assoc), 两个类型 builtin 折叠移 sema |
 
 ## 各步详情
 
@@ -75,7 +76,7 @@
   4. **stray 检查时机后移到函数末尾, 多错误输入的首个报错可能改变**(经用户确认接受). 单错误输入完全不变(43 个锁定用例均为单错误, 全绿). 实测两类位移: `int main(){ break; int x=1; return x->y; }` 原报 "stray break"(锚 break), 现报 "invalid pointer dereference"(锚 `->`); `int main(){ int x = ({ break; }); }` 原报 "stray break", 现报 "statement expression returning void is not supported"(锚 `(`) - 后者是 add_type 的语句表达式检查在解析现场先跑所致. 反向不位移: 另一处错误在 stray 之前时两版一致, 且 "use of undeclared label" 由 resolve_labels 在下降之后触发, 两版都排在全部 stray 之后.
   5. **嵌套函数定义中的外层 goto 现在能编译通过**(经用户确认接受). `int main(){ goto out; int inner(void){ return 42; } out: return 1; }` 原报 "use of undeclared label" - parse 的 resolve_goto_labels 在内层函数解析完时就跑, 拿外层已积累的 goto 去匹配内层的 label 清单, 匹配不上即报错, 随后清空清单. analyze 按函数体调用, 内层只收内层的 goto, 外层的留到外层自己的下降里解析. 这是原实现的缺陷被顺带修掉, 不是新引入的行为; 归类为诊断消失.
 
-### R2.1 成员访问两段式 (本提交)
+### R2.1 成员访问两段式 (162cd2a)
 
 - 改了什么: parse.c 的 `struct_ref` 从 30 行降到 4 行 - 只发一个未绑定的 ND_MEMBER(`lhs`=被访问表达式, `tok`=成员名 token, `arrow_tok`=`->` token 或 NULL), 不再 `add_type(操作数)`, 不再查成员表, 不再做四类检查; `get_struct_member` 整体迁到 sema.c 并导出(parse 的 `struct_designator` 仍在用它 - 初始化器指示符归 R2.4). sema.c 新增 `resolve_member(Node*)`, 由 add_type 的 ND_MEMBER case 在 `node->member==NULL` 时调用: 四类检查(invalid pointer dereference / dereferencing a void pointer / not a struct nor a union(箭头锚) / not a struct nor a union(点号锚操作数 token) / no such member(锚成员名 token)), 匿名成员展平(路径上每个匿名成员自成一个 ND_MEMBER 挂在操作数与具名成员之间), 以及 `->` 的 DEREF 补插(锚成员名 token, 归最内层链接). 结果节点字段原样搬回 `node`(父指针指向它). chibicc.h: `bool is_arrow` 改为 `Token *arrow_tok`(一个字段同时承载"是不是箭头"与该箭头的锚点, 二者本不可分), 新增 `get_struct_member` 声明. test/struct.c 补 17 条匿名成员展平断言(`.`/`->`/三层匿名/匿名 union/结构赋值/取址/`+=`/`++`/位域/`sizeof`/带初值声明/指针间接改值), 期望值先用宿主机 clang 算出. parse.c 2427 -> 2378 行, error_tok 29 -> 24(判定表 C 的 struct_ref 5 处清空, 仅剩初始化器 6 处待 R2.4); sema.c 1699 -> 1770 行; codegen.c 零改动.
 - 为什么改: 成员名指向哪个 Member 是一次名字查找, `x->y` 的类型合法性与 `(*x).y` 的补插也是语义 - 按层 3 的定义不属于语法层. 拆成两段后 parse 只记录"谁.谁", sema 在标注遍里查表, 判定表 C 里"建树必需"的成员访问一项就此消失(该项在拆分线的理由是"成员链含匿名成员必须现解析", 现在它和绑定/降级一起在遍历现场完成).
@@ -85,3 +86,13 @@
   1. **未选中的 `_Generic` 分支**: `struct S{int a;}; int main(){ return _Generic(1, int: 0, double: ((struct S*)0)->b); }` 原报 "no such member"(泛型选择边解析边在 `ctrl` 上定类型, 落选分支的节点被丢弃, 从未标注), 现在静默通过. 真实编译器(clang/gcc)会对落选分支做类型检查, 所以这是向"更 lax"偏离 - R2.2 把 `_Generic` 改成忠实节点后所有 association 表达式都进遍历, 该检查自然恢复, 偏差只存在于 R2.1~R2.2 之间.
   2. **多余初始化元素**: `int x[1] = {0, ((struct S*)0)->b};` 的第二元素被 `skip_excess_element` 跳过(chibicc 对"initializer 元素过多"本就无诊断), 其成员检查现在不再触发. 与 1. 同源: 检查跟着标注走, 不标注就不检查. 归入 R1.2 偏差 4 同一类(诊断时机/诊断存在性随遍历现场移动), 单错误合法输入完全不变(43 个锁定用例全绿).
   3. 实现形态调整(非行为): `is_arrow` 换成 `arrow_tok` - 计划文本写"ND_MEMBER 只带成员名 token 与 is_arrow(字段已有)", 但四类检查里三类必须锚在 `->` token 上(纪律 4 要求锚点原样传递), 布尔字段不够用, 故直接存 token; "是否箭头"由它是否为 NULL 给出.
+
+### R2.2 泛型选择与 builtin 折叠忠实式 (本提交)
+
+- 改了什么: (1) `_Generic` 不再在解析现场做选择. parse.c 的 `generic_selection` 只建树 - `ND_GENERIC`(tok=`(`, 即原诊断锚点) 的 `cond` 存 controlling 表达式, `args` 存一条 `ND_GENERIC_ASSOC` 链, 每个 assoc 的 `ty_op` 存 type-name(`default:` 项为 NULL, 这就是它的标识), `lhs` 存结果表达式; 原 `add_type(ctrl)` 与 `is_compatible` 循环全部删掉. 选择移入 sema: add_type 顶部(前序递归**之前**)判到 ND_GENERIC 就调新函数 `select_generic(node)` - 标注 cond, 按 func/array 退化后逐个 assoc 比 `is_compatible`, 保持旧循环的胜出规则(具名匹配覆盖 default, 多个匹配后者胜), 无匹配则 `error_tok(node->tok, "controlling expression type not compatible with any generic association type")`, 落选分支各自 `add_type` 一遍(只要检查, 不进树), 最后 `*node = *sel` 并保回 `node->next`. (2) `__builtin_types_compatible_p`/`__builtin_reg_class` 由"解析现算 is_compatible/is_integer 折成 ND_NUM"改为发 `ND_TYPES_COMPATIBLE`(ty_op/ty_op2)/`ND_REG_CLASS`(ty_op) 忠实节点, sema 的 add_type 折叠成 ND_NUM 后再 `add_type(node)` 补类型. chibicc.h: 新增 4 个 NodeKind(ND_GENERIC/ND_GENERIC_ASSOC/ND_TYPES_COMPATIBLE/ND_REG_CLASS)与 `Type *ty_op2`. test/generic.c +11 断言(default 兜底与覆盖次序, 用作数组维度/枚举值/case 标签/sizeof 操作数, `&&label` 经 default 选中后仍能跳对, 嵌套 _Generic, 数组退化), test/builtin.c +11 断言(reg_class 六类取值 + 折果参与常量运算与数组维度). parse.c 2378 -> 2373 行, error_tok 24 -> 23(判定表 D 第 3 处清空); sema.c 1770 -> 1849 行; codegen.c 零改动.
+- 为什么改: 选中哪个分支取决于 controlling 表达式的**类型**, 是类型判定不是语法选择 - 拆分线判定表 D 给它的理由是"is_compatible 的结果决定选中哪个分支, 是语法选择而非事后诊断", 本线把"分支"本身变成树里的忠实记录后, 这个理由消失. 两个 builtin 折叠是拆分线 1.9 明确留下的返工点("暂留 parse"), 与 `__builtin_reg_class` 一起在此清掉. 落选分支自此也受类型检查(与 clang/gcc 一致).
+- 测试结果: 四项全绿, 且 **raw 逐字节为空**(无需重置基线). 基线做法同 R2.1: 用 HEAD(R2.1) 的编译器 + 本提交的新测试源生成 41 文件快照作为对照基线, 新编译器下 `docker-snapshot-diff` 与 `docker-snapshot-ndiff` 均为空 - 即"选择逻辑搬家"没有改变任何一个文件的产物字节. 另在宿主机交叉验证: R2.1 与 R2.2 二进制对 39 个 `test/*.c` + 四个手写压力文件(匿名成员/泛型全表达式位置/常量上下文/`&&label` 与 reg_class)输出逐字节相同. `docker-test` 退出码 0(新增 22 条断言 stage1+stage2 两遍全过, driver.sh passed, 诊断锁定 stage1/stage2 各 43/43), `docker-test-thirdparty THIRDPARTY=tinycc` 退出码 0.
+- 偏差说明: 三项.
+  1. **落选分支现在受完整类型检查**(行为增强, 与 clang 对齐): `struct S{int a;}; int main(){ return _Generic(1, int: 0, double: ((struct S*)0)->b); }` 原静默通过(拆分线起 `_Generic` 的落选节点从未标注), 现报 "no such member" 并退出 1 - 宿主机 clang 同样报错, 文案锚点与 R2.1 时选中分支的检查完全一致. 这同时关闭 R2.1 偏差 1.
+  2. **实现形态调整(非行为)**: 计划文本写"新增 NodeKind 或复用载体", 实施为新增 4 个 kind + 一个 `ty_op2` 字段; `default:` 用"assoc 无 type-name"表示, 未新增标志字段. 另外选择动作必须放在 add_type 的**入口**(前序递归之前), 放在 switch 里会让选中分支先作为 `args` 的子孙被独立标注, 于是 `&&label` 把自己的**原节点**登记进 gotos 清单, 而树上留下的是改写后的节点, 二者的 `unique_label` 脱钩 - 实测 `static void *gt[] = { _Generic(1, default: &&l2) };` 的跳转表项退化为 `.quad (null)+0`(R2.1 基线为 `.quad .L..6+0`). 改在入口做选择并只对落选分支做检查, 选中分支由改写后的节点自己走标注, 登记身份与树一致, 该用例逐字节复原. 落选分支的 `&&label` 仍会登记进 gotos, 因此未选中的 `&&未定义标签` 现在会报 "use of undeclared label"(clang 亦如此), 属 1. 的同一类增强.
+  3. **测试期望值的一处自我纠正**: `__builtin_reg_class(int) + __builtin_reg_class(double)` 先按 2 写入断言, docker-test 报 "2 expected but got 1" - 折叠规则(整型/指针=0, 浮点=1)下 0+1=1 才是对的, 已改正. 记录在此说明该断言的取值来源是规则本身, `reg_class` 非标准 builtin, 宿主机 clang 无法旁证.

@@ -266,6 +266,12 @@ typedef enum {
   ND_STRING,    // String literal; sema lowers it to an anonymous global
   ND_SIZEOF,    // "sizeof"; sema folds it to its value
   ND_ALIGNOF,   // "_Alignof"; sema folds it to its value
+  ND_GENERIC,   // "_Generic"; sema selects an association and becomes it
+  ND_GENERIC_ASSOC, // One association of an ND_GENERIC: the type name in
+                    // ty_op (NULL for "default:"), the result expression in
+                    // lhs. A carrier only; it never reaches codegen.
+  ND_TYPES_COMPATIBLE, // "__builtin_types_compatible_p"; sema folds it to 0 or 1
+  ND_REG_CLASS,        // "__builtin_reg_class"; sema folds it to its class
   ND_CAST,      // Type cast
   ND_MEMZERO,   // Zero-clear a stack variable
   ND_DECL,      // Declaration of a local variable; sema lowers it to statements
@@ -344,6 +350,10 @@ struct Node {
   // form. The `sizeof expr` form carries its unevaluated operand in
   // `lhs` instead. sema folds the node to its value.
   Type *ty_op;
+
+  // ND_TYPES_COMPATIBLE: the second type operand, the first being
+  // ty_op. The type predicates take two types and no subexpression.
+  Type *ty_op2;
 
   // ND_DECL: the parsed initializer tree, or NULL if the declarator
   // has no initializer. sema lowers it to the MEMZERO + assignment

@@ -2064,43 +2064,39 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
 //
 // generic-assoc = type-name ":" assign
 //               | "default" ":" assign
+//
+// Which association the controlling expression's type selects is not a
+// syntax question, so the selection is left to sema: the node keeps the
+// controlling expression in `cond` and one ND_GENERIC_ASSOC per
+// association in `args`.
 static Node *generic_selection(Token **rest, Token *tok) {
-  Token *start = tok;
+  Node *node = new_node(ND_GENERIC, tok);
+
   tok = skip(tok, "(");
+  node->cond = assign(&tok, tok);
 
-  Node *ctrl = assign(&tok, tok);
-  add_type(ctrl);
-
-  Type *t1 = ctrl->ty;
-  if (t1->kind == TY_FUNC)
-    t1 = pointer_to(t1);
-  else if (t1->kind == TY_ARRAY)
-    t1 = pointer_to(t1->base);
-
-  Node *ret = NULL;
+  Node head = {};
+  Node *cur = &head;
 
   while (!consume(rest, tok, ")")) {
     tok = skip(tok, ",");
 
+    Node *assoc = new_node(ND_GENERIC_ASSOC, tok);
+
+    // A "default:" association is the one that carries no type name.
     if (equal(tok, "default")) {
       tok = skip(tok->next, ":");
-      Node *node = assign(&tok, tok);
-      if (!ret)
-        ret = node;
-      continue;
+    } else {
+      assoc->ty_op = typename(&tok, tok);
+      tok = skip(tok, ":");
     }
+    assoc->lhs = assign(&tok, tok);
 
-    Type *t2 = typename(&tok, tok);
-    tok = skip(tok, ":");
-    Node *node = assign(&tok, tok);
-    if (is_compatible(t1, t2))
-      ret = node;
+    cur = cur->next = assoc;
   }
 
-  if (!ret)
-    error_tok(start, "controlling expression type not compatible with"
-              " any generic association type");
-  return ret;
+  node->args = head.next;
+  return node;
 }
 
 // primary = "(" "{" stmt+ "}" ")"
@@ -2171,24 +2167,23 @@ static Node *primary(Token **rest, Token *tok) {
     return generic_selection(rest, tok->next);
 
   if (equal(tok, "__builtin_types_compatible_p")) {
+    // Both type operands are recorded; sema folds the node to 0 or 1.
+    Node *node = new_node(ND_TYPES_COMPATIBLE, start);
     tok = skip(tok->next, "(");
-    Type *t1 = typename(&tok, tok);
+    node->ty_op = typename(&tok, tok);
     tok = skip(tok, ",");
-    Type *t2 = typename(&tok, tok);
+    node->ty_op2 = typename(&tok, tok);
     *rest = skip(tok, ")");
-    return new_num(is_compatible(t1, t2), start);
+    return node;
   }
 
   if (equal(tok, "__builtin_reg_class")) {
+    // sema folds the node to the register class of its type operand.
+    Node *node = new_node(ND_REG_CLASS, start);
     tok = skip(tok->next, "(");
-    Type *ty = typename(&tok, tok);
+    node->ty_op = typename(&tok, tok);
     *rest = skip(tok, ")");
-
-    if (is_integer(ty) || ty->kind == TY_PTR)
-      return new_num(0, start);
-    if (is_flonum(ty))
-      return new_num(1, start);
-    return new_num(2, start);
+    return node;
   }
 
   if (equal(tok, "__builtin_compare_and_swap")) {

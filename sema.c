@@ -1237,9 +1237,64 @@ static void resolve_member(Node *node) {
   node->arrow_tok = NULL;
 }
 
+// Picks the association of an ND_GENERIC that the controlling expression
+// selects, and makes the node that association's result expression. The
+// comparison is written against the type the controlling expression decays
+// to; a "default:" association (the one that carries no type name) is a
+// fallback that a later match overrides, and among matching types the
+// last one wins, exactly as the parser's loop used to decide.
+//
+// The result expression is deliberately left untyped: the caller types
+// the node afresh. The other associations are typed for their checks
+// only - they are expressions in the source, and a real compiler reports
+// their errors too.
+static void select_generic(Node *node) {
+  add_type(node->cond);
+
+  Type *ty = node->cond->ty;
+  if (ty->kind == TY_FUNC)
+    ty = pointer_to(ty);
+  else if (ty->kind == TY_ARRAY)
+    ty = pointer_to(ty->base);
+
+  Node *sel = NULL;
+  for (Node *assoc = node->args; assoc; assoc = assoc->next) {
+    if (!assoc->ty_op) {
+      if (!sel)
+        sel = assoc->lhs;
+    } else if (is_compatible(ty, assoc->ty_op)) {
+      sel = assoc->lhs;
+    }
+  }
+
+  if (!sel)
+    error_tok(node->tok, "controlling expression type not compatible with"
+              " any generic association type");
+
+  for (Node *assoc = node->args; assoc; assoc = assoc->next)
+    if (assoc->lhs != sel)
+      add_type(assoc->lhs);
+
+  // `next` is the parent's link; the result's own link is not its.
+  Node *nxt = node->next;
+  *node = *sel;
+  node->next = nxt;
+}
+
 void add_type(Node *node) {
   if (!node || node->ty)
     return;
+
+  // A generic selection is resolved before anything else, because the
+  // node becomes the association it selects: the result has to be typed
+  // as a fresh node, so that a subtree which registers itself by
+  // identity while being typed - a `&&label` joining the gotos list -
+  // registers the node that stays in the tree.
+  if (node->kind == ND_GENERIC) {
+    select_generic(node);
+    add_type(node);
+    return;
+  }
 
   add_type(node->lhs);
   add_type(node->rhs);
@@ -1412,6 +1467,30 @@ void add_type(Node *node) {
     node->val = folded->val;
     node->ty = folded->ty;
     node->ty_op = NULL;
+    return;
+  }
+  case ND_TYPES_COMPATIBLE:
+    // Fold `__builtin_types_compatible_p(T1, T2)` to 0 or 1.
+    node->val = is_compatible(node->ty_op, node->ty_op2);
+    node->ty_op = NULL;
+    node->ty_op2 = NULL;
+    node->kind = ND_NUM;
+    add_type(node);
+    return;
+  case ND_REG_CLASS: {
+    // Fold `__builtin_reg_class(T)` to its register class: integer or
+    // pointer, floating-point, or anything else.
+    Type *ty = node->ty_op;
+    int64_t val = 2;
+    if (is_integer(ty) || ty->kind == TY_PTR)
+      val = 0;
+    else if (is_flonum(ty))
+      val = 1;
+
+    node->ty_op = NULL;
+    node->val = val;
+    node->kind = ND_NUM;
+    add_type(node);
     return;
   }
   case ND_COND:
