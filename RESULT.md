@@ -9,21 +9,22 @@
 
 ## 基线记录(R0.3 完成后填写)
 
-- docker-test: (待填)
-- tinycc: (待填)
-- raw / 归一化 diff: (待填)
-- 诊断锁定测试: (待填)
+- docker-test: 2026-09-19, HEAD = 79e6c76(R0.2), 退出码 0 - 测试集 + driver.sh + 自举重跑全过; 诊断锁定 stage1/stage2 各 "43 cases byte-exact".
+- tinycc: 退出码 0(test/thirdparty/make shim 跳过 Rosetta 下不稳定的 106_pthread/112_backtrace/113_btdll 三个用例, 其余全过).
+- raw / 归一化 diff: `docker-snapshot-diff` 空 + `docker-snapshot-ndiff` 空; raw 基线沿用拆分线终态后的快照, 尚未重置(首个 [重组] 提交内重置).
+- 诊断锁定测试: docker-test 内 stage1 + stage2 两遍全绿; 宿主机本地(macOS)另跑 43/43.
 
 ## 提交一览
 
 | 提交 | 步骤 | 内容 |
 |---|---|---|
 | 16a6719 | R0.1 | 诊断锁定测试(test/diagnostic.sh, 43 用例) |
-| (本提交) | R0.2 | 归一化快照 diff 闸门(snapshot-normalize.awk + docker-snapshot-ndiff) |
+| 79e6c76 | R0.2 | 归一化快照 diff 闸门(snapshot-normalize.awk + docker-snapshot-ndiff) |
+| (本提交) | R0.3 | 基线复验留档(四闸门全绿) |
 
 ## 各步详情
 
-### R0.2 归一化 diff 目标 (本提交)
+### R0.2 归一化 diff 目标 (79e6c76)
 
 - 改了什么: 新增根目录 `snapshot-normalize.awk` - 汇编快照归一化器, 三条规则: (1) 折叠 `.loc`/`.file` 行; (2) 末段为 ".纯数字" 的 `.L` 标签按文件内首现顺序重编号; (3) 负 rbp 局部偏移按每函数首现顺序映射为 `-N(%rbp)` 序号, 函数边界 = 列 0 的非点号标签. 新增 Makefile 目标 `docker-snapshot-ndiff` - 与 `docker-snapshot-diff` 同源生成新快照, 对基线与新快照施加同一归一化后 `diff -ru`, 文件集不一致单独报 FILE-SET MISMATCH. raw 闸门与 raw 基线 `.cache/snapshot` 不动. 另入库 `snapshot-normalize-test.sh` - 归一化器性质自测脚本(需先 `make docker-snapshot` 生成基线, 手动运行).
 - 为什么改: [重组] 步骤(R1 起)允许汇编字节变化, 形状闸门改用归一化 diff - 三规则分别吃掉 R3 语句链整形的调试行号重排, R1.1/R2.6 的标签计数器交织与分配后置, R2.6/R2.8 的隐藏变量创建时机变化引起的 lvar 偏移重排; 同时结构性变化(指令增删, 标签前缀, 符号名, 数据内容)必须仍然可见.
@@ -36,3 +37,10 @@
 - 为什么改: R2 各步要把大量检查从 parse 移入 sema, 移动纪律是 "文案 + 锚点" 保真 - 本测试是该纪律的回归闸门; 同时把拆分线 4.2c 的两处诊断时机偏差拍板为规范(锁进用例): "too many arguments" 锚调用右括号(ND_FUNCALL.tok), 块域 `void x = <初始化器>;` 锚初始化器之后的 token, 块域 static 路径(declare_static_local)仍锚 `=`.
 - 测试结果: 本地(macOS) 43/43 通过; `make docker-test` 退出码 0, diagnostic lock 在 stage1/stage2 各报 "43 cases byte-exact"; `make docker-snapshot-diff` 为空.
 - 偏差说明: 覆盖 = 判定表 A 15 处 + B 4 处 + C 11 处 + D 3 处(parse.c 33 处 error_tok 全部) + 判定表 E 9/10 处. 唯一未覆盖: sema.c 的 "redeclared as a different kind of symbol" - find_func 只返回 `is_function` 为真的对象, 该守卫恒假, 是拆分线遗留的死检查, 任何输入不可达(内置 alloca 未注册进作用域表, `void alloca() {}` 亦不触发), 已在测试头注释记录. 另两点现状一并锁定: 文件域 `void x;` 被接受(无检查, 无用例), 块域 `int x; int x;` 被接受(重定义检查只对函数定义生效). 触发写法的非显然点, 供 R2 维持用例时参考: `.5` 被词法为浮点字面量(字段指示符用 `.+` 触发); `typedef static int x;` 合法(typedef 组合检查只拦 typedef 携带两个以上其他存储类, 用 `typedef static extern` 触发); `unsigned unsigned` 合法(符号位是 `|=`, 位掩码用 `char float` 触发); "expected string literal" 属 asm 语句而非初始化器(`asm(1)`); `int ()` 走全局变量路径(函数名省略用 `int ()()` 触发); `goto` 缺标签是 get_ident 的可达路径.
+
+### R0.3 基线复验 (本提交)
+
+- 改了什么: 无代码改动 - 在 HEAD = 79e6c76 上跑齐四项闸门, 结果写入上方"基线记录", 作为本线后续所有步骤的对照基线.
+- 为什么改: 本线开工基线必须留档; 自此归一化 diff 闸门(docker-snapshot-ndiff)正式启用, raw 基线保持拆分线终态后的快照, 待首个 [重组] 提交内重置.
+- 测试结果: 四项全绿 - docker-test 退出码 0(测试集 + driver.sh + 自举重跑, 诊断锁定 stage1/stage2 各 43/43); tinycc 退出码 0; raw diff 空; 归一化 diff 空. 另: 宿主机本地(macOS)构建后 diagnostic.sh 43/43.
+- 偏差说明: 无 - 编译器源码零改动, 工作区仅剩与本线无关的未跟踪文件 .zcodeignore.
