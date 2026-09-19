@@ -194,9 +194,11 @@ struct Initializer {
   // `mem` is used to clarify which member is initialized.
   Member *mem;
 
-  // For the top-level initializer of an ND_DECL: the first token of
-  // the initializer source. sema anchors the nodes of the lowered
-  // assignment chain at it.
+  // For the top-level initializer of an ND_DECL: the `=` that
+  // introduced it, which is where sema anchors a diagnostic that
+  // rejects the declaration as a whole. (`tok` above is the first token
+  // of the initializer source.)
+  Token *eq_tok;
 };
 
 // Designator chain describing the position of an element within a
@@ -366,6 +368,14 @@ struct Node {
   long end;
   bool is_default; // `default:` rather than `case <expr>:`
 
+  // ND_CASE: the operands of `case <expr>:` and of the [GNU] range form
+  // `case <expr> ... <expr>:`, recorded unevaluated; sema's add_type
+  // fills in `begin`/`end` from them. `colon_tok` is the `:` that ends
+  // the label, where the range check is anchored.
+  Node *begin_expr;
+  Node *end_expr;
+  Token *colon_tok;
+
   // "asm" string literal
   char *asm_str;
 
@@ -417,6 +427,9 @@ typedef struct {
   bool is_inline;
   bool is_tls;
   int align;
+  // A `_Alignas(<expr>)` argument, of which `align` is the
+  // `_Alignas(<type>)` form the parser can read off the type.
+  Node *align_expr;
 } VarAttr;
 
 // The scope table belongs to sema: it is what name resolution reads and
@@ -508,9 +521,16 @@ void analyze(Node *body);
 // redundant tentative definitions.
 void finalize_globals(void);
 
-// The type of an array dimension: a fixed-length array for a constant
-// dimension, a VLA otherwise.
-Type *array_dimension_type(Type *base, Node *expr);
+// Completes the declarator-layer type records the parser leaves pending:
+// an array dimension, a `typeof(expr)` operand, an `aligned` argument.
+// Called when a declarator is finished, and by the aggregate layout,
+// which needs the member alignments; idempotent.
+void resolve_type(Type *ty);
+
+// The alignment a declaration's `_Alignas` asks for: the value read off
+// the type in the `_Alignas(type)` form, or the evaluation of the
+// recorded expression in the `_Alignas(expr)` form.
+int attr_align(VarAttr *attr);
 
 // Looks up a member of a struct or union type by the name spelled by
 // `tok`, descending into anonymous members. Returns NULL if the type
@@ -545,6 +565,8 @@ typedef enum {
   TY_FUNC,
   TY_ARRAY,
   TY_VLA, // variable-length array
+  TY_TYPEOF, // [GNU] `typeof(expr)`, whose operand type sema has not
+             // annotated yet
   TY_STRUCT,
   TY_UNION,
 } TypeKind;
@@ -573,6 +595,16 @@ struct Type {
 
   // Array
   int array_len;
+
+  // Records the parser's declarator layer leaves for sema to complete
+  // (see resolve_type): an array dimension expression that has not been
+  // evaluated, so that neither the length nor the fixed-or-variable
+  // question is answered in the parser; a `typeof(expr)` operand whose
+  // type has not been annotated; and the argument of an `aligned`
+  // attribute. Each is cleared once consumed.
+  Node *dim_len;
+  Node *typeof_expr;
+  Node *align_expr;
 
   // Variable-length array
   Node *vla_len; // # of elements
@@ -632,6 +664,8 @@ Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int size);
 Type *vla_of(Type *base, Node *expr);
+Type *array_of_dim(Type *base, Node *dim);
+Type *typeof_placeholder(void);
 Type *enum_type(void);
 Type *struct_type(void);
 

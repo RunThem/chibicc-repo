@@ -266,10 +266,17 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
         error_tok(tok, "_Alignas is not allowed in this context");
       tok = skip(tok->next, "(");
 
-      if (is_typename(tok))
+      // The `_Alignas(type)` form asks for a property of a type the
+      // parser has in hand; the `_Alignas(expr)` form is a constant
+      // expression, so it is recorded for sema to evaluate. Whichever
+      // comes last is the one that counts, as before.
+      if (is_typename(tok)) {
         attr->align = typename(&tok, tok)->align;
-      else
-        attr->align = const_expr(&tok, tok);
+        attr->align_expr = NULL;
+      } else {
+        attr->align = 0;
+        attr->align_expr = conditional(&tok, tok);
+      }
       tok = skip(tok, ")");
       continue;
     }
@@ -463,10 +470,11 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
   tok = skip(tok, "]");
   ty = type_suffix(rest, tok, ty);
 
-  // Whether the dimension denotes a fixed-length array or a VLA is a
-  // semantic question (it depends on constant evaluation), so sema
-  // builds the type.
-  return array_dimension_type(ty, expr);
+  // Whether the dimension denotes a fixed-length array or a VLA depends
+  // on whether the length expression is a constant expression - a
+  // semantic question. The expression is recorded here and sema decides
+  // the type when the declarator is complete (see resolve_type).
+  return array_of_dim(ty, expr);
 }
 
 // type-suffix = "(" func-params
@@ -517,6 +525,12 @@ static Type *declarator(Token **rest, Token *tok, Type *ty) {
   }
 
   ty = type_suffix(rest, tok, ty);
+
+  // The type is complete from here on: what the declarator recorded but
+  // could not decide (an array dimension, a `typeof(expr)` operand) is
+  // settled before the name goes on it and before its owner reads it.
+  resolve_type(ty);
+
   ty->name = name;
   ty->name_pos = name_pos;
   return ty;
@@ -535,7 +549,9 @@ static Type *abstract_declarator(Token **rest, Token *tok, Type *ty) {
     return abstract_declarator(&tok, start->next, ty);
   }
 
-  return type_suffix(rest, tok, ty);
+  Type *ty2 = type_suffix(rest, tok, ty);
+  resolve_type(ty2);
+  return ty2;
 }
 
 // type-name = declspec abstract-declarator
@@ -619,9 +635,11 @@ static Type *typeof_specifier(Token **rest, Token *tok) {
   if (is_typename(tok)) {
     ty = typename(&tok, tok);
   } else {
-    Node *node = expr(&tok, tok);
-    add_type(node);
-    ty = node->ty;
+    // What type an expression has is not a syntax question, so the
+    // operand is recorded in a placeholder the declarator builds on;
+    // sema annotates the expression and fills the record in.
+    ty = typeof_placeholder();
+    ty->typeof_expr = expr(&tok, tok);
   }
   *rest = skip(tok, ")");
   return ty;
@@ -673,10 +691,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     // (e.g. int (*foo)[n][m] where n and m are variables.)
     Node *vla_size = compute_vla_size(ty, tok);
 
-    if (ty->kind == TY_VLA) {
-      if (equal(tok, "="))
-        error_tok(tok, "variable-sized object may not be initialized");
-
+    if (ty->kind == TY_VLA && !equal(tok, "=")) {
       cur = cur->next = new_unary(ND_EXPR_STMT, vla_size, tok);
 
       // Variable length arrays (VLAs) are translated to alloca() calls.
@@ -692,15 +707,18 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     }
 
     Obj *var = new_lvar(get_ident(ty->name), ty);
-    if (attr && attr->align)
-      var->align = attr->align;
+    int align = attr_align(attr);
+    if (align)
+      var->align = align;
 
     if (equal(tok, "=")) {
       cur = cur->next = new_unary(ND_EXPR_STMT, vla_size, tok);
 
+      Token *eq = tok;
       Token *start = tok->next;
       Initializer *init = initializer(&tok, start, var->ty, &var->ty);
       init->tok = start;
+      init->eq_tok = eq;
 
       Node *decl = new_node(ND_DECL, tok);
       decl->var = var;
@@ -1218,23 +1236,20 @@ static Node *stmt(Token **rest, Token *tok) {
   }
 
   if (equal(tok, "case")) {
+    // The values a case label stands for are constant expressions, so
+    // they are recorded unevaluated; sema's add_type evaluates them into
+    // begin/end. `:` is where the range check is anchored.
     Node *node = new_node(ND_CASE, tok);
-    int begin = const_expr(&tok, tok->next);
-    int end;
+    node->begin_expr = conditional(&tok, tok->next);
 
     if (equal(tok, "...")) {
       // [GNU] Case ranges, e.g. "case 1 ... 5:"
-      end = const_expr(&tok, tok->next);
-      if (end < begin)
-        error_tok(tok, "empty case range specified");
-    } else {
-      end = begin;
+      node->end_expr = conditional(&tok, tok->next);
     }
 
+    node->colon_tok = tok;
     tok = skip(tok, ":");
     node->lhs = stmt(rest, tok);
-    node->begin = begin;
-    node->end = end;
     return node;
   }
 
@@ -1777,13 +1792,19 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
     Type *basety = declspec(&tok, tok, &attr);
     bool first = true;
 
+    // An anonymous member is recognized by the kind of the base type,
+    // which a `typeof(expr)` has not settled yet; no declarator follows
+    // in that path, so complete the type here.
+    resolve_type(basety);
+
     // Anonymous struct member
     if ((basety->kind == TY_STRUCT || basety->kind == TY_UNION) &&
         consume(&tok, tok, ";")) {
       Member *mem = calloc(1, sizeof(Member));
       mem->ty = basety;
       mem->idx = idx++;
-      mem->align = attr.align ? attr.align : mem->ty->align;
+      int align = attr_align(&attr);
+      mem->align = align ? align : mem->ty->align;
       cur = cur->next = mem;
       continue;
     }
@@ -1798,7 +1819,8 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       mem->ty = declarator(&tok, tok, basety);
       mem->name = mem->ty->name;
       mem->idx = idx++;
-      mem->align = attr.align ? attr.align : mem->ty->align;
+      int align = attr_align(&attr);
+      mem->align = align ? align : mem->ty->align;
 
       if (consume(&tok, tok, ":")) {
         mem->is_bitfield = true;
@@ -1841,7 +1863,9 @@ static Token *attribute_list(Token *tok, Type *ty) {
 
       if (consume(&tok, tok, "aligned")) {
         tok = skip(tok, "(");
-        ty->align = const_expr(&tok, tok);
+        // The alignment is a constant expression, so it is recorded and
+        // sema evaluates it when the type is completed.
+        ty->align_expr = conditional(&tok, tok);
         tok = skip(tok, ")");
         continue;
       }
@@ -2312,8 +2336,9 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     var->is_definition = !attr->is_extern;
     var->is_static = attr->is_static;
     var->is_tls = attr->is_tls;
-    if (attr->align)
-      var->align = attr->align;
+    int align = attr_align(attr);
+    if (align)
+      var->align = align;
 
     if (equal(tok, "="))
       gvar_initializer(&tok, tok->next, var);

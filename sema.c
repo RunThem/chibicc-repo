@@ -426,12 +426,85 @@ void finalize_globals(void) {
   scan_globals();
 }
 
-// The type of an array dimension: a dimension that is a constant
-// expression gives a fixed-length array, anything else a VLA.
-Type *array_dimension_type(Type *base, Node *expr) {
-  if (base->kind == TY_VLA || !is_const_expr(expr))
-    return vla_of(base, expr);
-  return array_of(base, eval(expr));
+// Completes the type records the parser's declarator layer could not
+// decide. It walks the type a declarator built, so that an inner
+// dimension or operand is settled before the outer one wrapped in it -
+// the order the parser's own recursion gave. A record is cleared as it is
+// consumed, so calling this again costs nothing.
+void resolve_type(Type *ty) {
+  if (!ty)
+    return;
+
+  switch (ty->kind) {
+  case TY_PTR:
+  case TY_ARRAY:
+  case TY_VLA:
+    resolve_type(ty->base);
+    break;
+  case TY_FUNC:
+    resolve_type(ty->return_ty);
+    for (Type *param = ty->params; param; param = param->next)
+      resolve_type(param);
+    break;
+  default:
+    break;
+  }
+
+  if (ty->align_expr) {
+    ty->align = (int) eval(ty->align_expr);
+    ty->align_expr = NULL;
+  }
+
+  if (ty->typeof_expr) {
+    Node *expr = ty->typeof_expr;
+    ty->typeof_expr = NULL;
+
+    // The operand's type fills this record in rather than replacing it:
+    // the parser has already built the rest of the declarator's types on
+    // top of it, and the name it read off the declarator belongs here.
+    add_type(expr);
+    resolve_type(expr->ty);
+
+    Token *name = ty->name;
+    Token *name_pos = ty->name_pos;
+    *ty = *expr->ty;
+    ty->name = name;
+    ty->name_pos = name_pos;
+  }
+
+  if (ty->dim_len) {
+    Node *dim = ty->dim_len;
+    ty->dim_len = NULL;
+
+    // A dimension that is not a constant expression, like the base of a
+    // VLA, gives a variable-length array.
+    if (ty->base->kind == TY_VLA || !is_const_expr(dim)) {
+      ty->kind = TY_VLA;
+      ty->vla_len = dim;
+      ty->size = 8;
+      ty->align = 8;
+    } else {
+      ty->array_len = (int) eval(dim);
+      ty->size = ty->base->size * ty->array_len;
+      ty->align = ty->base->align;
+    }
+  }
+}
+
+// The alignment a declaration's `_Alignas` asks for. The parser has the
+// value for the `_Alignas(type)` form; the `_Alignas(expr)` form is a
+// constant expression, and evaluating it is not a syntax question. The
+// value is cached, because one declaration declares several objects and
+// each of them asks.
+int attr_align(VarAttr *attr) {
+  if (!attr)
+    return 0;
+  if (!attr->align_expr)
+    return attr->align;
+
+  attr->align = (int) eval(attr->align_expr);
+  attr->align_expr = NULL;
+  return attr->align;
 }
 
 static int align_down(int n, int align) {
@@ -443,6 +516,10 @@ static int align_down(int n, int align) {
 // and calls this once the list is complete and the attributes are
 // known; an incomplete type (size < 0) has no members to place yet.
 void layout_struct(Type *ty) {
+  // An `aligned` attribute on the type is a constant expression the
+  // parser recorded; it has to be settled before the offsets are.
+  resolve_type(ty);
+
   if (ty->size < 0)
     return;
 
@@ -478,6 +555,8 @@ void layout_struct(Type *ty) {
 // Unions need no member offsets (they are all zero), only the union
 // of the member sizes and the largest member alignment.
 void layout_union(Type *ty) {
+  resolve_type(ty);
+
   if (ty->size < 0)
     return;
 
@@ -530,6 +609,7 @@ static Obj *new_var(char *name, Type *ty) {
   Obj *var = calloc(1, sizeof(Obj));
   var->name = name;
   var->ty = ty;
+  resolve_type(ty);
   var->align = ty->align;
   push_scope(name)->var = var;
   return var;
@@ -1596,6 +1676,27 @@ void add_type(Node *node) {
       error_tok(node->cas_addr->tok, "pointer expected");
     node->ty = node->lhs->ty->base;
     return;
+  case ND_CASE:
+    // The value(s) a case label stands for: the parser recorded the
+    // operands unevaluated, because whether an expression is a constant
+    // is not a syntax question. They are truncated to `int`, as they
+    // were when the parser wrote `begin`/`end` on its way past them.
+    if (node->begin_expr) {
+      int begin = (int) eval(node->begin_expr);
+      int end = begin;
+
+      if (node->end_expr) {
+        end = (int) eval(node->end_expr);
+        if (end < begin)
+          error_tok(node->colon_tok, "empty case range specified");
+      }
+
+      node->begin = begin;
+      node->end = end;
+      node->begin_expr = NULL;
+      node->end_expr = NULL;
+    }
+    return;
   case ND_DECL:
     // Lower a declaration. A VLA becomes `x = alloca(<size>)` (the
     // VLA-size statement stays a parse-emitted sibling). With an
@@ -1605,6 +1706,14 @@ void add_type(Node *node) {
     // carries the VLA-size computation in lhs and simply becomes that
     // statement.
     if (node->var->ty->kind == TY_VLA) {
+      // A variable-length object may not be initialized. The parser left
+      // the two standing side by side because whether a declaration is a
+      // VLA one depends on the dimension being a constant expression;
+      // the `=` is where that used to be reported.
+      if (node->decl_init)
+        error_tok(node->decl_init->eq_tok,
+                  "variable-sized object may not be initialized");
+
       Token *tok = node->tok;
       node->kind = ND_EXPR_STMT;
       node->lhs = new_binary(ND_ASSIGN, new_vla_ptr(node->var, tok),

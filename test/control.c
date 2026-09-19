@@ -113,6 +113,15 @@ int main() {
   // A goto leaving a statement expression for a label outside it.
   ASSERT(1, ({ int i=0; ({ goto out; i++; }); out: i++; i; }));
 
+  // Case labels whose value the parser records unevaluated: an enum
+  // constant, a [GNU] range, sizeof, a negative number.
+  ASSERT(1, ({ enum { K = 3 }; int r = 0; switch (3) { case K: r = 1; } r; }));
+  ASSERT(2, ({ int r = 0; switch (5) { case 2 ... 6: r = 2; break; default: r = 3; } r; }));
+  ASSERT(3, ({ int r = 0; switch (9) { case 2 ... 6: r = 2; break; default: r = 3; } r; }));
+  ASSERT(4, ({ int r = 0; switch (-3) { case -3: r = 4; } r; }));
+  ASSERT(5, ({ int r = 0; switch (4) { case sizeof(int): r = 5; } r; }));
+  ASSERT(8, ({ enum { A = 1, B = 4 }; int r = 0; switch (B) { case A ... A: r = 7; break; case B: r = 8; } r; }));
+
   printf("OK\n");
   return 0;
 }

@@ -25,7 +25,8 @@
 | 956a662 | R1.2 前置 | test/control.c 补控制流形状覆盖(纯测试) |
 | 4bf8aec | R1.2 | analyze 前序语句下降入 sema: 标签分配 + break/continue/case 绑定 + stray 四检查 |
 | 162cd2a | R2.1 | 成员访问两段式: ND_MEMBER 留未绑定名字, 成员链/四类检查/DEREF 补插归 sema |
-| (本提交) | R2.2 | `_Generic` 改发忠实节点(ND_GENERIC + assoc), 两个类型 builtin 折叠移 sema |
+| d281858 | R2.2 | `_Generic` 改发忠实节点(ND_GENERIC + assoc), 两个类型 builtin 折叠移 sema |
+| (本提交) | R2.3 | 常量求值出 parse 第一批: 数组维度/typeof/aligned 与 _Alignas/case 值改记表达式, resolve_type 回填 |
 
 ## 各步详情
 
@@ -87,7 +88,7 @@
   2. **多余初始化元素**: `int x[1] = {0, ((struct S*)0)->b};` 的第二元素被 `skip_excess_element` 跳过(chibicc 对"initializer 元素过多"本就无诊断), 其成员检查现在不再触发. 与 1. 同源: 检查跟着标注走, 不标注就不检查. 归入 R1.2 偏差 4 同一类(诊断时机/诊断存在性随遍历现场移动), 单错误合法输入完全不变(43 个锁定用例全绿).
   3. 实现形态调整(非行为): `is_arrow` 换成 `arrow_tok` - 计划文本写"ND_MEMBER 只带成员名 token 与 is_arrow(字段已有)", 但四类检查里三类必须锚在 `->` token 上(纪律 4 要求锚点原样传递), 布尔字段不够用, 故直接存 token; "是否箭头"由它是否为 NULL 给出.
 
-### R2.2 泛型选择与 builtin 折叠忠实式 (本提交)
+### R2.2 泛型选择与 builtin 折叠忠实式 (d281858)
 
 - 改了什么: (1) `_Generic` 不再在解析现场做选择. parse.c 的 `generic_selection` 只建树 - `ND_GENERIC`(tok=`(`, 即原诊断锚点) 的 `cond` 存 controlling 表达式, `args` 存一条 `ND_GENERIC_ASSOC` 链, 每个 assoc 的 `ty_op` 存 type-name(`default:` 项为 NULL, 这就是它的标识), `lhs` 存结果表达式; 原 `add_type(ctrl)` 与 `is_compatible` 循环全部删掉. 选择移入 sema: add_type 顶部(前序递归**之前**)判到 ND_GENERIC 就调新函数 `select_generic(node)` - 标注 cond, 按 func/array 退化后逐个 assoc 比 `is_compatible`, 保持旧循环的胜出规则(具名匹配覆盖 default, 多个匹配后者胜), 无匹配则 `error_tok(node->tok, "controlling expression type not compatible with any generic association type")`, 落选分支各自 `add_type` 一遍(只要检查, 不进树), 最后 `*node = *sel` 并保回 `node->next`. (2) `__builtin_types_compatible_p`/`__builtin_reg_class` 由"解析现算 is_compatible/is_integer 折成 ND_NUM"改为发 `ND_TYPES_COMPATIBLE`(ty_op/ty_op2)/`ND_REG_CLASS`(ty_op) 忠实节点, sema 的 add_type 折叠成 ND_NUM 后再 `add_type(node)` 补类型. chibicc.h: 新增 4 个 NodeKind(ND_GENERIC/ND_GENERIC_ASSOC/ND_TYPES_COMPATIBLE/ND_REG_CLASS)与 `Type *ty_op2`. test/generic.c +11 断言(default 兜底与覆盖次序, 用作数组维度/枚举值/case 标签/sizeof 操作数, `&&label` 经 default 选中后仍能跳对, 嵌套 _Generic, 数组退化), test/builtin.c +11 断言(reg_class 六类取值 + 折果参与常量运算与数组维度). parse.c 2378 -> 2373 行, error_tok 24 -> 23(判定表 D 第 3 处清空); sema.c 1770 -> 1849 行; codegen.c 零改动.
 - 为什么改: 选中哪个分支取决于 controlling 表达式的**类型**, 是类型判定不是语法选择 - 拆分线判定表 D 给它的理由是"is_compatible 的结果决定选中哪个分支, 是语法选择而非事后诊断", 本线把"分支"本身变成树里的忠实记录后, 这个理由消失. 两个 builtin 折叠是拆分线 1.9 明确留下的返工点("暂留 parse"), 与 `__builtin_reg_class` 一起在此清掉. 落选分支自此也受类型检查(与 clang/gcc 一致).
@@ -96,3 +97,22 @@
   1. **落选分支现在受完整类型检查**(行为增强, 与 clang 对齐): `struct S{int a;}; int main(){ return _Generic(1, int: 0, double: ((struct S*)0)->b); }` 原静默通过(拆分线起 `_Generic` 的落选节点从未标注), 现报 "no such member" 并退出 1 - 宿主机 clang 同样报错, 文案锚点与 R2.1 时选中分支的检查完全一致. 这同时关闭 R2.1 偏差 1.
   2. **实现形态调整(非行为)**: 计划文本写"新增 NodeKind 或复用载体", 实施为新增 4 个 kind + 一个 `ty_op2` 字段; `default:` 用"assoc 无 type-name"表示, 未新增标志字段. 另外选择动作必须放在 add_type 的**入口**(前序递归之前), 放在 switch 里会让选中分支先作为 `args` 的子孙被独立标注, 于是 `&&label` 把自己的**原节点**登记进 gotos 清单, 而树上留下的是改写后的节点, 二者的 `unique_label` 脱钩 - 实测 `static void *gt[] = { _Generic(1, default: &&l2) };` 的跳转表项退化为 `.quad (null)+0`(R2.1 基线为 `.quad .L..6+0`). 改在入口做选择并只对落选分支做检查, 选中分支由改写后的节点自己走标注, 登记身份与树一致, 该用例逐字节复原. 落选分支的 `&&label` 仍会登记进 gotos, 因此未选中的 `&&未定义标签` 现在会报 "use of undeclared label"(clang 亦如此), 属 1. 的同一类增强.
   3. **测试期望值的一处自我纠正**: `__builtin_reg_class(int) + __builtin_reg_class(double)` 先按 2 写入断言, docker-test 报 "2 expected but got 1" - 折叠规则(整型/指针=0, 浮点=1)下 0+1=1 才是对的, 已改正. 记录在此说明该断言的取值来源是规则本身, `reg_class` 非标准 builtin, 宿主机 clang 无法旁证.
+
+### R2.3 常量求值出 parse(第一批) (本提交)
+
+- 改了什么: 四类"解析现场算常量"的决策点改为**只记表达式**, 求值/判定统一进 sema 的新函数 `resolve_type(Type*)`.
+  1. **数组维度与 VLA 分类**: `array_dimensions` 改发 `array_of_dim(ty, expr)`(type.c 新增: TY_ARRAY, array_len=-1, `Type.dim_len` 挂长度表达式); chibicc.h 的 `array_dimension_type` 声明与 sema 侧定义**删除**. resolve_type 递归走 declarator 建出的类型链(base / return_ty / params), 内层先于外层, 判 `base->kind==TY_VLA || !is_const_expr(dim)` 则就地改成 TY_VLA(size/align=8), 否则 `array_len=(int)eval(dim)` 重算 size 与 align - 与旧 `array_dimension_type` 同一判据同一次序. **触发点**: `declarator()` 与 `abstract_declarator()` 的非括号返回(类型完整之后、写 name 之前), `struct_members()` 对 basety 的一次(匿名成员靠 kind 识别, 该路径后面没有 declarator 出口), `layout_struct/layout_union` 入口, `new_var()` 读 `ty->align` 之前. 全部幂等(记录取出即清空).
+  2. **typeof(expr)**: 新 TypeKind `TY_TYPEOF` 与 `Type.typeof_expr`; `typeof_specifier` 改为 `typeof_placeholder()` + 记表达式, **删掉该处 add_type**(计划文本所说"parse 侧对应的 add_type 消费点消失"之一). resolve_type 里 `add_type(操作数)` 后把操作数类型**回填进这条记录**(`*ty = *expr->ty`, 并保住 name/name_pos), 因为 declarator 已经把指针/数组类型包在这块记录之上.
+  3. **`_Alignas` 与 `aligned`**: `VarAttr.align_expr` 记 `_Alignas(<expr>)`(类型形式仍由 parse 读 `typename()->align`, 两种形式后写者生效, 与旧一致), 新 `attr_align(VarAttr*)` 在三个消费点(块域声明/文件域声明/结构成员)取值并**把值缓存回 attr->align**(一条声明声明多个 declarator 要重复问, 不缓存则第二个拿不到). `__attribute__((aligned(<expr>)))` 改记 `Type.align_expr`, 由 resolve_type 在 layout 之前回填.
+  4. **case 的 begin/end 与空区间**: ND_CASE 新增 `begin_expr`/`end_expr`/`colon_tok`; parse 的 case 分支只做 `conditional()`; add_type 新增 `case ND_CASE:` 求值回填 begin/end(仍按 int 截断, 与旧 `int begin = const_expr(...)` 一致), `end<begin` 报 "empty case range specified" 锚 `:`.
+  5. **VLA 带初值**: parse 的 `ty->kind==TY_VLA` 分支不再报错也不再提前 continue(有 `=` 时落到通用路径, 初值照常解析, `Initializer.eq_tok` 记下 `=`), 报错移到 add_type 的 ND_DECL VLA 降级分支, 锚点即 eq_tok.
+  6. `array_of` 补一条规则: 元素尺寸未知(负)而长度也为负时结果尺寸保持 -1, 不再"负负得正" - 待决维度会让这种组合真实出现.
+  7. 测试: test/alignof.c +3(`_Alignas(1<<4)` 多 declarator、`aligned(8*8)`、成员 `_Alignas(4<<3)` 的 struct 对齐), test/control.c +6(case 值为枚举/[GNU]区间/`sizeof`/负数), test/typeof.c +7(typeof 操作数为浮点/取址/数组类型名/结构成员/嵌套 typeof/指针类型流变), 期望值先用宿主机 clang 算出.
+  规模: parse.c 2373 -> 2398 行(记录表达式与说明注释, 但求值调用清零), error_tok 23 -> **21**(判定表 D 的 1/2 两处随 case 值与 VLA 初值迁走, **D 表就此全清**), parse.c 剩余 `const_expr` 5 处(初始化设计符 4 处归 R2.4, 位域宽度 1 处归 R2.5); sema.c 1849 -> 1958; type.c 132 -> 157; chibicc.h 688 -> 722; codegen.c 零改动.
+- 为什么改: 维度是不是常量, `aligned` 的参数是多少, case 标签代表什么值, `typeof(expr)` 的操作数是什么类型 - 全是常量求值与类型标注, 按层 3 的定义不属于语法层. 拆分线把这几处留在 parse 的理由都是"parse 必须现在就拿到结果才能继续建树"; 本步用"待补全的类型/属性记录"把它们解开: 声明符层照常建它能建的形状, 只把值挖空交给 sema. 至此 parse.c 的常量求值只剩初始化器与位域两处, 也正是 R2.4/R2.5 的对象.
+- 测试结果: **四闸门全绿, raw 逐字节为空**. 做法同 R2.1/R2.2: 用 HEAD(R2.2) 编译器 + 本提交的新测试源生成 41 文件对照基线, 新编译器下 `docker-snapshot-diff`(raw) 与 `docker-snapshot-ndiff` **均为空** - 即数组维度/typeof/对齐/case 值的求权搬家没有改变任何产物字节. `docker-test` 退出码 0(含新增 16 条断言, stage1 + stage2 自举各一遍, 诊断锁定 stage1/stage2 各 "43 cases byte-exact"; d01_vla_initialized 与 d02_empty_case_range 两个已锁用例随迁移后文案与锚点逐字节不变), `docker-test-thirdparty THIRDPARTY=tinycc` 退出码 0(该轮在测试源定稿前跑, 编译器二进制与定稿同一份). 另在宿主机交叉验证: R2.2 与 R2.3 二进制对 39 个 `test/*.c`(atomic/tls 需 Linux 系统头本机跳过)与手写的 R2.3 压力文件(多维 VLA/`(*pv)[n]`/`typeof(VLA)`/`_Alignas(expr)`/`aligned(expr)`/枚举与区间 case 标签)输出逐字节相同; 单独核对 `case zzz:`(undefined variable)、`case n:`(not a compile-time constant)、`case 2 ... 1:`(empty case range)三处诊断文案与锚点不变.
+- 偏差说明: 四项.
+  1. **`typeof(vla)` 不再与源变量共用类型对象**: 旧实现里 typeof 的操作数类型就是那个 VLA 的 Type, 两个声明共用一条 `vla_size` 槽位; 现在回填出的类型是独立记录, 每个声明各有自己的 `vla_size` 局部. 实测 `int f(int n){ int vla[n]; typeof(vla) c; sizeof(vla); sizeof(c); }`: 旧版两处都读 `-16(%rbp)`, 新版读 `-16` 与 `-32` - **值相同**(同一条 `vla_len` 乘同一基尺寸), 仅栈槽数量随声明个数增长. 归为产物形状变化, 测试集无此写法故 raw/归一化 diff 均空. 计划文本要求 typeof 改记表达式并由 sema 回填, 记录本身即独立类型, 此为该设计的直接后果.
+  2. **诊断时机后移(多错误输入首个报错可能变化)**, 单错误输入完全不变(43 用例全绿). case 标签的值现在在语句整体标注时求值, 即晚于其**语句体**的现场标注: `switch(n){ case qq: int m; undeclared; }` 这类同时含两处错误的输入, 首个报错可能从体侧移到标签侧(实测 `case zzz: return 1;` 单错仍先报标签的 undefined variable, 次序不变). `_Alignas(expr)` 的求值从 declspec 内移到声明符完成处, 若表达式本身报错(如 `case _Alignas` 里引用未声明名)锚点与文案不变, 只晚于同一 declspec 后续关键字. 与 R1.2 偏差 4 同类, 经该步一并确认.
+  3. **实现形态调整(非行为)**: 计划文本写"由 sema 求值/判定后回填", 未指明触发时机; 按本线纪律 6(R2.1-R2.5 只做两段式, R2.6 才改遍历), 求值动作放在 resolve_type 里, 而 resolve_type 的**调用点**仍在解析现场(declarator 出口, 结构成员, layout 入口, new_var). 其中 `attr_align(VarAttr*)` 由 parse 直接调用并取回一个 int - 这是本步唯一"parse 仍向 sema 要一个值"的点, 因为 `_Alignas` 的值在一条声明里被多个 declarator 消费, 挂到 ND_DECL 上需要再引一个节点字段而收益为零; R2.6 的 resolve 遍历将连同 declarator 出口的 resolve_type 调用一起拆除. 另: 匿名成员那条路径没有 declarator 出口, 故 `struct_members` 里对 basety 多一次 resolve_type 调用.
+  4. **未纳入本步的两项按计划归属确认无误**: 位域宽度 `mem->bit_width = const_expr(...)` 因布局时序留在 parse(归 R2.5); 初始化设计符的 4 处 `const_expr`(数组下标与区间)留在 parse(归 R2.4). `typeof` 的类型形式(`typeof(int)`)本就由 parse 走 typename, 不在求值迁移范围内.

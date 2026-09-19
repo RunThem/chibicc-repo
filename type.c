@@ -110,7 +110,16 @@ Type *func_type(Type *return_ty) {
 }
 
 Type *array_of(Type *base, int len) {
-  Type *ty = new_type(TY_ARRAY, base->size * len, base->align);
+  // A negative length asks for an incomplete array, and a negative base
+  // size means the element type has no size yet - a dimension the parser
+  // left for sema to decide is one way to get there. The product of the
+  // two would look like a complete type, so an array built on an element
+  // it cannot measure stays unmeasurable.
+  int size = base->size * len;
+  if (size >= 0 && (base->size < 0 || len < 0))
+    size = -1;
+
+  Type *ty = new_type(TY_ARRAY, size, base->align);
   ty->base = base;
   ty->array_len = len;
   return ty;
@@ -121,6 +130,22 @@ Type *vla_of(Type *base, Node *len) {
   ty->base = base;
   ty->vla_len = len;
   return ty;
+}
+
+// An array whose dimension the parser could not decide: `dim` is the
+// length expression, which sema evaluates into a length - or, when it is
+// not a constant expression, turns the type into a VLA.
+Type *array_of_dim(Type *base, Node *dim) {
+  Type *ty = array_of(base, -1);
+  ty->dim_len = dim;
+  return ty;
+}
+
+// The type of a `typeof(expr)`, until sema annotates the operand and
+// fills this record in. Its size is negative like an incomplete type's,
+// so that a record nobody completed is rejected rather than measured.
+Type *typeof_placeholder(void) {
+  return new_type(TY_TYPEOF, -1, 1);
 }
 
 Type *enum_type(void) {

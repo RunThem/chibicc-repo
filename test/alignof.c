@@ -35,6 +35,12 @@ int main() {
   ASSERT(1, ({ char x; _Alignof x; }));
   ASSERT(4, ({ int x; _Alignof x; }));
 
+  // An `_Alignas` argument and an `aligned` attribute argument are
+  // constant expressions, which the parser records unevaluated.
+  ASSERT(16, ({ _Alignas(1 << 4) char x, y; &y-&x; }));
+  ASSERT(64, ({ struct S { int a; } __attribute__((aligned(8 * 8))) v; _Alignof(v); }));
+  ASSERT(32, ({ struct S { _Alignas(4 << 3) char a; }; _Alignof(struct S); }));
+
   ASSERT(1, _Alignof(char) << 31 >> 31);
   ASSERT(1, _Alignof(char) << 63 >> 63);
   ASSERT(1, ({ char x; _Alignof(x) << 63 >> 63; }));
