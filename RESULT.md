@@ -20,7 +20,8 @@
 |---|---|---|
 | 16a6719 | R0.1 | 诊断锁定测试(test/diagnostic.sh, 43 用例) |
 | 79e6c76 | R0.2 | 归一化快照 diff 闸门(snapshot-normalize.awk + docker-snapshot-ndiff) |
-| (本提交) | R0.3 | 基线复验留档(四闸门全绿) |
+| 8a69232 | R0.3 | 基线复验留档(四闸门全绿) |
+| (本提交) | R1.1 | 匿名名计数器与名字物化三函数迁 sema.c |
 
 ## 各步详情
 
@@ -44,3 +45,10 @@
 - 为什么改: 本线开工基线必须留档; 自此归一化 diff 闸门(docker-snapshot-ndiff)正式启用, raw 基线保持拆分线终态后的快照, 待首个 [重组] 提交内重置.
 - 测试结果: 四项全绿 - docker-test 退出码 0(测试集 + driver.sh + 自举重跑, 诊断锁定 stage1/stage2 各 43/43); tinycc 退出码 0; raw diff 空; 归一化 diff 空. 另: 宿主机本地(macOS)构建后 diagnostic.sh 43/43.
 - 偏差说明: 无 - 编译器源码零改动, 工作区仅剩与本线无关的未跟踪文件 .zcodeignore.
+
+### R1.1 匿名名计数器归 sema (本提交)
+
+- 改了什么: `new_unique_name`(含计数器 static)与 `new_anon_gvar`/`new_string_literal` 两个调用方从 parse.c 整体迁入 sema.c, 紧邻 new_gvar 等变量构造器; chibicc.h 的声明区注释同步(计数器所有权说明). parse.c 对这三个函数只剩跨文件调用(复合字面量的 new_anon_gvar, R2.8 收编).
+- 为什么改: R1.1 的核心是计数器所有权 - 匿名名(字符串字面量全局, static 局部, 控制流标签)的唯一发号器归 sema, 为 R1.2 把标签分配触发点移入遍历扫清所有权问题; 拆分线 1.10 的"计数器交织"顾虑自此从所有权层面解除.
+- 测试结果: 四项全绿 - docker-test 退出码 0(诊断锁定 stage1/stage2 各 43/43), tinycc 退出码 0, raw diff 为空, 归一化 diff 为空. raw 为空符合预期: 本步只搬定义, parse 侧分配触发点的调用顺序逐点不变, 计数器交织原样保留.
+- 偏差说明: 步骤分工与 PLAN 文本有出入 - PLAN 把"brk/cont 标签分配移 sema"与"ND_LABEL/ND_LABEL_VAL unique_label 机制移入"列在本步, 实际这两项与绑定/stray 检查在构造现场标注架构下不可分离(parse 侧 break 绑定要求标签先于体解析而存在, 分配触发点无法先于绑定单独迁移), 故全部并入 R1.2 的前序语句下降一次完成; 本步只承担计数器所有权搬迁, 无行为变化. 归类为实现形态调整.

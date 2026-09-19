@@ -32,7 +32,7 @@
 
 ## R1 控制流出 parse [重组]
 
-- [ ] **R1.1 标签分配移 sema**: ND_WHILE/ND_DO/ND_FOR/ND_SWITCH 的降级在 sema 分配 brk_label/cont_label; ND_LABEL/ND_LABEL_VAL 的 unique_label 同步移入; `new_unique_name` 计数器整体归 sema(parse 不再触碰 - 字符串物化与 static 局部匿名名已在此侧). 解锁拆分线 1.10 偏差的"计数器交织".
+- [x] **R1.1 标签分配移 sema**: ND_WHILE/ND_DO/ND_FOR/ND_SWITCH 的降级在 sema 分配 brk_label/cont_label; ND_LABEL/ND_LABEL_VAL 的 unique_label 同步移入; `new_unique_name` 计数器整体归 sema(parse 不再触碰 - 字符串物化与 static 局部匿名名已在此侧). 解锁拆分线 1.10 偏差的"计数器交织".
 - [ ] **R1.2 绑定与 stray 检查移 sema**: analyze 的语句下降是前序的(先循环后体), 维护"当前循环/switch"上下文, ND_BREAK/ND_CONTINUE 由 sema 填绑定目标; stray break/continue/case/default 四处检查随迁, **拆分线判定表 B 清空**; parse 删除 current_switch/brk_label/cont_label/gotos/labels 五个 static 与 resolve_goto_labels 壳(gotos/labels 清单归 sema).
 
 ## R2 表达式层语义全部后置 [重组, 最大阶段]

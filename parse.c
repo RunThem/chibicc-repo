@@ -178,21 +178,6 @@ static Initializer *new_initializer(Type *ty, bool is_flexible) {
   return init;
 }
 
-char *new_unique_name(void) {
-  static int id = 0;
-  return format(".L..%d", id++);
-}
-
-Obj *new_anon_gvar(Type *ty) {
-  return new_gvar(new_unique_name(), ty);
-}
-
-Obj *new_string_literal(char *p, Type *ty) {
-  Obj *var = new_anon_gvar(ty);
-  var->init_data = p;
-  return var;
-}
-
 char *get_ident(Token *tok) {
   if (tok->kind != TK_IDENT)
     error_tok(tok, "expected an identifier");

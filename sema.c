@@ -419,6 +419,24 @@ Obj *new_gvar(char *name, Type *ty) {
   return var;
 }
 
+// The anonymous names of hidden objects - string literal globals,
+// static locals and the control-flow labels sema allocates - come
+// from this one counter.
+char *new_unique_name(void) {
+  static int id = 0;
+  return format(".L..%d", id++);
+}
+
+Obj *new_anon_gvar(Type *ty) {
+  return new_gvar(new_unique_name(), ty);
+}
+
+Obj *new_string_literal(char *p, Type *ty) {
+  Obj *var = new_anon_gvar(ty);
+  var->init_data = p;
+  return var;
+}
+
 static void create_param_lvars(Type *param) {
   if (param) {
     create_param_lvars(param->next);

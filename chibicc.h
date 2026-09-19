@@ -380,8 +380,10 @@ Node *new_var_node(Obj *var, Token *tok);
 Node *new_vla_ptr(Obj *var, Token *tok);
 Node *new_cast(Node *expr, Type *ty);
 
-// Variable constructors. Defined in sema.c, which owns the lists of
-// local and global variables.
+// Variable constructors and the anonymous-name counter. Defined in
+// sema.c, which owns the lists of local and global variables and the
+// single counter that hidden objects (string literals, static locals,
+// control-flow labels) draw their names from.
 Obj *new_lvar(char *name, Type *ty);
 Obj *new_gvar(char *name, Type *ty);
 Obj *new_anon_gvar(Type *ty);
