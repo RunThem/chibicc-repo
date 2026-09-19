@@ -17,6 +17,24 @@ int main() {
 
   ASSERT(6, ({ struct { struct { char b; } a; } x; x.a.b=6; x.a.b; }));
 
+  // A member of an anonymous struct or union belongs to the enclosing
+  // namespace, so the access chain runs through the anonymous link.
+  ASSERT(3, ({ struct { struct {int a;}; int b; } x; x.a=3; x.b=4; x.a; }));
+  ASSERT(4, ({ struct { struct {int a;}; int b; } x; x.a=3; x.b=4; x.b; }));
+  ASSERT(5, ({ struct { struct {int a;}; int b; } x, *p=&x; p->a=5; p->b=6; x.a; }));
+  ASSERT(6, ({ struct { struct {int a;}; int b; } x, *p=&x; p->a=5; p->b=6; x.b; }));
+  ASSERT(7, ({ struct { struct { struct {int a;}; }; } x; x.a=7; x.a; }));
+  ASSERT(8, ({ struct { union { int a; struct {int b;}; }; int c; } x; x.b=8; x.b; }));
+  ASSERT(9, ({ typedef struct { struct {int a;}; } T; T x, y; x.a=9; y=x; y.a; }));
+  ASSERT(10, ({ struct { struct {int a;} s; } x; x.s.a=10; x.s.a; }));
+  ASSERT(11, ({ struct { struct {int a;}; int b; } x; x.a=11; (&x.a)[0]; }));
+  ASSERT(3, ({ struct { struct {int a;}; int b; } x, *p=&x; p->a=1; p->a+=2; x.a; }));
+  ASSERT(13, ({ struct { struct {int a;}; int b; } x; x.a=12; x.a++; x.a; }));
+  ASSERT(2, ({ struct { struct { unsigned a : 2; }; int b; } x; x.a=1; x.a+=1; x.a; }));
+  ASSERT(4, ({ struct { struct {int a;}; int b; } x; x.a=13; sizeof(x.a); }));
+  ASSERT(29, ({ struct { struct {int a;}; int b; } x={14,15}; x.a+x.b; }));
+  ASSERT(16, ({ struct { struct {int a;}; int b; } x; int *p=&x.a; *p=16; x.a; }));
+
   ASSERT(4, ({ struct {int a;} x; sizeof(x); }));
   ASSERT(8, ({ struct {int a; int b;} x; sizeof(x); }));
   ASSERT(8, ({ struct {int a, b;} x; sizeof(x); }));

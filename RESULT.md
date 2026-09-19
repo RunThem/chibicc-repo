@@ -23,7 +23,8 @@
 | 8a69232 | R0.3 | 基线复验留档(四闸门全绿) |
 | 9d66036 | R1.1 | 匿名名计数器与名字物化三函数迁 sema.c |
 | 956a662 | R1.2 前置 | test/control.c 补控制流形状覆盖(纯测试) |
-| (本提交) | R1.2 | analyze 前序语句下降入 sema: 标签分配 + break/continue/case 绑定 + stray 四检查 |
+| 4bf8aec | R1.2 | analyze 前序语句下降入 sema: 标签分配 + break/continue/case 绑定 + stray 四检查 |
+| (本提交) | R2.1 | 成员访问两段式: ND_MEMBER 留未绑定名字, 成员链/四类检查/DEREF 补插归 sema |
 
 ## 各步详情
 
@@ -62,7 +63,7 @@
 - 测试结果: `make docker-test` 退出码 0, 新断言在 stage1/stage2 两遍均通过, 诊断锁定 43/43 两遍; 纯测试提交, 行为中立.
 - 偏差说明: 原拟的一条用例被删 - "goto 跳入语句表达式内部的标签" 被 clang 拒绝(jump enters a statement expression), 不写入真实编译器同样拒绝的形状. 另: 本次提交未同步重置 raw 基线(control.s 因新增断言变长), 重置在 R1.2 步内完成 - `.cache/` 已被 .gitignore 忽略, 不涉及提交内容.
 
-### R1.2 绑定与 stray 检查移 sema (本提交)
+### R1.2 绑定与 stray 检查移 sema (4bf8aec)
 
 - 改了什么: sema.c 新增导出的 `analyze(Node *body)` - 函数体的一遍控制流下降, 由三个 static 组成(analyze_node / analyze_chain / analyze_children), 在 parse.c 的 `function()` 末尾替代原 `resolve_goto_labels()` 调用. 它承担: 循环与 switch 的 brk_label/cont_label 分配, ND_BREAK/ND_CONTINUE 填 unique_label 并降级为 ND_GOTO, ND_CASE 分配 label 并挂入所属 switch, ND_GOTO/ND_LABEL 的清单收集与 unique_label 分配, stray break/continue/case/default 四处检查, 以及 ND_WHILE -> ND_FOR 降级. `resolve_labels` 由导出改为 static 并改读 sema 侧的 gotos/labels. parse.c 删除 current_switch/brk_label/cont_label/gotos/labels 五个 static 与 resolve_goto_labels 壳, switch/for/while/do/case/default/break/continue/goto/label/`&&label` 十处构造点回到只建忠实形状(2516 -> 2427 行, error_tok 33 -> 29, 判定表 B 清空). chibicc.h: ND_CASE 新增 `bool is_default`(sema 挂链时需要区分 `default:` 与 `case <expr>:`, 今天这个信息只存在于 parse 的语法位置), 导出 `analyze` 取代 `resolve_labels`. add_type 删除 ND_WHILE/ND_BREAK/ND_CONTINUE 三个 case, ND_LABEL_VAL case 改为把节点收进 gotos. sema.c 1570 -> 1699 行. codegen.c 零改动.
 - 为什么改: break/continue 的目标标签是一次名字绑定, case 归属哪个 switch 也是 - 按层 3 的定义(无类型标注, 无名字绑定)它们不属于语法层. 解析现场维护"当前循环/switch"要求 parse 持有五个可变 static 上下文, 与库的可重入性冲突; 换成函数体解析完后的一遍下降, 上下文变成该遍的局部状态, parse 侧的控制流 static 归零. 判定表 B 的四处 stray 检查随之迁走, 因为它们问的正是"有没有外层目标"这个绑定问题.
@@ -73,3 +74,14 @@
   3. **ND_LABEL_VAL 的收集留在 add_type, 没有进 analyze** - `&&lbl` 可以出现在语句树之外: 块域 static 数组初始化器里的跳转表只有常量求值器会走到, analyze 的语句下降看不到它, 漏收会导致 `use of undeclared label` 误报. 因此 analyze 的 gotos 清单由两处供给(analyze 收 ND_GOTO, add_type 收 ND_LABEL_VAL); add_type 的 `node->ty` 早退守卫保证每个节点恰好收一次. 代价是 `&&lbl` 与同函数内 `goto` 的入链相对顺序可能与原 parse 顺序不同, 只在同一函数有多处未声明标签时影响首个报错, 归入第 4 项.
   4. **stray 检查时机后移到函数末尾, 多错误输入的首个报错可能改变**(经用户确认接受). 单错误输入完全不变(43 个锁定用例均为单错误, 全绿). 实测两类位移: `int main(){ break; int x=1; return x->y; }` 原报 "stray break"(锚 break), 现报 "invalid pointer dereference"(锚 `->`); `int main(){ int x = ({ break; }); }` 原报 "stray break", 现报 "statement expression returning void is not supported"(锚 `(`) - 后者是 add_type 的语句表达式检查在解析现场先跑所致. 反向不位移: 另一处错误在 stray 之前时两版一致, 且 "use of undeclared label" 由 resolve_labels 在下降之后触发, 两版都排在全部 stray 之后.
   5. **嵌套函数定义中的外层 goto 现在能编译通过**(经用户确认接受). `int main(){ goto out; int inner(void){ return 42; } out: return 1; }` 原报 "use of undeclared label" - parse 的 resolve_goto_labels 在内层函数解析完时就跑, 拿外层已积累的 goto 去匹配内层的 label 清单, 匹配不上即报错, 随后清空清单. analyze 按函数体调用, 内层只收内层的 goto, 外层的留到外层自己的下降里解析. 这是原实现的缺陷被顺带修掉, 不是新引入的行为; 归类为诊断消失.
+
+### R2.1 成员访问两段式 (本提交)
+
+- 改了什么: parse.c 的 `struct_ref` 从 30 行降到 4 行 - 只发一个未绑定的 ND_MEMBER(`lhs`=被访问表达式, `tok`=成员名 token, `arrow_tok`=`->` token 或 NULL), 不再 `add_type(操作数)`, 不再查成员表, 不再做四类检查; `get_struct_member` 整体迁到 sema.c 并导出(parse 的 `struct_designator` 仍在用它 - 初始化器指示符归 R2.4). sema.c 新增 `resolve_member(Node*)`, 由 add_type 的 ND_MEMBER case 在 `node->member==NULL` 时调用: 四类检查(invalid pointer dereference / dereferencing a void pointer / not a struct nor a union(箭头锚) / not a struct nor a union(点号锚操作数 token) / no such member(锚成员名 token)), 匿名成员展平(路径上每个匿名成员自成一个 ND_MEMBER 挂在操作数与具名成员之间), 以及 `->` 的 DEREF 补插(锚成员名 token, 归最内层链接). 结果节点字段原样搬回 `node`(父指针指向它). chibicc.h: `bool is_arrow` 改为 `Token *arrow_tok`(一个字段同时承载"是不是箭头"与该箭头的锚点, 二者本不可分), 新增 `get_struct_member` 声明. test/struct.c 补 17 条匿名成员展平断言(`.`/`->`/三层匿名/匿名 union/结构赋值/取址/`+=`/`++`/位域/`sizeof`/带初值声明/指针间接改值), 期望值先用宿主机 clang 算出. parse.c 2427 -> 2378 行, error_tok 29 -> 24(判定表 C 的 struct_ref 5 处清空, 仅剩初始化器 6 处待 R2.4); sema.c 1699 -> 1770 行; codegen.c 零改动.
+- 为什么改: 成员名指向哪个 Member 是一次名字查找, `x->y` 的类型合法性与 `(*x).y` 的补插也是语义 - 按层 3 的定义不属于语法层. 拆成两段后 parse 只记录"谁.谁", sema 在标注遍里查表, 判定表 C 里"建树必需"的成员访问一项就此消失(该项在拆分线的理由是"成员链含匿名成员必须现解析", 现在它和绑定/降级一起在遍历现场完成).
+- 测试结果: **四项全绿且 raw 逐字节为空**(本步无需重置 raw 基线, 口径上等同常规步骤). 判据做法: 因为本提交同时给 test/struct.c 加了断言, 直接用旧基线比会把"测试源变了"和"编译器变了"混在一起 - 于是先用 **HEAD 的编译器 + 工作区的新测试源**在容器里生成 41 个文件的快照作为对照基线, 再用新编译器生成快照跑 `docker-snapshot-diff`(raw)与 `docker-snapshot-ndiff`(归一化), **两者均为空**. 另在宿主机做独立交叉验证: HEAD 构建的二进制与工作区构建的二进制对 39 个 `test/*.c`(atomic/tls 需 Linux 系统头, 本机跳过)与匿名成员样例 `/tmp/anon2.c` 输出的 .s 逐字节相同. `docker-test` 退出码 0(40 个测试可执行文件 stage1 + stage2 自举各一遍, 含新增 17 条断言; driver.sh passed; 诊断锁定 stage1/stage2 各 "43 cases byte-exact"), `docker-test-thirdparty THIRDPARTY=tinycc` 退出码 0. 最后用新编译器 `make docker-snapshot` 重置 raw 基线并复跑 `docker-snapshot-diff` 为空, 确认基线可复现.
+- 环境注记: 本会话 `make docker-image` 无法联网(docker build 拉 `ubuntu:22.04` 清单时 auth.docker.io 连接被重置), 但本地已有 `chibicc:amd64` 镜像. 用 `make -o docker-image <target>` 把该前置目标标记为不重做, 其余目标照常, 四个 docker 闸门全部照跑. 网络恢复后无需任何改动.
+- 偏差说明: 三项, 前两项同源于"被丢弃的表达式不再受成员检查".
+  1. **未选中的 `_Generic` 分支**: `struct S{int a;}; int main(){ return _Generic(1, int: 0, double: ((struct S*)0)->b); }` 原报 "no such member"(泛型选择边解析边在 `ctrl` 上定类型, 落选分支的节点被丢弃, 从未标注), 现在静默通过. 真实编译器(clang/gcc)会对落选分支做类型检查, 所以这是向"更 lax"偏离 - R2.2 把 `_Generic` 改成忠实节点后所有 association 表达式都进遍历, 该检查自然恢复, 偏差只存在于 R2.1~R2.2 之间.
+  2. **多余初始化元素**: `int x[1] = {0, ((struct S*)0)->b};` 的第二元素被 `skip_excess_element` 跳过(chibicc 对"initializer 元素过多"本就无诊断), 其成员检查现在不再触发. 与 1. 同源: 检查跟着标注走, 不标注就不检查. 归入 R1.2 偏差 4 同一类(诊断时机/诊断存在性随遍历现场移动), 单错误合法输入完全不变(43 个锁定用例全绿).
+  3. 实现形态调整(非行为): `is_arrow` 换成 `arrow_tok` - 计划文本写"ND_MEMBER 只带成员名 token 与 is_arrow(字段已有)", 但四类检查里三类必须锚在 `->` token 上(纪律 4 要求锚点原样传递), 布尔字段不够用, 故直接存 token; "是否箭头"由它是否为 NULL 给出.

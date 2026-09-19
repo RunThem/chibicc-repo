@@ -312,9 +312,13 @@ struct Node {
   // Block or statement expression
   Node *body;
 
-  // Struct member access
+  // Struct member access. The parser leaves it unbound: an unresolved
+  // ND_MEMBER carries the member name in `tok`, and sema's add_type
+  // looks the name up. `arrow_tok` is the `->` token of a pointer
+  // access and NULL for a plain `.`; it is the anchor of the checks on
+  // the operand, which is why the token itself is kept.
   Member *member;
-  bool is_arrow; // member access via `->`; sema re-inserts the deref
+  Token *arrow_tok;
 
   // Function call
   Type *func_ty;
@@ -497,6 +501,11 @@ void finalize_globals(void);
 // The type of an array dimension: a fixed-length array for a constant
 // dimension, a VLA otherwise.
 Type *array_dimension_type(Type *base, Node *expr);
+
+// Looks up a member of a struct or union type by the name spelled by
+// `tok`, descending into anonymous members. Returns NULL if the type
+// has no such member.
+Member *get_struct_member(Type *ty, Token *tok);
 
 // Member placement for aggregates: the parser builds the member list
 // and calls these once it is complete.

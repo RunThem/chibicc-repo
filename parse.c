@@ -51,7 +51,6 @@ static Node *shift(Token **rest, Token *tok);
 static Node *add(Token **rest, Token *tok);
 static Node *mul(Token **rest, Token *tok);
 static Node *cast(Token **rest, Token *tok);
-static Member *get_struct_member(Type *ty, Token *tok);
 static Type *struct_decl(Token **rest, Token *tok);
 static Type *union_decl(Token **rest, Token *tok);
 static Node *postfix(Token **rest, Token *tok);
@@ -1917,25 +1916,6 @@ static Type *union_decl(Token **rest, Token *tok) {
   return ty;
 }
 
-// Find a struct member by name.
-static Member *get_struct_member(Type *ty, Token *tok) {
-  for (Member *mem = ty->members; mem; mem = mem->next) {
-    // Anonymous struct member
-    if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) &&
-        !mem->name) {
-      if (get_struct_member(mem->ty, tok))
-        return mem;
-      continue;
-    }
-
-    // Regular struct member
-    if (mem->name->len == tok->len &&
-        !strncmp(mem->name->loc, tok->loc, tok->len))
-      return mem;
-  }
-  return NULL;
-}
-
 // Create a node representing a struct member access, such as foo.bar
 // where foo is a struct and bar is a member name.
 //
@@ -1948,44 +1928,15 @@ static Member *get_struct_member(Type *ty, Token *tok) {
 // member namespace. Therefore, in the above example, you can access
 // member "a" of the anonymous struct as "x.a".
 //
-// This function takes care of anonymous structs.
-// `arrow` is the `->` token if this access is through a pointer, and
-// NULL for a plain `.` access. The dereference itself is not built
-// here: the outermost ND_MEMBER carries is_arrow and add_type
-// re-inserts the dereference.
+// Which member a name denotes is not a syntax question, so the node is
+// left unbound: it carries the member name token and, for `x->y`, the
+// `->` token in `arrow`. sema's add_type finds the member (flattening
+// the anonymous ones in between), checks the operand and re-inserts the
+// dereference.
 static Node *struct_ref(Node *node, Token *tok, Token *arrow) {
-  add_type(node);
-
-  Type *ty = node->ty;
-  if (arrow) {
-    // `x->y` is `(*x).y`. These checks reproduce the errors the
-    // dereference node used to produce, anchored at the arrow.
-    if (ty->kind != TY_PTR || !ty->base)
-      error_tok(arrow, "invalid pointer dereference");
-    if (ty->base->kind == TY_VOID)
-      error_tok(arrow, "dereferencing a void pointer");
-    if (ty->base->kind != TY_STRUCT && ty->base->kind != TY_UNION)
-      error_tok(arrow, "not a struct nor a union");
-    ty = ty->base;
-  } else if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) {
-    error_tok(node->tok, "not a struct nor a union");
-  }
-
-  bool is_arrow = arrow != NULL;
-
-  for (;;) {
-    Member *mem = get_struct_member(ty, tok);
-    if (!mem)
-      error_tok(tok, "no such member");
-    node = new_unary(ND_MEMBER, node, tok);
-    node->member = mem;
-    node->is_arrow = is_arrow;
-    is_arrow = false;
-    if (mem->name)
-      break;
-    ty = mem->ty;
-  }
-  return node;
+  Node *mem = new_unary(ND_MEMBER, node, tok);
+  mem->arrow_tok = arrow;
+  return mem;
 }
 
 // postfix = "(" type-name ")" "{" initializer-list "}"

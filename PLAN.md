@@ -39,7 +39,7 @@
 
 前置说明: R2.6 的"拆构造现场标注"要能落地, 前提是 parse 侧所有消费类型/常量/名字的决策点先行两段式化 - 即 R2.1-R2.5; 每步独立可绿(构造现场标注暂留, 被改造的决策点改为事后补齐), 最后 R2.6 一次性拆除.
 
-- [ ] **R2.1 成员访问两段式**: parse 的 `.`/`->` 不再查表, ND_MEMBER 只带成员名 token 与 is_arrow(字段已有); sema 的 ND_MEMBER case 解析成员链(含匿名成员展平), 三类校验("invalid pointer dereference"/"void pointer"/"not a struct nor a union")与 "no such member" 随迁, 锚定成员名 token, 并补插 DEREF. 拆分线判定表 C 的 struct_ref 5 处清空.
+- [x] **R2.1 成员访问两段式**: parse 的 `.`/`->` 不再查表, ND_MEMBER 只带成员名 token 与 is_arrow(字段已有); sema 的 ND_MEMBER case 解析成员链(含匿名成员展平), 三类校验("invalid pointer dereference"/"void pointer"/"not a struct nor a union")与 "no such member" 随迁, 锚定成员名 token, 并补插 DEREF. 拆分线判定表 C 的 struct_ref 5 处清空.
 - [ ] **R2.2 泛型选择与 builtin 折叠忠实化**: `_Generic` 改发忠实节点(controlling 表达式 + assoc 列表, 新增 NodeKind 或复用载体), 选择逻辑移 sema(判定表 D 第 3 处清); `__builtin_types_compatible_p`/`__builtin_reg_class` 的折叠移 sema(清拆分线 1.9 返工点). parse 侧对应的 add_type 消费点消失.
 - [ ] **R2.3 常量求值出 parse(第一批)**: 数组维度与 VLA 分类, case 的 begin/end(含 "empty case range" 检查), `aligned`/`_Alignas` 值, `typeof(expr)` 全部改记表达式节点由 sema 求值/判定后回填 - 表示载体: Type 加维度/typeof 表达式字段, VarAttr/ND_CASE 加表达式字段(命名实施时定); `array_dimension_type` oracle 消失; "variable-sized object may not be initialized" 移 ND_DECL 降级. 拆分线判定表 D 第 1/2 处清空. 位域宽度同类, 但因布局时序归 R2.5.
 - [ ] **R2.4 初始化器忠实化(最重步)**: designator(数组下标常量求值 + 成员名解析), brace elision, 定位与越界检查全部移 sema; Initializer 改为忠实 brace 记录(元素序列 + designator 表达式记录), sema 在降级时定位铺开. 拆分线判定表 C 的初始化器 6 处清空; parse 侧初始化器常量求值消失. 本步同时消除 parse 对结构 size 的初始化器消费, 为 R2.5 铺路.

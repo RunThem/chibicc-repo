@@ -1165,6 +1165,78 @@ static void usual_arith_conv(Node **lhs, Node **rhs) {
   *rhs = new_cast(*rhs, ty);
 }
 
+// Find a struct member by name, descending into anonymous members.
+Member *get_struct_member(Type *ty, Token *tok) {
+  for (Member *mem = ty->members; mem; mem = mem->next) {
+    // Anonymous struct member
+    if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) &&
+        !mem->name) {
+      if (get_struct_member(mem->ty, tok))
+        return mem;
+      continue;
+    }
+
+    // Regular struct member
+    if (mem->name->len == tok->len &&
+        !strncmp(mem->name->loc, tok->loc, tok->len))
+      return mem;
+  }
+  return NULL;
+}
+
+// Binds a member access the parser left unbound: the checks on the
+// operand, the lookup of the name, and the dereference implied by `->`.
+// An anonymous member does not name a field of the type the access is
+// written against, so each one on the path becomes an ND_MEMBER node of
+// its own between the operand and the named member.
+//
+// `node` is rewritten in place because its parent points at it.
+static void resolve_member(Node *node) {
+  Node *operand = node->lhs;
+  Type *ty = operand->ty;
+  Token *arrow = node->arrow_tok;
+
+  // `x->y` is `(*x).y`; these are the checks the dereference would
+  // make, anchored at the arrow.
+  if (arrow) {
+    if (ty->kind != TY_PTR || !ty->base)
+      error_tok(arrow, "invalid pointer dereference");
+    if (ty->base->kind == TY_VOID)
+      error_tok(arrow, "dereferencing a void pointer");
+    if (ty->base->kind != TY_STRUCT && ty->base->kind != TY_UNION)
+      error_tok(arrow, "not a struct nor a union");
+    ty = ty->base;
+  } else if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) {
+    error_tok(operand->tok, "not a struct nor a union");
+  }
+
+  Node *cur = operand;
+  for (;;) {
+    Member *mem = get_struct_member(ty, node->tok);
+    if (!mem)
+      error_tok(node->tok, "no such member");
+
+    Node *link = new_unary(ND_MEMBER, cur, node->tok);
+    link->member = mem;
+    if (arrow) {
+      // The dereference belongs to the innermost link.
+      link->lhs = new_unary(ND_DEREF, cur, node->tok);
+      add_type(link->lhs);
+      arrow = NULL;
+    }
+    link->ty = mem->ty;
+    cur = link;
+
+    if (mem->name)
+      break;
+    ty = mem->ty;
+  }
+
+  node->lhs = cur->lhs;
+  node->member = cur->member;
+  node->arrow_tok = NULL;
+}
+
 void add_type(Node *node) {
   if (!node || node->ty)
     return;
@@ -1369,12 +1441,11 @@ void add_type(Node *node) {
     node->ty = node->rhs->ty;
     return;
   case ND_MEMBER:
-    // Re-insert the dereference implied by `->` (`x->y` is (*x).y).
-    if (node->is_arrow) {
-      node->lhs = new_unary(ND_DEREF, node->lhs, node->tok);
-      node->is_arrow = false;
-      add_type(node->lhs);
-    }
+    // Bind the member name the parser left unresolved. Nodes that sema
+    // builds itself (compound assignment, initializer designators)
+    // carry their member already.
+    if (!node->member)
+      resolve_member(node);
     node->ty = node->member->ty;
     return;
   case ND_ADDR: {
