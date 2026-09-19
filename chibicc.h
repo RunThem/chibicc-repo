@@ -304,7 +304,8 @@ struct Node {
   Node *init;
   Node *inc;
 
-  // "break" and "continue" labels
+  // "break" and "continue" labels, allocated by sema's analyze pass
+  // when it descends into the loop or the switch.
   char *brk_label;
   char *cont_label;
 
@@ -326,7 +327,8 @@ struct Node {
   char *unique_label;
   Node *goto_next;
 
-  // Switch
+  // Switch. sema's analyze pass links the case labels of a body into
+  // the switch that encloses them.
   Node *case_next;
   Node *default_case;
 
@@ -348,6 +350,7 @@ struct Node {
   // Case
   long begin;
   long end;
+  bool is_default; // `default:` rather than `case <expr>:`
 
   // "asm" string literal
   char *asm_str;
@@ -481,10 +484,14 @@ Obj *declare_static_local(Token *tok, char *name, Type *ty);
 // the call site.
 void lower_funcall(Node *node, Token *tok);
 
-// Matches gotos with labels (called once per parsed function) and
-// finishes the translated unit (liveness of "static inline" functions,
-// redundant tentative definitions).
-void resolve_labels(Node *gotos, Node *labels);
+// Binds the control flow of a function body: sema allocates the labels
+// of loops and switches, points break/continue/case/goto at them, and
+// reports the ones that have no enclosing target. Called once per
+// function definition, after the body is complete.
+void analyze(Node *body);
+
+// Finishes the translated unit: liveness of "static inline" functions,
+// redundant tentative definitions.
 void finalize_globals(void);
 
 // The type of an array dimension: a fixed-length array for a constant

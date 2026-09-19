@@ -227,10 +227,19 @@ Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
   return fn;
 }
 
+// The state of the control-flow descent (analyze): the loop a
+// break/continue binds to, the switch a case label belongs to, and the
+// gotos and labels of the function descended so far.
+static char *brk_label;
+static char *cont_label;
+static Node *current_switch;
+static Node *gotos;
+static Node *labels;
+
 // Sets the unique label of every goto in a function to that of the
 // matching label. Gotos may refer to a label that appears later, so
-// this runs once the whole function has been parsed.
-void resolve_labels(Node *gotos, Node *labels) {
+// this runs once the whole body has been descended.
+static void resolve_labels(void) {
   for (Node *x = gotos; x; x = x->goto_next) {
     for (Node *y = labels; y; y = y->goto_next) {
       if (!strcmp(x->label, y->label)) {
@@ -242,6 +251,130 @@ void resolve_labels(Node *gotos, Node *labels) {
     if (x->unique_label == NULL)
       error_tok(x->tok->next, "use of undeclared label");
   }
+}
+
+static void analyze_node(Node *node);
+
+static void analyze_chain(Node *node) {
+  for (Node *n = node; n; n = n->next)
+    analyze_node(n);
+}
+
+// Descends every subtree a node owns, statements and expressions alike:
+// a break can sit in a statement expression, which is an expression
+// node holding a statement chain.
+static void analyze_children(Node *node) {
+  analyze_node(node->lhs);
+  analyze_node(node->rhs);
+  analyze_node(node->cond);
+  analyze_node(node->then);
+  analyze_node(node->els);
+  analyze_node(node->init);
+  analyze_node(node->inc);
+  analyze_chain(node->body);
+  analyze_chain(node->args);
+  analyze_node(node->cas_addr);
+  analyze_node(node->cas_old);
+  analyze_node(node->cas_new);
+}
+
+// The descent is pre-order: a loop or a switch owns its labels before
+// its body is visited, which is what binds a break in that body to the
+// innermost enclosing one.
+static void analyze_node(Node *node) {
+  if (!node)
+    return;
+
+  switch (node->kind) {
+  case ND_WHILE:
+  case ND_DO:
+  case ND_FOR: {
+    // A loop sema built itself (the compare-and-swap retry loop of an
+    // atomic compound assignment) arrives with its labels allocated.
+    if (!node->brk_label)
+      node->brk_label = new_unique_name();
+    if (!node->cont_label)
+      node->cont_label = new_unique_name();
+
+    char *brk = brk_label;
+    char *cont = cont_label;
+    brk_label = node->brk_label;
+    cont_label = node->cont_label;
+    analyze_children(node);
+    brk_label = brk;
+    cont_label = cont;
+
+    // Lower the faithful `while` to the ND_FOR shape codegen
+    // understands: no init/inc, so cont_label jumps to the loop top.
+    if (node->kind == ND_WHILE)
+      node->kind = ND_FOR;
+    return;
+  }
+  case ND_SWITCH: {
+    if (!node->brk_label)
+      node->brk_label = new_unique_name();
+
+    // A switch is a break target but not a continue target, so the
+    // continue label of an enclosing loop stays in force in the body.
+    Node *sw = current_switch;
+    char *brk = brk_label;
+    current_switch = node;
+    brk_label = node->brk_label;
+    analyze_children(node);
+    current_switch = sw;
+    brk_label = brk;
+    return;
+  }
+  case ND_CASE:
+    if (!current_switch)
+      error_tok(node->tok, node->is_default ? "stray default" : "stray case");
+
+    node->label = new_unique_name();
+    analyze_node(node->lhs);
+
+    // Linked after the body: a case label may sit inside the statement
+    // of an earlier one (`case 0: while (..) { .. case 1: .. }`), and
+    // the chain is prepended, so this order is what puts the outer case
+    // ahead of the buried one in codegen's comparison chain.
+    if (node->is_default) {
+      current_switch->default_case = node;
+    } else {
+      node->case_next = current_switch->case_next;
+      current_switch->case_next = node;
+    }
+    return;
+  case ND_BREAK:
+    if (!brk_label)
+      error_tok(node->tok, "stray break");
+    node->unique_label = brk_label;
+    node->kind = ND_GOTO;
+    return;
+  case ND_CONTINUE:
+    if (!cont_label)
+      error_tok(node->tok, "stray continue");
+    node->unique_label = cont_label;
+    node->kind = ND_GOTO;
+    return;
+  case ND_GOTO:
+    node->goto_next = gotos;
+    gotos = node;
+    return;
+  case ND_LABEL:
+    node->unique_label = new_unique_name();
+    node->goto_next = labels;
+    labels = node;
+    analyze_node(node->lhs);
+    return;
+  default:
+    analyze_children(node);
+    return;
+  }
+}
+
+void analyze(Node *body) {
+  analyze_chain(body);
+  resolve_labels();
+  gotos = labels = NULL;
 }
 
 static void mark_live(Obj *var) {
@@ -1288,6 +1421,13 @@ void add_type(Node *node) {
     error_tok(node->tok, "statement expression returning void is not supported");
     return;
   case ND_LABEL_VAL:
+    // [GNU] `&&lbl` is matched with the labels of the function by
+    // analyze. It is collected here rather than there because such an
+    // expression can live outside the statement tree - a block-scope
+    // static initializer holds one, and only the evaluator reaches it.
+    // The type annotation makes this run exactly once per node.
+    node->goto_next = gotos;
+    gotos = node;
     node->ty = pointer_to(ty_void);
     return;
   case ND_CAS:
@@ -1305,17 +1445,6 @@ void add_type(Node *node) {
     if (node->lhs->ty->kind != TY_PTR)
       error_tok(node->cas_addr->tok, "pointer expected");
     node->ty = node->lhs->ty->base;
-    return;
-  case ND_WHILE:
-    // Lower the faithful `while` back to the ND_FOR shape codegen
-    // understands: no init/inc, so cont_label jumps to the loop top.
-    node->kind = ND_FOR;
-    return;
-  case ND_BREAK:
-  case ND_CONTINUE:
-    // Restore the parse-time rewrite to a jump to the enclosing
-    // loop's label (or the switch's, for break).
-    node->kind = ND_GOTO;
     return;
   case ND_DECL:
     // Lower a declaration. A VLA becomes `x = alloca(<size>)` (the

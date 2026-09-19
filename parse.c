@@ -21,18 +21,6 @@
 // Points to the function object the parser is currently parsing.
 static Obj *current_fn;
 
-// Lists of all goto statements and labels in the curent function.
-static Node *gotos;
-static Node *labels;
-
-// Current "goto" and "continue" jump targets.
-static char *brk_label;
-static char *cont_label;
-
-// Points to a node representing a switch if we are parsing
-// a switch statement. Otherwise, NULL.
-static Node *current_switch;
-
 static Obj *builtin_alloca;
 
 static bool is_typename(Token *tok);
@@ -1226,24 +1214,11 @@ static Node *stmt(Token **rest, Token *tok) {
     tok = skip(tok->next, "(");
     node->cond = expr(&tok, tok);
     tok = skip(tok, ")");
-
-    Node *sw = current_switch;
-    current_switch = node;
-
-    char *brk = brk_label;
-    brk_label = node->brk_label = new_unique_name();
-
     node->then = stmt(rest, tok);
-
-    current_switch = sw;
-    brk_label = brk;
     return node;
   }
 
   if (equal(tok, "case")) {
-    if (!current_switch)
-      error_tok(tok, "stray case");
-
     Node *node = new_node(ND_CASE, tok);
     int begin = const_expr(&tok, tok->next);
     int end;
@@ -1258,24 +1233,17 @@ static Node *stmt(Token **rest, Token *tok) {
     }
 
     tok = skip(tok, ":");
-    node->label = new_unique_name();
     node->lhs = stmt(rest, tok);
     node->begin = begin;
     node->end = end;
-    node->case_next = current_switch->case_next;
-    current_switch->case_next = node;
     return node;
   }
 
   if (equal(tok, "default")) {
-    if (!current_switch)
-      error_tok(tok, "stray default");
-
     Node *node = new_node(ND_CASE, tok);
+    node->is_default = true;
     tok = skip(tok->next, ":");
-    node->label = new_unique_name();
     node->lhs = stmt(rest, tok);
-    current_switch->default_case = node;
     return node;
   }
 
@@ -1284,11 +1252,6 @@ static Node *stmt(Token **rest, Token *tok) {
     tok = skip(tok->next, "(");
 
     enter_scope();
-
-    char *brk = brk_label;
-    char *cont = cont_label;
-    brk_label = node->brk_label = new_unique_name();
-    cont_label = node->cont_label = new_unique_name();
 
     if (is_typename(tok)) {
       Type *basety = declspec(&tok, tok, NULL);
@@ -1308,45 +1271,21 @@ static Node *stmt(Token **rest, Token *tok) {
     node->then = stmt(rest, tok);
 
     leave_scope();
-    brk_label = brk;
-    cont_label = cont;
     return node;
   }
 
   if (equal(tok, "while")) {
-    // Keep `while` faithful; sema lowers it to the ND_FOR shape. The
-    // labels are still allocated here so that break/continue in the
-    // body can record their targets, and so that the anonymous-name
-    // counter keeps its original interleaving.
     Node *node = new_node(ND_WHILE, tok);
     tok = skip(tok->next, "(");
     node->cond = expr(&tok, tok);
     tok = skip(tok, ")");
-
-    char *brk = brk_label;
-    char *cont = cont_label;
-    brk_label = node->brk_label = new_unique_name();
-    cont_label = node->cont_label = new_unique_name();
-
     node->then = stmt(rest, tok);
-
-    brk_label = brk;
-    cont_label = cont;
     return node;
   }
 
   if (equal(tok, "do")) {
     Node *node = new_node(ND_DO, tok);
-
-    char *brk = brk_label;
-    char *cont = cont_label;
-    brk_label = node->brk_label = new_unique_name();
-    cont_label = node->cont_label = new_unique_name();
-
     node->then = stmt(&tok, tok->next);
-
-    brk_label = brk;
-    cont_label = cont;
 
     tok = skip(tok, "while");
     tok = skip(tok, "(");
@@ -1370,39 +1309,24 @@ static Node *stmt(Token **rest, Token *tok) {
 
     Node *node = new_node(ND_GOTO, tok);
     node->label = get_ident(tok->next);
-    node->goto_next = gotos;
-    gotos = node;
     *rest = skip(tok->next->next, ";");
     return node;
   }
 
   if (equal(tok, "break")) {
-    if (!brk_label)
-      error_tok(tok, "stray break");
-    // The binding target is recorded at parse time; sema restores the
-    // ND_GOTO rewrite.
-    Node *node = new_node(ND_BREAK, tok);
-    node->unique_label = brk_label;
     *rest = skip(tok->next, ";");
-    return node;
+    return new_node(ND_BREAK, tok);
   }
 
   if (equal(tok, "continue")) {
-    if (!cont_label)
-      error_tok(tok, "stray continue");
-    Node *node = new_node(ND_CONTINUE, tok);
-    node->unique_label = cont_label;
     *rest = skip(tok->next, ";");
-    return node;
+    return new_node(ND_CONTINUE, tok);
   }
 
   if (tok->kind == TK_IDENT && equal(tok->next, ":")) {
     Node *node = new_node(ND_LABEL, tok);
     node->label = strndup(tok->loc, tok->len);
-    node->unique_label = new_unique_name();
     node->lhs = stmt(rest, tok->next->next);
-    node->goto_next = labels;
-    labels = node;
     return node;
   }
 
@@ -1836,8 +1760,6 @@ static Node *unary(Token **rest, Token *tok) {
   if (equal(tok, "&&")) {
     Node *node = new_node(ND_LABEL_VAL, tok);
     node->label = get_ident(tok->next);
-    node->goto_next = gotos;
-    gotos = node;
     *rest = tok->next->next;
     return node;
   }
@@ -2405,17 +2327,6 @@ static Token *parse_typedef(Token *tok, Type *basety) {
   return tok;
 }
 
-// This function matches gotos or labels-as-values with labels.
-//
-// We cannot resolve gotos as we parse a function because gotos
-// can refer a label that appears later in the function.
-// So, we need to do this after we parse the entire function.
-// The two lists are the parser's; the matching itself is semantic.
-static void resolve_goto_labels(void) {
-  resolve_labels(gotos, labels);
-  gotos = labels = NULL;
-}
-
 static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   Type *ty = declarator(&tok, tok, basety);
   if (!ty->name)
@@ -2435,7 +2346,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   fn->body = compound_stmt(&tok, tok);
   fn->locals = get_locals();
   leave_scope();
-  resolve_goto_labels();
+  analyze(fn->body);
   return tok;
 }
 
