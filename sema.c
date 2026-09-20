@@ -2161,12 +2161,33 @@ static void add_type(Node *node) {
     return;
   }
 
+  // A statement expression's value is its last statement, and only an
+  // expression statement as written has one: a declaration record
+  // lowers to an expression statement in place, so the shape is
+  // captured here, before the body is lowered.
+  Node *stmt_expr_value = NULL;
+  if (node->kind == ND_STMT_EXPR) {
+    stmt_expr_value = node->body;
+    while (stmt_expr_value && stmt_expr_value->next)
+      stmt_expr_value = stmt_expr_value->next;
+    if (stmt_expr_value && stmt_expr_value->kind != ND_EXPR_STMT)
+      stmt_expr_value = NULL;
+  }
+
   add_type(node->lhs);
   add_type(node->rhs);
   add_type(node->cond);
   add_type(node->then);
   add_type(node->els);
   type_chain(&node->init);
+  // codegen's `for` has a single-statement init slot, so an init
+  // declaration that lowered to more than one statement is wrapped in a
+  // block here. The parser leaves the records as a chain.
+  if (node->init && node->init->next) {
+    Node *blk = new_node(ND_BLOCK, node->init->tok);
+    blk->body = node->init;
+    node->init = blk;
+  }
   add_type(node->inc);
   type_chain(&node->body);
 
@@ -2440,14 +2461,9 @@ static void add_type(Node *node) {
     node->ty = node->lhs->ty->base;
     return;
   case ND_STMT_EXPR:
-    if (node->body) {
-      Node *stmt = node->body;
-      while (stmt->next)
-        stmt = stmt->next;
-      if (stmt->kind == ND_EXPR_STMT) {
-        node->ty = stmt->lhs->ty;
-        return;
-      }
+    if (stmt_expr_value) {
+      node->ty = stmt_expr_value->lhs->ty;
+      return;
     }
     error_tok(node->tok, "statement expression returning void is not supported");
     return;

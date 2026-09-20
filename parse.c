@@ -210,16 +210,16 @@ static Node *chain_append(Node *cur, Node *chain) {
   return cur;
 }
 
-// Returns `specs` with `node` chained after it (or `node` if there are
-// no specs yet). Used where declaration records produced by a declspec
-// have to precede the node the declaration itself emits.
-static Node *specs_then(Node *specs, Node *node) {
+// Returns `specs` with `chain` appended after it (or `chain` if there
+// are no specs yet). Used where declaration records produced by a
+// declspec have to precede the records the declaration itself emits.
+static Node *specs_then(Node *specs, Node *chain) {
   if (!specs)
-    return node;
+    return chain;
   Node *cur = specs;
   while (cur->next)
     cur = cur->next;
-  cur->next = node;
+  cur->next = chain;
   return specs;
 }
 
@@ -712,9 +712,12 @@ static Type *typeof_specifier(Token **rest, Token *tok, Node **specs) {
 
 // declaration = declspec (declarator ("=" initializer)? ("," declarator ("=" initializer)?)*)? ";"
 //
-// Each declarator emits an ND_DECL record: the name rides on the type
-// (Type.name), the storage class and alignment in `attr`, and the
-// initializer stays a faithful record. sema declares the object when it
+// Each declarator emits an ND_DECL record anchored at the name it
+// declares: the name rides on the type (Type.name), the storage class
+// and alignment in `attr`, and the initializer stays a faithful record.
+// The records go straight into the enclosing statement chain - a
+// declaration is not a block in the source, so the block that carries
+// them is the one the source wrote. sema declares the object when it
 // resolves the record and lowers the node when it types it - including
 // the VLA-size sibling statement and the block-scope static's data
 // image, whose shapes it reproduces exactly.
@@ -745,10 +748,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       init->eq_tok = eq;
     }
 
-    // The node is anchored where the diagnostic for a rejected
-    // declaration used to point: at the token after the initializer if
-    // there is one, and at the token after the declarator otherwise.
-    Node *decl = new_node(ND_DECL, tok);
+    Node *decl = new_node(ND_DECL, name);
     decl->ty_op = ty;
     decl->name_tok = name;
     if (attr)
@@ -757,10 +757,8 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     cur = cur->next = decl;
   }
 
-  Node *node = new_node(ND_BLOCK, tok);
-  node->body = head.next;
   *rest = tok->next;
-  return node;
+  return head.next;
 }
 
 // designator = "[" conditional-expr ("]" | "..." conditional-expr "]")
@@ -1004,7 +1002,10 @@ static Node *stmt(Token **rest, Token *tok) {
       Node *specs = NULL;
       Type *basety = declspec(&tok, tok, NULL, &specs);
       // Enum records a for-init declspec defined share the init's
-      // scope, so they ride at the head of the init chain.
+      // scope, so they ride at the head of the init chain. The init is
+      // a chain of declaration records like any other declaration; sema
+      // folds it into one statement once the records are lowered,
+      // because codegen's `for` has a single-statement init slot.
       node->init = specs_then(specs, declaration(&tok, tok, basety, NULL));
     } else {
       node->init = expr_stmt(&tok, tok);
@@ -1122,7 +1123,7 @@ static Node *compound_stmt(Token **rest, Token *tok) {
         continue;
       }
 
-      cur = cur->next = declaration(&tok, tok, basety, &attr);
+      cur = chain_append(cur, declaration(&tok, tok, basety, &attr));
     } else {
       cur = cur->next = stmt(&tok, tok);
     }

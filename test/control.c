@@ -122,6 +122,14 @@ int main() {
   ASSERT(5, ({ int r = 0; switch (4) { case sizeof(int): r = 5; } r; }));
   ASSERT(8, ({ enum { A = 1, B = 4 }; int r = 0; switch (B) { case A ... A: r = 7; break; case B: r = 8; } r; }));
 
+  // A for-init declaration is a chain of records, not one statement: two
+  // declarators, a VLA (whose size computation is a sibling statement of
+  // the alloca assignment), and enum records from the init's declspec.
+  ASSERT(33, ({ int s=0; for (int i=0, j=10; i<3; i++) s += i+j; s; }));
+  ASSERT(6, ({ int n=3; int s=0; for (int v[n], i=0; i<3; i++) { v[i]=i+1; s+=v[i]; } s; }));
+  ASSERT(2, ({ int s=0; for (enum { E = 2 } i = 0; i < E; i++) s++; s; }));
+  ASSERT(9, ({ int s=0; for (enum { E = 2 } i = 0, j=5; i < E; i++) s += j-i; s; }));
+
   printf("OK\n");
   return 0;
 }

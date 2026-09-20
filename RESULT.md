@@ -33,7 +33,8 @@
 | 59b6d2a | R2.7 | 作用域表一分为二: parse 私有 typedef/tag 影子栈 + sema 私有变量/枚举栈(4.2b 共享表解体) |
 | 99c5bfe | R2.8 | `in_file_scope` oracle 删除, 复合字面量的存储类改由 resolve 上下文标志给出 |
 | 11e7757 | R2.9 | `op` 字段"已缩放"标记机制删除: new_add/new_sub 返回完整标注节点, 新增 new_arith/scale_rhs/combine |
-| (本提交) | R2.10 | 四个语义节点构造器迁 sema, locals/globals 访问器删除; parse.c 的 `Obj` 引用归零 |
+| 8c7c0af | R2.10 | 四个语义节点构造器迁 sema, locals/globals 访问器删除; parse.c 的 `Obj` 引用归零 |
+| (本提交) | R3.1 | declaration() 的合成 ND_BLOCK 取消, ND_DECL 记录直接入所在语句链; 锚点新规范 = 被声明的名字 |
 
 ## 各步详情
 
@@ -232,7 +233,7 @@
   3. **实现形态**: 计划文本写"add_type 对 ND_ADD/ND_SUB 统一处理", 实施为"new_add/new_sub 返回完整标注节点 + add_type 只做四字段拷贝" - 统一发生在**构造侧**而非标注侧, 因为只有构造函数知道 `ptr - ptr` 的内层 SUB 必须避开 conv. `combine` 是本步新引入的第三个辅助函数: 复合赋值与原子重试循环都需要"操作数已缩放"的组合语义, 而移位不过 conv / 乘除位运算过 conv 的分支差异必须与 add_type 原有分支一一对应, 抽出来才能两处共用.
   4. **`op` 字段的语义收窄已反映在 chibicc.h**: 该字段的注释原本就只描述 ND_ASSIGN 的复合赋值算符("0 means a plain `=`"), 标记机制是 1.7 在其上的私自复用, 故本步无需改 chibicc.h; 校验口径为 `grep '->op'` 的全部命中点(20 处)逐个确认都落在 ND_ASSIGN 上.
 
-### R2.10 杂项归位 (本提交)
+### R2.10 杂项归位 (8c7c0af)
 
 - 改了什么: 计划列的四项中三项已由 R2.6 落地(见偏差 1), 本步做的是搬家遗留的接口形态清扫, 外加把"parse 无名字绑定"从断言变成可机器核对的事实.
   1. **parse.c 不再定义它从不构造的节点**: `new_var_node`(ND_VAR)/`new_vla_ptr`(ND_VLA_PTR)/`new_long`/`new_ulong`(出生即带类型的 ND_NUM)四个构造器整体迁入 sema.c 并收为 static - 解析器发的是未绑定的 ND_IDENT 与 `ty = tok->ty` 的字面量, 这四个形状只由降级产生. chibicc.h 的构造器声明区相应缩为四个(new_node/new_binary/new_unary/new_num). 此后 **parse.c 中 `Obj` 的出现次数为 0**(`grep -c '\bObj\b' parse.c`), 即"表达式层无名字绑定"不再靠人工盘点, 而是一条 grep 就能核对的不变量.
@@ -250,3 +251,26 @@
   1. **计划四项中的三项已由 R2.6 达成**(同 R2.6 偏差 1 的预告, 本步实测核对而非推定): return 的隐式 cast 在 add_type 的 ND_RETURN case 读 `sema_fn->ty->return_ty`, parse 的 stmt() 只建忠实 ND_RETURN(其注释即"parser 不知道外层函数"); `current_fn` 这个 static 已不存在, sema 侧对应物 `sema_fn` 是 static; `fn->locals` 的赋值在 resolve_function 内. 本步实际动的是第 4 项("parse 的函数语义残留清零")与计划未列的构造器/访问器形态.
   2. **构造器搬家是计划外的相邻清扫**(实现形态): 计划 R2.10 的文本只列了函数语义四项, 未提 `new_var_node` 等. 判定其属于"parse 的语义残留清零"的口径内 - 一个为**已绑定名字**提供构造器的文件, 不能说它无名字绑定; 且搬走后 `Obj` 在 parse.c 归零, 给了终态验收一个可 grep 的判据. 纯搬家, 逐字节中立(39/39 identical).
   3. **`set_globals(NULL)` 保留为 `globals = NULL`**: 该重置把 `declare_builtin_functions` 刚登记的 `alloca` 移出待发射链. 实测它在可观测层面是空操作(alloca 的 `is_definition` 为假, codegen 本就跳过; `mark_live`/`scan_globals` 也不读它), 但它是既有行为, 本步只换写法不改语义, 并补注释说明顺序不是疏漏.
+
+### R3.1 声明链自然化 (本提交)
+
+- 改了什么: 声明记录自此直接挂在源码写出的那条语句链上, 合成包装块与"为保 .loc 字节而挑的锚点"两处拆分线残留一并清除.
+  1. **parse.c 的 `declaration()` 不再发外层 ND_BLOCK**: 每个 declarator 的 ND_DECL 记录直接进所在链(块体链或 for-init 链), 携带它们的块自此是源码里真实写出的那个 ND_BLOCK. compound_stmt 的调用点改 `chain_append`; for-init 的 `specs_then` 原样可用(它本就是"把一条链接到另一条链后面"). 空声明(`int;`)因此不再产生任何节点(旧为一个空 ND_BLOCK).
+  2. **ND_DECL 锚点新规范**: `tok` = 该 declarator 声明的**名字 token**(与 `name_tok` 同). 旧锚点是"有初始化器时为初始化器之后的 token, 否则为声明符之后的 token" - 拆分线 2.1 为让 .loc 行序列逐字节不变而挑的位置. 新锚点与 "variable has incomplete type" 已有的锚点一致, 也与上游 chibicc 对这两条声明诊断的锚点一致; 降级出的语句的 .loc 因此指向被声明的名字.
+  3. **sema 两处配合**:
+     - `for` 的 init 槽: codegen 的 ND_FOR 只对 `node->init` 调一次 `gen_stmt`(单语句槽, codegen 零改动红线), 故标注趟在 `type_chain(&node->init)` 之后, 若 init 链降级出多于一条语句就包一个不带 `is_scope_block` 的 ND_BLOCK. 单 declarator 也会触发(带初始化器的声明降级出 [VLA 尺寸兄弟语句, 声明语句] 两条; R3.2 消掉兄弟语句后只剩多 declarator 会触发).
+     - 语句表达式的值: ND_STMT_EXPR 的"末语句必须是表达式语句"判定改为在**降级之前**捕获末语句形状(见偏差 1).
+  4. **测试**: test/control.c +4 断言(两个 declarator 的 for-init; for-init 里的 VLA - 其尺寸计算与 alloca 赋值是两条语句; for-init declspec 里的枚举记录; 枚举记录 + 两个 declarator), 期望值先用宿主机 clang 算出(33/6/2/9); test/diagnostic.sh 的 e05/e06 期望插入符随新锚点更新, 新增 e11(语句表达式末语句是声明)锁定偏差 1 的修复, 43 -> **44** 用例.
+  规模: parse.c 2145 -> **2146**, sema.c 3130 -> **3146**, chibicc.h 696(仅注释), parse.c 的 error_tok 维持 **15**(判定表 A 全集); codegen.c 与 type.c **零改动**.
+- 为什么改: 层 3 的树是给源到源工具用的 - 源码里不存在的合成块会让打印器多出一对花括号, 也让"这条记录属于哪个块"要跨一层才看得到. 拆分线 2.1 的计划原文就要求取消该包装, 当时被 .loc 字节闸门否决(gen_stmt 对每个语句节点先打一行 .loc); R0.2 的归一化闸门把 .loc/.file 折叠后该约束消失, 本步执行原计划. 锚点同理: 那是为字节等价挑的位置, 不是声明的自然位置. R3.3 的"天然携带所在 ND_BLOCK"原则对 ND_DECL 也就此成立.
+- 测试结果: 本步为 [重组], 闸门 = 行为三闸门 + 归一化 diff 为空 + 同提交重置 raw 基线.
+  - 归一化 diff: 对照基线 = HEAD(R2.10, 8c7c0af)编译器 + **本提交的新测试源**在容器内生成的 41 文件快照(混合基线, 否则 control.c 新增断言会被误判为差异), `make docker-snapshot-ndiff` **退出码 0, "snapshot ndiff: empty"**.
+  - raw diff: 非空(32 文件 / 803 行变化), 逐行核对**全部**为 `.loc`/`.file` 行(非 .loc/.file 的变化行 = 0) - 即指令流零变化, 强于 [重组] 步的口径要求. 成因就是包装块与锚点: 每条声明少一行 .loc(合成块不再发射), 其余 .loc 的行号随锚点移动. 本提交内 `make docker-snapshot` 重置 raw 基线, 复跑 `docker-snapshot-diff` 为空.
+  - 宿主机分类 A/B(参考 = 8c7c0af 二进制, 同一份新测试源, 带 SNAPSHOT_DATEFLAGS 吃掉时钟伪影): 39 个 `test/*.c`(atomic/tls 需 Linux 系统头本机跳过) = **9 identical + 30 normalized-match + 0 structural**, 且那 30 个的 raw 差异也全为 .loc/.file(非 .loc 行 0).
+  - 手写边界探针: 15 个形状(语句表达式内的声明/块域 static/嵌套语句表达式/`_Atomic` 复合赋值(sema 自建语句表达式)/多 declarator for-init/VLA for-init/空声明 `int;`/空语句/switch 体内声明/嵌套块)对参考编译器 **0 行非 .loc 差异**, 归一化后逐字节相同; 6 个语句表达式错误形状(末语句为声明/为 static 声明/为空块/为 `;`/为空/为嵌套空块)的 stderr **逐字节相同**.
+  - `docker-test` 退出码 0(41 个测试可执行文件 stage1 + stage2 自举各一遍, 含 control.c 新增 4 条断言; driver.sh passed; 诊断锁定 stage1/stage2 各 "44 cases byte-exact"), `docker-test-thirdparty THIRDPARTY=tinycc` 退出码 0(tcc 自身编译 + tests2 全套).
+- 偏差说明: 四项.
+  1. **中途缺陷 + 捕获路径(留档, 同 R2.5/R2.6 的教训)**: 语句表达式以声明结尾时(`int f(void){ return ({ int x = 1; }); }`)首版**接受**了该输入并生成非法汇编(语句表达式的类型取自降级后的声明语句, 驱动把 `.local .L..3` 之类写进 .s, as 报 "unknown directive"); 旧版与宿主机 clang 都拒绝("statement expression returning void is not supported"). 成因: 该判定读"末语句是不是 ND_EXPR_STMT", 而 ND_DECL 是**就地**改写成 ND_EXPR_STMT 的 - 旧树里声明被合成块包着, 末语句是 ND_BLOCK 故判定为假, 正确性是包装的副产品, 包装一撤就暴露. 修复: 判定改为在降级前捕获末语句形状(捕获到的不是表达式语句即报错). **41 文件语料 / ndiff / raw diff / 宿主机 A/B 全都没抓到**(语料里没有"语句表达式以声明结尾"这种非法形状, 三道闸门都只跑合法输入), 是手写边界探针抓到的; 已补 e11 锁定, 并验证非空转(撤掉修复该输入即被接受).
+  2. **诊断锚点变化(PLAN R3.1 明确授权"按新规范自定义并记录", 锁定测试同步更新)**: e05 `void x;` 与 e06 `void x = 1;` 的插入符由 `;` 移到 `x`. e07(块域 static, 锚 `=`, 拆分线以来从未移动)与 e08(incomplete type, 锚名字)逐字节不变. 文案全部不变, 只有插入符位置变. 另: 块域 `static void x;`(无初始化器, 无用例)的锚点同样由 `;` 变为名字 - 它走 resolve 侧的 `decl_init ? eq_tok : node->tok`.
+  3. **PLAN 文本的实施口径**: "declaration() 恢复外层 ND_BLOCK 包装" 实施为"取消 declaration() 自己发的合成 ND_BLOCK, 记录改由**外层**(源码写出的)块携带". 依据: 拆分线 2.1 的计划原文是"外层 ND_BLOCK 包装取消", 其偏差记录写的正是"未执行", 本步"反悔"该偏差即执行原计划; R3.3 的"天然携带所在 ND_BLOCK"是同一原则; 且按字面"保留包装"理解, 本步只剩锚点一项, 与步名"声明链自然化"和 R3 组标题"语句链整形"不符.
+  4. **for-init 的合成块从 parse 移到 sema**(实现形态): codegen 的 `for` 只有单语句 init 槽, 而 codegen 零改动是红线, 因此 init 链降级出多条语句时必须有一层包装. 选择由 sema 在标注趟包(层 4 的"为 codegen 服务的降级"), 而不是让 parse 继续发: 忠实层里 `for (int i = 0, j = 1; ...)` 的 init 就是一条记录链, 与块体内的声明同形. 该包装不带 `is_scope_block`, 作用域仍由 ND_FOR 的 resolve case 给出, 语义不变.

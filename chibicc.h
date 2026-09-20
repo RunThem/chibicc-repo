@@ -363,9 +363,9 @@ struct Node {
   Node *body;
 
   // ND_BLOCK: true for a compound-statement block, which is a lexical
-  // scope; the wrapper a declaration emits and the empty statement are
-  // ND_BLOCK nodes without one. sema's resolve pass derives its scope
-  // stack from this flag.
+  // scope; the empty statement and the block sema folds a `for`
+  // init-declaration chain into are ND_BLOCK nodes without one. sema's
+  // resolve pass derives its scope stack from this flag.
   bool is_scope_block;
 
   // Struct member access. The parser leaves it unbound: an unresolved
