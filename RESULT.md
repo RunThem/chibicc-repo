@@ -31,7 +31,8 @@
 | 5f07540 | R2.5 | 位域宽度记表达式, 布局动作转 sema 私有(反悔 4.2a), 收尾触发落在定义完成点 |
 | 516c4a0 | R2.6 | 拆全部构造现场调用, sema 改 resolve + 标注/降级两趟独立遍历, parse.c 达层 3 形态 |
 | 59b6d2a | R2.7 | 作用域表一分为二: parse 私有 typedef/tag 影子栈 + sema 私有变量/枚举栈(4.2b 共享表解体) |
-| (本提交) | R2.8 | `in_file_scope` oracle 删除, 复合字面量的存储类改由 resolve 上下文标志给出 |
+| 99c5bfe | R2.8 | `in_file_scope` oracle 删除, 复合字面量的存储类改由 resolve 上下文标志给出 |
+| (本提交) | R2.9 | `op` 字段"已缩放"标记机制删除: new_add/new_sub 返回完整标注节点, 新增 new_arith/scale_rhs/combine |
 
 ## 各步详情
 
@@ -199,7 +200,7 @@
   2. **登记侧函数一并收编**: 计划只列了六个查询/驱动函数, `add_typedef`/`add_declared_name` 是它们的写入侧, 同样只被 parse 调用, 故一并转为 parse 私有. 此后 chibicc.h 的 parse/sema 接口只剩 `parse`/`sema`/`const_expr`/`conditional`/`get_ident` 与六个节点构造器.
   3. **"sema 的作用域由 resolve 遍历自管"在 R2.6 已成立**: enter_scope/leave_scope 的 sema 侧调用点自 R2.6 起全在 resolve_node/resolve_function 内, 本步改变的是这些调用落到哪张表上, 不是调用结构. 另: `in_file_scope()` 读的 `scope->next == NULL` 自此是 sema 自己栈的深度(而非共享栈), 语义不变; 该 oracle 的拆除是 R2.8 的内容.
 
-### R2.8 隐藏变量创建归 sema (本提交)
+### R2.8 隐藏变量创建归 sema (99c5bfe)
 
 - 改了什么: `in_file_scope()` 删除 - 复合字面量的存储类判定不再从"作用域栈有多深"倒推, 改由 resolve 遍历自己维护的显式上下文标志 `resolving_body` 给出: `resolve_function` 在解析函数体前 save/置位, 出来后恢复(嵌套函数定义从体内进入, 故必须 save 而非清零), `resolve_node` 的 ND_COMPOUND_LITERAL case 据此选 `new_lvar`(体内, 自动存储期)或 `new_anon_gvar`(文件域, 静态存储期). test/complit.c +5 断言: 文件域复合字面量分别位于一个函数定义**之前**与**之后**(`int *before = (int[]){1,2}; int mid(void){...} int *after = (int[]){3,4};`), 加上 mid 体内的一处块域复合字面量, 期望值宿主机 clang 验证. 规模: sema.c 3095 -> **3102**, parse.c/chibicc.h/codegen.c/type.c **零改动**.
 - 为什么改: `scope->next == NULL` 是拆分线 4.2b 留给 parse 的三个 oracle 之一, 它成立的前提是"作用域栈由 parse 驱动, 深度即词法位置" - R2.7 把栈拆开后这个前提在字面上已经失效(读的是 sema 自己的栈), 只是恰好还给出正确答案. 复合字面量的存储期是 C 语义(块内自动, 文件域静态), 应当由 sema 的遍历上下文直接陈述, 而不是从栈深度反推. 至此 4.2b 的三个 oracle 只剩 typedef/tag 分类一项, 而那一项是阶段 3 明确永久保留的.
@@ -209,3 +210,23 @@
   1. **R2.6 已吸收本步主体**(同 R2.6 偏差 1 的预告): 计划要求的"复合字面量的域判定与 new_lvar/new_anon_gvar 移 ND_COMPOUND_LITERAL case"与"隐藏变量创建归 sema", 在 R2.6 落地两趟遍历时已经完成 - 复合字面量的隐藏变量在 `resolve_node` 的 ND_COMPOUND_LITERAL case 创建, 字符串字面量匿名全局在 ND_STRING case(pass1), `__func__`/`__FUNCTION__`/形参/va_area/alloca_bottom 在 begin_function, 全部临时变量与 ret_buffer 在 pass2 的各降级点. 本步实测核对: `parse.o` 不引用 `new_lvar`/`new_gvar`/`new_anon_gvar`/`new_string_literal` 中任何一个(nm 口径, 见 R2.7 测试结果), 拆分线 2.3 记的"变量创建仍在 parse"偏差就此**完全清算**.
   2. **块域 static 的匿名全局创建留在 pass1, 不移 pass2**(计划文本未达成, 结构性原因): 计划写"改由 ND_DECL 降级路径完成". 实测该移动不可行 - pass1 的 `bind_ident` 要为同一块内后续引用绑定名字, `int f(void){ static int x = 1; return x; }` 里 `return x;` 的 x 在 pass1 就得有 Obj, 否则报 "undefined variable". 若改为"pass1 建一个不在任何链上的占位 Obj, pass2 再补匿名名并挂进 globals", 则 globals 的插入序从 resolve 序变成标注序(数据段顺序随之变), 且占位 Obj 必须避开 locals 链以免被 assign_lvar_offsets 分配栈偏移 - 更多机械, 零可观测收益. 现状即"创建 + 名字登记在 pass1, 数据段序列化(`gvar_init_data`)在 pass2 的降级路径", 拆分线 3.4a 记的偏差实质是"创建发生在 parse", 这一点已由 R2.6 清算; "创建发生在降级趟"的字面要求判定为不采纳.
   3. **实现形态**: `resolving_body` 是 resolve 遍历的上下文标志而非参数 - 与 analyze 的 `brk_label`/`cont_label`/`current_switch`(R1.2)同一处理方式, 上下文成为该遍的私有状态而不是 static 全局的隐式契约. 库化阶段(路线图 5)的 context 对象化会把它与那几个一并收进去, 本线按纪律 5 不做 context 化.
+
+### R2.9 op 字段双职解除 (本提交)
+
+- 改了什么: 本步是 [重组] 步 - "已缩放"标记机制整体删除, `Node.op` 自此起只承担 ND_ASSIGN 的复合赋值算符一职(层 3 的忠实信息).
+  1. **新增三个辅助函数**: `new_arith(kind, lhs, rhs, tok)` - 施加 usual arithmetic conversions 并**返回完整标注的节点**, 于是 add_type 顶部的早退守卫(`node->ty` 非空)天然承担了"不要重复处理"的记账, 不再需要一个标志字段; `scale_rhs(Type *ptr_ty, rhs, tok)` - 加法算符在指针上的缩放(定长 = 元素尺寸常量 `new_long`, VLA = 运行时尺寸变量 `vla_size`); `combine(op, lhs, rhs, tok)` - "操作数已缩放"的二元组合器, 加法算符走 new_arith, 其余交给 add_type(乘除模与位运算过 conv, 移位不过, 与原先 add_type 的分支逐一对应).
+  2. **new_add/new_sub 变为全函数**: 每条分支都返回完整标注的节点. `ptr - num`/`VLA - num` 因此也走 conv(原先直接 `node->ty = lhs->ty` 跳过 conv), 这正是拆分线 1.7 记录的字节级不对称的来源; `ptr - ptr` 的内层 SUB 仍显式标 `ty_long` 且不过 conv(过 conv 会被 get_common_type 当指针处理, 结果类型就错了), 外层 DIV 经 new_arith.
+  3. **三处标记写入点与一处读取点删除**: `compound_op` 收缩为"取 new_add/new_sub settled 的右操作数 + combine"(不再 `expr->op = node->op`); `to_assign` 的原子分支重试循环体改用 `combine`; `new_inc_dec` 去掉 `sub->op = ND_ADD`; add_type 的 ND_SUBSCRIPT 去掉 `add->op = ND_ADD`; add_type 的 ND_ADD/ND_SUB case 去掉 `if (node->op)` 分支, 28 行降为 12 行的四字段拷贝.
+  规模: sema.c 3102 -> **3112**; parse.c / chibicc.h / codegen.c / type.c **零改动**(标记机制完全是 sema 内部的: codegen 从不读 `op`, parse 只在 ND_ASSIGN 上写它).
+- 为什么改: `op` 字段原本兼任两职 - ND_ASSIGN 上它是"这是哪个复合赋值算符"(源码事实, 层 3 要保留), ND_ADD/ND_SUB 上它是"这个节点已被缩放过, add_type 不要再缩一次"(降级过程的内部记账). 后者是拆分线 1.7 为字节等价刻意保留的机制, 其记录写明"旧代码存在一个字节级不对称: 二进制 p-n(经 new_sub, 预标注)不走 conv, 而复合 p-=n(to_assign 里 new_binary 的新鲜节点)走 conv 并插入 no-op CAST - 必须分别复现", 并把"若接受快照里这类 no-op cast 差异, 该标记机制可简化"留作开放点. 本线已把闸门放宽到归一化 diff, 该开放点就此关闭: 统一后 `+`/`-` 只有一条产生路径, add_type 不再需要知道一个 ADD 是解析器写的还是 sema 自己重建的, 1.7 记录里"共修了三处缺标记/错标记"这类缺陷的可能性也随之消失.
+- 测试结果: 本步为 [重组], 闸门 = 行为三闸门 + **归一化** diff 为空 + 同提交重置 raw 基线.
+  - 归一化 diff: `make docker-snapshot-ndiff` **退出码 0, "snapshot ndiff: empty"**.
+  - raw diff: **非空(14 文件 / 132 行变化), 逐行核对全部为 `.loc`/`.file` 行(非 .loc 变化行 = 0, 新增 132 / 删除 0)**. 成因明确: `gen_expr` 对**每个**表达式节点先打一行 `.loc`(codegen.c:693), 而统一化给 `ptr - num` 新增了 `cast(ptr)`/`cast(乘积)` 两个 no-op cast 节点, `cast()` 查表得 `cast_table[U64][U64]`/`cast_table[I64][U64]` = NULL 故不产指令 - 即**指令流零变化, 只多调试行号**. 受影响文件: alloca/arith/atomic/bitfield/constexpr/control/function/pointer/stdhdr/struct/tls/typedef/varargs/vla. 本提交内 `make docker-snapshot` 重置 raw 基线, 复跑 `docker-snapshot-diff` 为空.
+  - 宿主机分类 A/B(参考 = R2.8 99c5bfe 二进制; 逐文件把差异归类为 identical / .loc-only / structural): 39 个 `test/*.c`(atomic/tls 需 Linux 系统头本机跳过) = **27 identical + 12 .loc-only + 0 structural**. 另对 4269 行的指针算术压力文件归类为 **.loc-only(+30/-0), 0 处删除, 0 处结构性差异** - 覆盖 `p+n`/`n+p`/`p-n`/`p-q`/`a[i]`/多维数组/指针到数组(`pa+=2`, `pa[1][2]`)/`p+=n`/`p-=n`/四种自增自减/struct 指针与成员复合赋值(`sp->a += 5`, `sp->b <<= 1`)/char* 与字符串字面量/VLA 的全部同形状(`*(vp+3)`, `vp+=2`, `vp-=1`, `vla[n-1]`, 二维 VLA)/`_Atomic int` 的 `+=`/`-=`/`++`/`--`/函数指针数组下标/常量初始化器里的指针算术(`&arr[6]-2`, `arr+5-1`, `&sarr[0]+2`).
+  - 非加法复合赋值的专项核对(`c <<= 2; l >>= 1; i *= 3; i |= 4; d += 1.5; c += 1;`): 四条非加法语句**逐字节不变**, 两条加法语句各多一行 `.loc`(右操作数现在多一层同类型 cast), 指令流不变 - 确认 `combine` 对移位"不过 conv"的分支与原先一致.
+  - `docker-test` 退出码 0(41 个测试可执行文件 stage1 + stage2 自举各一遍, 含 atomic.c 的三线程 600 万次原子复合赋值与自增, 诊断锁定 stage1/stage2 各 "43 cases byte-exact"), `docker-test-thirdparty THIRDPARTY=tinycc` 退出码 0.
+- 偏差说明: 四项, 前两项是统一化顺带修掉的潜在缺陷.
+  1. **`sizeof(vla - n)` 由运行时字节数改为常量 8**(修复, 与 clang 一致): 原 new_sub 的 `ptr - num`/`VLA - num` 分支把结果类型写成 `lhs->ty`, 对 VLA 设计符即 TY_VLA, 于是 ND_SIZEOF 命中 `ty->kind == TY_VLA` 走 `vla_size_expr` 取运行时尺寸; 统一走 conv 后结果类型是 `get_common_type` 给出的 `pointer_to(elem)` = TY_PTR, sizeof 折成常量 8. 探针(`int n=5; int vla[n]; long a = sizeof(vla-1);`): 旧 `lea -8(%rbp),%rax; mov (%rax),%rax`(运行时 = 20), 新 `mov $8,%rax`; 同一探针里 `sizeof(vla+1)` 旧新都是 8(ADD 分支本来就过 conv), 即本步同时消除了 ADD 与 SUB 之间的这条不一致. 宿主机 clang 对两者都给 8(并警告 `-Wsizeof-array-decay`). **未加语料回归断言**: 该断言会让归一化 diff 非空(这是真实的指令变化, 归一化器五条规则都不吃), 与本线 [重组] 步"归一化 diff 为空"的闸门口径冲突; 处理方式同 R2.3 偏差 1(彼处亦为产物形状变化且"测试集无此写法故 raw/归一化 diff 均空"). 若接受 R2.9 的归一化 diff 非空, 可补进 test/vla.c.
+  2. **`_Atomic(T*)` 的复合赋值不再二次缩放**(修复): 原 to_assign 原子分支的重试循环体是未标注的 `new_binary(op, old, val)`, 落到 add_type 的 ND_ADD **原始**路径又走一次 new_add → 对指针再乘一次元素尺寸. 探针(`_Atomic(int*) ap; void bump(int n){ ap += n; }`): 旧版 `bump` 内出现 **2 处 `imul`**(先把 n*4 存入 val, 循环体内再 *4, 实际步进 n*16), 新版 **1 处**. 改用 `combine` 后循环体直接按算术组合 old 与 val(val 已是缩放后的字节量), 对整型原子(语料覆盖的形状)产物逐字节不变. 该形状 clang 本身拒绝(`invalid operands to binary expression ('_Atomic(int *)' and 'int')`), 语料与 tcc 均无 `_Atomic` 复合赋值(tcc 全树只在 libtcc.c:1848 的注释里出现该词), 故两道 diff 闸门不受影响. 同类: `val` 临时变量的类型从"未转换的右操作数类型"变为"conv 后的公共类型"(如 `_Atomic long l; l += 1;` 的 val 槽由 4 字节变 8 字节), 语义不变, 语料无此写法.
+  3. **实现形态**: 计划文本写"add_type 对 ND_ADD/ND_SUB 统一处理", 实施为"new_add/new_sub 返回完整标注节点 + add_type 只做四字段拷贝" - 统一发生在**构造侧**而非标注侧, 因为只有构造函数知道 `ptr - ptr` 的内层 SUB 必须避开 conv. `combine` 是本步新引入的第三个辅助函数: 复合赋值与原子重试循环都需要"操作数已缩放"的组合语义, 而移位不过 conv / 乘除位运算过 conv 的分支差异必须与 add_type 原有分支一一对应, 抽出来才能两处共用.
+  4. **`op` 字段的语义收窄已反映在 chibicc.h**: 该字段的注释原本就只描述 ND_ASSIGN 的复合赋值算符("0 means a plain `=`"), 标记机制是 1.7 在其上的私自复用, 故本步无需改 chibicc.h; 校验口径为 `grep '->op'` 的全部命中点(20 处)逐个确认都落在 ND_ASSIGN 上.

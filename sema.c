@@ -32,6 +32,7 @@ static bool is_const_expr(Node *node);
 static void layout_struct(Type *ty);
 static void layout_union(Type *ty);
 static void add_type(Node *node);
+static void usual_arith_conv(Node **lhs, Node **rhs);
 static void type_chain(Node **head);
 static void analyze(Node *body);
 static void analyze_function(Obj *fn);
@@ -835,6 +836,32 @@ static Node *new_alloca(Node *sz) {
   return node;
 }
 
+// Builds a binary arithmetic node out of operands a lowering has
+// already settled on: the usual arithmetic conversions are applied and
+// the node comes back fully typed, so add_type has nothing left to do
+// with it. This is what makes new_add/new_sub total - every `+`/`-` in
+// the tree, whether the parser wrote it or sema rebuilt it from a
+// compound assignment or a subscript, is scaled and converted exactly
+// once, and no node needs a flag saying which of the two it had.
+static Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
+  add_type(lhs);
+  add_type(rhs);
+  usual_arith_conv(&lhs, &rhs);
+
+  Node *node = new_binary(kind, lhs, rhs, tok);
+  node->ty = lhs->ty;
+  return node;
+}
+
+// The scaled operand of an additive operator on a pointer: `p + n`
+// advances by sizeof(*p) * n rather than by n, and when the pointee is
+// a VLA, by its runtime size rather than a compile-time one.
+static Node *scale_rhs(Type *ptr_ty, Node *rhs, Token *tok) {
+  if (ptr_ty->base->kind == TY_VLA)
+    return new_binary(ND_MUL, rhs, new_var_node(ptr_ty->base->vla_size, tok), tok);
+  return new_binary(ND_MUL, rhs, new_long(ptr_ty->base->size, tok), tok);
+}
+
 // In C, `+` operator is overloaded to perform the pointer arithmetic.
 // If p is a pointer, p+n adds not n but sizeof(*p)*n to the value of p,
 // so that p+n points to the location n elements (not bytes) ahead of p.
@@ -846,7 +873,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
 
   // num + num
   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
-    return new_binary(ND_ADD, lhs, rhs, tok);
+    return new_arith(ND_ADD, lhs, rhs, tok);
 
   if (lhs->ty->base && rhs->ty->base)
     error_tok(tok, "invalid operands");
@@ -858,15 +885,8 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
     rhs = tmp;
   }
 
-  // VLA + num
-  if (lhs->ty->base->kind == TY_VLA) {
-    rhs = new_binary(ND_MUL, rhs, new_var_node(lhs->ty->base->vla_size, tok), tok);
-    return new_binary(ND_ADD, lhs, rhs, tok);
-  }
-
-  // ptr + num
-  rhs = new_binary(ND_MUL, rhs, new_long(lhs->ty->base->size, tok), tok);
-  return new_binary(ND_ADD, lhs, rhs, tok);
+  // ptr + num; a pointer to a VLA scales by its runtime size
+  return new_arith(ND_ADD, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
 }
 
 // Like `+`, `-` is overloaded for the pointer type.
@@ -876,54 +896,59 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
 
   // num - num
   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
-    return new_binary(ND_SUB, lhs, rhs, tok);
+    return new_arith(ND_SUB, lhs, rhs, tok);
 
-  // VLA + num
-  if (lhs->ty->base->kind == TY_VLA) {
-    rhs = new_binary(ND_MUL, rhs, new_var_node(lhs->ty->base->vla_size, tok), tok);
-    add_type(rhs);
-    Node *node = new_binary(ND_SUB, lhs, rhs, tok);
-    node->ty = lhs->ty;
-    return node;
-  }
+  // pointer to a VLA - num
+  if (lhs->ty->base->kind == TY_VLA)
+    return new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
 
   // ptr - num
-  if (lhs->ty->base && is_integer(rhs->ty)) {
-    rhs = new_binary(ND_MUL, rhs, new_long(lhs->ty->base->size, tok), tok);
-    add_type(rhs);
-    Node *node = new_binary(ND_SUB, lhs, rhs, tok);
-    node->ty = lhs->ty;
-    return node;
-  }
+  if (lhs->ty->base && is_integer(rhs->ty))
+    return new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
 
-  // ptr - ptr, which returns how many elements are between the two.
+  // ptr - ptr, which returns how many elements are between the two. The
+  // difference itself is an element count, so it is typed long and left
+  // alone; only the division that follows it is converted.
   if (lhs->ty->base && rhs->ty->base) {
     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
     node->ty = ty_long;
-    return new_binary(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
+    return new_arith(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
   }
 
   error_tok(tok, "invalid operands");
 }
 
+// Builds the `lhs op rhs` combination a compound assignment or an
+// atomic retry loop needs, given an operand whose pointer scaling has
+// already been applied. An additive operator goes through new_arith,
+// which is the shape `+`/`-` produce; the others are handed to add_type,
+// which converts the multiplicative and bitwise ones and leaves the
+// shifts alone.
+static Node *combine(NodeKind op, Node *lhs, Node *rhs, Token *tok) {
+  if (op == ND_ADD || op == ND_SUB)
+    return new_arith(op, lhs, rhs, tok);
+
+  Node *node = new_binary(op, lhs, rhs, tok);
+  add_type(node);
+  return node;
+}
+
 // Build the `lhs op rhs` operand expression for a compound assignment
-// driven by node->op. The raw expression is emitted here; add_type
-// applies the pointer scaling and the usual arithmetic conversions.
+// driven by node->op.
 static Node *compound_op(Node *node, Node *lhs, Token *tok) {
-  // `+=`/`-=` are routed through new_add/new_sub so that pointer
-  // arithmetic is scaled exactly as for plain `+`/`-`; the rebuilt
-  // node carries a non-zero `op` marking it as already scaled.
-  Node *expr;
+  Node *rhs = node->rhs;
+
+  // `+=`/`-=` are routed through new_add/new_sub so that the operand
+  // checks run and the pointer arithmetic is scaled exactly as for
+  // plain `+`/`-`; the operand they settle on is the one the rebuilt
+  // expression combines with `lhs`.
   if (node->op == ND_ADD || node->op == ND_SUB) {
     Node *scaled = node->op == ND_ADD ? new_add(node->lhs, node->rhs, tok)
                                       : new_sub(node->lhs, node->rhs, tok);
-    add_type(scaled->rhs);
-    expr = new_binary(node->op, lhs, scaled->rhs, tok);
-  } else {
-    expr = new_binary(node->op, lhs, node->rhs, tok);
+    rhs = scaled->rhs;
   }
-  expr->op = node->op;
-  return expr;
+
+  return combine(node->op, lhs, rhs, tok);
 }
 
 // Convert op= operators to expressions containing an assignment.
@@ -973,21 +998,22 @@ static Node *to_assign(Node *node) {
   //   new;
   // })
   if (node->lhs->ty->is_atomic) {
-    // The `val` temporary has the type of the (scaled) operand, so
-    // the scaling is computed eagerly here.
-    Node *operand;
-    if (node->op == ND_ADD || node->op == ND_SUB)
-      operand = node->op == ND_ADD ? new_add(node->lhs, node->rhs, tok)
-                                   : new_sub(node->lhs, node->rhs, tok);
-    else
-      operand = new_binary(node->op, node->lhs, node->rhs, tok);
-    add_type(operand->rhs);
+    // The `val` temporary holds the operand as `op` would have it, so
+    // for `+=`/`-=` the scaling is computed eagerly here - through
+    // new_add/new_sub, which is also what runs the operand checks.
+    Node *rhs = node->rhs;
+    if (node->op == ND_ADD || node->op == ND_SUB) {
+      Node *operand = node->op == ND_ADD ? new_add(node->lhs, node->rhs, tok)
+                                         : new_sub(node->lhs, node->rhs, tok);
+      rhs = operand->rhs;
+    }
+    add_type(rhs);
 
     Node head = {};
     Node *cur = &head;
 
     Obj *addr = new_lvar("", pointer_to(node->lhs->ty));
-    Obj *val = new_lvar("", operand->rhs->ty);
+    Obj *val = new_lvar("", rhs->ty);
     Obj *old = new_lvar("", node->lhs->ty);
     Obj *new = new_lvar("", node->lhs->ty);
 
@@ -999,7 +1025,7 @@ static Node *to_assign(Node *node) {
 
     cur = cur->next =
       new_unary(ND_EXPR_STMT,
-                new_binary(ND_ASSIGN, new_var_node(val, tok), operand->rhs, tok),
+                new_binary(ND_ASSIGN, new_var_node(val, tok), rhs, tok),
                 tok);
 
     cur = cur->next =
@@ -1012,10 +1038,13 @@ static Node *to_assign(Node *node) {
     loop->brk_label = new_unique_name();
     loop->cont_label = new_unique_name();
 
+    // `val` already holds the operand as `op` would have it - scaled
+    // for an additive operator on a pointer - so the retry loop
+    // combines it with the old value without scaling again.
     Node *body = new_binary(ND_ASSIGN,
                             new_var_node(new, tok),
-                            new_binary(node->op, new_var_node(old, tok),
-                                       new_var_node(val, tok), tok),
+                            combine(node->op, new_var_node(old, tok),
+                                    new_var_node(val, tok), tok),
                             tok);
 
     loop->then = new_node(ND_BLOCK, tok);
@@ -1056,7 +1085,6 @@ static Node *new_inc_dec(Node *node, Token *tok, int addend) {
   Node *expr = new_binary(ND_ASSIGN, node, new_num(addend, tok), tok);
   expr->op = ND_ADD;
   Node *sub = new_add(to_assign(expr), new_num(-addend, tok), tok);
-  sub->op = ND_ADD; // already scaled; keep add_type from scaling again
   return new_cast(sub, node->ty);
 }
 
@@ -2134,33 +2162,17 @@ static void add_type(Node *node) {
     return;
   case ND_ADD:
   case ND_SUB: {
-    // A non-zero `op` marks a node that a compound assignment or
-    // subscript lowering already scaled; it only needs the usual
-    // arithmetic conversions, which its fresh untyped predecessor
-    // also went through.
-    if (node->op) {
-      add_type(node->lhs);
-      add_type(node->rhs);
-      usual_arith_conv(&node->lhs, &node->rhs);
-      node->ty = node->lhs->ty;
-      return;
-    }
-    // A raw `+`/`-` from the parser: apply the pointer scaling (and
-    // the `num + ptr` canonicalization) here, then type the result.
-    // The result is an untyped ADD (numeric or pointer), a pre-typed
-    // SUB (`ptr - num`), or a DIV (`ptr - ptr`).
+    // A raw `+`/`-` from the parser: new_add/new_sub apply the pointer
+    // scaling, the `num + ptr` canonicalization and the usual arithmetic
+    // conversions, and come back fully typed - a plain ADD/SUB, a
+    // pre-typed SUB for `ptr - num`, or a DIV for `ptr - ptr`. The
+    // result replaces this node.
     Node *result = node->kind == ND_ADD ? new_add(node->lhs, node->rhs, node->tok)
                                         : new_sub(node->lhs, node->rhs, node->tok);
     node->kind = result->kind;
     node->lhs = result->lhs;
     node->rhs = result->rhs;
     node->ty = result->ty;
-    if (node->ty)
-      return;
-    add_type(node->lhs);
-    add_type(node->rhs);
-    usual_arith_conv(&node->lhs, &node->rhs);
-    node->ty = node->lhs->ty;
     return;
   }
   case ND_MUL:
@@ -2385,10 +2397,8 @@ static void add_type(Node *node) {
   case ND_SUBSCRIPT: {
     // Downgrade `x[y]` to `*(x+y)` (with pointer scaling), the only
     // subscript form codegen understands. The node is rewritten in
-    // place. The ADD is already scaled, so it is marked to keep
-    // add_type from scaling it again.
+    // place; new_add returns the scaled sum already typed.
     Node *add = new_add(node->lhs, node->rhs, node->tok);
-    add->op = ND_ADD;
     node->kind = ND_DEREF;
     node->lhs = add;
     add_type(node);

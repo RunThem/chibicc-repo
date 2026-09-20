@@ -47,7 +47,7 @@
 - [x] **R2.6 拆构造现场标注 + resolve 前序遍历(原子收官)**: 删除 parse 全部构造现场 add_type/降级调用(拆分线 1.4/1.8/2.3/4.2c 时序原则作废); sema 改两遍 - 前序 **resolve 遍历**(作用域栈由树结构给出: ND_BLOCK push/pop, ND_FOR 的 init 声明独立成域)绑定 ND_IDENT, 求值并登记枚举常量(add_enum_const 的调用时机从解析现场迁入), 解析求值 R2.3/R2.5 挂到 Type/Member/ND_CASE 的 stash 表达式, 完成布局与类型补全; 再走标注 + 降级遍历. 拆分线 3.2b 原设计("树结构给出作用域 + 遍历绑定")就此落地. "undefined variable" 等报告时机后移, 锚定 ND_IDENT.tok, 文案不变.
 - [x] **R2.7 typedef/tag 影子作用域**: parse 自持仅 typedef/tag 的作用域栈(C 词法 hack oracle, 永久保留), `find_typedef`/`find_tag`/`find_current_tag`/`push_tag_scope`/`enter_scope`/`leave_scope` 变 parse 私有; sema 的变量/枚举作用域由 resolve 遍历自管, 拆分线 4.2b 的"共享表"解体.
 - [x] **R2.8 隐藏变量创建归 sema**: 复合字面量的域判定与 new_lvar/new_anon_gvar 移 ND_COMPOUND_LITERAL case(`in_file_scope` oracle 消失, 域由 resolve 上下文给出); 块域 static 的匿名全局创建改由 ND_DECL 降级路径完成(清算拆分线 2.3/3.4a 偏差).
-- [ ] **R2.9 op 字段双职解除**: add_type 对 ND_ADD/ND_SUB 统一处理, "已缩放"标记机制删除, p-n 与 p-=n 的 conv/no-op cast 序列统一化(关闭拆分线 1.7 开放点).
+- [x] **R2.9 op 字段双职解除**: add_type 对 ND_ADD/ND_SUB 统一处理, "已缩放"标记机制删除, p-n 与 p-=n 的 conv/no-op cast 序列统一化(关闭拆分线 1.7 开放点).
 - [ ] **R2.10 杂项归位**: return 隐式 cast 移 sema 的 ND_RETURN case(消除 parse 对 current_fn->ty 的最后依赖); current_fn static, `fn->locals = get_locals()`, builtin_alloca 归属收拾; parse 的函数语义残留清零.
 
 ## R3 语句链整形 [重组, 依赖 R0.2 的 .loc 折叠]
