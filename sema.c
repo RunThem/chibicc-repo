@@ -90,11 +90,9 @@ static Node *new_cast(Node *expr, Type *ty) {
   return node;
 }
 
-// Scope for local variables, global variables, typedefs
-// or enum constants
+// An object or an enum constant the resolve pass has declared.
 typedef struct {
   Obj *var;
-  Type *type_def;
   Type *enum_ty;
   int enum_val;
 } VarScope;
@@ -103,28 +101,21 @@ typedef struct {
 typedef struct Scope Scope;
 struct Scope {
   Scope *next;
-
-  // C has two block scopes; one is for variables/typedefs and
-  // the other is for struct/union/enum tags.
   HashMap vars;
-  HashMap tags;
 };
 
-// The scope table serves two masters with disjoint needs: the parser
-// drives the block structure while parsing and asks the two grammar
-// questions the table answers - whether an identifier is a typedef
-// name, and what a tag refers to. The resolve pass derives the same
-// block structure from the tree and reads/writes the variable and
-// enum-constant entries.
+// The resolve pass derives this scope stack from the tree structure, so
+// it lives entirely within sema; the parser keeps a separate stack of
+// its own for the typedef/tag classification the C grammar needs.
 static Scope *scope = &(Scope){};
 
-void enter_scope(void) {
+static void enter_scope(void) {
   Scope *sc = calloc(1, sizeof(Scope));
   sc->next = scope;
   scope = sc;
 }
 
-void leave_scope(void) {
+static void leave_scope(void) {
   scope = scope->next;
 }
 
@@ -144,59 +135,10 @@ static VarScope *find_var(Token *tok) {
   return NULL;
 }
 
-// Find a struct/union/enum tag by name, in any enclosing scope.
-Type *find_tag(Token *tok) {
-  for (Scope *sc = scope; sc; sc = sc->next) {
-    Type *ty = hashmap_get2(&sc->tags, tok->loc, tok->len);
-    if (ty)
-      return ty;
-  }
-  return NULL;
-}
-
-// Find a tag declared in the current scope only; used when a tag is
-// (re)defined, so that a previous forward declaration in the same scope
-// keeps its identity.
-Type *find_current_tag(Token *tok) {
-  return hashmap_get2(&scope->tags, tok->loc, tok->len);
-}
-
-void push_tag_scope(Token *tok, Type *ty) {
-  hashmap_put2(&scope->tags, tok->loc, tok->len, ty);
-}
-
 static VarScope *push_scope(char *name) {
   VarScope *sc = calloc(1, sizeof(VarScope));
   hashmap_put(&scope->vars, name, sc);
   return sc;
-}
-
-// The parser's typedef-name oracle: the C grammar needs to know whether
-// an identifier names a type before it can parse a declaration.
-Type *find_typedef(Token *tok) {
-  if (tok->kind == TK_IDENT) {
-    VarScope *sc = find_var(tok);
-    if (sc)
-      return sc->type_def;
-  }
-  return NULL;
-}
-
-// Declares a typedef name in the current scope. The name must be
-// visible immediately: the parser needs the typedef oracle to classify
-// the very next identifier. The ND_TYPEDEF record also enters the chain
-// for the resolve pass to complete its type at that position.
-void add_typedef(Node *node) {
-  push_scope(get_ident(node->tok))->type_def = node->ty;
-}
-
-// Records a name a declarator just declared (a variable, function or
-// parameter). The entry carries no object; it shadows a typedef of the
-// same name from the point of declaration on, which is the
-// classification the parser's oracle needs before sema's resolve pass
-// declares the object for real.
-void add_declared_name(Token *tok) {
-  push_scope(get_ident(tok));
 }
 
 // A block-scope declaration may not declare a void object. `tok` is the

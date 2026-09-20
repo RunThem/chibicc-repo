@@ -102,6 +102,11 @@ int main() {
   ASSERT(1, ({ struct {int a;} x={1}, y={2}; (1?x:y).a; }));
   ASSERT(2, ({ struct {int a;} x={1}, y={2}; (0?x:y).a; }));
 
+  // Tag lookup walks the enclosing scopes, and a tag defined in an
+  // inner block shadows the outer one only there.
+  ASSERT(1, ({ struct S {int a;}; long r; { struct S {char b;}; struct S y; r = sizeof(y); } r; }));
+  ASSERT(8, ({ struct S2 {int a;}; long r; { struct S2 *p; r = sizeof(p); } r; }));
+
   printf("OK\n");
   return 0;
 }

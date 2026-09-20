@@ -19,6 +19,13 @@ int main() {
   ASSERT(6, fparam(5));
   ASSERT(2, ({ MyInt MyInt = 2; MyInt; }));
 
+  // The typedef/tag oracle is the parser's own scope stack: a name a
+  // declarator declares shadows a typedef of the same spelling until the
+  // block ends, and a for-init declarator shadows one for the loop.
+  ASSERT(3, ({ typedef int t; int s=0; for (int t=0; t<3; t++) s+=t; s; }));
+  ASSERT(6, ({ typedef int U; long r; { int U = 2; r = U; } U x = 4; r + x; }));
+  ASSERT(5, ({ long r; { typedef int V; V x = 5; r = x; } r; }));
+
   printf("OK\n");
   return 0;
 }

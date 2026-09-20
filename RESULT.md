@@ -29,6 +29,8 @@
 | 332f31e | R2.3 | 常量求值出 parse 第一批: 数组维度/typeof/aligned 与 _Alignas/case 值改记表达式, resolve_type 回填 |
 | 47e0040 | R2.4 | 初始化器忠实化: 忠实 brace 记录入树, 定位/越界/brace elision/灵活长度全部移 sema |
 | 5f07540 | R2.5 | 位域宽度记表达式, 布局动作转 sema 私有(反悔 4.2a), 收尾触发落在定义完成点 |
+| 516c4a0 | R2.6 | 拆全部构造现场调用, sema 改 resolve + 标注/降级两趟独立遍历, parse.c 达层 3 形态 |
+| (本提交) | R2.7 | 作用域表一分为二: parse 私有 typedef/tag 影子栈 + sema 私有变量/枚举栈(4.2b 共享表解体) |
 
 ## 各步详情
 
@@ -153,7 +155,7 @@
   2. **实施形态调整(非行为)**: 计划文本写"布局调用点从解析现场移入 sema 遍历"; 按纪律 6(R2.1-R2.5 只做两段式, R2.6 才改遍历), 本步迁移的是**布局动作** - `layout_struct/layout_union` 的直接调用消失, 改为 `resolve_type` 的 TY_STRUCT/TY_UNION case(内含位宽求值), 而触发调用留在 struct_decl/union_decl 等解析现场. R2.6 的 resolve 遍历拆掉这些现场调用时, 布局与位宽逻辑零改动. 拆分线 4.2a 的"调用点仍在解析现场且直接铺布局"就此反悔.
   3. 拆分线 4.2a 记的两项时机偏差(常量诊断时机后移、布局时点移到首用点)在收尾点定到定义完成处之后**不再存在**: 位宽非常量诊断与布局计算时机逐字节回到 R2.4 口径(裸定义/后用/指针三类探针全同).
 
-### R2.6 拆构造现场标注 + resolve 前序遍历 (本提交)
+### R2.6 拆构造现场标注 + resolve 前序遍历 (516c4a0)
 
 - 改了什么: 本步是 [重组] 步 - R2.1-R2.5 把语义动作从"解析现场算"改成"解析现场记录 + 现场调用 sema 求值", 触发点仍散落在 parse 的各构造点; R2.6 把这些**现场调用全部拆除**, sema 成为对整棵树的两趟独立遍历, parse.c 自此达到层 3 形态(无类型标注, 无名字绑定, 无降级).
   1. **parse.c 去语义化(终态)**: `declarator` 不再 `copy_type`(共享类型单例的 `name`/`name_pos` 直接写在 declspec 造出的那块记录上); `declaration()`/`global_variable()` 在读到名字后**立即**用 `add_declared_name(name)` 把名字推进作用域影子表(供文法分类 oracle 识别 `t t=1; t;` 里末尾的 `t` 是表达式), 并把该 token 存进 `decl->name_tok`(在解析初始化器**之前**捕获, 因为共享单例的 `name` 会被下一个 declarator 覆写); `function_def()` 进作用域 + 推参数名后解析函数体(镜像基线 begin_function), 同样存 `name_tok`; `enum_specifier()` 每读一个枚举常量名就 `add_declared_name`. parse.c 里 `add_type`/`resolve_type`/`gvar_initializer`/`attr_align`/`declare_function`/`new_lvar`/`new_gvar`/`push_scope` 的调用计数**全部归零**(eval 族自 R2.5 已为 0).
@@ -181,3 +183,17 @@
   6. **locals 顺序变化 → 归一化器类 4/5 + raw 基线重置**(预期字节变化): pass2 临时变量前插(splice_locals)vs 基线交织创建, 造成对齐填充与栈帧大小的字节变化(5 文件 4 行); 设计决策 = 不为字节冻结而扭曲两趟结构, 改由归一化器吸收(类 4 帧大小 / 类 5 memzero 负立即数), 并在本提交重置 raw 基线. ndiff 空证明结构等价.
   7. **诊断时机后移**(多错误输入首错优先级可能微移, 单错误不变): 名字解析/类型检查从构造现场移到 pass1/pass2 遍历, 单错误输入 43/43 逐字节同(e08 锚点改用 name_tok 仍同); 多错误输入的首错优先级可能随遍历顺序变化, 与 R1.2 偏差 4 / R2.3 偏差 2 / R2.4 偏差 5 同类.
   8. **复合赋值 / 前缀自增自降的整结构复制改写**(潜在缺陷规避): pass2 降级 `op=` 与前缀 `++/--` 时对整个 Node 做结构复制再改写, 规避了"语句表达式 body 在改写中丢失"的潜在缺陷(若只改字段, ND_STMT_EXPR 的 body 链会脱钩); 纯表达式产物逐字节不变(归一化 match).
+
+### R2.7 typedef/tag 影子作用域 (本提交)
+
+- 改了什么: 作用域表一分为二, 拆分线 4.2b 的"共享表"解体.
+  1. **parse.c 自持一个只装文法分类信息的私有作用域栈**: 新增 `ParseScope`(`names` + `tags` 两张 HashMap, C 的两个块作用域)与 `NameEntry`(只有 `Type *type_def` 一个字段). `find_typedef`/`add_typedef`/`add_declared_name`/`find_tag`/`find_current_tag`/`push_tag_scope`/`enter_scope`/`leave_scope` 八个函数连同 `scope` static 全部由 sema.c 迁入 parse.c 并收为 static, chibicc.h 对应的八行声明删除. 变量名遮蔽 typedef 的机制不变: 每个 declarator 声明的名字(变量/函数/形参/枚举常量)仍推一条 `type_def == NULL` 的空条目(R2.6 偏差 4 的 oracle 增强).
+  2. **sema.c 的表只剩名字解析产物**: `Scope` 去掉 `tags`, `VarScope` 去掉 `type_def`, `enter_scope`/`leave_scope`/`find_var`/`push_scope` 收为 static. 它的栈完全由 resolve 遍历驱动(ND_BLOCK 的 is_scope_block / ND_STMT_EXPR / ND_FOR / resolve_function 的形参层), 与 parse 的栈不再有共享的可变状态.
+  3. **测试**: test/typedef.c +3(for-init declarator 遮蔽 typedef, 块内变量遮蔽 typedef 且块外 typedef 恢复可用, 块内 typedef), test/struct.c +2(内层 tag 遮蔽外层 tag, 外层 tag 在内层经 find_tag 上溯可见), 期望值宿主机 clang 验证.
+  规模: parse.c 2066 -> **2171**(作用域栈机器 +105 行), sema.c 3153 -> **3095**, chibicc.h 715 -> **697**; parse.c 的 error_tok 维持 15(判定表 A 全集); codegen.c 与 type.c 零改动.
+- 为什么改: 共享表要求两个阶段对同一个 static 栈轮流 push/pop, 且 parse 登记的 typedef 名与 sema 登记的对象/枚举常量混在同一张 HashMap 里 - 库语境下这是"两个阶段共用可变全局状态", 与可重入性直接冲突, 也让"谁是作用域的权威"取决于当前处在哪个阶段. 拆开后 parse 的表只回答 C 文法要求的两个问题(这个名字是不是 typedef 名, 这个 tag 指向什么), 即阶段 3 明确永久保留的词法 hack oracle; sema 的表只承载名字解析结果, 由它自己的遍历结构驱动. 两侧的生命周期自此互不重叠, 也不再需要"parse 先 push, sema 后 push 到同一个栈上"这种隐式契约.
+- 测试结果: **四闸门全绿, raw 逐字节为空**(无需重置基线). 对照基线做法同 R2.1-R2.5: 用 HEAD(R2.6, 516c4a0)编译器 + 本提交的新测试源在容器内生成 41 文件快照, 新编译器下 `docker-snapshot-diff`(raw)与 `docker-snapshot-ndiff`(归一化)**均为空** - 表的拆分没有改变任何产物字节. `docker-test` 退出码 0(新增 5 条断言 stage1 + stage2 自举各一遍全过, driver.sh passed, 诊断锁定 stage1/stage2 各 "43 cases byte-exact"), `docker-test-thirdparty THIRDPARTY=tinycc` 退出码 0(tcc 自身编译 3149 ms + tests2 全套). 宿主机 A/B 旁证: 参考编译器(/tmp/cbase27, 自 516c4a0 构建)与新编译器对同一份新测试源的 39 个 `test/*.c`(atomic/tls 需 Linux 系统头, 本机跳过)输出 `.s` 与 stderr **39/39 逐字节相同**(带 SNAPSHOT_DATEFLAGS 吃掉时钟伪影). 另用 `nm` 核对层边界: `parse.o` 的未定义符号集与 `sema.o` 的导出符号集**交集为空** - sema.o 现在只导出 `sema` 与 `const_expr`(后者供 preprocess.c 的 `#if`), parse.o 的跨文件依赖只剩 type.c 的类型构造器与 tokenize.c/hashmap.c 的基础设施.
+- 偏差说明: 三项, 均为实现形态, 无行为偏差.
+  1. **一张 `names` 表同时装 typedef 名与遮蔽条目**: 计划文本写"仅 typedef/tag 的作用域栈", 实施为 typedef 名与被声明名的空条目同表 - 后者既不是 typedef 也不是 tag, 但它是 oracle 正确工作的前提(`t t=1; t;` 里末尾的 `t` 必须不再被当作类型名), 单独建一张表只会让 find_typedef 多一次查表. 表中不存在任何 `Obj *` 或枚举值, "只装文法分类信息"的实质不变.
+  2. **登记侧函数一并收编**: 计划只列了六个查询/驱动函数, `add_typedef`/`add_declared_name` 是它们的写入侧, 同样只被 parse 调用, 故一并转为 parse 私有. 此后 chibicc.h 的 parse/sema 接口只剩 `parse`/`sema`/`const_expr`/`conditional`/`get_ident` 与六个节点构造器.
+  3. **"sema 的作用域由 resolve 遍历自管"在 R2.6 已成立**: enter_scope/leave_scope 的 sema 侧调用点自 R2.6 起全在 resolve_node/resolve_function 内, 本步改变的是这些调用落到哪张表上, 不是调用结构. 另: `in_file_scope()` 读的 `scope->next == NULL` 自此是 sema 自己栈的深度(而非共享栈), 语义不变; 该 oracle 的拆除是 R2.8 的内容.

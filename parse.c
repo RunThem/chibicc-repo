@@ -26,8 +26,21 @@
 // "to-be-completed" type records the declarator layer builds (array
 // dimensions, typeof operands, alignment and bitfield-width
 // expressions), which sema resolves.
+//
+// That feedback comes from the scope stack at the top of this file,
+// which is the parser's own and holds nothing else. sema keeps a
+// separate stack for the objects and enum constants it declares.
 
 #include "chibicc.h"
+
+static Type *find_typedef(Token *tok);
+static Type *find_tag(Token *tok);
+static Type *find_current_tag(Token *tok);
+static void push_tag_scope(Token *tok, Type *ty);
+static void add_typedef(Node *node);
+static void add_declared_name(Token *tok);
+static void enter_scope(void);
+static void leave_scope(void);
 
 static bool is_typename(Token *tok);
 static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs);
@@ -121,6 +134,98 @@ char *get_ident(Token *tok) {
   if (tok->kind != TK_IDENT)
     error_tok(tok, "expected an identifier");
   return strndup(tok->loc, tok->len);
+}
+
+//
+// The parser's scope stack
+//
+// C's grammar is not context-free: whether `t * x;` declares a pointer
+// or multiplies two variables depends on whether `t` is a typedef name,
+// and `struct T` has to be resolvable to know whether a tag was seen
+// before. The parser therefore keeps its own block scope stack, and it
+// holds nothing else - no object, no enum constant, no type annotation.
+// sema derives its own scope stack from the tree when it resolves names.
+
+// An identifier the parser has seen. `type_def` is non-NULL for a
+// typedef name; a plain declared name gets an empty entry, which is how
+// a variable shadows a typedef of the same spelling from its point of
+// declaration on.
+typedef struct {
+  Type *type_def;
+} NameEntry;
+
+typedef struct ParseScope ParseScope;
+struct ParseScope {
+  ParseScope *next;
+
+  // C has two block scopes; one is for ordinary names and the other is
+  // for struct/union/enum tags.
+  HashMap names;
+  HashMap tags;
+};
+
+static ParseScope *scope = &(ParseScope){};
+
+static void enter_scope(void) {
+  ParseScope *sc = calloc(1, sizeof(ParseScope));
+  sc->next = scope;
+  scope = sc;
+}
+
+static void leave_scope(void) {
+  scope = scope->next;
+}
+
+// The parser's typedef-name oracle: the C grammar needs to know whether
+// an identifier names a type before it can parse a declaration.
+static Type *find_typedef(Token *tok) {
+  if (tok->kind != TK_IDENT)
+    return NULL;
+
+  for (ParseScope *sc = scope; sc; sc = sc->next) {
+    NameEntry *e = hashmap_get2(&sc->names, tok->loc, tok->len);
+    if (e)
+      return e->type_def;
+  }
+  return NULL;
+}
+
+// Declares a typedef name in the current scope. The name must be
+// visible immediately: the oracle has to classify the very next
+// identifier. sema completes the type when it reaches the ND_TYPEDEF
+// record this declaration also emits.
+static void add_typedef(Node *node) {
+  NameEntry *e = calloc(1, sizeof(NameEntry));
+  e->type_def = node->ty;
+  hashmap_put(&scope->names, get_ident(node->tok), e);
+}
+
+// Records a name a declarator just declared (a variable, function,
+// parameter or enum constant), so that it shadows a typedef of the same
+// spelling for the rest of the parse.
+static void add_declared_name(Token *tok) {
+  hashmap_put(&scope->names, get_ident(tok), calloc(1, sizeof(NameEntry)));
+}
+
+// Find a struct/union/enum tag by name, in any enclosing scope.
+static Type *find_tag(Token *tok) {
+  for (ParseScope *sc = scope; sc; sc = sc->next) {
+    Type *ty = hashmap_get2(&sc->tags, tok->loc, tok->len);
+    if (ty)
+      return ty;
+  }
+  return NULL;
+}
+
+// Find a tag declared in the current scope only; used when a tag is
+// (re)defined, so that a previous forward declaration in the same scope
+// keeps its identity.
+static Type *find_current_tag(Token *tok) {
+  return hashmap_get2(&scope->tags, tok->loc, tok->len);
+}
+
+static void push_tag_scope(Token *tok, Type *ty) {
+  hashmap_put2(&scope->tags, tok->loc, tok->len, ty);
 }
 
 // Appends a chain of nodes to the chain `cur` points into and returns

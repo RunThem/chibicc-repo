@@ -503,24 +503,6 @@ Obj *sema(Node *toplevel);
 int64_t const_expr(Token **rest, Token *tok);
 Node *conditional(Token **rest, Token *tok);
 
-// The parser's typedef-name oracle: the C grammar needs to know whether
-// an identifier names a type before it can parse a declaration. Sema
-// holds the table the oracle reads; the parser registers names into it
-// as it accepts typedefs.
-Type *find_typedef(Token *tok);
-void add_typedef(Node *node);
-void add_declared_name(Token *tok);
-
-// The struct/union/enum tag table. Like the typedef oracle, tag
-// lookup is a grammar question the parser asks while parsing.
-Type *find_tag(Token *tok);
-Type *find_current_tag(Token *tok);
-void push_tag_scope(Token *tok, Type *ty);
-
-// Block-structure driving for the scope tables above.
-void enter_scope(void);
-void leave_scope(void);
-
 //
 // type.c
 //
