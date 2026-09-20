@@ -31,10 +31,8 @@ static Type *typeof_specifier(Token **rest, Token *tok);
 static Type *type_suffix(Token **rest, Token *tok, Type *ty);
 static Type *declarator(Token **rest, Token *tok, Type *ty);
 static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr);
-static void array_initializer2(Token **rest, Token *tok, Initializer *init, int i);
-static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Member *mem);
-static void initializer2(Token **rest, Token *tok, Initializer *init);
-Initializer *initializer(Token **rest, Token *tok, Type *ty, Type **new_ty);
+static Initializer *init_record(Token **rest, Token *tok);
+Initializer *initializer(Token **rest, Token *tok);
 static Node *compound_stmt(Token **rest, Token *tok);
 static Node *stmt(Token **rest, Token *tok);
 static Node *expr_stmt(Token **rest, Token *tok);
@@ -123,46 +121,6 @@ Node *new_cast(Node *expr, Type *ty) {
   node->lhs = expr;
   node->ty = copy_type(ty);
   return node;
-}
-
-static Initializer *new_initializer(Type *ty, bool is_flexible) {
-  Initializer *init = calloc(1, sizeof(Initializer));
-  init->ty = ty;
-
-  if (ty->kind == TY_ARRAY) {
-    if (is_flexible && ty->size < 0) {
-      init->is_flexible = true;
-      return init;
-    }
-
-    init->children = calloc(ty->array_len, sizeof(Initializer *));
-    for (int i = 0; i < ty->array_len; i++)
-      init->children[i] = new_initializer(ty->base, false);
-    return init;
-  }
-
-  if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
-    // Count the number of struct members.
-    int len = 0;
-    for (Member *mem = ty->members; mem; mem = mem->next)
-      len++;
-
-    init->children = calloc(len, sizeof(Initializer *));
-
-    for (Member *mem = ty->members; mem; mem = mem->next) {
-      if (is_flexible && ty->is_flexible && !mem->next) {
-        Initializer *child = calloc(1, sizeof(Initializer));
-        child->ty = mem->ty;
-        child->is_flexible = true;
-        init->children[mem->idx] = child;
-      } else {
-        init->children[mem->idx] = new_initializer(mem->ty, false);
-      }
-    }
-    return init;
-  }
-
-  return init;
 }
 
 char *get_ident(Token *tok) {
@@ -560,10 +518,6 @@ static Type *typename(Token **rest, Token *tok) {
   return abstract_declarator(rest, tok, ty);
 }
 
-static bool is_end(Token *tok) {
-  return equal(tok, "}") || (equal(tok, ",") && equal(tok->next, "}"));
-}
-
 static bool consume_end(Token **rest, Token *tok) {
   if (equal(tok, "}")) {
     *rest = tok->next;
@@ -659,8 +613,9 @@ Node *new_alloca(Node *sz) {
 // declaration = declspec (declarator ("=" expr)? ("," declarator ("=" expr)?)*)? ";"
 //
 // Each declarator emits an ND_DECL node carrying the variable and its
-// parsed initializer tree; sema lowers it when typing. The VLA-size
-// statement is kept as a separate sibling (and carries the tree itself
+// faithful initializer record; sema resolves and lowers it when typing.
+// The VLA-size statement is kept as a separate sibling (and carries
+// the record itself
 // when there is no initializer) so that the lowered shape matches the
 // pre-split output byte for byte, including .loc lines.
 static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) {
@@ -716,8 +671,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
 
       Token *eq = tok;
       Token *start = tok->next;
-      Initializer *init = initializer(&tok, start, var->ty, &var->ty);
-      init->tok = start;
+      Initializer *init = initializer(&tok, start);
       init->eq_tok = eq;
 
       Node *decl = new_node(ND_DECL, tok);
@@ -738,50 +692,8 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
   return node;
 }
 
-static Token *skip_excess_element(Token *tok) {
-  if (equal(tok, "{")) {
-    tok = skip_excess_element(tok->next);
-    return skip(tok, "}");
-  }
-
-  assign(&tok, tok);
-  return tok;
-}
-
-// string-initializer = string-literal
-static void string_initializer(Token **rest, Token *tok, Initializer *init) {
-  if (init->is_flexible)
-    *init = *new_initializer(array_of(init->ty->base, tok->ty->array_len), false);
-
-  int len = MIN(init->ty->array_len, tok->ty->array_len);
-
-  switch (init->ty->base->size) {
-  case 1: {
-    char *str = tok->str;
-    for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(str[i], tok);
-    break;
-  }
-  case 2: {
-    uint16_t *str = (uint16_t *)tok->str;
-    for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(str[i], tok);
-    break;
-  }
-  case 4: {
-    uint32_t *str = (uint32_t *)tok->str;
-    for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(str[i], tok);
-    break;
-  }
-  default:
-    unreachable();
-  }
-
-  *rest = tok->next;
-}
-
-// array-designator = "[" const-expr "]"
+// designator = "[" conditional-expr ("]" | "..." conditional-expr "]")
+//            | "." ident
 //
 // C99 added the designated initializer to the language, which allows
 // programmers to move the "cursor" of an initializer to any element.
@@ -806,343 +718,103 @@ static void string_initializer(Token **rest, Token *tok, Initializer *init) {
 //   struct { int a, b, c; } x = { .c=5 };
 //
 // The above initializer sets x.c to 5.
-static void array_designator(Token **rest, Token *tok, Type *ty, int *begin, int *end) {
-  *begin = const_expr(&tok, tok->next);
-  if (*begin >= ty->array_len)
-    error_tok(tok, "array designator index exceeds array bounds");
+//
+// Designators are recorded as written: index expressions stay
+// unevaluated and member names stay unbound; sema evaluates and
+// applies them against the target type.
+static InitDesig *designators(Token **rest, Token *tok) {
+  InitDesig head = {};
+  InitDesig *cur = &head;
 
-  if (equal(tok, "...")) {
-    *end = const_expr(&tok, tok->next);
-    if (*end >= ty->array_len)
-      error_tok(tok, "array designator index exceeds array bounds");
-    if (*end < *begin)
-      error_tok(tok, "array designator range [%d, %d] is empty", *begin, *end);
-  } else {
-    *end = *begin;
-  }
-
-  *rest = skip(tok, "]");
-}
-
-// struct-designator = "." ident
-static Member *struct_designator(Token **rest, Token *tok, Type *ty) {
-  Token *start = tok;
-  tok = skip(tok, ".");
-  if (tok->kind != TK_IDENT)
-    error_tok(tok, "expected a field designator");
-
-  for (Member *mem = ty->members; mem; mem = mem->next) {
-    // Anonymous struct member
-    if (mem->ty->kind == TY_STRUCT && !mem->name) {
-      if (get_struct_member(mem->ty, tok)) {
-        *rest = start;
-        return mem;
-      }
-      continue;
-    }
-
-    // Regular struct member
-    if (mem->name->len == tok->len && !strncmp(mem->name->loc, tok->loc, tok->len)) {
-      *rest = tok->next;
-      return mem;
-    }
-  }
-
-  error_tok(tok, "struct has no such member");
-}
-
-// designation = ("[" const-expr "]" | "." ident)* "="? initializer
-static void designation(Token **rest, Token *tok, Initializer *init) {
-  if (equal(tok, "[")) {
-    if (init->ty->kind != TY_ARRAY)
-      error_tok(tok, "array index in non-array initializer");
-
-    int begin, end;
-    array_designator(&tok, tok, init->ty, &begin, &end);
-
-    Token *tok2;
-    for (int i = begin; i <= end; i++)
-      designation(&tok2, tok, init->children[i]);
-    array_initializer2(rest, tok2, init, begin + 1);
-    return;
-  }
-
-  if (equal(tok, ".") && init->ty->kind == TY_STRUCT) {
-    Member *mem = struct_designator(&tok, tok, init->ty);
-    designation(&tok, tok, init->children[mem->idx]);
-    init->expr = NULL;
-    struct_initializer2(rest, tok, init, mem->next);
-    return;
-  }
-
-  if (equal(tok, ".") && init->ty->kind == TY_UNION) {
-    Member *mem = struct_designator(&tok, tok, init->ty);
-    init->mem = mem;
-    designation(rest, tok, init->children[mem->idx]);
-    return;
-  }
-
-  if (equal(tok, "."))
-    error_tok(tok, "field name not in struct or union initializer");
-
-  if (equal(tok, "="))
-    tok = tok->next;
-  initializer2(rest, tok, init);
-}
-
-// An array length can be omitted if an array has an initializer
-// (e.g. `int x[] = {1,2,3}`). If it's omitted, count the number
-// of initializer elements.
-static int count_array_init_elements(Token *tok, Type *ty) {
-  bool first = true;
-  Initializer *dummy = new_initializer(ty->base, true);
-
-  int i = 0, max = 0;
-
-  while (!consume_end(&tok, tok)) {
-    if (!first)
-      tok = skip(tok, ",");
-    first = false;
-
+  while (1) {
     if (equal(tok, "[")) {
-      i = const_expr(&tok, tok->next);
+      InitDesig *desig = calloc(1, sizeof(InitDesig));
+      desig->tok = tok;
+      desig->begin = conditional(&tok, tok->next);
+      desig->after_begin = tok;
       if (equal(tok, "..."))
-        i = const_expr(&tok, tok->next);
+        desig->end = conditional(&tok, tok->next);
+      desig->rbracket = tok;
       tok = skip(tok, "]");
-      designation(&tok, tok, dummy);
-    } else {
-      initializer2(&tok, tok, dummy);
-    }
-
-    i++;
-    max = MAX(max, i);
-  }
-  return max;
-}
-
-// array-initializer1 = "{" initializer ("," initializer)* ","? "}"
-static void array_initializer1(Token **rest, Token *tok, Initializer *init) {
-  tok = skip(tok, "{");
-
-  if (init->is_flexible) {
-    int len = count_array_init_elements(tok, init->ty);
-    *init = *new_initializer(array_of(init->ty->base, len), false);
-  }
-
-  bool first = true;
-
-  if (init->is_flexible) {
-    int len = count_array_init_elements(tok, init->ty);
-    *init = *new_initializer(array_of(init->ty->base, len), false);
-  }
-
-  for (int i = 0; !consume_end(rest, tok); i++) {
-    if (!first)
-      tok = skip(tok, ",");
-    first = false;
-
-    if (equal(tok, "[")) {
-      int begin, end;
-      array_designator(&tok, tok, init->ty, &begin, &end);
-
-      Token *tok2;
-      for (int j = begin; j <= end; j++)
-        designation(&tok2, tok, init->children[j]);
-      tok = tok2;
-      i = end;
+      cur = cur->next = desig;
       continue;
     }
-
-    if (i < init->ty->array_len)
-      initializer2(&tok, tok, init->children[i]);
-    else
-      tok = skip_excess_element(tok);
-  }
-}
-
-// array-initializer2 = initializer ("," initializer)*
-static void array_initializer2(Token **rest, Token *tok, Initializer *init, int i) {
-  if (init->is_flexible) {
-    int len = count_array_init_elements(tok, init->ty);
-    *init = *new_initializer(array_of(init->ty->base, len), false);
-  }
-
-  for (; i < init->ty->array_len && !is_end(tok); i++) {
-    Token *start = tok;
-    if (i > 0)
-      tok = skip(tok, ",");
-
-    if (equal(tok, "[") || equal(tok, ".")) {
-      *rest = start;
-      return;
-    }
-
-    initializer2(&tok, tok, init->children[i]);
-  }
-  *rest = tok;
-}
-
-// struct-initializer1 = "{" initializer ("," initializer)* ","? "}"
-static void struct_initializer1(Token **rest, Token *tok, Initializer *init) {
-  tok = skip(tok, "{");
-
-  Member *mem = init->ty->members;
-  bool first = true;
-
-  while (!consume_end(rest, tok)) {
-    if (!first)
-      tok = skip(tok, ",");
-    first = false;
 
     if (equal(tok, ".")) {
-      mem = struct_designator(&tok, tok, init->ty);
-      designation(&tok, tok, init->children[mem->idx]);
-      mem = mem->next;
+      InitDesig *desig = calloc(1, sizeof(InitDesig));
+      desig->tok = tok;
+      tok = tok->next;
+      if (tok->kind != TK_IDENT)
+        error_tok(tok, "expected a field designator");
+      desig->name = tok;
+      tok = tok->next;
+      cur = cur->next = desig;
       continue;
     }
 
-    if (mem) {
-      initializer2(&tok, tok, init->children[mem->idx]);
-      mem = mem->next;
-    } else {
-      tok = skip_excess_element(tok);
-    }
+    break;
   }
-}
 
-// struct-initializer2 = initializer ("," initializer)*
-static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Member *mem) {
-  bool first = true;
-
-  for (; mem && !is_end(tok); mem = mem->next) {
-    Token *start = tok;
-
-    if (!first)
-      tok = skip(tok, ",");
-    first = false;
-
-    if (equal(tok, "[") || equal(tok, ".")) {
-      *rest = start;
-      return;
-    }
-
-    initializer2(&tok, tok, init->children[mem->idx]);
-  }
   *rest = tok;
+  return head.next;
 }
 
-static void union_initializer(Token **rest, Token *tok, Initializer *init) {
-  // Unlike structs, union initializers take only one initializer,
-  // and that initializes the first union member by default.
-  // You can initialize other member using a designated initializer.
-  if (equal(tok, "{") && equal(tok->next, ".")) {
-    Member *mem = struct_designator(&tok, tok->next, init->ty);
-    init->mem = mem;
-    designation(&tok, tok, init->children[mem->idx]);
-    *rest = skip(tok, "}");
-    return;
-  }
-
-  init->mem = init->ty->members;
+// initializer-record = brace-list | string-literal | assign-expression
+// brace-list = "{" item ("," item)* ","? "}"
+// item = designator* "="? initializer-record
+//
+// The record is faithful: elements keep their written shape (braced
+// sublist, string literal or expression) and no decision that needs
+// the target type is made here. Brace elision, string expansion,
+// designator application and flexible-array sizing all happen in sema.
+static Initializer *init_record(Token **rest, Token *tok) {
+  Initializer *rec = calloc(1, sizeof(Initializer));
+  rec->tok = tok;
 
   if (equal(tok, "{")) {
-    initializer2(&tok, tok->next, init->children[0]);
-    consume(&tok, tok, ",");
-    *rest = skip(tok, "}");
-  } else {
-    initializer2(rest, tok, init->children[0]);
-  }
-}
+    rec->kind = INIT_LIST;
+    tok = tok->next;
 
-// initializer = string-initializer | array-initializer
-//             | struct-initializer | union-initializer
-//             | assign
-static void initializer2(Token **rest, Token *tok, Initializer *init) {
-  if (init->ty->kind == TY_ARRAY && tok->kind == TK_STR) {
-    string_initializer(rest, tok, init);
-    return;
-  }
+    InitItem head = {};
+    InitItem *cur = &head;
+    bool first = true;
 
-  if (init->ty->kind == TY_ARRAY) {
-    if (equal(tok, "{"))
-      array_initializer1(rest, tok, init);
-    else
-      array_initializer2(rest, tok, init, 0);
-    return;
-  }
+    while (!consume_end(&tok, tok)) {
+      InitItem *item = calloc(1, sizeof(InitItem));
+      if (!first) {
+        item->comma_tok = tok;
+        tok = skip(tok, ",");
+      }
+      first = false;
 
-  if (init->ty->kind == TY_STRUCT) {
-    if (equal(tok, "{")) {
-      struct_initializer1(rest, tok, init);
-      return;
+      item->desigs = designators(&tok, tok);
+      if (item->desigs && equal(tok, "="))
+        tok = tok->next;
+      item->init = init_record(&tok, tok);
+      cur = cur->next = item;
     }
 
-    // A struct can be initialized with another struct. E.g.
-    // `struct T x = y;` where y is a variable of type `struct T`.
-    // Handle that case first.
-    Node *expr = assign(rest, tok);
-    add_type(expr);
-    if (expr->ty->kind == TY_STRUCT) {
-      init->expr = expr;
-      return;
-    }
-
-    struct_initializer2(rest, tok, init, init->ty->members);
-    return;
+    rec->items = head.next;
+    *rest = tok;
+    return rec;
   }
 
-  if (init->ty->kind == TY_UNION) {
-    union_initializer(rest, tok, init);
-    return;
+  if (tok->kind == TK_STR) {
+    rec->kind = INIT_STR;
+    rec->str_tok = tok;
+    *rest = tok->next;
+    return rec;
   }
 
-  if (equal(tok, "{")) {
-    // An initializer for a scalar variable can be surrounded by
-    // braces. E.g. `int x = {3};`. Handle that case.
-    initializer2(&tok, tok->next, init);
-    *rest = skip(tok, "}");
-    return;
-  }
-
-  init->expr = assign(rest, tok);
+  rec->kind = INIT_EXPR;
+  rec->expr = assign(rest, tok);
+  return rec;
 }
 
-static Type *copy_struct_type(Type *ty) {
-  ty = copy_type(ty);
-
-  Member head = {};
-  Member *cur = &head;
-  for (Member *mem = ty->members; mem; mem = mem->next) {
-    Member *m = calloc(1, sizeof(Member));
-    *m = *mem;
-    cur = cur->next = m;
-  }
-
-  ty->members = head.next;
-  return ty;
-}
-
-// Build the tree-shaped initializer for a variable. Also used by
-// sema.c; the ND_DECL lowering consumes the resulting tree.
-Initializer *initializer(Token **rest, Token *tok, Type *ty, Type **new_ty) {
-  Initializer *init = new_initializer(ty, true);
-  initializer2(rest, tok, init);
-
-  if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && ty->is_flexible) {
-    ty = copy_struct_type(ty);
-
-    Member *mem = ty->members;
-    while (mem->next)
-      mem = mem->next;
-    mem->ty = init->children[mem->idx]->ty;
-    ty->size += mem->ty->size;
-
-    *new_ty = ty;
-    return init;
-  }
-
-  *new_ty = init->ty;
-  return init;
+// Parse an initializer into a faithful record. sema resolves it
+// against the declared type when the carrying node is lowered.
+Initializer *initializer(Token **rest, Token *tok) {
+  return init_record(rest, tok);
 }
 
 // Returns true if a given token represents a type.
@@ -1992,8 +1664,7 @@ static Node *postfix(Token **rest, Token *tok) {
       node->var = new_lvar("", ty);
     }
 
-    node->decl_init = initializer(rest, tok, node->var->ty, &node->var->ty);
-    node->decl_init->tok = tok;
+    node->decl_init = initializer(rest, tok);
     return node;
   }
 

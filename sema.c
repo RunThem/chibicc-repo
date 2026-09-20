@@ -1008,6 +1008,530 @@ static Node *vla_size_expr(Type *ty, Token *tok) {
   return new_binary(ND_COMMA, lhs, new_var_node(ty->vla_size, tok), tok);
 }
 
+// The resolved initializer tree: what a faithful initializer record
+// (Initializer in chibicc.h) becomes once designators are evaluated,
+// member names are bound, brace elision is applied and flexible
+// arrays are sized. Built and consumed only within this file:
+// create_lvar_init walks it to build assignments and write_gvar_data
+// serializes it into .data bytes. Since initializers can be nested
+// (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), it is a tree.
+typedef struct ResolvedInit ResolvedInit;
+struct ResolvedInit {
+  Type *ty;
+  bool is_flexible;
+
+  // If it's not an aggregate type and has an initializer,
+  // `expr` has an initialization expression.
+  Node *expr;
+
+  // If it's an initializer for an aggregate type (e.g. array or struct),
+  // `children` has initializers for its children.
+  ResolvedInit **children;
+
+  // Only one member can be initialized for a union.
+  // `mem` is used to clarify which member is initialized.
+  Member *mem;
+};
+
+// Designator chain describing the position of an element within a
+// local variable initializer (e.g. `x[1].y[2]`).
+typedef struct InitDesg InitDesg;
+struct InitDesg {
+  InitDesg *next;
+  int idx;
+  Member *member;
+  Obj *var;
+};
+
+static ResolvedInit *new_resolved_init(Type *ty, bool is_flexible) {
+  ResolvedInit *init = calloc(1, sizeof(ResolvedInit));
+  init->ty = ty;
+
+  if (ty->kind == TY_ARRAY) {
+    if (is_flexible && ty->size < 0) {
+      init->is_flexible = true;
+      return init;
+    }
+
+    init->children = calloc(ty->array_len, sizeof(ResolvedInit *));
+    for (int i = 0; i < ty->array_len; i++)
+      init->children[i] = new_resolved_init(ty->base, false);
+    return init;
+  }
+
+  if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+    // Count the number of struct members.
+    int len = 0;
+    for (Member *mem = ty->members; mem; mem = mem->next)
+      len++;
+
+    init->children = calloc(len, sizeof(ResolvedInit *));
+
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+      if (is_flexible && ty->is_flexible && !mem->next) {
+        ResolvedInit *child = calloc(1, sizeof(ResolvedInit));
+        child->ty = mem->ty;
+        child->is_flexible = true;
+        init->children[mem->idx] = child;
+      } else {
+        init->children[mem->idx] = new_resolved_init(mem->ty, false);
+      }
+    }
+    return init;
+  }
+
+  return init;
+}
+
+static Type *copy_struct_type(Type *ty) {
+  ty = copy_type(ty);
+
+  Member head = {};
+  Member *cur = &head;
+  for (Member *mem = ty->members; mem; mem = mem->next) {
+    Member *m = calloc(1, sizeof(Member));
+    *m = *mem;
+    cur = cur->next = m;
+  }
+
+  ty->members = head.next;
+  return ty;
+}
+
+// Evaluate a recorded designator index expression.
+static int eval_desig_index(Node *expr) {
+  return eval(expr);
+}
+
+// Evaluate an array designator and run its bounds checks against the
+// array being designated. Anchors mirror the old parse-time checks:
+// the begin bound reports at the token following the begin expression,
+// the end bound and the empty range at `]`.
+static void eval_array_desig(InitDesig *d, Type *ty, int *begin, int *end) {
+  *begin = eval_desig_index(d->begin);
+  if (*begin >= ty->array_len)
+    error_tok(d->after_begin, "array designator index exceeds array bounds");
+
+  if (d->end) {
+    *end = eval_desig_index(d->end);
+    if (*end >= ty->array_len)
+      error_tok(d->rbracket, "array designator index exceeds array bounds");
+    if (*end < *begin)
+      error_tok(d->rbracket, "array designator range [%d, %d] is empty", *begin, *end);
+  } else {
+    *end = *begin;
+  }
+}
+
+// Find the member a `.name` designator refers to. If the name lives
+// inside an anonymous struct member, that (nameless) member is
+// returned and the caller re-applies the designator to its subtree.
+static Member *find_init_member(Type *ty, Token *name) {
+  for (Member *mem = ty->members; mem; mem = mem->next) {
+    // Anonymous struct member
+    if (mem->ty->kind == TY_STRUCT && !mem->name) {
+      if (get_struct_member(mem->ty, name))
+        return mem;
+      continue;
+    }
+
+    // Regular struct member
+    if (mem->name->len == name->len && !strncmp(mem->name->loc, name->loc, name->len))
+      return mem;
+  }
+
+  error_tok(name, "struct has no such member");
+}
+
+// Turn a recorded string literal into an expression node referencing
+// its anonymous global, which is what a string initializer for a
+// non-array target used to parse into.
+static Node *materialize_str(Initializer *rec) {
+  Node *node = new_node(ND_STRING, rec->str_tok);
+  add_type(node);
+  return node;
+}
+
+// Expand a string literal into the elements of a character array,
+// one character (of the element width) per element.
+static void resolve_string(Initializer *rec, ResolvedInit *init) {
+  Token *tok = rec->str_tok;
+  int len = MIN(init->ty->array_len, tok->ty->array_len);
+
+  switch (init->ty->base->size) {
+  case 1: {
+    char *str = tok->str;
+    for (int i = 0; i < len; i++)
+      init->children[i]->expr = new_num(str[i], tok);
+    break;
+  }
+  case 2: {
+    uint16_t *str = (uint16_t *)tok->str;
+    for (int i = 0; i < len; i++)
+      init->children[i]->expr = new_num(str[i], tok);
+    break;
+  }
+  case 4: {
+    uint32_t *str = (uint32_t *)tok->str;
+    for (int i = 0; i < len; i++)
+      init->children[i]->expr = new_num(str[i], tok);
+    break;
+  }
+  default:
+    unreachable();
+  }
+}
+
+static void resolve_value(Initializer *rec, ResolvedInit *init, InitItem **cursor);
+static void resolve_desig(ResolvedInit *init, InitDesig *d, Initializer *rec, InitItem **cursor);
+static void resolve_array1(Initializer *rec, ResolvedInit *init);
+static void resolve_array_cont(ResolvedInit *init, int i, InitItem **cursor);
+static void resolve_struct1(Initializer *rec, ResolvedInit *init);
+static void resolve_struct_cont(ResolvedInit *init, Member *mem, InitItem **cursor);
+static void resolve_struct_first(ResolvedInit *init, Member *mem, Initializer *rec, InitItem **cursor);
+static void resolve_union(Initializer *rec, ResolvedInit *init, InitItem **cursor);
+static int count_flex_list(InitItem *items, Type *ty);
+static int count_flex(Initializer *rec, InitItem **cursor, Type *ty);
+
+// Consume one braced-list item: apply its designator chain (if any)
+// and resolve its value. *cursor advances past the item and any
+// siblings the value consumes through brace elision.
+static void resolve_item(InitItem **cursor, ResolvedInit *init) {
+  InitItem *it = *cursor;
+  *cursor = it->next;
+  resolve_desig(init, it->desigs, it->init, cursor);
+}
+
+// Apply a designator chain to a resolved node, then its value. This
+// is the record-driven form of the old designation(): `[n]` moves
+// within an array, `.name` within a struct or union, and after a
+// struct member the following siblings continue with the next members.
+static void resolve_desig(ResolvedInit *init, InitDesig *d, Initializer *rec, InitItem **cursor) {
+  if (!d) {
+    resolve_value(rec, init, cursor);
+    return;
+  }
+
+  if (!d->name) {
+    if (init->ty->kind != TY_ARRAY)
+      error_tok(d->tok, "array index in non-array initializer");
+
+    int begin, end;
+    eval_array_desig(d, init->ty, &begin, &end);
+
+    for (int j = begin; j <= end; j++)
+      resolve_desig(init->children[j], d->next, rec, cursor);
+    resolve_array_cont(init, begin + 1, cursor);
+    return;
+  }
+
+  if (init->ty->kind == TY_STRUCT) {
+    Member *mem = find_init_member(init->ty, d->name);
+    if (!mem->name) {
+      // Anonymous struct member: re-apply the designator to its subtree.
+      resolve_desig(init->children[mem->idx], d, rec, cursor);
+      return;
+    }
+    resolve_desig(init->children[mem->idx], d->next, rec, cursor);
+    init->expr = NULL;
+    resolve_struct_cont(init, mem->next, cursor);
+    return;
+  }
+
+  if (init->ty->kind == TY_UNION) {
+    Member *mem = find_init_member(init->ty, d->name);
+    init->mem = mem;
+    if (!mem->name) {
+      resolve_desig(init->children[mem->idx], d, rec, cursor);
+      return;
+    }
+    resolve_desig(init->children[mem->idx], d->next, rec, cursor);
+    return;
+  }
+
+  error_tok(d->tok, "field name not in struct or union initializer");
+}
+
+// Fill array elements from sibling items (brace-elision continuation
+// or post-designator continuation), stopping at a designated item or
+// when the items run out.
+static void resolve_array_cont(ResolvedInit *init, int i, InitItem **cursor) {
+  for (; i < init->ty->array_len && *cursor && !(*cursor)->desigs; i++)
+    resolve_item(cursor, init->children[i]);
+}
+
+// Resolve a braced array initializer, designated items included.
+// Elements past the end of the array are silently dropped, as the
+// parser used to skip them.
+static void resolve_array1(Initializer *rec, ResolvedInit *init) {
+  int i = 0;
+  InitItem *cursor = rec->items;
+
+  while (cursor) {
+    InitItem *it = cursor;
+
+    if (it->desigs && !it->desigs->name) {
+      int begin, end;
+      eval_array_desig(it->desigs, init->ty, &begin, &end);
+      cursor = it->next;
+      for (int j = begin; j <= end; j++)
+        resolve_desig(init->children[j], it->desigs->next, it->init, &cursor);
+      i = end + 1;
+      continue;
+    }
+
+    if (i < init->ty->array_len) {
+      resolve_item(&cursor, init->children[i]);
+    } else {
+      cursor = it->next;
+    }
+    i++;
+  }
+}
+
+// Fill struct members from sibling items, stopping at a designated
+// item or when the items run out.
+static void resolve_struct_cont(ResolvedInit *init, Member *mem, InitItem **cursor) {
+  for (; mem && *cursor && !(*cursor)->desigs; mem = mem->next)
+    resolve_item(cursor, init->children[mem->idx]);
+}
+
+// Brace-elision entry for structs: the expression a struct was
+// "initialized" with becomes the first member's initializer and the
+// siblings continue with the following members.
+static void resolve_struct_first(ResolvedInit *init, Member *mem, Initializer *rec, InitItem **cursor) {
+  if (mem) {
+    resolve_value(rec, init->children[mem->idx], cursor);
+    mem = mem->next;
+  }
+  resolve_struct_cont(init, mem, cursor);
+}
+
+// Resolve a braced struct initializer.
+static void resolve_struct1(Initializer *rec, ResolvedInit *init) {
+  Member *mem = init->ty->members;
+  InitItem *cursor = rec->items;
+
+  while (cursor) {
+    InitItem *it = cursor;
+
+    if (it->desigs && it->desigs->name) {
+      Member *m = find_init_member(init->ty, it->desigs->name);
+      cursor = it->next;
+      if (m->name)
+        resolve_desig(init->children[m->idx], it->desigs->next, it->init, &cursor);
+      else
+        resolve_desig(init->children[m->idx], it->desigs, it->init, &cursor);
+      mem = m->next;
+      continue;
+    }
+
+    if (mem) {
+      resolve_item(&cursor, init->children[mem->idx]);
+      mem = mem->next;
+    } else {
+      cursor = it->next;
+    }
+  }
+}
+
+// Resolve a union initializer. Unlike structs, union initializers
+// take only one initializer, and that initializes the first union
+// member by default. You can initialize another member using a
+// designated initializer.
+static void resolve_union(Initializer *rec, ResolvedInit *init, InitItem **cursor) {
+  if (rec->kind == INIT_LIST) {
+    InitItem *it = rec->items;
+
+    if (it && it->desigs && it->desigs->name) {
+      Member *mem = find_init_member(init->ty, it->desigs->name);
+      init->mem = mem;
+      InitItem *next = it->next;
+      if (mem->name)
+        resolve_desig(init->children[mem->idx], it->desigs->next, it->init, &next);
+      else
+        resolve_desig(init->children[mem->idx], it->desigs, it->init, &next);
+      if (next)
+        error_tok(next->comma_tok, "expected '}'");
+      return;
+    }
+
+    init->mem = init->ty->members;
+    if (!it) {
+      // The old parser dispatched on the closing brace here; only an
+      // array first member came out of `{}` without an error.
+      if (init->ty->members->ty->kind != TY_ARRAY)
+        error_tok(rec->tok->next, "expected an expression");
+      return;
+    }
+
+    InitItem *next = it->next;
+    resolve_desig(init->children[0], it->desigs, it->init, &next);
+    if (next)
+      error_tok(next->desigs ? next->desigs->tok : next->init->tok, "expected '}'");
+    return;
+  }
+
+  init->mem = init->ty->members;
+  resolve_value(rec, init->children[0], cursor);
+}
+
+// Count the elements a flexible-array initializer will have so the
+// array type can be completed before the tree is built. Items are
+// resolved against a throwaway tree, exactly like the old parser's
+// counting pass; designator bounds are not checked here (the build
+// pass checks them against the completed length).
+static int count_flex_list(InitItem *items, Type *ty) {
+  ResolvedInit *dummy = new_resolved_init(ty->base, true);
+  int i = 0, max = 0;
+  InitItem *cursor = items;
+
+  while (cursor) {
+    InitItem *it = cursor;
+    if (it->desigs && !it->desigs->name) {
+      i = eval_desig_index(it->desigs->begin);
+      if (it->desigs->end)
+        i = eval_desig_index(it->desigs->end);
+      cursor = it->next;
+      resolve_desig(dummy, it->desigs->next, it->init, &cursor);
+    } else {
+      resolve_item(&cursor, dummy);
+    }
+    i++;
+    max = MAX(max, i);
+  }
+  return max;
+}
+
+// The brace-elision form of count_flex_list: the first value is the
+// record itself and the siblings follow it.
+static int count_flex(Initializer *rec, InitItem **cursor, Type *ty) {
+  ResolvedInit *dummy = new_resolved_init(ty->base, true);
+  int i = 0, max = 0;
+
+  resolve_value(rec, dummy, cursor);
+  i++;
+  max = MAX(max, i);
+
+  while (*cursor) {
+    InitItem *it = *cursor;
+    if (it->desigs && !it->desigs->name) {
+      i = eval_desig_index(it->desigs->begin);
+      if (it->desigs->end)
+        i = eval_desig_index(it->desigs->end);
+      *cursor = it->next;
+      resolve_desig(dummy, it->desigs->next, it->init, cursor);
+    } else {
+      resolve_item(cursor, dummy);
+    }
+    i++;
+    max = MAX(max, i);
+  }
+  return max;
+}
+
+// Resolve one initializer record against its target slot.
+static void resolve_value(Initializer *rec, ResolvedInit *init, InitItem **cursor) {
+  Type *ty = init->ty;
+
+  if (ty->kind == TY_ARRAY && rec->kind == INIT_STR) {
+    if (init->is_flexible)
+      *init = *new_resolved_init(array_of(ty->base, rec->str_tok->ty->array_len), false);
+    resolve_string(rec, init);
+    return;
+  }
+
+  if (ty->kind == TY_ARRAY) {
+    if (init->is_flexible) {
+      // The counting pass walks the siblings without consuming them;
+      // the build pass below resolves them for real.
+      InitItem *save = *cursor;
+      int len = (rec->kind == INIT_LIST) ? count_flex_list(rec->items, ty)
+                                         : count_flex(rec, cursor, ty);
+      *cursor = save;
+      *init = *new_resolved_init(array_of(ty->base, len), false);
+    }
+
+    if (rec->kind == INIT_LIST) {
+      resolve_array1(rec, init);
+    } else {
+      resolve_value(rec, init->children[0], cursor);
+      resolve_array_cont(init, 1, cursor);
+    }
+    return;
+  }
+
+  if (ty->kind == TY_STRUCT) {
+    if (rec->kind == INIT_LIST) {
+      resolve_struct1(rec, init);
+      return;
+    }
+
+    // A struct can be initialized with another struct. E.g.
+    // `struct T x = y;` where y is a variable of type `struct T`.
+    // Handle that case first.
+    Node *expr = (rec->kind == INIT_STR) ? materialize_str(rec) : rec->expr;
+    add_type(expr);
+    if (expr->ty->kind == TY_STRUCT) {
+      init->expr = expr;
+      return;
+    }
+
+    resolve_struct_first(init, ty->members, rec, cursor);
+    return;
+  }
+
+  if (ty->kind == TY_UNION) {
+    resolve_union(rec, init, cursor);
+    return;
+  }
+
+  if (rec->kind == INIT_LIST) {
+    // An initializer for a scalar variable can be surrounded by
+    // braces. E.g. `int x = {3};`. Handle that case: exactly one
+    // element, no designators.
+    InitItem *it = rec->items;
+    if (!it)
+      error_tok(rec->tok->next, "expected an expression");
+    if (it->desigs)
+      error_tok(it->desigs->tok, "expected an expression");
+    InitItem *next = it->next;
+    resolve_value(it->init, init, &next);
+    if (next)
+      error_tok(next->comma_tok, "expected '}'");
+    return;
+  }
+
+  init->expr = (rec->kind == INIT_STR) ? materialize_str(rec) : rec->expr;
+}
+
+// Resolve a faithful initializer record against a declared type:
+// evaluate designators, bind member names, apply brace elision, size
+// flexible arrays and complete flexible struct/union members. *new_ty
+// receives the completed type (it may differ from ty for flexible
+// arrays and flexible members).
+static ResolvedInit *resolve_initializer(Initializer *rec, Type *ty, Type **new_ty) {
+  InitItem *cursor = NULL;
+  ResolvedInit *init = new_resolved_init(ty, true);
+  resolve_value(rec, init, &cursor);
+
+  if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && ty->is_flexible) {
+    ty = copy_struct_type(ty);
+
+    Member *mem = ty->members;
+    while (mem->next)
+      mem = mem->next;
+    mem->ty = init->children[mem->idx]->ty;
+    ty->size += mem->ty->size;
+
+    *new_ty = ty;
+    return init;
+  }
+
+  *new_ty = init->ty;
+  return init;
+}
+
 static Node *init_desg_expr(InitDesg *desg, Token *tok) {
   if (desg->var)
     return new_var_node(desg->var, tok);
@@ -1025,7 +1549,7 @@ static Node *init_desg_expr(InitDesg *desg, Token *tok) {
   return node;
 }
 
-static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token *tok) {
+static Node *create_lvar_init(ResolvedInit *init, Type *ty, InitDesg *desg, Token *tok) {
   if (ty->kind == TY_ARRAY) {
     Node *node = new_node(ND_NULL_EXPR, tok);
     for (int i = 0; i < ty->array_len; i++) {
@@ -1061,10 +1585,10 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
 }
 
 // Build the MEMZERO + assignment comma chain that initializes a local
-// variable from its parsed initializer tree. `tok` anchors the
+// variable from its resolved initializer tree. `tok` anchors the
 // synthesized nodes; the parser anchors them at the first token of
-// the initializer source (Initializer::tok of an ND_DECL's tree).
-static Node *lvar_init_comma(Obj *var, Initializer *init, Token *tok) {
+// the initializer source (Initializer::tok of an ND_DECL's record).
+static Node *lvar_init_comma(Obj *var, ResolvedInit *init, Token *tok) {
   InitDesg desg = {NULL, 0, NULL, var};
 
   // If a partial initializer list is given, the standard requires
@@ -1089,8 +1613,8 @@ static Node *lvar_init_comma(Obj *var, Initializer *init, Token *tok) {
 //   x[1][0] = 8;
 //   x[1][1] = 9;
 //
-// The parser hands the parsed initializer tree to ND_DECL and this
-// lowering rebuilds the chain from it.
+// The parser hands the faithful initializer record to ND_DECL; sema
+// resolves it and this lowering rebuilds the chain from the result.
 
 static uint64_t read_buf(char *buf, int sz) {
   if (sz == 1)
@@ -1118,7 +1642,7 @@ static void write_buf(char *buf, uint64_t val, int sz) {
 }
 
 static Relocation *
-write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int offset) {
+write_gvar_data(Relocation *cur, ResolvedInit *init, Type *ty, char *buf, int offset) {
   if (ty->kind == TY_ARRAY) {
     int sz = ty->base->size;
     for (int i = 0; i < ty->array_len; i++)
@@ -1183,10 +1707,10 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
   return cur->next;
 }
 
-// Serialize a parsed initializer tree into the .data image of a global
-// variable. Split from gvar_initializer so that sema-internal
+// Serialize a resolved initializer tree into the .data image of a
+// global variable. Split from gvar_initializer so that sema-internal
 // lowerings (e.g. compound literals) can reuse it.
-static void gvar_init_data(Obj *var, Initializer *init) {
+static void gvar_init_data(Obj *var, ResolvedInit *init) {
   Relocation head = {};
   char *buf = calloc(1, var->ty->size);
   write_gvar_data(&head, init, var->ty, buf, 0);
@@ -1199,7 +1723,10 @@ static void gvar_init_data(Obj *var, Initializer *init) {
 // objects to a flat byte array. It is a compile error if an
 // initializer list contains a non-constant expression.
 void gvar_initializer(Token **rest, Token *tok, Obj *var) {
-  Initializer *init = initializer(rest, tok, var->ty, &var->ty);
+  Initializer *rec = initializer(rest, tok);
+  Type *new_ty;
+  ResolvedInit *init = resolve_initializer(rec, var->ty, &new_ty);
+  var->ty = new_ty;
   gvar_init_data(var, init);
 }
 
@@ -1700,11 +2227,11 @@ void add_type(Node *node) {
   case ND_DECL:
     // Lower a declaration. A VLA becomes `x = alloca(<size>)` (the
     // VLA-size statement stays a parse-emitted sibling). With an
-    // initializer, the parsed initializer tree becomes the MEMZERO +
-    // assignment comma chain the parser used to flatten directly; the
-    // node becomes its expression statement. Without one, the node
-    // carries the VLA-size computation in lhs and simply becomes that
-    // statement.
+    // initializer, the faithful record is resolved and becomes the
+    // MEMZERO + assignment comma chain the parser used to flatten
+    // directly; the node becomes its expression statement. Without
+    // one, the node carries the VLA-size computation in lhs and
+    // simply becomes that statement.
     if (node->var->ty->kind == TY_VLA) {
       // A variable-length object may not be initialized. The parser left
       // the two standing side by side because whether a declaration is a
@@ -1720,15 +2247,22 @@ void add_type(Node *node) {
                              new_alloca(new_var_node(node->var->ty->vla_size, tok)),
                              tok);
     } else {
-      // A declared object must have a complete, non-void type. The
-      // initializer has already been parsed (it is what completes a
-      // flexible array member), so the type is final by now.
+      // Resolve the faithful initializer record first: resolution is
+      // what completes a flexible array or flexible-member type.
+      ResolvedInit *init = NULL;
+      if (node->decl_init) {
+        Type *new_ty;
+        init = resolve_initializer(node->decl_init, node->var->ty, &new_ty);
+        node->var->ty = new_ty;
+      }
+
+      // A declared object must have a complete, non-void type.
       check_declared_void(node->tok, node->var->ty);
       if (node->var->ty->size < 0)
         error_tok(node->var->ty->name, "variable has incomplete type");
 
-      if (node->decl_init)
-        node->lhs = lvar_init_comma(node->var, node->decl_init, node->decl_init->tok);
+      if (init)
+        node->lhs = lvar_init_comma(node->var, init, node->decl_init->tok);
       node->decl_init = NULL;
       node->kind = ND_EXPR_STMT;
     }
@@ -1743,12 +2277,16 @@ void add_type(Node *node) {
     Obj *var = node->var;
     Token *tok = node->tok;
 
+    Type *new_ty;
+    ResolvedInit *init = resolve_initializer(node->decl_init, var->ty, &new_ty);
+    var->ty = new_ty;
+
     if (var->is_local) {
       node->kind = ND_COMMA;
-      node->lhs = lvar_init_comma(var, node->decl_init, node->decl_init->tok);
+      node->lhs = lvar_init_comma(var, init, node->decl_init->tok);
       node->rhs = new_var_node(var, tok);
     } else {
-      gvar_init_data(var, node->decl_init);
+      gvar_init_data(var, init);
       node->kind = ND_VAR;
     }
     node->decl_init = NULL;

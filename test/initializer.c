@@ -262,6 +262,28 @@ int main() {
   ASSERT(16, ({ char x[]={[2 ... 10]='a', [7]='b', [15 ... 15]='c', [3 ... 5]='d'}; sizeof(x); }));
   ASSERT(0, ({ char x[]={[2 ... 10]='a', [7]='b', [15 ... 15]='c', [3 ... 5]='d'}; memcmp(x, "\0\0adddabaaa\0\0\0\0c", 16); }));
 
+  ASSERT(1, ({ struct {int a,b,c;} x={.a=1, 2, 3}; x.a; }));
+  ASSERT(2, ({ struct {int a,b,c;} x={.a=1, 2, 3}; x.b; }));
+  ASSERT(3, ({ struct {int a,b,c;} x={.a=1, 2, 3}; x.c; }));
+
+  ASSERT(0, ({ char x[4]="ab"; memcmp(x, "ab\0\0", 4); }));
+  ASSERT(0, ({ union {char b[4]; int a;} x={"ab"}; memcmp(x.b, "ab\0\0", 4); }));
+
+  ASSERT(42, ({ struct {int x; struct {int p; struct {int deep;};};} y={.deep=42, .x=1}; y.deep; }));
+  ASSERT(1, ({ struct {int x; struct {int p; struct {int deep;};};} y={.x=1, .deep=42}; y.x; }));
+
+  ASSERT(2, ({ typedef char T[]; T x={1,2}; sizeof(x); }));
+  ASSERT(4, ({ typedef char T[]; T x="str"; sizeof(x); }));
+
+  ASSERT(1, ({ union {char b[4]; int a;} x[2]={{.a=1}, {"ab"}}; x[0].a; }));
+  ASSERT(0, ({ union {char b[4]; int a;} x[2]={{.a=1}, {"ab"}}; memcmp(x[1].b, "ab", 2); }));
+
+  ASSERT(1, ({ int x[3][2]={[0 ... 1]={1,2}, [2]={3}}; x[0][0]; }));
+  ASSERT(2, ({ int x[3][2]={[0 ... 1]={1,2}, [2]={3}}; x[1][1]; }));
+  ASSERT(3, ({ int x[3][2]={[0 ... 1]={1,2}, [2]={3}}; x[2][0]; }));
+
+  ASSERT(6, ({ struct {int n; int d[];} x={3,{1,2,3}}; x.n + x.d[2]; }));
+
   printf("OK\n");
   return 0;
 }

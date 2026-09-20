@@ -172,43 +172,49 @@ struct Relocation {
   long addend;
 };
 
-// This struct represents a variable initializer. Since initializers
-// can be nested (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), this struct
-// is a tree data structure.
+// Faithful initializer record (parse.c): the syntactic shape of an
+// initializer as written - a braced item sequence, a string literal or
+// a single expression, with designators recorded unevaluated. sema
+// resolves designators, applies brace elision and lowers the record
+// when it types the carrying node (ND_DECL, compound literal) or when
+// a global variable definition is parsed.
 typedef struct Initializer Initializer;
+typedef struct InitItem InitItem;
+typedef struct InitDesig InitDesig;
+
+enum { INIT_LIST, INIT_EXPR, INIT_STR };
+
 struct Initializer {
-  Initializer *next;
-  Type *ty;
-  Token *tok;
-  bool is_flexible;
+  int kind;     // INIT_LIST, INIT_EXPR or INIT_STR
+  Token *tok;   // first token of the initializer source
+  InitItem *items;  // INIT_LIST: braced element sequence
+  Node *expr;       // INIT_EXPR: scalar initialization expression
+  Token *str_tok;   // INIT_STR: string literal token
 
-  // If it's not an aggregate type and has an initializer,
-  // `expr` has an initialization expression.
-  Node *expr;
-
-  // If it's an initializer for an aggregate type (e.g. array or struct),
-  // `children` has initializers for its children.
-  Initializer **children;
-
-  // Only one member can be initialized for a union.
-  // `mem` is used to clarify which member is initialized.
-  Member *mem;
-
-  // For the top-level initializer of an ND_DECL: the `=` that
+  // Only for the top-level record of an ND_DECL: the `=` that
   // introduced it, which is where sema anchors a diagnostic that
-  // rejects the declaration as a whole. (`tok` above is the first token
-  // of the initializer source.)
+  // rejects the declaration as a whole.
   Token *eq_tok;
 };
 
-// Designator chain describing the position of an element within a
-// local variable initializer (e.g. `x[1].y[2]`).
-typedef struct InitDesg InitDesg;
-struct InitDesg {
-  InitDesg *next;
-  int idx;
-  Member *member;
-  Obj *var;
+// One element of a braced initializer list.
+struct InitItem {
+  InitItem *next;
+  Token *comma_tok;    // the `,` before this element (NULL for the first)
+  InitDesig *desigs;   // designator chain as written (may be NULL)
+  Initializer *init;   // the element value
+};
+
+// One designator as written: `[expr]`, `[begin ... end]` or `.name`.
+// Index expressions are recorded unevaluated; sema evaluates them.
+struct InitDesig {
+  InitDesig *next;
+  Token *tok;           // `[` or `.`
+  Token *after_begin;   // token after the begin expression (`...` or `]`)
+  Token *rbracket;      // the `]` token
+  Node *begin;          // array designator index
+  Node *end;            // range end (NULL unless `[begin ... end]`)
+  Token *name;          // member designator name
 };
 
 // AST node
@@ -357,9 +363,10 @@ struct Node {
   // ty_op. The type predicates take two types and no subexpression.
   Type *ty_op2;
 
-  // ND_DECL: the parsed initializer tree, or NULL if the declarator
-  // has no initializer. sema lowers it to the MEMZERO + assignment
-  // comma chain. Without an initializer, the VLA-size computation
+  // ND_DECL: the faithful initializer record, or NULL if the
+  // declarator has no initializer. sema resolves and lowers it to the
+  // MEMZERO + assignment comma chain. Without an initializer, the
+  // VLA-size computation
   // (carried in `lhs`) becomes the lowered statement instead.
   Initializer *decl_init;
 
@@ -466,8 +473,8 @@ void begin_function(Obj *fn, Type *ty);
 Node *conditional(Token **rest, Token *tok);
 Obj *parse(Token *tok);
 
-// Initializer tree building (parse.c); consumed by sema.c as well.
-Initializer *initializer(Token **rest, Token *tok, Type *ty, Type **new_ty);
+// Faithful initializer record building (parse.c); resolved by sema.c.
+Initializer *initializer(Token **rest, Token *tok);
 Node *new_alloca(Node *sz);
 
 //
@@ -542,8 +549,8 @@ Member *get_struct_member(Type *ty, Token *tok);
 void layout_struct(Type *ty);
 void layout_union(Type *ty);
 
-// Initializer lowering (sema.c). ND_DECL carries the parsed tree and
-// is lowered when typed.
+// Initializer resolution and lowering (sema.c). ND_DECL carries the
+// faithful record and is resolved when typed.
 void gvar_initializer(Token **rest, Token *tok, Obj *var);
 
 //
