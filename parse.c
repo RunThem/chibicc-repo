@@ -3,7 +3,7 @@
 // Most functions in this file are named after the symbols they are
 // supposed to read from an input token list. For example, stmt() is
 // responsible for reading a statement from a token list. The function
-// then construct an AST node representing a statement.
+// then construct an AST node representing that statement.
 //
 // Each function conceptually returns two values, an AST node and
 // remaining part of the input tokens. Since C doesn't support
@@ -15,24 +15,29 @@
 // Most parsing functions don't change the global state of the parser.
 // So it is very easy to lookahead arbitrary number of tokens in this
 // parser.
+//
+// The tree this parser builds is faithful to the source and carries no
+// semantic decision: expressions are untyped, names are unbound,
+// constant expressions are unevaluated, and declarations (variables,
+// functions, typedefs, enum constants) are emitted as records for sema
+// to declare and lower. The only semantic feedback the parser takes is
+// the one the C grammar demands - whether an identifier is a typedef
+// name and what a struct/union/enum tag refers to - plus the
+// "to-be-completed" type records the declarator layer builds (array
+// dimensions, typeof operands, alignment and bitfield-width
+// expressions), which sema resolves.
 
 #include "chibicc.h"
 
-// Points to the function object the parser is currently parsing.
-static Obj *current_fn;
-
-static Obj *builtin_alloca;
-
 static bool is_typename(Token *tok);
-static Type *declspec(Token **rest, Token *tok, VarAttr *attr);
-static Type *typename(Token **rest, Token *tok);
-static Type *enum_specifier(Token **rest, Token *tok);
-static Type *typeof_specifier(Token **rest, Token *tok);
+static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs);
+static Type *typename(Token **rest, Token *tok, Node **specs);
+static Type *enum_specifier(Token **rest, Token *tok, Node **specs);
+static Type *typeof_specifier(Token **rest, Token *tok, Node **specs);
 static Type *type_suffix(Token **rest, Token *tok, Type *ty);
 static Type *declarator(Token **rest, Token *tok, Type *ty);
 static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr);
 static Initializer *init_record(Token **rest, Token *tok);
-Initializer *initializer(Token **rest, Token *tok);
 static Node *compound_stmt(Token **rest, Token *tok);
 static Node *stmt(Token **rest, Token *tok);
 static Node *expr_stmt(Token **rest, Token *tok);
@@ -49,16 +54,16 @@ static Node *shift(Token **rest, Token *tok);
 static Node *add(Token **rest, Token *tok);
 static Node *mul(Token **rest, Token *tok);
 static Node *cast(Token **rest, Token *tok);
-static Type *struct_decl(Token **rest, Token *tok);
-static Type *union_decl(Token **rest, Token *tok);
+static Type *struct_decl(Token **rest, Token *tok, Node **specs);
+static Type *union_decl(Token **rest, Token *tok, Node **specs);
 static Node *postfix(Token **rest, Token *tok);
 static Node *funcall(Token **rest, Token *tok, Node *node);
 static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
-static Token *parse_typedef(Token *tok, Type *basety);
+static Node *parse_typedef(Token **rest, Token *tok, Type *basety);
 static bool is_function(Token *tok);
-static Token *function(Token *tok, Type *basety, VarAttr *attr);
-static Token *global_variable(Token *tok, Type *basety, VarAttr *attr);
+static Node *function_def(Token **rest, Token *tok, Type *basety, VarAttr *attr);
+static Node *global_variable(Token **rest, Token *tok, Type *basety, VarAttr *attr);
 
 Node *new_node(NodeKind kind, Token *tok) {
   Node *node = calloc(1, sizeof(Node));
@@ -112,25 +117,44 @@ Node *new_vla_ptr(Obj *var, Token *tok) {
   return node;
 }
 
-Node *new_cast(Node *expr, Type *ty) {
-  add_type(expr);
-
-  Node *node = calloc(1, sizeof(Node));
-  node->kind = ND_CAST;
-  node->tok = expr->tok;
-  node->lhs = expr;
-  node->ty = copy_type(ty);
-  return node;
-}
-
 char *get_ident(Token *tok) {
   if (tok->kind != TK_IDENT)
     error_tok(tok, "expected an identifier");
   return strndup(tok->loc, tok->len);
 }
 
-Obj *get_current_fn(void) {
-  return current_fn;
+// Appends a chain of nodes to the chain `cur` points into and returns
+// its new tail.
+static Node *chain_append(Node *cur, Node *chain) {
+  for (; chain; chain = chain->next)
+    cur = cur->next = chain;
+  return cur;
+}
+
+// Returns `specs` with `node` chained after it (or `node` if there are
+// no specs yet). Used where declaration records produced by a declspec
+// have to precede the node the declaration itself emits.
+static Node *specs_then(Node *specs, Node *node) {
+  if (!specs)
+    return node;
+  Node *cur = specs;
+  while (cur->next)
+    cur = cur->next;
+  cur->next = node;
+  return specs;
+}
+
+// Appends one declaration record (an enum constant) to a spec list.
+static void add_spec(Node **specs, Node *node) {
+  node->next = NULL;
+  if (!*specs) {
+    *specs = node;
+    return;
+  }
+  Node *cur = *specs;
+  while (cur->next)
+    cur = cur->next;
+  cur->next = node;
 }
 
 // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
@@ -145,7 +169,7 @@ Obj *get_current_fn(void) {
 // The order of typenames in a type-specifier doesn't matter. For
 // example, `int long static` means the same as `static long int`.
 // That can also be written as `static long` because you can omit
-// `int` if `long` or `short` are specified. However, something like
+// `int` if `long` or `short` is specified. However, something like
 // `char int` is not a valid type specifier. We have to accept only a
 // limited combinations of the typenames.
 //
@@ -153,7 +177,11 @@ Obj *get_current_fn(void) {
 // while keeping the "current" type object that the typenames up
 // until that point represent. When we reach a non-typename token,
 // we returns the current type object.
-static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+//
+// Enum constants an enum-specifier defines along the way are declaration
+// records with no statement of their own; they are appended to `*specs`
+// for the caller to place at this position of its chain or node.
+static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
   // We use a single integer as counters for all typenames.
   // For example, bits 0 and 1 represents how many times we saw the
   // keyword "void" so far. With this, we can use a switch statement
@@ -212,7 +240,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     if (equal(tok, "_Atomic")) {
       tok = tok->next;
       if (equal(tok , "(")) {
-        ty = typename(&tok, tok->next);
+        ty = typename(&tok, tok->next, specs);
         tok = skip(tok, ")");
       }
       is_atomic = true;
@@ -224,15 +252,15 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
         error_tok(tok, "_Alignas is not allowed in this context");
       tok = skip(tok->next, "(");
 
-      // The `_Alignas(type)` form asks for a property of a type the
-      // parser has in hand; the `_Alignas(expr)` form is a constant
-      // expression, so it is recorded for sema to evaluate. Whichever
-      // comes last is the one that counts, as before.
+      // The `_Alignas(type)` form asks for a property of a type that
+      // may not be complete yet, and the `_Alignas(expr)` form is a
+      // constant expression; both are recorded for sema to settle.
+      // Whichever comes last is the one that counts, as before.
       if (is_typename(tok)) {
-        attr->align = typename(&tok, tok)->align;
+        attr->align_ty = typename(&tok, tok, specs);
         attr->align_expr = NULL;
       } else {
-        attr->align = 0;
+        attr->align_ty = NULL;
         attr->align_expr = conditional(&tok, tok);
       }
       tok = skip(tok, ")");
@@ -247,13 +275,13 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
         break;
 
       if (equal(tok, "struct")) {
-        ty = struct_decl(&tok, tok->next);
+        ty = struct_decl(&tok, tok->next, specs);
       } else if (equal(tok, "union")) {
-        ty = union_decl(&tok, tok->next);
+        ty = union_decl(&tok, tok->next, specs);
       } else if (equal(tok, "enum")) {
-        ty = enum_specifier(&tok, tok->next);
+        ty = enum_specifier(&tok, tok->next, specs);
       } else if (equal(tok, "typeof")) {
-        ty = typeof_specifier(&tok, tok->next);
+        ty = typeof_specifier(&tok, tok->next, specs);
       } else {
         ty = ty2;
         tok = tok->next;
@@ -372,6 +400,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
   Type head = {};
   Type *cur = &head;
   bool is_variadic = false;
+  Node *specs = NULL;
 
   while (!equal(tok, ")")) {
     if (cur != &head)
@@ -384,7 +413,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
       break;
     }
 
-    Type *ty2 = declspec(&tok, tok, NULL);
+    Type *ty2 = declspec(&tok, tok, NULL, &specs);
     ty2 = declarator(&tok, tok, ty2);
 
     Token *name = ty2->name;
@@ -410,6 +439,10 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
   ty = func_type(ty);
   ty->params = head.next;
   ty->is_variadic = is_variadic;
+  // Enum constants a parameter's declspec defined (e.g.
+  // `int f(enum E { A } x)`) ride on the function type; sema registers
+  // them when it completes the type.
+  ty->spec_decls = specs;
   *rest = tok->next;
   return ty;
 }
@@ -431,7 +464,7 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
   // Whether the dimension denotes a fixed-length array or a VLA depends
   // on whether the length expression is a constant expression - a
   // semantic question. The expression is recorded here and sema decides
-  // the type when the declarator is complete (see resolve_type).
+  // the type when it resolves the declarator (see resolve_type).
   return array_of_dim(ty, expr);
 }
 
@@ -462,6 +495,10 @@ static Type *pointers(Token **rest, Token *tok, Type *ty) {
 }
 
 // declarator = pointers ("(" ident ")" | "(" declarator ")" | ident) type-suffix
+//
+// The declarator layer builds the type shape and leaves everything it
+// cannot decide syntactically (array dimensions, typeof operands) as
+// records for sema to complete.
 static Type *declarator(Token **rest, Token *tok, Type *ty) {
   ty = pointers(&tok, tok, ty);
 
@@ -483,12 +520,6 @@ static Type *declarator(Token **rest, Token *tok, Type *ty) {
   }
 
   ty = type_suffix(rest, tok, ty);
-
-  // The type is complete from here on: what the declarator recorded but
-  // could not decide (an array dimension, a `typeof(expr)` operand) is
-  // settled before the name goes on it and before its owner reads it.
-  resolve_type(ty);
-
   ty->name = name;
   ty->name_pos = name_pos;
   return ty;
@@ -507,14 +538,12 @@ static Type *abstract_declarator(Token **rest, Token *tok, Type *ty) {
     return abstract_declarator(&tok, start->next, ty);
   }
 
-  Type *ty2 = type_suffix(rest, tok, ty);
-  resolve_type(ty2);
-  return ty2;
+  return type_suffix(rest, tok, ty);
 }
 
 // type-name = declspec abstract-declarator
-static Type *typename(Token **rest, Token *tok) {
-  Type *ty = declspec(&tok, tok, NULL);
+static Type *typename(Token **rest, Token *tok, Node **specs) {
+  Type *ty = declspec(&tok, tok, NULL, specs);
   return abstract_declarator(rest, tok, ty);
 }
 
@@ -536,7 +565,7 @@ static bool consume_end(Token **rest, Token *tok) {
 //                | ident ("{" enum-list? "}")?
 //
 // enum-list      = ident ("=" num)? ("," ident ("=" num)?)* ","?
-static Type *enum_specifier(Token **rest, Token *tok) {
+static Type *enum_specifier(Token **rest, Token *tok, Node **specs) {
   Type *ty = enum_type();
 
   // Read a struct tag.
@@ -558,22 +587,25 @@ static Type *enum_specifier(Token **rest, Token *tok) {
 
   tok = skip(tok, "{");
 
-  // Read an enum-list. Each member becomes a declaration record; sema
-  // evaluates its value and registers the name.
+  // Read an enum-list. Each member becomes a declaration record node
+  // carrying the name, the optional explicit value expression and the
+  // enum type; sema evaluates the values and registers the names at
+  // this position of the enclosing chain.
   int i = 0;
-  int val = 0;
   while (!consume_end(rest, tok)) {
     if (i++ > 0)
       tok = skip(tok, ",");
 
     Token *name = tok;
     tok = tok->next;
+    add_declared_name(name);
 
     Node *node = new_node(ND_ENUM_CONST, name);
     if (equal(tok, "="))
       node->lhs = conditional(&tok, tok->next);
+    node->ty_op = ty;
 
-    add_enum_const(node, ty, &val);
+    add_spec(specs, node);
   }
 
   if (tag)
@@ -582,12 +614,12 @@ static Type *enum_specifier(Token **rest, Token *tok) {
 }
 
 // typeof-specifier = "(" (expr | typename) ")"
-static Type *typeof_specifier(Token **rest, Token *tok) {
+static Type *typeof_specifier(Token **rest, Token *tok, Node **specs) {
   tok = skip(tok, "(");
 
   Type *ty;
   if (is_typename(tok)) {
-    ty = typename(&tok, tok);
+    ty = typename(&tok, tok, specs);
   } else {
     // What type an expression has is not a syntax question, so the
     // operand is recorded in a placeholder the declarator builds on;
@@ -599,25 +631,14 @@ static Type *typeof_specifier(Token **rest, Token *tok) {
   return ty;
 }
 
-// Build the `alloca(<size>)` call node for a VLA declaration. Also
-// used by sema.c when lowering ND_DECL.
-Node *new_alloca(Node *sz) {
-  Node *node = new_unary(ND_FUNCALL, new_var_node(builtin_alloca, sz->tok), sz->tok);
-  node->func_ty = builtin_alloca->ty;
-  node->ty = builtin_alloca->ty->return_ty;
-  node->args = sz;
-  add_type(sz);
-  return node;
-}
-
-// declaration = declspec (declarator ("=" expr)? ("," declarator ("=" expr)?)*)? ";"
+// declaration = declspec (declarator ("=" initializer)? ("," declarator ("=" initializer)?)*)? ";"
 //
-// Each declarator emits an ND_DECL node carrying the variable and its
-// faithful initializer record; sema resolves and lowers it when typing.
-// The VLA-size statement is kept as a separate sibling (and carries
-// the record itself
-// when there is no initializer) so that the lowered shape matches the
-// pre-split output byte for byte, including .loc lines.
+// Each declarator emits an ND_DECL record: the name rides on the type
+// (Type.name), the storage class and alignment in `attr`, and the
+// initializer stays a faithful record. sema declares the object when it
+// resolves the record and lowers the node when it types it - including
+// the VLA-size sibling statement and the block-scope static's data
+// image, whose shapes it reproduces exactly.
 static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) {
   Node head = {};
   Node *cur = &head;
@@ -631,59 +652,30 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     if (!ty->name)
       error_tok(ty->name_pos, "variable name omitted");
 
-    if (attr && attr->is_static) {
-      // A block-scope static variable lives in the global data section
-      // under an anonymous name. It is not an AST node of its own, so
-      // sema checks its type here rather than when an ND_DECL lowers.
-      Obj *var = declare_static_local(tok, get_ident(ty->name), ty);
-      if (equal(tok, "="))
-        gvar_initializer(&tok, tok->next, var);
-      continue;
-    }
+    // The name goes on the shared type only until the next declarator
+    // overwrites it, and the declared name shadows a typedef of the
+    // same name for the rest of the parse - both before the
+    // initializer is parsed, as the old declaration site did.
+    Token *name = ty->name;
+    add_declared_name(name);
 
-    // Generate code for computing a VLA size. We need to do this
-    // even if ty is not VLA because ty may be a pointer to VLA
-    // (e.g. int (*foo)[n][m] where n and m are variables.)
-    Node *vla_size = compute_vla_size(ty, tok);
-
-    if (ty->kind == TY_VLA && !equal(tok, "=")) {
-      cur = cur->next = new_unary(ND_EXPR_STMT, vla_size, tok);
-
-      // Variable length arrays (VLAs) are translated to alloca() calls.
-      // For example, `int x[n+2]` is translated to `tmp = n + 2,
-      // x = alloca(tmp)`. The alloca statement is kept faithful in the
-      // ND_DECL node; add_type generates it when lowering.
-      Obj *var = new_lvar(get_ident(ty->name), ty);
-
-      Node *decl = new_node(ND_DECL, ty->name);
-      decl->var = var;
-      cur = cur->next = decl;
-      continue;
-    }
-
-    Obj *var = new_lvar(get_ident(ty->name), ty);
-    int align = attr_align(attr);
-    if (align)
-      var->align = align;
-
+    Initializer *init = NULL;
     if (equal(tok, "=")) {
-      cur = cur->next = new_unary(ND_EXPR_STMT, vla_size, tok);
-
       Token *eq = tok;
-      Token *start = tok->next;
-      Initializer *init = initializer(&tok, start);
+      init = init_record(&tok, tok->next);
       init->eq_tok = eq;
-
-      Node *decl = new_node(ND_DECL, tok);
-      decl->var = var;
-      decl->decl_init = init;
-      cur = cur->next = decl;
-    } else {
-      Node *decl = new_node(ND_DECL, tok);
-      decl->var = var;
-      decl->lhs = vla_size;
-      cur = cur->next = decl;
     }
+
+    // The node is anchored where the diagnostic for a rejected
+    // declaration used to point: at the token after the initializer if
+    // there is one, and at the token after the declarator otherwise.
+    Node *decl = new_node(ND_DECL, tok);
+    decl->ty_op = ty;
+    decl->name_tok = name;
+    if (attr)
+      decl->attr = *attr;
+    decl->decl_init = init;
+    cur = cur->next = decl;
   }
 
   Node *node = new_node(ND_BLOCK, tok);
@@ -703,7 +695,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
 //
 // `[5]` moves the cursor to the 5th element, so the 5th element of x
 // is set to 3. Initialization then continues forward in order, so
-// 6th, 7th, 8th and 9th elements are initialized with 4, 5, 6 and 7,
+// 6th, 7th, 8th and 9th elements are initialized with 4, 5 and 6 and 7,
 // respectively. Unspecified elements (in this case, 3rd and 4th
 // elements) are initialized with zero.
 //
@@ -811,12 +803,6 @@ static Initializer *init_record(Token **rest, Token *tok) {
   return rec;
 }
 
-// Parse an initializer into a faithful record. sema resolves it
-// against the declared type when the carrying node is lowered.
-Initializer *initializer(Token **rest, Token *tok) {
-  return init_record(rest, tok);
-}
-
 // Returns true if a given token represents a type.
 static bool is_typename(Token *tok) {
   static HashMap map;
@@ -870,19 +856,14 @@ static Node *asm_stmt(Token **rest, Token *tok) {
 //      | expr-stmt
 static Node *stmt(Token **rest, Token *tok) {
   if (equal(tok, "return")) {
+    // The implicit conversion to the return type is sema's: the parser
+    // does not know the enclosing function.
     Node *node = new_node(ND_RETURN, tok);
     if (consume(rest, tok->next, ";"))
       return node;
 
-    Node *exp = expr(&tok, tok->next);
+    node->lhs = expr(&tok, tok->next);
     *rest = skip(tok, ";");
-
-    add_type(exp);
-    Type *ty = current_fn->ty->return_ty;
-    if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
-      exp = new_cast(exp, current_fn->ty->return_ty);
-
-    node->lhs = exp;
     return node;
   }
 
@@ -909,8 +890,9 @@ static Node *stmt(Token **rest, Token *tok) {
 
   if (equal(tok, "case")) {
     // The values a case label stands for are constant expressions, so
-    // they are recorded unevaluated; sema's add_type evaluates them into
-    // begin/end. `:` is where the range check is anchored.
+    // they are recorded unevaluated; sema evaluates them into begin/end
+    // when it resolves the node. `:` is where the range check is
+    // anchored.
     Node *node = new_node(ND_CASE, tok);
     node->begin_expr = conditional(&tok, tok->next);
 
@@ -940,8 +922,11 @@ static Node *stmt(Token **rest, Token *tok) {
     enter_scope();
 
     if (is_typename(tok)) {
-      Type *basety = declspec(&tok, tok, NULL);
-      node->init = declaration(&tok, tok, basety, NULL);
+      Node *specs = NULL;
+      Type *basety = declspec(&tok, tok, NULL, &specs);
+      // Enum records a for-init declspec defined share the init's
+      // scope, so they ride at the head of the init chain.
+      node->init = specs_then(specs, declaration(&tok, tok, basety, NULL));
     } else {
       node->init = expr_stmt(&tok, tok);
     }
@@ -1023,8 +1008,14 @@ static Node *stmt(Token **rest, Token *tok) {
 }
 
 // compound-stmt = (typedef | declaration | stmt)* "}"
+//
+// Declaration records that produce no statement of their own (typedefs,
+// enum constants, block-scope extern declarations and [GNU] nested
+// function definitions) enter the chain at their source position; sema
+// removes them again before codegen sees the chain.
 static Node *compound_stmt(Token **rest, Token *tok) {
   Node *node = new_node(ND_BLOCK, tok);
+  node->is_scope_block = true;
   Node head = {};
   Node *cur = &head;
 
@@ -1033,20 +1024,22 @@ static Node *compound_stmt(Token **rest, Token *tok) {
   while (!equal(tok, "}")) {
     if (is_typename(tok) && !equal(tok->next, ":")) {
       VarAttr attr = {};
-      Type *basety = declspec(&tok, tok, &attr);
+      Node *specs = NULL;
+      Type *basety = declspec(&tok, tok, &attr, &specs);
+      cur = chain_append(cur, specs);
 
       if (attr.is_typedef) {
-        tok = parse_typedef(tok, basety);
+        cur = chain_append(cur, parse_typedef(&tok, tok, basety));
         continue;
       }
 
       if (is_function(tok)) {
-        tok = function(tok, basety, &attr);
+        cur = cur->next = function_def(&tok, tok, basety, &attr);
         continue;
       }
 
       if (attr.is_extern) {
-        tok = global_variable(tok, basety, &attr);
+        cur = chain_append(cur, global_variable(&tok, tok, basety, &attr));
         continue;
       }
 
@@ -1054,7 +1047,6 @@ static Node *compound_stmt(Token **rest, Token *tok) {
     } else {
       cur = cur->next = stmt(&tok, tok);
     }
-    add_type(cur);
   }
 
   leave_scope();
@@ -1091,6 +1083,9 @@ static Node *expr(Token **rest, Token *tok) {
 // assign    = conditional (assign-op assign)?
 // assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^="
 //           | "<<=" | ">>="
+//
+// A compound assignment keeps its operator in `op`; sema rewrites it to
+// the read-modify-write form (handling the bitfield and atomic cases).
 static Node *assign(Token **rest, Token *tok) {
   Node *node = conditional(&tok, tok);
 
@@ -1100,61 +1095,61 @@ static Node *assign(Token **rest, Token *tok) {
   if (equal(tok, "+=")) {
     Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
     expr->op = ND_ADD;
-    return to_assign(expr);
+    return expr;
   }
 
   if (equal(tok, "-=")) {
     Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
     expr->op = ND_SUB;
-    return to_assign(expr);
+    return expr;
   }
 
   if (equal(tok, "*=")) {
     Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
     expr->op = ND_MUL;
-    return to_assign(expr);
+    return expr;
   }
 
   if (equal(tok, "/=")) {
     Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
     expr->op = ND_DIV;
-    return to_assign(expr);
+    return expr;
   }
 
   if (equal(tok, "%=")) {
     Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
     expr->op = ND_MOD;
-    return to_assign(expr);
+    return expr;
   }
 
   if (equal(tok, "&=")) {
     Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
     expr->op = ND_BITAND;
-    return to_assign(expr);
+    return expr;
   }
 
   if (equal(tok, "|=")) {
     Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
     expr->op = ND_BITOR;
-    return to_assign(expr);
+    return expr;
   }
 
   if (equal(tok, "^=")) {
     Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
     expr->op = ND_BITXOR;
-    return to_assign(expr);
+    return expr;
   }
 
   if (equal(tok, "<<=")) {
     Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
     expr->op = ND_SHL;
-    return to_assign(expr);
+    return expr;
   }
 
   if (equal(tok, ">>=")) {
     Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
     expr->op = ND_SHR;
-    return to_assign(expr);
+    return expr;
   }
 
   *rest = tok;
@@ -1172,14 +1167,11 @@ Node *conditional(Token **rest, Token *tok) {
 
   if (equal(tok->next, ":")) {
     // [GNU] `a ?: b`. Kept as-is in the tree with is_elvis set;
-    // add_type lowers it to `tmp = a, tmp ? tmp : b`. It is typed
-    // eagerly here so that the temporary is created at the same point
-    // as it used to be.
+    // sema lowers it to `tmp = a, tmp ? tmp : b`.
     Node *node = new_node(ND_COND, tok);
     node->is_elvis = true;
     node->cond = cond;
     node->els = conditional(rest, tok->next->next);
-    add_type(node);
     return node;
   }
 
@@ -1374,16 +1366,20 @@ static Node *mul(Token **rest, Token *tok) {
 static Node *cast(Token **rest, Token *tok) {
   if (equal(tok, "(") && is_typename(tok->next)) {
     Token *start = tok;
-    Type *ty = typename(&tok, tok->next);
+    Node *specs = NULL;
+    Type *ty = typename(&tok, tok->next, &specs);
     tok = skip(tok, ")");
 
     // compound literal
     if (equal(tok, "{"))
       return unary(rest, start);
 
-    // type cast
-    Node *node = new_cast(cast(rest, tok), ty);
-    node->tok = start;
+    // type cast: kept faithful and untyped, with the target type
+    // recorded for sema to complete and apply.
+    Node *node = new_node(ND_CAST, start);
+    node->lhs = cast(rest, tok);
+    node->ty_op = ty;
+    node->spec_decls = specs;
     return node;
   }
 
@@ -1410,12 +1406,9 @@ static Node *unary(Token **rest, Token *tok) {
     // [https://www.sigbus.info/n1570#6.5.3.2p4] This is an oddity
     // in the C spec, but dereferencing a function shouldn't do
     // anything. If foo is a function, `*foo`, `**foo` or `*****foo`
-    // are all equivalent to just `foo`.
-    Node *node = cast(rest, tok->next);
-    add_type(node);
-    if (node->ty->kind == TY_FUNC)
-      return node;
-    return new_unary(ND_DEREF, node, tok);
+    // are all equivalent to just `foo`. The check needs the operand's
+    // type, so sema drops the node when it sees one.
+    return new_unary(ND_DEREF, cast(rest, tok->next), tok);
   }
 
   if (equal(tok, "!"))
@@ -1424,21 +1417,19 @@ static Node *unary(Token **rest, Token *tok) {
   if (equal(tok, "~"))
     return new_unary(ND_BITNOT, cast(rest, tok->next), tok);
 
-  // Read ++i as a faithful prefix increment; add_type lowers it to i+=1
+  // Read ++i as a faithful prefix increment; sema lowers it to i+=1
   if (equal(tok, "++")) {
     Node *node = new_node(ND_INCDEC, tok);
     node->lhs = unary(rest, tok->next);
     node->addend = 1;
-    add_type(node);
     return node;
   }
 
-  // Read --i as a faithful prefix decrement; add_type lowers it to i-=1
+  // Read --i as a faithful prefix decrement; sema lowers it to i-=1
   if (equal(tok, "--")) {
     Node *node = new_node(ND_INCDEC, tok);
     node->lhs = unary(rest, tok->next);
     node->addend = -1;
-    add_type(node);
     return node;
   }
 
@@ -1454,29 +1445,33 @@ static Node *unary(Token **rest, Token *tok) {
 }
 
 // struct-members = (declspec declarator (","  declarator)* ";")*
-static void struct_members(Token **rest, Token *tok, Type *ty) {
+//
+// Member placement (offsets, size, alignment, bitfield widths) and the
+// flexible-array-member conversion are sema's; the member list here is
+// the syntax shape, with `_Alignas` and bitfield widths recorded
+// unevaluated.
+static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
   Member head = {};
   Member *cur = &head;
   int idx = 0;
 
   while (!equal(tok, "}")) {
     VarAttr attr = {};
-    Type *basety = declspec(&tok, tok, &attr);
+    Type *basety = declspec(&tok, tok, &attr, specs);
     bool first = true;
 
-    // An anonymous member is recognized by the kind of the base type,
-    // which a `typeof(expr)` has not settled yet; no declarator follows
-    // in that path, so complete the type here.
-    resolve_type(basety);
-
-    // Anonymous struct member
-    if ((basety->kind == TY_STRUCT || basety->kind == TY_UNION) &&
+    // An anonymous member is recognized by the kind of the base type.
+    // A `typeof(expr)` base has not settled its kind yet, so the
+    // placeholder counts as a candidate too; sema rejects a nameless
+    // member that turns out not to be an aggregate.
+    if ((basety->kind == TY_STRUCT || basety->kind == TY_UNION ||
+         basety->kind == TY_TYPEOF) &&
         consume(&tok, tok, ";")) {
       Member *mem = calloc(1, sizeof(Member));
       mem->ty = basety;
       mem->idx = idx++;
-      int align = attr_align(&attr);
-      mem->align = align ? align : mem->ty->align;
+      mem->align_ty = attr.align_ty;
+      mem->align_expr = attr.align_expr;
       cur = cur->next = mem;
       continue;
     }
@@ -1491,8 +1486,8 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       mem->ty = declarator(&tok, tok, basety);
       mem->name = mem->ty->name;
       mem->idx = idx++;
-      int align = attr_align(&attr);
-      mem->align = align ? align : mem->ty->align;
+      mem->align_ty = attr.align_ty;
+      mem->align_expr = attr.align_expr;
 
       if (consume(&tok, tok, ":")) {
         mem->is_bitfield = true;
@@ -1504,14 +1499,6 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
 
       cur = cur->next = mem;
     }
-  }
-
-  // If the last element is an array of incomplete type, it's
-  // called a "flexible array member". It should behave as if
-  // if were a zero-sized array.
-  if (cur != &head && cur->ty->kind == TY_ARRAY && cur->ty->array_len < 0) {
-    cur->ty = array_of(cur->ty->base, 0);
-    ty->is_flexible = true;
   }
 
   *rest = tok->next;
@@ -1555,7 +1542,7 @@ static Token *attribute_list(Token *tok, Type *ty) {
 }
 
 // struct-union-decl = attribute? ident? ("{" struct-members)?
-static Type *struct_union_decl(Token **rest, Token *tok) {
+static Type *struct_union_decl(Token **rest, Token *tok, Node **specs) {
   Type *ty = struct_type();
   tok = attribute_list(tok, ty);
 
@@ -1581,8 +1568,10 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
   tok = skip(tok, "{");
 
   // Construct a struct object. The member list is syntax; placing the
-  // members (offsets, size, alignment, bitfield widths) is sema's job.
-  struct_members(&tok, tok, ty);
+  // members is sema's job, which it does when the type is completed -
+  // at the definition for a bare one, or at the first declaration that
+  // resolves a type referring to it.
+  struct_members(&tok, tok, ty, specs);
   *rest = attribute_list(tok, ty);
   ty->layout_pending = true;
 
@@ -1603,23 +1592,16 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
 }
 
 // struct-decl = struct-union-decl
-static Type *struct_decl(Token **rest, Token *tok) {
-  Type *ty = struct_union_decl(rest, tok);
+static Type *struct_decl(Token **rest, Token *tok, Node **specs) {
+  Type *ty = struct_union_decl(rest, tok, specs);
   ty->kind = TY_STRUCT;
-  // The closing brace is where the type becomes complete, so this is
-  // where sema is asked to place the members: a use of the type in a
-  // later declaration, or a tag-only definition that never gets a
-  // declarator, must not have to wait for one. The kind is settled
-  // first, because placing the members differs between the two.
-  resolve_type(ty);
   return ty;
 }
 
 // union-decl = struct-union-decl
-static Type *union_decl(Token **rest, Token *tok) {
-  Type *ty = struct_union_decl(rest, tok);
+static Type *union_decl(Token **rest, Token *tok, Node **specs) {
+  Type *ty = struct_union_decl(rest, tok, specs);
   ty->kind = TY_UNION;
-  resolve_type(ty);
   return ty;
 }
 
@@ -1637,8 +1619,8 @@ static Type *union_decl(Token **rest, Token *tok) {
 //
 // Which member a name denotes is not a syntax question, so the node is
 // left unbound: it carries the member name token and, for `x->y`, the
-// `->` token in `arrow`. sema's add_type finds the member (flattening
-// the anonymous ones in between), checks the operand and re-inserts the
+// `->` token in `arrow_tok`. sema finds the member (flattening the
+// anonymous ones in between), checks the operand and re-inserts the
 // dereference.
 static Node *struct_ref(Node *node, Token *tok, Token *arrow) {
   Node *mem = new_unary(ND_MEMBER, node, tok);
@@ -1658,24 +1640,19 @@ static Node *struct_ref(Node *node, Token *tok, Token *arrow) {
 //              | "--"
 static Node *postfix(Token **rest, Token *tok) {
   if (equal(tok, "(") && is_typename(tok->next)) {
-    // Compound literal. Kept faithful; sema materializes the hidden
-    // variable and lowers the node to a reference of it. The variable
-    // is still created here so that it precedes any temporaries the
-    // initializer builds, exactly as before.
+    // Compound literal. Kept faithful: the type and the initializer
+    // record ride on the node, and sema materializes the hidden
+    // variable (an anonymous global at file scope, a hidden local in a
+    // block) when it resolves the node, then lowers it when typing.
     Token *start = tok;
-    Type *ty = typename(&tok, tok->next);
+    Node *specs = NULL;
+    Type *ty = typename(&tok, tok->next, &specs);
     tok = skip(tok, ")");
 
     Node *node = new_node(ND_COMPOUND_LITERAL, start);
-
-    if (in_file_scope()) {
-      Obj *var = new_anon_gvar(ty);
-      node->var = var;
-    } else {
-      node->var = new_lvar("", ty);
-    }
-
-    node->decl_init = initializer(rest, tok);
+    node->ty_op = ty;
+    node->spec_decls = specs;
+    node->decl_init = init_record(rest, tok);
     return node;
   }
 
@@ -1716,7 +1693,6 @@ static Node *postfix(Token **rest, Token *tok) {
       incdec->lhs = node;
       incdec->is_post = true;
       incdec->addend = 1;
-      add_type(incdec);
       node = incdec;
       tok = tok->next;
       continue;
@@ -1727,7 +1703,6 @@ static Node *postfix(Token **rest, Token *tok) {
       incdec->lhs = node;
       incdec->is_post = true;
       incdec->addend = -1;
-      add_type(incdec);
       node = incdec;
       tok = tok->next;
       continue;
@@ -1739,9 +1714,11 @@ static Node *postfix(Token **rest, Token *tok) {
 }
 
 // funcall = (assign ("," assign)*)? ")"
+//
+// The callee check, the argument conversions and the struct-return
+// buffer are sema's; the node stays faithful, anchored at the closing
+// paren where the argument-count diagnostics point.
 static Node *funcall(Token **rest, Token *tok, Node *fn) {
-  add_type(fn);
-
   Node head = {};
   Node *cur = &head;
 
@@ -1749,20 +1726,13 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
     if (cur != &head)
       tok = skip(tok, ",");
 
-    Node *arg = assign(&tok, tok);
-    add_type(arg);
-    cur = cur->next = arg;
+    cur = cur->next = assign(&tok, tok);
   }
 
   *rest = skip(tok, ")");
 
   Node *node = new_unary(ND_FUNCALL, fn, tok);
   node->args = head.next;
-
-  // The callee's type, the argument conversions and the return-value
-  // buffer are semantic; sema lowers the node here so that the buffer
-  // is created at the call's position, like any other local.
-  lower_funcall(node, tok);
   return node;
 }
 
@@ -1793,7 +1763,9 @@ static Node *generic_selection(Token **rest, Token *tok) {
     if (equal(tok, "default")) {
       tok = skip(tok->next, ":");
     } else {
-      assoc->ty_op = typename(&tok, tok);
+      Node *specs = NULL;
+      assoc->ty_op = typename(&tok, tok, &specs);
+      assoc->spec_decls = specs;
       tok = skip(tok, ":");
     }
     assoc->lhs = assign(&tok, tok);
@@ -1835,37 +1807,38 @@ static Node *primary(Token **rest, Token *tok) {
   }
 
   if (equal(tok, "sizeof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
-    Type *ty = typename(&tok, tok->next->next);
+    Node *specs = NULL;
+    Type *ty = typename(&tok, tok->next->next, &specs);
     *rest = skip(tok, ")");
 
     // Keep sizeof faithful; sema folds it to its value.
     Node *node = new_node(ND_SIZEOF, start);
     node->ty_op = ty;
-    add_type(node);
+    node->spec_decls = specs;
     return node;
   }
 
   if (equal(tok, "sizeof")) {
+    // Keep sizeof faithful; sema folds it to its value.
     Node *node = new_node(ND_SIZEOF, tok);
     node->lhs = unary(rest, tok->next);
-    add_type(node);
     return node;
   }
 
   if (equal(tok, "_Alignof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
-    Type *ty = typename(&tok, tok->next->next);
+    Node *specs = NULL;
+    Type *ty = typename(&tok, tok->next->next, &specs);
     *rest = skip(tok, ")");
 
     Node *node = new_node(ND_ALIGNOF, start);
     node->ty_op = ty;
-    add_type(node);
+    node->spec_decls = specs;
     return node;
   }
 
   if (equal(tok, "_Alignof")) {
     Node *node = new_node(ND_ALIGNOF, tok);
     node->lhs = unary(rest, tok->next);
-    add_type(node);
     return node;
   }
 
@@ -1875,10 +1848,12 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "__builtin_types_compatible_p")) {
     // Both type operands are recorded; sema folds the node to 0 or 1.
     Node *node = new_node(ND_TYPES_COMPATIBLE, start);
+    Node *specs = NULL;
     tok = skip(tok->next, "(");
-    node->ty_op = typename(&tok, tok);
+    node->ty_op = typename(&tok, tok, &specs);
     tok = skip(tok, ",");
-    node->ty_op2 = typename(&tok, tok);
+    node->ty_op2 = typename(&tok, tok, &specs);
+    node->spec_decls = specs;
     *rest = skip(tok, ")");
     return node;
   }
@@ -1886,8 +1861,10 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "__builtin_reg_class")) {
     // sema folds the node to the register class of its type operand.
     Node *node = new_node(ND_REG_CLASS, start);
+    Node *specs = NULL;
     tok = skip(tok->next, "(");
-    node->ty_op = typename(&tok, tok);
+    node->ty_op = typename(&tok, tok, &specs);
+    node->spec_decls = specs;
     *rest = skip(tok, ")");
     return node;
   }
@@ -1916,28 +1893,19 @@ static Node *primary(Token **rest, Token *tok) {
 
   if (tok->kind == TK_IDENT) {
     // A reference to a variable, a function or an enum constant. Which
-    // one it denotes is not a syntax question, so the parser keeps the
-    // reference faithful and sema binds it through add_type.
-    //
-    // The binding has to happen at this point rather than in a later
-    // pass: name lookup needs the parser's scope stack, which is a
-    // dynamic one. A variable declared in a `for` init is out of scope
-    // once the statement is parsed, but its uses are typed later than
-    // that, so the name must be resolved while the scope is still
-    // alive.
+    // one it denotes is not a syntax question, so the reference stays
+    // faithful and sema's resolve pass binds it, using the scope stack
+    // the tree structure gives it.
     Node *node = new_node(ND_IDENT, tok);
     *rest = tok->next;
-    add_type(node);
     return node;
   }
 
   if (tok->kind == TK_STR) {
     // Keep the literal faithful; sema lowers it to a reference to an
-    // anonymous global. add_type is called here so that the global is
-    // created at the exact point the parser used to create it.
+    // anonymous global when it types the node.
     Node *node = new_node(ND_STRING, tok);
     *rest = tok->next;
-    add_type(node);
     return node;
   }
 
@@ -1958,7 +1926,12 @@ static Node *primary(Token **rest, Token *tok) {
   error_tok(tok, "expected an expression");
 }
 
-static Token *parse_typedef(Token *tok, Type *basety) {
+// Parses typedef declarators into ND_TYPEDEF records. The name also
+// goes into the typedef-name oracle immediately: the grammar needs it
+// to classify the very next identifier.
+static Node *parse_typedef(Token **rest, Token *tok, Type *basety) {
+  Node head = {};
+  Node *cur = &head;
   bool first = true;
 
   while (!consume(&tok, tok, ";")) {
@@ -1970,39 +1943,56 @@ static Token *parse_typedef(Token *tok, Type *basety) {
     if (!ty->name)
       error_tok(ty->name_pos, "typedef name omitted");
 
-    // Record the declaration for sema: it registers the name in the
-    // current scope, which the typedef oracle below reads back.
     Node *node = new_node(ND_TYPEDEF, ty->name);
     node->ty = ty;
     add_typedef(node);
+    cur = cur->next = node;
   }
-  return tok;
+
+  *rest = tok;
+  return head.next;
 }
 
-static Token *function(Token *tok, Type *basety, VarAttr *attr) {
+// Parses a function declarator, and its body if one follows, into an
+// ND_FUNCDEF record. sema declares the function (checking it against a
+// previous declaration, anchored at `tok`) and analyzes the body.
+static Node *function_def(Token **rest, Token *tok, Type *basety, VarAttr *attr) {
   Type *ty = declarator(&tok, tok, basety);
   if (!ty->name)
     error_tok(ty->name_pos, "function name omitted");
-  char *name_str = get_ident(ty->name);
 
-  Obj *fn = declare_function(name_str, ty, attr, tok, equal(tok, "{"));
+  Node *node = new_node(ND_FUNCDEF, tok);
+  node->ty_op = ty;
+  node->name_tok = ty->name;
+  node->attr = *attr;
+  add_declared_name(ty->name);
 
-  if (consume(&tok, tok, ";"))
-    return tok;
+  if (consume(&tok, tok, ";")) {
+    *rest = tok;
+    return node;
+  }
 
-  current_fn = fn;
+  // The parameters are visible in the whole body, so they shadow
+  // typedefs of the same name from here on, one scope above the body's
+  // own - where the old begin_function registered them.
   enter_scope();
-  begin_function(fn, ty);
+  for (Type *p = ty->params; p; p = p->next)
+    if (p->name)
+      add_declared_name(p->name);
 
   tok = skip(tok, "{");
-  fn->body = compound_stmt(&tok, tok);
-  fn->locals = get_locals();
+  node->body = compound_stmt(&tok, tok);
   leave_scope();
-  analyze(fn->body);
-  return tok;
+  *rest = tok;
+  return node;
 }
 
-static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
+// Parses global-variable declarators (at file scope, or `extern` ones
+// inside a block) into ND_GVAR_DECL records; sema declares the objects
+// and serializes their initializers.
+static Node *global_variable(Token **rest, Token *tok, Type *basety, VarAttr *attr) {
+  Node head = {};
+  Node *cur = &head;
   bool first = true;
 
   while (!consume(&tok, tok, ";")) {
@@ -2014,20 +2004,20 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     if (!ty->name)
       error_tok(ty->name_pos, "variable name omitted");
 
-    Obj *var = new_gvar(get_ident(ty->name), ty);
-    var->is_definition = !attr->is_extern;
-    var->is_static = attr->is_static;
-    var->is_tls = attr->is_tls;
-    int align = attr_align(attr);
-    if (align)
-      var->align = align;
+    Token *name = ty->name;
+    add_declared_name(name);
 
+    Node *node = new_node(ND_GVAR_DECL, tok);
+    node->ty_op = ty;
+    node->name_tok = name;
+    node->attr = *attr;
     if (equal(tok, "="))
-      gvar_initializer(&tok, tok->next, var);
-    else if (!attr->is_extern && !attr->is_tls)
-      var->is_tentative = true;
+      node->decl_init = init_record(&tok, tok->next);
+    cur = cur->next = node;
   }
-  return tok;
+
+  *rest = tok;
+  return head.next;
 }
 
 // Lookahead tokens and returns true if a given token is a start
@@ -2041,40 +2031,36 @@ static bool is_function(Token *tok) {
   return ty->kind == TY_FUNC;
 }
 
-static void declare_builtin_functions(void) {
-  Type *ty = func_type(pointer_to(ty_void));
-  ty->params = copy_type(ty_int);
-  builtin_alloca = new_gvar("alloca", ty);
-  builtin_alloca->is_definition = false;
-}
-
 // program = (typedef | function-definition | global-variable)*
-Obj *parse(Token *tok) {
-  declare_builtin_functions();
-  set_globals(NULL);
+//
+// The top-level declaration-record chain this returns is what sema
+// walks, in source order, to declare the objects and analyze the
+// function bodies.
+Node *parse(Token *tok) {
+  Node head = {};
+  Node *cur = &head;
 
   while (tok->kind != TK_EOF) {
     VarAttr attr = {};
-    Type *basety = declspec(&tok, tok, &attr);
+    Node *specs = NULL;
+    Type *basety = declspec(&tok, tok, &attr, &specs);
+    cur = chain_append(cur, specs);
 
     // Typedef
     if (attr.is_typedef) {
-      tok = parse_typedef(tok, basety);
+      cur = chain_append(cur, parse_typedef(&tok, tok, basety));
       continue;
     }
 
     // Function
     if (is_function(tok)) {
-      tok = function(tok, basety, &attr);
+      cur = cur->next = function_def(&tok, tok, basety, &attr);
       continue;
     }
 
     // Global variable
-    tok = global_variable(tok, basety, &attr);
+    cur = chain_append(cur, global_variable(&tok, tok, basety, &attr));
   }
 
-  // Mark the reachable functions live and drop the redundant tentative
-  // definitions.
-  finalize_globals();
-  return get_globals();
+  return head.next;
 }

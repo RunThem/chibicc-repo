@@ -28,7 +28,7 @@
 | d281858 | R2.2 | `_Generic` 改发忠实节点(ND_GENERIC + assoc), 两个类型 builtin 折叠移 sema |
 | 332f31e | R2.3 | 常量求值出 parse 第一批: 数组维度/typeof/aligned 与 _Alignas/case 值改记表达式, resolve_type 回填 |
 | 47e0040 | R2.4 | 初始化器忠实化: 忠实 brace 记录入树, 定位/越界/brace elision/灵活长度全部移 sema |
-| (本提交) | R2.5 | 位域宽度记表达式, 布局动作转 sema 私有(反悔 4.2a), 收尾触发落在定义完成点 |
+| 5f07540 | R2.5 | 位域宽度记表达式, 布局动作转 sema 私有(反悔 4.2a), 收尾触发落在定义完成点 |
 
 ## 各步详情
 
@@ -100,7 +100,7 @@
   2. **实现形态调整(非行为)**: 计划文本写"新增 NodeKind 或复用载体", 实施为新增 4 个 kind + 一个 `ty_op2` 字段; `default:` 用"assoc 无 type-name"表示, 未新增标志字段. 另外选择动作必须放在 add_type 的**入口**(前序递归之前), 放在 switch 里会让选中分支先作为 `args` 的子孙被独立标注, 于是 `&&label` 把自己的**原节点**登记进 gotos 清单, 而树上留下的是改写后的节点, 二者的 `unique_label` 脱钩 - 实测 `static void *gt[] = { _Generic(1, default: &&l2) };` 的跳转表项退化为 `.quad (null)+0`(R2.1 基线为 `.quad .L..6+0`). 改在入口做选择并只对落选分支做检查, 选中分支由改写后的节点自己走标注, 登记身份与树一致, 该用例逐字节复原. 落选分支的 `&&label` 仍会登记进 gotos, 因此未选中的 `&&未定义标签` 现在会报 "use of undeclared label"(clang 亦如此), 属 1. 的同一类增强.
   3. **测试期望值的一处自我纠正**: `__builtin_reg_class(int) + __builtin_reg_class(double)` 先按 2 写入断言, docker-test 报 "2 expected but got 1" - 折叠规则(整型/指针=0, 浮点=1)下 0+1=1 才是对的, 已改正. 记录在此说明该断言的取值来源是规则本身, `reg_class` 非标准 builtin, 宿主机 clang 无法旁证.
 
-### R2.3 常量求值出 parse(第一批) (本提交)
+### R2.3 常量求值出 parse(第一批) (332f31e)
 
 - 改了什么: 四类"解析现场算常量"的决策点改为**只记表达式**, 求值/判定统一进 sema 的新函数 `resolve_type(Type*)`.
   1. **数组维度与 VLA 分类**: `array_dimensions` 改发 `array_of_dim(ty, expr)`(type.c 新增: TY_ARRAY, array_len=-1, `Type.dim_len` 挂长度表达式); chibicc.h 的 `array_dimension_type` 声明与 sema 侧定义**删除**. resolve_type 递归走 declarator 建出的类型链(base / return_ty / params), 内层先于外层, 判 `base->kind==TY_VLA || !is_const_expr(dim)` 则就地改成 TY_VLA(size/align=8), 否则 `array_len=(int)eval(dim)` 重算 size 与 align - 与旧 `array_dimension_type` 同一判据同一次序. **触发点**: `declarator()` 与 `abstract_declarator()` 的非括号返回(类型完整之后、写 name 之前), `struct_members()` 对 basety 的一次(匿名成员靠 kind 识别, 该路径后面没有 declarator 出口), `layout_struct/layout_union` 入口, `new_var()` 读 `ty->align` 之前. 全部幂等(记录取出即清空).
@@ -119,7 +119,7 @@
   3. **实现形态调整(非行为)**: 计划文本写"由 sema 求值/判定后回填", 未指明触发时机; 按本线纪律 6(R2.1-R2.5 只做两段式, R2.6 才改遍历), 求值动作放在 resolve_type 里, 而 resolve_type 的**调用点**仍在解析现场(declarator 出口, 结构成员, layout 入口, new_var). 其中 `attr_align(VarAttr*)` 由 parse 直接调用并取回一个 int - 这是本步唯一"parse 仍向 sema 要一个值"的点, 因为 `_Alignas` 的值在一条声明里被多个 declarator 消费, 挂到 ND_DECL 上需要再引一个节点字段而收益为零; R2.6 的 resolve 遍历将连同 declarator 出口的 resolve_type 调用一起拆除. 另: 匿名成员那条路径没有 declarator 出口, 故 `struct_members` 里对 basety 多一次 resolve_type 调用.
   4. **未纳入本步的两项按计划归属确认无误**: 位域宽度 `mem->bit_width = const_expr(...)` 因布局时序留在 parse(归 R2.5); 初始化设计符的 4 处 `const_expr`(数组下标与区间)留在 parse(归 R2.4). `typeof` 的类型形式(`typeof(int)`)本就由 parse 走 typename, 不在求值迁移范围内.
 
-### R2.4 初始化器忠实化 (本提交)
+### R2.4 初始化器忠实化 (47e0040)
 
 - 改了什么: 初始化器解析与定位彻底两段式化 - parse 只建**忠实 brace 记录**, 全部语义(定位, 越界检查, brace elision, 灵活数组长度, 字符串展开, 结构复制判定)移入 sema 的 resolver.
   1. **chibicc.h**: `Initializer` 重定义为忠实记录(kind = INIT_LIST/INIT_EXPR/INIT_STR; LIST 携带 `InitItem` 元素序列, 每元素带 `comma_tok` + `InitDesig` designator 链 + 值记录; `InitDesig` 记 `[`/`.` token, 未求值的 begin/end 表达式节点, `...` 后的 after_begin 锚点与 `]` 锚点, 成员名 token). 旧 typed 树结构与 `InitDesg` 从 chibicc.h 撤出.
@@ -136,7 +136,7 @@
   4. **字符串物化与 copy 判定时点后移**: 初始化器内字符串记录的匿名全局物化与结构复制判定的 add_type 从解析现场移到 resolve(降级)时点. 单 declarator 声明内相对顺序不变(降级紧随该语句解析), 仅"同一声明内前一 declarator 的字符串初始化器 + 后一 declarator 的表达式初始化器含字符串字面量"(如 `char *p = "a", *q = f("b");`)会使匿名名编号相对旧版互换; 测试语料无此写法(raw diff 空). 与 R2.3 偏差 2 同类的时点位移.
   5. **多错误输入的首错优先级微移**: VLA 带初始化器且初始化器本身非法时(如 `int x[n] = {[0]=1}`), 旧版先报解析侧语法错("expected an expression"), 新版先报 "variable-sized object may not be initialized"(VLA 检查在 resolve 之前); `void x = <非法初始化器>` 同理由 resolve 侧先报. 单错误输入不变(d01 与 flex/void 锁定用例逐字节同, 43/43 全绿).
 
-### R2.5 位域宽度记录与布局后置 (本提交)
+### R2.5 位域宽度记录与布局后置 (5f07540)
 
 - 改了什么: 布局动作彻底离开 parse(`layout_struct/layout_union` 的直接调用消失, 转 sema 私有), 位域宽度改记表达式 - 拆分线 4.2a 的"解析现场直接铺布局"就此反悔.
   1. **宽度记录**: `Member` 加 `width_expr`(未求值的宽度表达式); parse 的 `mem->bit_width = const_expr(...)` 改为 `conditional()` 记录. sema 的 `eval_bitfield_widths` 在 layout 开头求值回填(结构/联合体共用), **纪律 7 就此达成: parse.c 的 eval/eval2/eval_double/const_expr/is_const_expr 调用计数 = 0**.
@@ -152,3 +152,32 @@
   1. **崩溃输入转正常编译**(条目 4 的 NULL 解引用): `int : 0;` 后接成员访问(`b.d`)或初始化器成员指定(`{.d=1}`)旧版段错静默退出, 新版正确布局并读取(4 位域零宽对齐语义经值核对). 属修复, 非行为回归(崩溃输入不可能有合法依赖).
   2. **实施形态调整(非行为)**: 计划文本写"布局调用点从解析现场移入 sema 遍历"; 按纪律 6(R2.1-R2.5 只做两段式, R2.6 才改遍历), 本步迁移的是**布局动作** - `layout_struct/layout_union` 的直接调用消失, 改为 `resolve_type` 的 TY_STRUCT/TY_UNION case(内含位宽求值), 而触发调用留在 struct_decl/union_decl 等解析现场. R2.6 的 resolve 遍历拆掉这些现场调用时, 布局与位宽逻辑零改动. 拆分线 4.2a 的"调用点仍在解析现场且直接铺布局"就此反悔.
   3. 拆分线 4.2a 记的两项时机偏差(常量诊断时机后移、布局时点移到首用点)在收尾点定到定义完成处之后**不再存在**: 位宽非常量诊断与布局计算时机逐字节回到 R2.4 口径(裸定义/后用/指针三类探针全同).
+
+### R2.6 拆构造现场标注 + resolve 前序遍历 (本提交)
+
+- 改了什么: 本步是 [重组] 步 - R2.1-R2.5 把语义动作从"解析现场算"改成"解析现场记录 + 现场调用 sema 求值", 触发点仍散落在 parse 的各构造点; R2.6 把这些**现场调用全部拆除**, sema 成为对整棵树的两趟独立遍历, parse.c 自此达到层 3 形态(无类型标注, 无名字绑定, 无降级).
+  1. **parse.c 去语义化(终态)**: `declarator` 不再 `copy_type`(共享类型单例的 `name`/`name_pos` 直接写在 declspec 造出的那块记录上); `declaration()`/`global_variable()` 在读到名字后**立即**用 `add_declared_name(name)` 把名字推进作用域影子表(供文法分类 oracle 识别 `t t=1; t;` 里末尾的 `t` 是表达式), 并把该 token 存进 `decl->name_tok`(在解析初始化器**之前**捕获, 因为共享单例的 `name` 会被下一个 declarator 覆写); `function_def()` 进作用域 + 推参数名后解析函数体(镜像基线 begin_function), 同样存 `name_tok`; `enum_specifier()` 每读一个枚举常量名就 `add_declared_name`. parse.c 里 `add_type`/`resolve_type`/`gvar_initializer`/`attr_align`/`declare_function`/`new_lvar`/`new_gvar`/`push_scope` 的调用计数**全部归零**(eval 族自 R2.5 已为 0).
+  2. **sema.c 两趟遍历**: 新增驱动 `Obj *sema(Node *toplevel)` - 按源码顺序走 parse 产出的顶层声明记录链(ND_TYPEDEF/ND_ENUM_CONST/ND_GVAR_DECL/ND_FUNCDEF), 函数记录先解析(让后续记录看见其名), 其 body 紧随其后标注与下降. 每函数内: **pass1 = resolve 前序遍历**(从树上重建作用域 - ND_BLOCK 的 is_scope_block / ND_STMT_EXPR / ND_FOR; 绑定 ND_IDENT 到 Obj; 求值枚举; 解析 pass 暂存的初始化器 `init_resolved`; 补全聚合布局与类型; 物化 ND_STRING 为匿名全局, 保持源码顺序), **pass2 = add_type/type_chain/analyze 标注与降级**(pass2 新建的临时变量经 `splice_locals` 前插进 locals 链). `analyze_function` 用 get_locals/set_locals 隔离每函数的 locals 累加.
+  3. **pass1 暂存与回填**: 初始化器的 `resolve_initializer` 从 pass2 移进 pass1 的声明记录处(数组按初始化器定长、灵活成员必须在后续引用之前补全), 结果存进 `Node.init_resolved`(不透明 `void*`, ResolvedInit 是 sema 私有类型); pass2 的 ND_DECL/ND_COMPOUND_LITERAL/serialize_gvar 取回该结果并清空两个字段. ND_STRING 的物化也在 pass1(否则匿名全局的数据段顺序会随 pass2 降级时机漂移).
+  4. **pass2 建节点必须自带类型**(没有第二趟补标注): ND_SIZEOF/ND_ALIGNOF 折叠出的 `folded` 节点在拷回字段前 `add_type(folded)`; ND_DECL 的 VLA 降级与初始化器降级两处 `decl_splice`(经 type_chain 链入, 背着标注下降)各自 `add_type(decl_splice)`.
+  5. **chibicc.h**: `Node` 新增 `Token *name_tok`(共享类型单例的 name 会被后续 declarator 覆写, 故名字 token 必须在 parse 现场即捕获)与 `void *init_resolved`(sema 私有载荷, 对 parse 不透明); `add_declared_name(Token*)` 导出. main.c 一行: `Obj *prog = sema(parse(tok));`.
+  6. **snapshot-normalize.awk 扩两类**(吸收 pass2 临时变量前插造成的栈帧重排): 类 4 = 每函数首个 `sub $N, %rsp` 归一为 `sub $FRAME, %rsp`(FRAME 交替保证幂等); 类 5 = memzero 的 `addq $-N, -M(%rbp)` 负立即数按每函数首现顺序映射为序号. 类 1-3(.loc 折叠 / .L 标签重编号 / 负 rbp 偏移序列化)不变.
+  7. **测试**: test/typedef.c +2(`MyInt MyInt` 形参自增、块内同名 typedef 变量 - 验证 oracle 影子表), test/enum.c +4(文件域裸 `enum{...};` 后接函数/枚举记录、`enum{C1}; enum{C2=C1+1};` 跨记录引用、typedef 枚举 sizeof、块内枚举 + 后接 extern 声明 - 验证 resolve_enum_records 的记录链 kind 守卫), 期望值宿主机 clang 验证.
+  规模: parse.c 2080 -> **2066**(error_tok 维持 15 = 判定表 A 全集; eval 族 0; 上述语义调用 0), sema.c 2548 -> **3153**, chibicc.h 731 -> **715**(Node 字段净增但撤出若干 parse 侧声明), main.c 1 行; **codegen.c 与 type.c 零改动**(git diff --stat 不列).
+- 为什么改: 层 3(忠实语法 AST)的定义是"不做降级, 不查名字, 不算类型"; R2.1-R2.5 已把每一类语义动作改成"记录 + sema 求值", 但求值的**触发**仍由 parse 在构造现场调用 - parse 依旧主导语义时序, 不是干净的阶段边界. R2.6 把触发权收归 sema 自己的树遍历: parse 只产出忠实记录链, sema 独立走两趟. 这是路线图阶段 4("sema 独立 pass")的收口, 也是 PLAN 本线"解除字节冻结造成的忠实层偏差"的终点 - 此后 parse.c 的表达式层真正"无类型标注, 无名字绑定".
+- 测试结果: 本步为 [重组], 闸门 = 行为三闸门 + **归一化** diff 为空 + 同提交重置 raw 基线.
+  - `make docker-test`(含 stage1 + stage2 自举 + driver.sh + 诊断锁定)**退出码 0**, 末行 "diagnostic lock: 43 cases byte-exact"(新增 typedef/enum 断言两遍全过).
+  - `make docker-test-thirdparty THIRDPARTY=tinycc` **退出码 0**: tests2 全套(含 109_float_struct_calling/110_average/111_conversion 与 "Auto Bound-Test2 OK")通过, tcc 自身编译(2363 ms)成功; 该闸门正是抓到偏差 2 的文件域裸 enum 挂死的地方.
+  - 诊断锁定: 43/43 单错误用例 stderr 逐字节不变(e08 的锚点随 name_tok 迁移仍逐字节同).
+  - 归一化 diff: 对照基线做法同 R2.1-R2.5 - 用 HEAD(R2.5, 5f07540)编译器 + **本提交的新测试源**在容器内生成 41 文件快照(否则新增的 fparam/file_enum_fn 等断言会被误判为差异), 新编译器下 `make docker-snapshot-ndiff` **退出码 0, "snapshot ndiff: empty"**(扩展归一化器类 1-5 吸收全部预期字节变化). 宿主机 A/B 旁证(带 SNAPSHOT_DATEFLAGS 吃掉 __TIME__/__DATE__ 运行伪影): 参考编译器(/tmp/cbase26, 自 5f07540 纯净重建)vs 新编译器对同一份新测试源, 41/41 全部 normalized MATCH.
+  - raw 基线重置: `make docker-snapshot` 重写 .cache/snapshot 为本步产物(退出码 0), `make docker-snapshot-diff` 复跑 **退出码 0, "snapshot diff: empty"**(raw 相对 R2.5 的预期字节变化 = 栈帧大小立即数 / memzero 负立即数 / .L 标签重编号 / .loc 行号 / 匿名全局数据顺序, 均由归一化器类 1-5 吸收, 故 ndiff 空而 raw 非空 - 这正是 [重组] 步的预期口径).
+  - 新测试断言: typedef.c 的 6/2 与 enum.c 的 4/1/4/9 经宿主机 clang 验证, 且参考 vs 新编译器归一化 match.
+- 偏差说明: 八项.
+  1. **R2.8/R3.3/R2.10 的实质被本步吸收**(计划口径调整, 非行为): 计划把"记录链化与删除中间节点"(R3.3)、"scope_decls 删除"(R2.8)、"隐藏变量在 resolve 中创建"(R2.10)列为后续步; 实施 R2.6 的两趟遍历时, 这些是 pass1/pass2 结构的自然组成 - 记录链由 parse 产出、sema 按链遍历即隐含"链化", 作用域表从树上重建即不再需要 scope_decls, ND_STRING/临时变量在 pass1/pass2 创建即"隐藏变量在 resolve 中创建". 后续对应步若只剩空壳则在执行时标注"已由 R2.6 吸收".
+  2. **resolve_enum_records 无限循环缺陷 + 捕获路径**(留档, 同 R2.5 教训): pass1 求值枚举记录链的外层循环初版未守卫 `recs->kind == ND_ENUM_CONST` - glibc 的 ctype.h/unistd.h 有文件域裸 `enum {...};`, 其后紧跟 ND_FUNCDEF/ND_GVAR_DECL(ty_op 非 NULL), 循环永不前进 → atomic.c/tls.c/stage2 在 docker-test 里**确定性挂死**. 定位链: debug 容器二分 + 宿主机 `sample <pid>` 抓挂死栈(lldb 在部分用例上自身挂死). 修复: `while (recs && recs->kind == ND_ENUM_CONST)`. **41 文件语料/docker-snapshot/宿主机 A/B 全没抓到**(语料无文件域裸 enum 后接非枚举记录), 是 docker-test 的自举 + 系统头路径抓到的 - 与 R2.5 的 tcc 闸门同一教训: 第三道闸门(真实项目/自举)不可省. 已在 test/enum.c 补该形状的回归断言.
+  3. **共享类型单例的 name 覆写类 + 现场即捕获**(实现约束): declspec 造出的 `ty_int` 等是共享单例, `Type.name` 是瞬态(被下一个 declarator 覆写); 任何延迟到 sema 才读名字的路径都必须用 parse 现场捕获的 `Node.name_tok`, 不能读 `ty_op->name`. 初版未捕获导致 21 文件报 "undefined variable"(gvar 记录 `int g` 推到 sema 时 name 已是后写的 `z`). 曾在 declarator 里 `copy_type` 试图修, 但聚合类型一旦复制就破坏布局语义(is_flexible 由成员转换 `last->ty=array_of(base,0)` 派生一次, 复制后再布局丢失它)→ initializer.c 段错; 最终方案 = name_tok 现场捕获, declarator 不复制.
+  4. **add_declared_name 增强 oracle**(行为不变, 文法分类必需): typedef 名不再被"已声明变量"遮蔽后, `t t=1; t;` 的末尾 `t;` 会被误判(报 "statement expression returning void"); `add_declared_name` 推进影子 VarScope(var/type_def 均 NULL)让 oracle 仍把已声明名识别为表达式. function_def 进作用域 + 推参数名镜像基线 begin_function. 纯文法分类反馈, 不绑定名字、不算类型.
+  5. **pass1 类型补全 / 字符串物化 / 构造即标注的纪律**(实现约束): 没有第二趟补标注, 故 (a) 初始化器定长/灵活成员补全必须在 pass1(否则 pass1 绑定 ND_IDENT 时 var->ty 尚不完整, `int x[]={1,2,3,4}` 的 sizeof 折成 -4); (b) ND_STRING 物化在 pass1(否则匿名全局数据段顺序随 pass2 漂移, control/typeof 出现 762/106 行 diff); (c) pass2 新建节点(folded/decl_splice)必须自带 add_type.
+  6. **locals 顺序变化 → 归一化器类 4/5 + raw 基线重置**(预期字节变化): pass2 临时变量前插(splice_locals)vs 基线交织创建, 造成对齐填充与栈帧大小的字节变化(5 文件 4 行); 设计决策 = 不为字节冻结而扭曲两趟结构, 改由归一化器吸收(类 4 帧大小 / 类 5 memzero 负立即数), 并在本提交重置 raw 基线. ndiff 空证明结构等价.
+  7. **诊断时机后移**(多错误输入首错优先级可能微移, 单错误不变): 名字解析/类型检查从构造现场移到 pass1/pass2 遍历, 单错误输入 43/43 逐字节同(e08 锚点改用 name_tok 仍同); 多错误输入的首错优先级可能随遍历顺序变化, 与 R1.2 偏差 4 / R2.3 偏差 2 / R2.4 偏差 5 同类.
+  8. **复合赋值 / 前缀自增自降的整结构复制改写**(潜在缺陷规避): pass2 降级 `op=` 与前缀 `++/--` 时对整个 Node 做结构复制再改写, 规避了"语句表达式 body 在改写中丢失"的潜在缺陷(若只改字段, ND_STMT_EXPR 的 body 链会脱钩); 纯表达式产物逐字节不变(归一化 match).

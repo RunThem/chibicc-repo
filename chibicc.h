@@ -172,6 +172,23 @@ struct Relocation {
   long addend;
 };
 
+// Declaration attributes collected by declspec: storage class and
+// _Alignas. The parser fills this in and copies it onto the declaration
+// record nodes; sema consumes it when it declares the object.
+typedef struct {
+  bool is_typedef;
+  bool is_static;
+  bool is_extern;
+  bool is_inline;
+  bool is_tls;
+  int align;
+  // A `_Alignas(<expr>)` argument, of which `align_ty` is the
+  // `_Alignas(<type>)` form. Whichever comes last is the one that
+  // counts; sema reads the type form's alignment off a completed type.
+  Node *align_expr;
+  Type *align_ty;
+} VarAttr;
+
 // Faithful initializer record (parse.c): the syntactic shape of an
 // initializer as written - a braced item sequence, a string literal or
 // a single expression, with designators recorded unevaluated. sema
@@ -280,12 +297,31 @@ typedef enum {
                     // lhs. A carrier only; it never reaches codegen.
   ND_TYPES_COMPATIBLE, // "__builtin_types_compatible_p"; sema folds it to 0 or 1
   ND_REG_CLASS,        // "__builtin_reg_class"; sema folds it to its class
-  ND_CAST,      // Type cast
+  ND_CAST,      // Type cast. The parser leaves an explicit cast untyped
+                // with its target type in ty_op; sema resolves and types
+                // the node. Casts sema inserts are fully typed at birth.
   ND_MEMZERO,   // Zero-clear a stack variable
-  ND_DECL,      // Declaration of a local variable; sema lowers it to statements
-  ND_TYPEDEF,   // Typedef declaration; a record for sema, never codegen'd
-  ND_ENUM_CONST, // Enum constant declaration (member name + optional value)
-  ND_COMPOUND_LITERAL, // "(type){...}"; sema materializes its hidden variable
+  ND_DECL,      // Declaration of a local variable: the name token on its
+                // type record, the attributes in `attr` and the faithful
+                // initializer record. sema declares the variable (pass 1)
+                // and lowers the node to statements (pass 2).
+  ND_GVAR_DECL, // Declaration record of a global variable (file scope, or
+                // an `extern`/tentative declaration inside a block). sema
+                // declares the variable, serializes its initializer and
+                // removes the record from any statement chain.
+  ND_FUNCDEF,   // Declaration record of a function; `body` is non-NULL for
+                // a definition. sema declares the function, runs both
+                // passes over the body and removes the record from any
+                // statement chain (a block-scope prototype or a [GNU]
+                // nested definition).
+  ND_TYPEDEF,   // Typedef declaration record; sema resolves its type and
+                // removes it from any statement chain.
+  ND_ENUM_CONST, // Enum constant declaration (member name + optional value
+                // expression). sema evaluates and registers the name, and
+                // removes the record from any statement chain.
+  ND_COMPOUND_LITERAL, // "(type){...}": the type in ty_op, the faithful
+                // initializer record in decl_init. sema materializes the
+                // hidden variable and lowers the node.
   ND_ASM,       // "asm"
   ND_CAS,       // Atomic compare-and-swap
   ND_EXCH,      // Atomic exchange
@@ -326,6 +362,12 @@ struct Node {
   // Block or statement expression
   Node *body;
 
+  // ND_BLOCK: true for a compound-statement block, which is a lexical
+  // scope; the wrapper a declaration emits and the empty statement are
+  // ND_BLOCK nodes without one. sema's resolve pass derives its scope
+  // stack from this flag.
+  bool is_scope_block;
+
   // Struct member access. The parser leaves it unbound: an unresolved
   // ND_MEMBER carries the member name in `tok`, and sema's add_type
   // looks the name up. `arrow_tok` is the `->` token of a pointer
@@ -356,19 +398,43 @@ struct Node {
 
   // ND_SIZEOF/ND_ALIGNOF: the operand type for the `sizeof(type)`
   // form. The `sizeof expr` form carries its unevaluated operand in
-  // `lhs` instead. sema folds the node to its value.
+  // `lhs` instead. sema folds the node to its value. ND_CAST (from the
+  // parser), ND_GENERIC_ASSOC, ND_TYPES_COMPATIBLE, ND_REG_CLASS,
+  // ND_DECL, ND_GVAR_DECL, ND_FUNCDEF and ND_COMPOUND_LITERAL carry
+  // their declared/target/operand type here as well.
   Type *ty_op;
 
   // ND_TYPES_COMPATIBLE: the second type operand, the first being
   // ty_op. The type predicates take two types and no subexpression.
   Type *ty_op2;
 
+  // Declaration record nodes (ND_DECL, ND_GVAR_DECL, ND_FUNCDEF): the
+  // storage-class and alignment attributes as the parser read them.
+  VarAttr attr;
+
+  // Declaration record nodes (ND_DECL, ND_GVAR_DECL, ND_FUNCDEF): the
+  // declared identifier. The declarator also parks it on the type's
+  // `name`, but types are shared (basic-type singletons, tag and
+  // typedef types) and that slot is overwritten by the next
+  // declarator, long before sema reads the record.
+  Token *name_tok;
+
+  // Enum-constant declaration records that became visible while an
+  // expression-context type was parsed (e.g. `sizeof(enum E { A })`).
+  // sema's resolve pass evaluates and registers them at this node's
+  // position, since the record has no statement-chain slot of its own.
+  Node *spec_decls;
+
   // ND_DECL: the faithful initializer record, or NULL if the
   // declarator has no initializer. sema resolves and lowers it to the
-  // MEMZERO + assignment comma chain. Without an initializer, the
-  // VLA-size computation
-  // (carried in `lhs`) becomes the lowered statement instead.
+  // MEMZERO + assignment comma chain.
   Initializer *decl_init;
+
+  // ND_DECL, ND_GVAR_DECL and ND_COMPOUND_LITERAL: an opaque payload
+  // sema's resolve pass parks here - the initializer record resolved
+  // against the declared type, which also completes the type - for
+  // the annotation pass to consume. Owned by sema.c.
+  void *init_resolved;
 
   // Case
   long begin;
@@ -412,141 +478,48 @@ Node *new_long(int64_t val, Token *tok);
 Node *new_ulong(long val, Token *tok);
 Node *new_var_node(Obj *var, Token *tok);
 Node *new_vla_ptr(Obj *var, Token *tok);
-Node *new_cast(Node *expr, Type *ty);
 
-// Variable constructors and the anonymous-name counter. Defined in
-// sema.c, which owns the lists of local and global variables and the
-// single counter that hidden objects (string literals, static locals,
-// control-flow labels) draw their names from.
-Obj *new_lvar(char *name, Type *ty);
-Obj *new_gvar(char *name, Type *ty);
-Obj *new_anon_gvar(Type *ty);
-Obj *new_string_literal(char *p, Type *ty);
-char *new_unique_name(void);
-
-// Declaration attributes collected by declspec: storage class and
-// _Alignas. The parser fills this in; sema consumes it when it declares
-// the object.
-typedef struct {
-  bool is_typedef;
-  bool is_static;
-  bool is_extern;
-  bool is_inline;
-  bool is_tls;
-  int align;
-  // A `_Alignas(<expr>)` argument, of which `align` is the
-  // `_Alignas(<type>)` form the parser can read off the type.
-  Node *align_expr;
-} VarAttr;
-
-// The scope table belongs to sema: it is what name resolution reads and
-// writes. The parser drives the block structure and asks the grammar
-// questions that only the table can answer (typedef-name
-// classification, tag lookup).
-void enter_scope(void);
-void leave_scope(void);
-bool in_file_scope(void);
-Type *find_typedef(Token *tok);
-Type *find_tag(Token *tok);
-Type *find_current_tag(Token *tok);
-void push_tag_scope(Token *tok, Type *ty);
-
-// Declares a function at file scope, or checks a redeclaration against
-// the object declared before. `tok` is the token following the
-// declarator; `is_definition` says whether a body follows.
-Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
-                      bool is_definition);
-
-// The function the parser is currently parsing, needed by sema when it
-// records a reference to a "static inline" function.
-Obj *get_current_fn(void);
-
-// Identifier spelling, used by sema when it creates the parameter
-// variables of a function definition.
+// Identifier spelling, used by sema when it declares the objects the
+// parser's declaration records name.
 char *get_ident(Token *tok);
 
-// Creates the variables a function definition owns: parameters, the
-// hidden struct-return buffer, __va_area__, __alloca_size__ and the
-// __func__/__FUNCTION__ strings.
-void begin_function(Obj *fn, Type *ty);
-
-Node *conditional(Token **rest, Token *tok);
-Obj *parse(Token *tok);
-
-// Faithful initializer record building (parse.c); resolved by sema.c.
-Initializer *initializer(Token **rest, Token *tok);
-Node *new_alloca(Node *sz);
+// The parser builds the faithful syntax tree and returns the top-level
+// declaration record chain; it makes no semantic decision beyond the
+// typedef/tag classification oracle the C grammar requires. sema()
+// consumes the chain.
+Node *parse(Token *tok);
 
 //
 // sema.c
 //
 
-// Semantic analysis: type annotation and constant evaluation.
-void add_type(Node *node);
+// Runs semantic analysis over the parser's output: name resolution,
+// type annotation, constant evaluation, aggregate layout, lowering, and
+// control-flow binding. Returns the list of global objects for codegen.
+Obj *sema(Node *toplevel);
+
+// Parses and evaluates a constant expression. Used by the
+// preprocessor for `#if`; not part of the parse/sema pipeline below.
 int64_t const_expr(Token **rest, Token *tok);
-Node *to_assign(Node *node);
-Node *compute_vla_size(Type *ty, Token *tok);
+Node *conditional(Token **rest, Token *tok);
 
-// The parser-side list of local variables and the list of global
-// variables are held here; the parser reads and resets them through
-// these accessors.
-Obj *get_locals(void);
-void set_locals(Obj *vars);
-Obj *get_globals(void);
-void set_globals(Obj *vars);
-
-// Typedef and enum-constant declarations, recorded by sema in source
-// order. A typedef record carries the name (as `tok`) and the declared
-// type (as `ty`); an enum-constant record carries the name (as `tok`),
-// the optional explicit value (as `lhs`) and the evaluated value (as
-// `val`). They are kept out of the AST statement chain because codegen
-// emits a .loc directive for every node it sees.
+// The parser's typedef-name oracle: the C grammar needs to know whether
+// an identifier names a type before it can parse a declaration. Sema
+// holds the table the oracle reads; the parser registers names into it
+// as it accepts typedefs.
+Type *find_typedef(Token *tok);
 void add_typedef(Node *node);
-Node *get_scope_decls(void);
+void add_declared_name(Token *tok);
 
-// Evaluates one enum constant and registers it in the parser's scope
-// table. `val` holds the value of the preceding member and is advanced
-// past this one.
-void add_enum_const(Node *node, Type *ty, int *val);
+// The struct/union/enum tag table. Like the typedef oracle, tag
+// lookup is a grammar question the parser asks while parsing.
+Type *find_tag(Token *tok);
+Type *find_current_tag(Token *tok);
+void push_tag_scope(Token *tok, Type *ty);
 
-// Declares a block-scope static variable; it gets an anonymous name in
-// the global data section. `tok` is the declaration's position.
-Obj *declare_static_local(Token *tok, char *name, Type *ty);
-
-// Turns a faithful call node into the shape codegen expects: callee
-// check, argument conversions, return buffer. Called by the parser at
-// the call site.
-void lower_funcall(Node *node, Token *tok);
-
-// Binds the control flow of a function body: sema allocates the labels
-// of loops and switches, points break/continue/case/goto at them, and
-// reports the ones that have no enclosing target. Called once per
-// function definition, after the body is complete.
-void analyze(Node *body);
-
-// Finishes the translated unit: liveness of "static inline" functions,
-// redundant tentative definitions.
-void finalize_globals(void);
-
-// Completes the declarator-layer type records the parser leaves pending:
-// an array dimension, a `typeof(expr)` operand, an `aligned` argument.
-// Called when a declarator is finished, and by the aggregate layout,
-// which needs the member alignments; idempotent.
-void resolve_type(Type *ty);
-
-// The alignment a declaration's `_Alignas` asks for: the value read off
-// the type in the `_Alignas(type)` form, or the evaluation of the
-// recorded expression in the `_Alignas(expr)` form.
-int attr_align(VarAttr *attr);
-
-// Looks up a member of a struct or union type by the name spelled by
-// `tok`, descending into anonymous members. Returns NULL if the type
-// has no such member.
-Member *get_struct_member(Type *ty, Token *tok);
-
-// Initializer resolution and lowering (sema.c). ND_DECL carries the
-// faithful record and is resolved when typed.
-void gvar_initializer(Token **rest, Token *tok, Obj *var);
+// Block-structure driving for the scope tables above.
+void enter_scope(void);
+void leave_scope(void);
 
 //
 // type.c
@@ -625,6 +598,10 @@ struct Type {
   Type *return_ty;
   Type *params;
   bool is_variadic;
+  // Enum-constant declaration records a parameter's declspec produced
+  // (e.g. `int f(enum E { A } x)`); sema's resolve pass registers them
+  // when it completes this function type.
+  Node *spec_decls;
   Type *next;
 };
 
@@ -637,6 +614,13 @@ struct Member {
   int idx;
   int align;
   int offset;
+
+  // A `_Alignas` on the member's declspec: the `_Alignas(<type>)` form
+  // is recorded in `align_ty` and the `_Alignas(<expr>)` form in
+  // `align_expr`; sema settles the value when the aggregate is laid
+  // out. Zero means no `_Alignas`, and the type's own alignment counts.
+  Type *align_ty;
+  Node *align_expr;
 
   // Bitfield
   bool is_bitfield;

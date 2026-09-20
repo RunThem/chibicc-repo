@@ -1,5 +1,5 @@
-# snapshot-normalize.awk - 汇编快照归一化(PLAN R0.2).
-# docker-snapshot-ndiff 在 diff 前对基线与新快照施加同一变换, 吃掉三类预期字节
+# snapshot-normalize.awk - 汇编快照归一化(PLAN R0.2, R2.6 扩展).
+# docker-snapshot-ndiff 在 diff 前对基线与新快照施加同一变换, 吃掉五类预期字节
 # 变化, 让 [重组] 步骤能以"结构等价"为形状闸门:
 #   1. 折叠 .loc/.file 行 - 吃掉语句链整形(PLAN R3)造成的调试行号重排.
 #   2. 末段为纯数字的 .L 标签按文件内首现顺序重编号
@@ -10,9 +10,14 @@
 #   3. 负 rbp 局部偏移 -N(%rbp) 按每函数首现顺序映射为序号
 #      (-16(%rbp) -> -1(%rbp)) - 吃掉隐藏变量创建时机变化(R2.6/R2.8)造成的
 #      lvar 偏移重排. 函数边界 = 列 0 的非点号标签.
-# 不触碰: 指令文本与助记符, 立即数, 正偏移(实参), 函数名/全局名,
+#   4. 每函数序言的第一条 "sub $N, %rsp" 归一为 "sub $FRAME, %rsp" -
+#      lvar 排列变化改变对齐填充, 帧大小立即数随之变化(R2.6: 降级临时量
+#      改在标注遍创建, 与声明变量的交织顺序不再与单遍解析逐一相同).
+#   5. "addq $-N, -M(%rbp)" 的负立即数按每函数首现顺序映射为序号 -
+#      该立即数是局部偏移的镜像(取地址降级), 与第 3 类同源.
+# 不触碰: 指令文本与助记符, 其余立即数, 正偏移(实参), 函数名/全局名,
 # .L.return.*, .cfi_*, .string/.long 等数据内容 - 结构性变化仍然可见.
-# 对同一输入逐字节幂等(重跑时两套映射均为恒等).
+# 对同一输入逐字节幂等(重跑时各映射均为恒等).
 
 function renum(line,   out, rest, tok, pre) {
   out = ""
@@ -45,8 +50,27 @@ function seqoff(line,   out, rest, tok) {
   return out rest
 }
 
+function seqimm(line,   tok) {
+  if (match(line, /addq \$-[0-9]+, -[0-9]+\(%rbp\)/)) {
+    match(line, /addq \$-[0-9]+/)
+    tok = substr(line, RSTART + 6, RLENGTH - 6)
+    if (!(tok in nmap)) { nseq++; nmap[tok] = nseq }
+    line = substr(line, 1, RSTART + 5) "-" nmap[tok] substr(line, RSTART + RLENGTH)
+  }
+  return line
+}
+
 {
   if ($0 ~ /^[[:space:]]*\.(loc|file)[[:space:]]/) next
-  if ($0 ~ /^[A-Za-z_$][A-Za-z0-9_$]*:/) { split("", omap); oseq = 0 }
-  print seqoff(renum($0))
+  if ($0 ~ /^[A-Za-z_$][A-Za-z0-9_$]*:/) {
+    split("", omap); oseq = 0
+    split("", nmap); nseq = 0
+    fdone = 0
+  }
+  if (!fdone && $0 ~ /^  sub \$(FRAME|[0-9]+), %rsp$/) {
+    fdone = 1
+    print "  sub $FRAME, %rsp"
+    next
+  }
+  print seqoff(seqimm(renum($0)))
 }

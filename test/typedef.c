@@ -3,6 +3,11 @@
 typedef int MyInt, MyInt2[4];
 typedef int;
 
+static int fparam(MyInt MyInt) {
+  MyInt = MyInt + 1;
+  return MyInt;
+}
+
 int main() {
   ASSERT(1, ({ typedef int t; t x=1; x; }));
   ASSERT(1, ({ typedef struct {int a;} t; t x; x.a=1; x.a; }));
@@ -11,6 +16,8 @@ int main() {
   ASSERT(4, ({ typedef t; t x; sizeof(x); }));
   ASSERT(3, ({ MyInt x=3; x; }));
   ASSERT(16, ({ MyInt2 x; sizeof(x); }));
+  ASSERT(6, fparam(5));
+  ASSERT(2, ({ MyInt MyInt = 2; MyInt; }));
 
   printf("OK\n");
   return 0;

@@ -1,10 +1,26 @@
-// This file hosts semantic analysis passes that operate on the AST
-// built by parse.c.
+// This file hosts the semantic analysis passes that operate on the
+// faithful syntax tree built by parse.c.
 //
-// Currently it contains the type annotator (add_type and its helpers)
-// and the constant expression evaluator (eval and friends), moved
-// verbatim out of parse.c and type.c as the first step of splitting
-// semantic analysis out of the parser.
+// sema runs in two traversals per function body (and record by record
+// at file scope):
+//
+//  - the resolve pass (resolve_node and friends) derives the scope
+//    stack from the tree structure, declares the objects the parser's
+//    declaration records name, binds every ND_IDENT, evaluates and
+//    registers enum constants, settles the type records the parser
+//    left to be completed (array dimensions, typeof operands,
+//    alignments, bitfield widths, case values) and lays aggregates
+//    out;
+//
+//  - the annotation + lowering pass (add_type and type_chain) types
+//    every node and performs the lowerings codegen expects (pointer
+//    scaling, compound assignment, increment, function calls, string
+//    literals, initializer flattening, control-flow labels via
+//    analyze).
+//
+// It also contains the constant expression evaluator (eval and
+// friends), which both passes use, and which the preprocessor uses
+// for `#if` through const_expr.
 
 #include "chibicc.h"
 
@@ -15,28 +31,63 @@ static double eval_double(Node *node);
 static bool is_const_expr(Node *node);
 static void layout_struct(Type *ty);
 static void layout_union(Type *ty);
+static void add_type(Node *node);
+static void type_chain(Node **head);
+static void analyze(Node *body);
+static void analyze_function(Obj *fn);
+static void resolve_node(Node *node);
+static void resolve_chain(Node *node);
+static void resolve_function(Node *node);
+static void resolve_enum_records(Node *recs);
+static void resolve_type_exprs(Type *ty);
+static void resolve_type(Type *ty);
+static void serialize_gvar(Node *node);
+static int attr_align(VarAttr *attr);
+static Obj *new_gvar(char *name, Type *ty);
+static Obj *new_lvar(char *name, Type *ty);
+static char *new_unique_name(void);
+static Member *get_struct_member(Type *ty, Token *tok);
 
-// All local variable instances created during parsing are
-// accumulated to this list.
+// All local variable instances created for the function being analyzed
+// are accumulated to this list.
 static Obj *locals;
 
 // Likewise, global variables are accumulated to this list.
 static Obj *globals;
 
-Obj *get_locals(void) {
+static Obj *get_locals(void) {
   return locals;
 }
 
-void set_locals(Obj *vars) {
+static void set_locals(Obj *vars) {
   locals = vars;
 }
 
-Obj *get_globals(void) {
+static Obj *get_globals(void) {
   return globals;
 }
 
-void set_globals(Obj *vars) {
+static void set_globals(Obj *vars) {
   globals = vars;
+}
+
+// The function sema is currently working on, needed when a reference to
+// a "static inline" function is recorded and when a return statement is
+// converted to the return type. Like the parser's old current_fn, it
+// persists after a [GNU] nested function definition is analyzed.
+static Obj *sema_fn;
+
+static Obj *builtin_alloca;
+
+static Node *new_cast(Node *expr, Type *ty) {
+  add_type(expr);
+
+  Node *node = calloc(1, sizeof(Node));
+  node->kind = ND_CAST;
+  node->tok = expr->tok;
+  node->lhs = expr;
+  node->ty = copy_type(ty);
+  return node;
 }
 
 // Scope for local variables, global variables, typedefs
@@ -59,11 +110,12 @@ struct Scope {
   HashMap tags;
 };
 
-// The scope table lives here because name resolution is sema's: it
-// creates the variables and resolves the names. The parser only drives
-// the block structure (enter_scope/leave_scope) and asks the two
-// grammar questions the table answers - whether an identifier is a
-// typedef name, and what a tag refers to.
+// The scope table serves two masters with disjoint needs: the parser
+// drives the block structure while parsing and asks the two grammar
+// questions the table answers - whether an identifier is a typedef
+// name, and what a tag refers to. The resolve pass derives the same
+// block structure from the tree and reads/writes the variable and
+// enum-constant entries.
 static Scope *scope = &(Scope){};
 
 void enter_scope(void) {
@@ -78,7 +130,7 @@ void leave_scope(void) {
 
 // True at file scope, where a compound literal declares an anonymous
 // global rather than a hidden local.
-bool in_file_scope(void) {
+static bool in_file_scope(void) {
   return scope->next == NULL;
 }
 
@@ -130,45 +182,21 @@ Type *find_typedef(Token *tok) {
   return NULL;
 }
 
-// Declaration records (typedefs and enum constants), in source order.
-// Sema records them as it declares the names; they are not part of the
-// AST statement chain, which codegen walks.
-static Node *scope_decls;
-static Node *scope_decls_tail;
-
-static void add_scope_decl(Node *node) {
-  if (scope_decls)
-    scope_decls_tail = scope_decls_tail->next = node;
-  else
-    scope_decls = scope_decls_tail = node;
-}
-
-Node *get_scope_decls(void) {
-  return scope_decls;
-}
-
-// Declares a typedef name in the current scope and records the
-// declaration. The name must be visible immediately: the parser needs
-// the typedef oracle to classify the very next identifier.
+// Declares a typedef name in the current scope. The name must be
+// visible immediately: the parser needs the typedef oracle to classify
+// the very next identifier. The ND_TYPEDEF record also enters the chain
+// for the resolve pass to complete its type at that position.
 void add_typedef(Node *node) {
   push_scope(get_ident(node->tok))->type_def = node->ty;
-  add_scope_decl(node);
 }
 
-// Evaluates an enum constant's value and registers the name. `val` is
-// the running value of the enum list: a member without an explicit
-// value takes it, and it is advanced past this member either way.
-void add_enum_const(Node *node, Type *ty, int *val) {
-  if (node->lhs)
-    *val = eval(node->lhs);
-
-  node->val = *val;
-  (*val)++;
-
-  VarScope *sc = push_scope(get_ident(node->tok));
-  sc->enum_ty = ty;
-  sc->enum_val = node->val;
-  add_scope_decl(node);
+// Records a name a declarator just declared (a variable, function or
+// parameter). The entry carries no object; it shadows a typedef of the
+// same name from the point of declaration on, which is the
+// classification the parser's oracle needs before sema's resolve pass
+// declares the object for real.
+void add_declared_name(Token *tok) {
+  push_scope(get_ident(tok));
 }
 
 // A block-scope declaration may not declare a void object. `tok` is the
@@ -176,17 +204,6 @@ void add_enum_const(Node *node, Type *ty, int *val) {
 static void check_declared_void(Token *tok, Type *ty) {
   if (ty->kind == TY_VOID)
     error_tok(tok, "variable declared void");
-}
-
-// Declares a block-scope static variable. It has static storage
-// duration, so it lives in the global data section under an anonymous
-// name, but its name is registered like any other local.
-Obj *declare_static_local(Token *tok, char *name, Type *ty) {
-  check_declared_void(tok, ty);
-
-  Obj *var = new_anon_gvar(ty);
-  push_scope(name)->var = var;
-  return var;
 }
 
 // Looks up a function in the file scope.
@@ -204,8 +221,8 @@ static Obj *find_func(char *name) {
 // Declares a function at file scope, or checks a redeclaration against
 // the object declared before. `tok` is the token following the
 // declarator and `is_definition` says whether a body follows.
-Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
-                      bool is_definition) {
+static Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
+                             bool is_definition) {
   Obj *fn = find_func(name);
 
   if (fn) {
@@ -373,7 +390,7 @@ static void analyze_node(Node *node) {
   }
 }
 
-void analyze(Node *body) {
+static void analyze(Node *body) {
   analyze_chain(body);
   resolve_labels();
   gotos = labels = NULL;
@@ -420,7 +437,7 @@ static void scan_globals(void) {
 
 // Finishes the translated unit: marks the functions reachable from a
 // root live and drops the redundant tentative definitions.
-void finalize_globals(void) {
+static void finalize_globals(void) {
   for (Obj *var = globals; var; var = var->next)
     if (var->is_root)
       mark_live(var);
@@ -428,12 +445,46 @@ void finalize_globals(void) {
   scan_globals();
 }
 
+// Evaluates and registers a run of enum-constant declaration records.
+// The parser records each member with its name, its optional explicit
+// value expression and the enum type; a member without an explicit
+// value continues the running value of the list, exactly as the old
+// on-the-spot evaluation did. Each record is consumed (ty_op cleared)
+// so that a later walk skips it.
+static void resolve_enum_records(Node *recs) {
+  // The walk stops at the first record that is not an enum constant:
+  // on the top-level and block chains the run is followed by whatever
+  // declaration record comes next, which carries its own type payload.
+  while (recs && recs->kind == ND_ENUM_CONST) {
+    Type *ety = recs->ty_op;
+    if (!ety) {
+      recs = recs->next;
+      continue;
+    }
+
+    int val = 0;
+    while (recs && recs->kind == ND_ENUM_CONST && recs->ty_op == ety) {
+      if (recs->lhs) {
+        resolve_node(recs->lhs);
+        val = (int)eval(recs->lhs);
+      }
+      recs->val = val++;
+      recs->ty_op = NULL;
+
+      VarScope *sc = push_scope(get_ident(recs->tok));
+      sc->enum_ty = ety;
+      sc->enum_val = recs->val;
+      recs = recs->next;
+    }
+  }
+}
+
 // Completes the type records the parser's declarator layer could not
 // decide. It walks the type a declarator built, so that an inner
 // dimension or operand is settled before the outer one wrapped in it -
 // the order the parser's own recursion gave. A record is cleared as it is
 // consumed, so calling this again costs nothing.
-void resolve_type(Type *ty) {
+static void resolve_type(Type *ty) {
   if (!ty)
     return;
 
@@ -455,9 +506,9 @@ void resolve_type(Type *ty) {
   case TY_STRUCT:
   case TY_UNION:
     // The parser records the member list; placing the members is
-    // sema's job. The parser asks at the closing brace, which is where
-    // the type becomes complete, so an aggregate's own members are
-    // already placed by the time an outer one consumes their sizes.
+    // sema's job, done on first sight of the completed type. An
+    // aggregate's own members are placed before an outer one consumes
+    // their sizes, because the member types are resolved first.
     if (ty->layout_pending) {
       ty->layout_pending = false;
       if (ty->kind == TY_STRUCT)
@@ -467,6 +518,12 @@ void resolve_type(Type *ty) {
     }
     break;
   case TY_FUNC:
+    // Enum constants a parameter's declspec defined ride on the
+    // function type; they become visible when the type is completed.
+    if (ty->spec_decls) {
+      resolve_enum_records(ty->spec_decls);
+      ty->spec_decls = NULL;
+    }
     resolve_type(ty->return_ty);
     for (Type *param = ty->params; param; param = param->next)
       resolve_type(param);
@@ -516,24 +573,112 @@ void resolve_type(Type *ty) {
   }
 }
 
-// The alignment a declaration's `_Alignas` asks for. The parser has the
-// value for the `_Alignas(type)` form; the `_Alignas(expr)` form is a
-// constant expression, and evaluating it is not a syntax question. The
-// value is cached, because one declaration declares several objects and
-// each of them asks.
-int attr_align(VarAttr *attr) {
+// Walks a type's pending records and resolves the expression nodes
+// hanging off them (array dimensions, typeof operands, alignments,
+// bitfield widths) without evaluating anything: the names inside get
+// bound and the declaration records inside (a statement expression can
+// appear in a constant context) get declared, so that the evaluations
+// resolve_type performs afterwards find a complete picture.
+static void resolve_type_exprs(Type *ty) {
+  if (!ty)
+    return;
+
+  switch (ty->kind) {
+  case TY_PTR:
+  case TY_VLA:
+    resolve_type_exprs(ty->base);
+    break;
+  case TY_ARRAY:
+    resolve_type_exprs(ty->base);
+    resolve_node(ty->dim_len);
+    break;
+  case TY_FUNC:
+    resolve_type_exprs(ty->return_ty);
+    for (Type *param = ty->params; param; param = param->next)
+      resolve_type_exprs(param);
+    break;
+  case TY_STRUCT:
+  case TY_UNION:
+    // Layout resolves the member types itself; walking them here would
+    // recurse forever on a self-referential member. The pending flag
+    // bounds the recursion exactly as it does for the layout.
+    if (ty->layout_pending) {
+      ty->layout_pending = false;
+      for (Member *mem = ty->members; mem; mem = mem->next) {
+        resolve_type_exprs(mem->ty);
+        resolve_node(mem->width_expr);
+        resolve_node(mem->align_expr);
+        resolve_type_exprs(mem->align_ty);
+      }
+      ty->layout_pending = true;
+    }
+    break;
+  default:
+    break;
+  }
+
+  resolve_node(ty->align_expr);
+  resolve_node(ty->typeof_expr);
+}
+
+// The alignment a declaration's `_Alignas` asks for. The parser records
+// both forms: the `_Alignas(type)` one as a type whose alignment is
+// read once the type is complete, and the `_Alignas(expr)` one as a
+// constant expression to evaluate. The value is cached, because one
+// declaration declares several objects and each of them asks.
+static int attr_align(VarAttr *attr) {
   if (!attr)
     return 0;
-  if (!attr->align_expr)
+  if (attr->align_expr) {
+    attr->align = (int) eval(attr->align_expr);
+    attr->align_expr = NULL;
     return attr->align;
-
-  attr->align = (int) eval(attr->align_expr);
-  attr->align_expr = NULL;
+  }
+  if (attr->align_ty) {
+    resolve_type(attr->align_ty);
+    attr->align = attr->align_ty->align;
+    attr->align_ty = NULL;
+    return attr->align;
+  }
   return attr->align;
 }
 
 static int align_down(int n, int align) {
   return align_to(n - align + 1, align);
+}
+
+// Completes the member records before they are placed: a member type
+// may still carry parser stashes (a dimension, a typeof operand), and
+// the `_Alignas` forms are settled here. A trailing incomplete-array
+// member becomes the zero-sized flexible array member.
+static void finalize_members(Type *ty) {
+  for (Member *mem = ty->members; mem; mem = mem->next) {
+    resolve_type_exprs(mem->ty);
+    resolve_type(mem->ty);
+
+    if (mem->align_ty) {
+      resolve_type(mem->align_ty);
+      mem->align = mem->align_ty->align;
+      mem->align_ty = NULL;
+    }
+    if (mem->align_expr) {
+      mem->align = (int) eval(mem->align_expr);
+      mem->align_expr = NULL;
+    }
+    if (!mem->align)
+      mem->align = mem->ty->align;
+  }
+
+  // If the last element is an array of incomplete type, it's
+  // called a "flexible array member". It should behave as if
+  // if were a zero-sized array.
+  Member *last = NULL;
+  for (Member *mem = ty->members; mem; mem = mem->next)
+    last = mem;
+  if (last && last->ty->kind == TY_ARRAY && last->ty->array_len < 0) {
+    last->ty = array_of(last->ty->base, 0);
+    ty->is_flexible = true;
+  }
 }
 
 // Evaluate the recorded bitfield width expressions of a member list.
@@ -561,6 +706,7 @@ static void layout_struct(Type *ty) {
   if (ty->size < 0)
     return;
 
+  finalize_members(ty);
   eval_bitfield_widths(ty);
 
   int bits = 0;
@@ -600,6 +746,7 @@ static void layout_union(Type *ty) {
   if (ty->size < 0)
     return;
 
+  finalize_members(ty);
   eval_bitfield_widths(ty);
 
   for (Member *mem = ty->members; mem; mem = mem->next) {
@@ -622,9 +769,8 @@ static void bind_ident(Node *node) {
     // For "static inline" functions, record the reference so that the
     // liveness analysis can tell which ones are actually needed.
     if (var->is_function) {
-      Obj *fn = get_current_fn();
-      if (fn)
-        strarray_push(&fn->refs, var->name);
+      if (sema_fn)
+        strarray_push(&sema_fn->refs, var->name);
       else
         var->is_root = true;
     }
@@ -657,7 +803,7 @@ static Obj *new_var(char *name, Type *ty) {
   return var;
 }
 
-Obj *new_lvar(char *name, Type *ty) {
+static Obj *new_lvar(char *name, Type *ty) {
   Obj *var = new_var(name, ty);
   var->is_local = true;
   var->next = locals;
@@ -665,7 +811,7 @@ Obj *new_lvar(char *name, Type *ty) {
   return var;
 }
 
-Obj *new_gvar(char *name, Type *ty) {
+static Obj *new_gvar(char *name, Type *ty) {
   Obj *var = new_var(name, ty);
   var->next = globals;
   var->is_static = true;
@@ -677,16 +823,16 @@ Obj *new_gvar(char *name, Type *ty) {
 // The anonymous names of hidden objects - string literal globals,
 // static locals and the control-flow labels sema allocates - come
 // from this one counter.
-char *new_unique_name(void) {
+static char *new_unique_name(void) {
   static int id = 0;
   return format(".L..%d", id++);
 }
 
-Obj *new_anon_gvar(Type *ty) {
+static Obj *new_anon_gvar(Type *ty) {
   return new_gvar(new_unique_name(), ty);
 }
 
-Obj *new_string_literal(char *p, Type *ty) {
+static Obj *new_string_literal(char *p, Type *ty) {
   Obj *var = new_anon_gvar(ty);
   var->init_data = p;
   return var;
@@ -704,10 +850,10 @@ static void create_param_lvars(Type *param) {
 // Sets up the variables a function definition owns: the parameters
 // (including the hidden buffer for a large struct/union return value),
 // the __va_area__ and __alloca_size__ helpers, and the __func__ /
-// __FUNCTION__ strings. The parser calls this once it has seen the
-// function body begin, so that everything is created in the same order
-// as before.
-void begin_function(Obj *fn, Type *ty) {
+// __FUNCTION__ strings. The resolve pass calls this once it reaches the
+// function body, so that everything is created in the same order as
+// before.
+static void begin_function(Obj *fn, Type *ty) {
   set_locals(NULL);
   create_param_lvars(ty->params);
 
@@ -724,14 +870,33 @@ void begin_function(Obj *fn, Type *ty) {
   fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(ty_char));
 
   // [https://www.sigbus.info/n1570#6.4.2.2p1] "__func__" is
-  // automatically defined as a local variable containing the
-  // current function name.
+  // automatically defined as a local variable containing
+  // the current function name.
   push_scope("__func__")->var =
     new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
 
   // [GNU] __FUNCTION__ is yet another name of __func__.
   push_scope("__FUNCTION__")->var =
     new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
+}
+
+static void declare_builtin_functions(void) {
+  Type *ty = func_type(pointer_to(ty_void));
+  ty->params = copy_type(ty_int);
+  builtin_alloca = new_gvar("alloca", ty);
+  builtin_alloca->is_definition = false;
+}
+
+// Build the `alloca(<size>)` call node for a VLA declaration. The call
+// arrives fully typed, so add_type skips it and codegen recognizes the
+// builtin by name.
+static Node *new_alloca(Node *sz) {
+  Node *node = new_unary(ND_FUNCALL, new_var_node(builtin_alloca, sz->tok), sz->tok);
+  node->func_ty = builtin_alloca->ty;
+  node->ty = builtin_alloca->ty->return_ty;
+  node->args = sz;
+  add_type(sz);
+  return node;
 }
 
 // In C, `+` operator is overloaded to perform the pointer arithmetic.
@@ -833,7 +998,7 @@ static Node *compound_op(Node *node, Node *lhs, Token *tok) {
 // However, if a given expression is of form `A.x op= C`, the input is
 // converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
 // to bitfields.
-Node *to_assign(Node *node) {
+static Node *to_assign(Node *node) {
   add_type(node->lhs);
   add_type(node->rhs);
   Token *tok = node->tok;
@@ -964,9 +1129,8 @@ static Node *new_inc_dec(Node *node, Token *tok, int addend) {
 // its parameter type (an argument past the parameter list is promoted
 // instead, since it belongs to a variadic tail), and a struct or union
 // return value gets the buffer the caller owns. `tok` is the call's
-// position. The parser calls this at the call site so that the return
-// buffer is created where the call appears, like any other local.
-void lower_funcall(Node *node, Token *tok) {
+// closing paren, where the argument-count diagnostics are anchored.
+static void lower_funcall(Node *node, Token *tok) {
   Node *fn = node->lhs;
   Type *ty = fn->ty;
 
@@ -1017,9 +1181,8 @@ void lower_funcall(Node *node, Token *tok) {
     node->ret_buffer = new_lvar("", node->ty);
 }
 
-// Generate code for computing a VLA size. Moved from parse.c; the
-// parser still calls it for every declarator it declares.
-Node *compute_vla_size(Type *ty, Token *tok) {
+// Generate code for computing a VLA size.
+static Node *compute_vla_size(Type *ty, Token *tok) {
   Node *node = new_node(ND_NULL_EXPR, tok);
   if (ty->base)
     node = new_binary(ND_COMMA, node, compute_vla_size(ty->base, tok), tok);
@@ -1633,8 +1796,8 @@ static Node *create_lvar_init(ResolvedInit *init, Type *ty, InitDesg *desg, Toke
 
 // Build the MEMZERO + assignment comma chain that initializes a local
 // variable from its resolved initializer tree. `tok` anchors the
-// synthesized nodes; the parser anchors them at the first token of
-// the initializer source (Initializer::tok of an ND_DECL's record).
+// synthesized nodes; the record's first token is where the parser used
+// to anchor them.
 static Node *lvar_init_comma(Obj *var, ResolvedInit *init, Token *tok) {
   InitDesg desg = {NULL, 0, NULL, var};
 
@@ -1660,8 +1823,9 @@ static Node *lvar_init_comma(Obj *var, ResolvedInit *init, Token *tok) {
 //   x[1][0] = 8;
 //   x[1][1] = 9;
 //
-// The parser hands the faithful initializer record to ND_DECL; sema
-// resolves it and this lowering rebuilds the chain from the result.
+// The parser hands the faithful initializer record to the declaration
+// node; sema resolves it and this lowering rebuilds the chain from the
+// result.
 
 static uint64_t read_buf(char *buf, int sz) {
   if (sz == 1)
@@ -1755,8 +1919,7 @@ write_gvar_data(Relocation *cur, ResolvedInit *init, Type *ty, char *buf, int of
 }
 
 // Serialize a resolved initializer tree into the .data image of a
-// global variable. Split from gvar_initializer so that sema-internal
-// lowerings (e.g. compound literals) can reuse it.
+// global variable.
 static void gvar_init_data(Obj *var, ResolvedInit *init) {
   Relocation head = {};
   char *buf = calloc(1, var->ty->size);
@@ -1765,16 +1928,17 @@ static void gvar_init_data(Obj *var, ResolvedInit *init) {
   var->rel = head.next;
 }
 
-// Initializers for global variables are evaluated at compile-time and
-// embedded to .data section. This function serializes Initializer
-// objects to a flat byte array. It is a compile error if an
-// initializer list contains a non-constant expression.
-void gvar_initializer(Token **rest, Token *tok, Obj *var) {
-  Initializer *rec = initializer(rest, tok);
-  Type *new_ty;
-  ResolvedInit *init = resolve_initializer(rec, var->ty, &new_ty);
-  var->ty = new_ty;
-  gvar_init_data(var, init);
+// Resolve a global variable's faithful initializer record and
+// serialize it into the variable's .data image. Initializers for
+// global variables are evaluated at compile-time; it is a compile
+// error if an initializer list contains a non-constant expression.
+static void serialize_gvar(Node *node) {
+  if (!node->decl_init)
+    return;
+
+  gvar_init_data(node->var, node->init_resolved);
+  node->decl_init = NULL;
+  node->init_resolved = NULL;
 }
 
 static Type *get_common_type(Type *ty1, Type *ty2) {
@@ -1820,7 +1984,7 @@ static void usual_arith_conv(Node **lhs, Node **rhs) {
 }
 
 // Find a struct member by name, descending into anonymous members.
-Member *get_struct_member(Type *ty, Token *tok) {
+static Member *get_struct_member(Type *ty, Token *tok) {
   for (Member *mem = ty->members; mem; mem = mem->next) {
     // Anonymous struct member
     if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) &&
@@ -1921,8 +2085,10 @@ static void select_generic(Node *node) {
     if (!assoc->ty_op) {
       if (!sel)
         sel = assoc->lhs;
-    } else if (is_compatible(ty, assoc->ty_op)) {
-      sel = assoc->lhs;
+    } else {
+      resolve_type(assoc->ty_op);
+      if (is_compatible(ty, assoc->ty_op))
+        sel = assoc->lhs;
     }
   }
 
@@ -1940,7 +2106,66 @@ static void select_generic(Node *node) {
   node->next = nxt;
 }
 
-void add_type(Node *node) {
+// The declaration-record splicing of the annotation pass: a lowered
+// declaration may ask for a sibling statement in front of itself (the
+// VLA-size computation) or for its own removal (a block-scope static,
+// which produces no code).
+static Node *decl_splice;
+static bool decl_remove;
+
+// Walks a statement chain, typing each node. Declaration records that
+// produce no code (typedefs, enum constants, extern declarations and
+// [GNU] nested function definitions) are consumed here and removed
+// from the chain, so that codegen sees exactly the shape it saw when
+// the parser emitted the lowerings in place.
+static void type_chain(Node **head) {
+  for (Node **pp = head; *pp;) {
+    Node *n = *pp;
+
+    switch (n->kind) {
+    case ND_TYPEDEF:
+    case ND_ENUM_CONST:
+      *pp = n->next;
+      continue;
+    case ND_GVAR_DECL:
+      serialize_gvar(n);
+      *pp = n->next;
+      continue;
+    case ND_FUNCDEF:
+      // A [GNU] nested function definition: its body is analyzed at
+      // this position of the enclosing body, as the parser used to,
+      // and the record then leaves the chain.
+      if (n->body)
+        analyze_function(n->var);
+      *pp = n->next;
+      continue;
+    default:
+      break;
+    }
+
+    Node *save_splice = decl_splice;
+    bool save_remove = decl_remove;
+    decl_splice = NULL;
+    decl_remove = false;
+    add_type(n);
+    Node *splice = decl_splice;
+    bool remove = decl_remove;
+    decl_splice = save_splice;
+    decl_remove = save_remove;
+
+    if (remove) {
+      *pp = n->next;
+      continue;
+    }
+    if (splice) {
+      splice->next = n;
+      *pp = splice;
+    }
+    pp = &(*pp)->next;
+  }
+}
+
+static void add_type(Node *node) {
   if (!node || node->ty)
     return;
 
@@ -1960,11 +2185,10 @@ void add_type(Node *node) {
   add_type(node->cond);
   add_type(node->then);
   add_type(node->els);
-  add_type(node->init);
+  type_chain(&node->init);
   add_type(node->inc);
+  type_chain(&node->body);
 
-  for (Node *n = node->body; n; n = n->next)
-    add_type(n);
   for (Node *n = node->args; n; n = n->next)
     add_type(n);
 
@@ -2019,6 +2243,19 @@ void add_type(Node *node) {
     return;
   }
   case ND_ASSIGN:
+    if (node->op) {
+      // A compound assignment as the parser recorded it: rewrite to
+      // the read-modify-write form (handling the member and atomic
+      // cases), then type the result afresh. The rewrite takes the
+      // whole node, because the atomic form becomes a statement
+      // expression, which carries its body outside lhs/rhs.
+      Node *result = to_assign(node);
+      Node *nxt = node->next;
+      *node = *result;
+      node->next = nxt;
+      add_type(node);
+      return;
+    }
     if (node->lhs->ty->kind == TY_ARRAY)
       error_tok(node->lhs->tok, "not an lvalue");
     if (node->lhs->ty->kind != TY_STRUCT)
@@ -2042,9 +2279,9 @@ void add_type(Node *node) {
     Node *expr = new_binary(ND_ASSIGN, operand, new_num(1, tok), tok);
     expr->op = node->addend < 0 ? ND_SUB : ND_ADD;
     Node *result = to_assign(expr);
-    node->kind = result->kind;
-    node->lhs = result->lhs;
-    node->rhs = result->rhs;
+    Node *nxt = node->next;
+    *node = *result;
+    node->next = nxt;
     add_type(node);
     return;
   }
@@ -2071,7 +2308,9 @@ void add_type(Node *node) {
     node->ty = ty_int;
     return;
   case ND_FUNCALL:
-    node->ty = node->func_ty->return_ty;
+    // Lower the faithful call node: the callee check, the argument
+    // conversions and the return buffer.
+    lower_funcall(node, node->tok);
     return;
   case ND_NOT:
   case ND_LOGOR:
@@ -2084,9 +2323,8 @@ void add_type(Node *node) {
     node->ty = node->lhs->ty;
     return;
   case ND_STRING: {
-    // Lower a string literal to a reference to its anonymous global.
-    // The global is created here, where the parser used to create it,
-    // to keep the allocation order of anonymous names intact.
+    // Lower a string literal to a reference to its anonymous global,
+    // which is created here, where the literal is typed.
     Obj *var = new_string_literal(node->tok->str, node->tok->ty);
     node->kind = ND_VAR;
     node->var = var;
@@ -2094,8 +2332,9 @@ void add_type(Node *node) {
     return;
   }
   case ND_IDENT:
-    // Bind the name (variable, function or enum constant), rewriting
-    // the node into the shape codegen understands.
+    // The resolve pass binds every name while the scope it was
+    // written in is reconstructed; this is the safety net for nodes
+    // the evaluator reaches directly.
     bind_ident(node);
     return;
   case ND_VAR:
@@ -2111,6 +2350,8 @@ void add_type(Node *node) {
     if (!ty) {
       add_type(node->lhs);
       ty = node->lhs->ty;
+    } else {
+      resolve_type(ty);
     }
 
     Node *folded;
@@ -2118,6 +2359,11 @@ void add_type(Node *node) {
       folded = vla_size_expr(ty, node->tok);
     else
       folded = new_ulong(node->kind == ND_SIZEOF ? ty->size : ty->align, node->tok);
+
+    // The folded node replaces this one in the tree, so it has to
+    // arrive fully typed: the annotation descent visits this position
+    // exactly once and never comes back to the fresh nodes.
+    add_type(folded);
 
     node->kind = folded->kind;
     node->lhs = folded->lhs;
@@ -2130,6 +2376,8 @@ void add_type(Node *node) {
   }
   case ND_TYPES_COMPATIBLE:
     // Fold `__builtin_types_compatible_p(T1, T2)` to 0 or 1.
+    resolve_type(node->ty_op);
+    resolve_type(node->ty_op2);
     node->val = is_compatible(node->ty_op, node->ty_op2);
     node->ty_op = NULL;
     node->ty_op2 = NULL;
@@ -2139,6 +2387,7 @@ void add_type(Node *node) {
   case ND_REG_CLASS: {
     // Fold `__builtin_reg_class(T)` to its register class: integer or
     // pointer, floating-point, or anything else.
+    resolve_type(node->ty_op);
     Type *ty = node->ty_op;
     int64_t val = 2;
     if (is_integer(ty) || ty->kind == TY_PTR)
@@ -2210,6 +2459,16 @@ void add_type(Node *node) {
     return;
   }
   case ND_DEREF:
+    if (node->lhs->ty->kind == TY_FUNC) {
+      // [https://www.sigbus.info/n1570#6.5.3.2p4] Dereferencing a
+      // function shouldn't do anything: `*foo` is just `foo`. The
+      // parser cannot check this without typing the operand, so the
+      // node survives until here and becomes its operand.
+      Node *nxt = node->next;
+      *node = *node->lhs;
+      node->next = nxt;
+      return;
+    }
     if (!node->lhs->ty->base)
       error_tok(node->tok, "invalid pointer dereference");
     if (node->lhs->ty->base->kind == TY_VOID)
@@ -2255,36 +2514,46 @@ void add_type(Node *node) {
       error_tok(node->cas_addr->tok, "pointer expected");
     node->ty = node->lhs->ty->base;
     return;
-  case ND_CASE:
-    // The value(s) a case label stands for: the parser recorded the
-    // operands unevaluated, because whether an expression is a constant
-    // is not a syntax question. They are truncated to `int`, as they
-    // were when the parser wrote `begin`/`end` on its way past them.
-    if (node->begin_expr) {
-      int begin = (int) eval(node->begin_expr);
-      int end = begin;
-
-      if (node->end_expr) {
-        end = (int) eval(node->end_expr);
-        if (end < begin)
-          error_tok(node->colon_tok, "empty case range specified");
-      }
-
-      node->begin = begin;
-      node->end = end;
-      node->begin_expr = NULL;
-      node->end_expr = NULL;
+  case ND_CAST:
+    // An explicit cast from the parser: the target type is the record
+    // in ty_op and the operand has been typed by the recursion above.
+    // Casts sema builds itself arrive fully typed and never get here.
+    resolve_type(node->ty_op);
+    node->ty = node->ty_op;
+    return;
+  case ND_RETURN:
+    // The implicit conversion to the return type. Struct and union
+    // returns are passed through as the parser left them.
+    if (node->lhs) {
+      Type *ty = sema_fn->ty->return_ty;
+      if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
+        node->lhs = new_cast(node->lhs, ty);
     }
     return;
-  case ND_DECL:
-    // Lower a declaration. A VLA becomes `x = alloca(<size>)` (the
-    // VLA-size statement stays a parse-emitted sibling). With an
-    // initializer, the faithful record is resolved and becomes the
-    // MEMZERO + assignment comma chain the parser used to flatten
-    // directly; the node becomes its expression statement. Without
-    // one, the node carries the VLA-size computation in lhs and
-    // simply becomes that statement.
-    if (node->var->ty->kind == TY_VLA) {
+  case ND_DECL: {
+    // Lower a declaration record. A block-scope static was declared as
+    // an anonymous global by the resolve pass; its initializer is
+    // serialized here and the record leaves the chain, which produces
+    // no statement exactly like the old shape. Otherwise the record
+    // becomes an expression statement: a VLA becomes
+    // `x = alloca(<size>)`, with the VLA-size computation spliced in
+    // as the preceding sibling; with an initializer, the MEMZERO +
+    // assignment comma chain (again behind a VLA-size sibling, which
+    // may be a bare NULL_EXPR); without one, the VLA-size computation
+    // itself.
+    Obj *var = node->var;
+
+    if (node->attr.is_static) {
+      if (node->decl_init) {
+        gvar_init_data(var, node->init_resolved);
+        node->decl_init = NULL;
+        node->init_resolved = NULL;
+      }
+      decl_remove = true;
+      return;
+    }
+
+    if (var->ty->kind == TY_VLA) {
       // A variable-length object may not be initialized. The parser left
       // the two standing side by side because whether a declaration is a
       // VLA one depends on the dimension being a constant expression;
@@ -2293,45 +2562,56 @@ void add_type(Node *node) {
         error_tok(node->decl_init->eq_tok,
                   "variable-sized object may not be initialized");
 
-      Token *tok = node->tok;
+      Token *tok = node->name_tok;
+      decl_splice = new_unary(ND_EXPR_STMT, compute_vla_size(var->ty, tok), tok);
+      // The splice is linked into the chain behind the annotation
+      // descent's back, so it has to arrive fully typed.
+      add_type(decl_splice);
       node->kind = ND_EXPR_STMT;
-      node->lhs = new_binary(ND_ASSIGN, new_vla_ptr(node->var, tok),
-                             new_alloca(new_var_node(node->var->ty->vla_size, tok)),
+      node->tok = tok;
+      node->lhs = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
+                             new_alloca(new_var_node(var->ty->vla_size, tok)),
                              tok);
     } else {
-      // Resolve the faithful initializer record first: resolution is
-      // what completes a flexible array or flexible-member type.
-      ResolvedInit *init = NULL;
-      if (node->decl_init) {
-        Type *new_ty;
-        init = resolve_initializer(node->decl_init, node->var->ty, &new_ty);
-        node->var->ty = new_ty;
-      }
+      // The resolve pass resolved the faithful initializer record and
+      // completed the declared type with it; what is left here is the
+      // lowering to the assignment chain.
+      ResolvedInit *init = node->init_resolved;
 
       // A declared object must have a complete, non-void type.
       check_declared_void(node->tok, node->var->ty);
       if (node->var->ty->size < 0)
-        error_tok(node->var->ty->name, "variable has incomplete type");
+        error_tok(node->name_tok, "variable has incomplete type");
 
-      if (init)
+      if (init) {
+        // An initialized declaration keeps the VLA-size computation as
+        // a separate preceding sibling, matching the old shape (for a
+        // type with no VLA in it, the sibling is a bare NULL_EXPR).
+        decl_splice = new_unary(ND_EXPR_STMT,
+                                compute_vla_size(node->var->ty, node->tok),
+                                node->tok);
+        add_type(decl_splice);
         node->lhs = lvar_init_comma(node->var, init, node->decl_init->tok);
+      } else {
+        node->lhs = compute_vla_size(node->var->ty, node->tok);
+      }
       node->decl_init = NULL;
       node->kind = ND_EXPR_STMT;
     }
     add_type(node);
     return;
+  }
   case ND_COMPOUND_LITERAL: {
-    // Materialize the compound literal. In block scope it owns the
-    // hidden local variable the parser created, and the node lowers to
-    // `initializer-comma, var`. At file scope it owns an anonymous
-    // global whose data is serialized here, and the node lowers to a
-    // reference of it.
+    // Materialize the compound literal. The resolve pass created the
+    // hidden variable it owns - a hidden local in block scope - and
+    // resolved its initializer record against the variable's type.
+    // The node lowers to `initializer-comma, var`. At file scope the
+    // variable is an anonymous global whose data is serialized here,
+    // and the node lowers to a reference of it.
     Obj *var = node->var;
     Token *tok = node->tok;
 
-    Type *new_ty;
-    ResolvedInit *init = resolve_initializer(node->decl_init, var->ty, &new_ty);
-    var->ty = new_ty;
+    ResolvedInit *init = node->init_resolved;
 
     if (var->is_local) {
       node->kind = ND_COMMA;
@@ -2342,6 +2622,7 @@ void add_type(Node *node) {
       node->kind = ND_VAR;
     }
     node->decl_init = NULL;
+    node->init_resolved = NULL;
     add_type(node);
     return;
   }
@@ -2358,7 +2639,7 @@ static int64_t eval(Node *node) {
 // is a pointer to a global variable and n is a postiive/negative
 // number. The latter form is accepted only as an initialization
 // expression for a global variable.
-int64_t eval2(Node *node, char ***label) {
+static int64_t eval2(Node *node, char ***label) {
   add_type(node);
 
   if (is_flonum(node->ty))
@@ -2545,4 +2826,328 @@ static double eval_double(Node *node) {
   }
 
   error_tok(node->tok, "not a compile-time constant");
+}
+
+//
+// The resolve pass
+//
+// The scope stack is derived from the tree structure: a compound-stmt
+// block pushes and pops a scope, a statement expression does the same
+// for its body, and a `for` statement's init declarations share one
+// scope with its condition, increment and body - exactly the scopes
+// the parser used to drive while parsing.
+
+// Walks a faithful initializer record and resolves the expressions it
+// carries (values and designator bounds); resolution and lowering of
+// the record happen later, against the declared type.
+static void resolve_init_record(Initializer *rec) {
+  if (!rec)
+    return;
+
+  if (rec->kind == INIT_EXPR)
+    resolve_node(rec->expr);
+
+  for (InitItem *it = rec->items; it; it = it->next) {
+    for (InitDesig *d = it->desigs; d; d = d->next) {
+      resolve_node(d->begin);
+      resolve_node(d->end);
+    }
+    resolve_init_record(it->init);
+  }
+}
+
+static void resolve_children(Node *node) {
+  resolve_node(node->lhs);
+  resolve_node(node->rhs);
+  resolve_node(node->cond);
+  resolve_node(node->then);
+  resolve_node(node->els);
+  resolve_chain(node->init);
+  resolve_node(node->inc);
+  resolve_chain(node->body);
+  resolve_chain(node->args);
+  resolve_node(node->cas_addr);
+  resolve_node(node->cas_old);
+  resolve_node(node->cas_new);
+}
+
+static void resolve_node(Node *node) {
+  if (!node)
+    return;
+
+  // Enum constants an expression-context type defined become visible
+  // at this node's position.
+  if (node->spec_decls) {
+    resolve_enum_records(node->spec_decls);
+    node->spec_decls = NULL;
+  }
+
+  switch (node->kind) {
+  case ND_TYPEDEF:
+    resolve_type_exprs(node->ty);
+    resolve_type(node->ty);
+    return;
+  case ND_ENUM_CONST:
+    if (node->ty_op)
+      resolve_enum_records(node);
+    return;
+  case ND_BLOCK:
+    if (node->is_scope_block)
+      enter_scope();
+    resolve_chain(node->body);
+    if (node->is_scope_block)
+      leave_scope();
+    return;
+  case ND_STMT_EXPR:
+    enter_scope();
+    resolve_chain(node->body);
+    leave_scope();
+    return;
+  case ND_FOR:
+    // The init declarations share their scope with the rest of the
+    // statement, and the records the init chain may start with are
+    // registered inside it.
+    enter_scope();
+    resolve_chain(node->init);
+    resolve_node(node->cond);
+    resolve_node(node->inc);
+    resolve_node(node->then);
+    leave_scope();
+    return;
+  case ND_DECL: {
+    resolve_type_exprs(node->ty_op);
+    resolve_type(node->ty_op);
+
+    if (node->attr.is_static) {
+      // A block-scope static variable lives in the global data section
+      // under an anonymous name, but its name is registered like any
+      // other local. The void check is anchored where the old
+      // declaration site reported it: at the `=` if there is an
+      // initializer, at the declaration position otherwise.
+      Token *anchor = node->decl_init ? node->decl_init->eq_tok : node->tok;
+      check_declared_void(anchor, node->ty_op);
+      node->var = new_anon_gvar(node->ty_op);
+      push_scope(get_ident(node->name_tok))->var = node->var;
+    } else {
+      node->var = new_lvar(get_ident(node->name_tok), node->ty_op);
+      int align = attr_align(&node->attr);
+      if (align)
+        node->var->align = align;
+    }
+
+    // The declared name is visible to its own initializer, as it was
+    // when the parser created the variable before parsing the `=`.
+    resolve_init_record(node->decl_init);
+
+    // The initializer is resolved here, at the declaration's position:
+    // resolution completes the declared type (an array sized by its
+    // initializer, a flexible member), and later references in the
+    // resolve order have to see the completed type.
+    if (node->decl_init) {
+      Type *new_ty;
+      node->init_resolved =
+        resolve_initializer(node->decl_init, node->var->ty, &new_ty);
+      node->var->ty = new_ty;
+    }
+    return;
+  }
+  case ND_GVAR_DECL: {
+    resolve_type_exprs(node->ty_op);
+    resolve_type(node->ty_op);
+
+    Obj *var = new_gvar(get_ident(node->name_tok), node->ty_op);
+    var->is_definition = !node->attr.is_extern;
+    var->is_static = node->attr.is_static;
+    var->is_tls = node->attr.is_tls;
+    int align = attr_align(&node->attr);
+    if (align)
+      var->align = align;
+    if (!node->decl_init && !node->attr.is_extern && !node->attr.is_tls)
+      var->is_tentative = true;
+    node->var = var;
+
+    resolve_init_record(node->decl_init);
+    if (node->decl_init) {
+      Type *new_ty;
+      node->init_resolved = resolve_initializer(node->decl_init, var->ty, &new_ty);
+      var->ty = new_ty;
+    }
+    return;
+  }
+  case ND_FUNCDEF:
+    resolve_function(node);
+    return;
+  case ND_COMPOUND_LITERAL:
+    // The hidden variable is created here, where the scope says
+    // whether the literal lives in an anonymous global or on the
+    // stack, and before the initializer record is walked.
+    resolve_type_exprs(node->ty_op);
+    resolve_type(node->ty_op);
+    node->var = in_file_scope() ? new_anon_gvar(node->ty_op)
+                                : new_lvar("", node->ty_op);
+    resolve_init_record(node->decl_init);
+    if (node->decl_init) {
+      Type *new_ty;
+      node->init_resolved =
+        resolve_initializer(node->decl_init, node->var->ty, &new_ty);
+      node->var->ty = new_ty;
+    }
+    return;
+  case ND_STRING: {
+    // The literal becomes a reference to its anonymous global here, at
+    // its source position, so the globals keep the declaration order
+    // the single-pass parser produced.
+    Obj *var = new_string_literal(node->tok->str, node->tok->ty);
+    node->kind = ND_VAR;
+    node->var = var;
+    node->ty = var->ty;
+    return;
+  }
+  case ND_CASE:
+    // The value(s) a case label stands for: the parser recorded the
+    // operands unevaluated, because whether an expression is a
+    // constant is not a syntax question. They are truncated to `int`,
+    // as they were when the parser wrote `begin`/`end` on its way past
+    // them. `:` is where the range check is anchored.
+    resolve_node(node->begin_expr);
+    resolve_node(node->end_expr);
+    if (node->begin_expr) {
+      int begin = (int) eval(node->begin_expr);
+      int end = begin;
+
+      if (node->end_expr) {
+        end = (int) eval(node->end_expr);
+        if (end < begin)
+          error_tok(node->colon_tok, "empty case range specified");
+      }
+
+      node->begin = begin;
+      node->end = end;
+      node->begin_expr = NULL;
+      node->end_expr = NULL;
+    }
+    resolve_node(node->lhs);
+    return;
+  case ND_IDENT:
+    // Bind the name (variable, function or enum constant), rewriting
+    // the node into the shape codegen understands.
+    bind_ident(node);
+    return;
+  case ND_CAST:
+    resolve_type_exprs(node->ty_op);
+    resolve_type(node->ty_op);
+    break;
+  case ND_SIZEOF:
+  case ND_ALIGNOF:
+  case ND_REG_CLASS:
+  case ND_GENERIC_ASSOC:
+    if (node->ty_op) {
+      resolve_type_exprs(node->ty_op);
+      resolve_type(node->ty_op);
+    }
+    break;
+  case ND_TYPES_COMPATIBLE:
+    resolve_type_exprs(node->ty_op);
+    resolve_type(node->ty_op);
+    resolve_type_exprs(node->ty_op2);
+    resolve_type(node->ty_op2);
+    break;
+  default:
+    break;
+  }
+
+  resolve_children(node);
+}
+
+static void resolve_chain(Node *node) {
+  for (; node; node = node->next)
+    resolve_node(node);
+}
+
+// Declares the function a record names (checking it against a previous
+// declaration), then resolves its body: the parameters and helpers
+// first, then the statements, with the scope stack the block structure
+// gives. The variable list is captured before the annotation pass adds
+// its temporaries; analyze_function splices those in afterwards.
+static void resolve_function(Node *node) {
+  Type *ty = node->ty_op;
+  resolve_type_exprs(ty);
+  resolve_type(ty);
+
+  Obj *fn = declare_function(get_ident(node->name_tok), ty, &node->attr,
+                             node->tok, node->body != NULL);
+  node->var = fn;
+
+  if (!node->body)
+    return;
+
+  fn->body = node->body;
+  sema_fn = fn;
+
+  enter_scope();
+  begin_function(fn, ty);
+  resolve_node(node->body);
+  fn->locals = get_locals();
+  leave_scope();
+}
+
+// Runs the annotation + lowering pass and the control-flow descent over
+// a resolved function body. The temporaries the lowering creates are
+// collected on a fresh variable list and spliced in front of the ones
+// the resolve pass captured, so that the function's frame is complete
+// and no other function's list is polluted.
+static Obj *splice_locals(Obj *fn) {
+  Obj *pass2 = get_locals();
+  if (pass2) {
+    Obj *tail = pass2;
+    while (tail->next)
+      tail = tail->next;
+    tail->next = fn->locals;
+    fn->locals = pass2;
+  }
+  return fn->locals;
+}
+
+static void analyze_function(Obj *fn) {
+  Obj *save = get_locals();
+  set_locals(NULL);
+  add_type(fn->body);
+  analyze(fn->body);
+  splice_locals(fn);
+  set_locals(save);
+}
+
+// Runs semantic analysis over the parser's top-level declaration-record
+// chain, in source order, and returns the list of global objects for
+// codegen. A function record is resolved first, so that later records
+// see its name, and its body is annotated and descended right after -
+// the order the parser used to interleave declaration and analysis.
+Obj *sema(Node *toplevel) {
+  declare_builtin_functions();
+  set_globals(NULL);
+
+  for (Node *n = toplevel; n; n = n->next) {
+    switch (n->kind) {
+    case ND_TYPEDEF:
+    case ND_ENUM_CONST:
+      resolve_node(n);
+      break;
+    case ND_GVAR_DECL:
+      resolve_node(n);
+      serialize_gvar(n);
+      break;
+    case ND_FUNCDEF:
+      resolve_function(n);
+      if (n->body)
+        analyze_function(n->var);
+      break;
+    default:
+      unreachable();
+    }
+  }
+
+  // Mark the reachable functions live and drop the redundant tentative
+  // definitions.
+  finalize_globals();
+  return get_globals();
 }

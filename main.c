@@ -550,7 +550,7 @@ static void cc1(void) {
     return;
   }
 
-  Obj *prog = parse(tok);
+  Obj *prog = sema(parse(tok));
 
   // Open a temporary output buffer.
   char *buf;
