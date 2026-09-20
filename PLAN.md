@@ -48,7 +48,7 @@
 - [x] **R2.7 typedef/tag 影子作用域**: parse 自持仅 typedef/tag 的作用域栈(C 词法 hack oracle, 永久保留), `find_typedef`/`find_tag`/`find_current_tag`/`push_tag_scope`/`enter_scope`/`leave_scope` 变 parse 私有; sema 的变量/枚举作用域由 resolve 遍历自管, 拆分线 4.2b 的"共享表"解体.
 - [x] **R2.8 隐藏变量创建归 sema**: 复合字面量的域判定与 new_lvar/new_anon_gvar 移 ND_COMPOUND_LITERAL case(`in_file_scope` oracle 消失, 域由 resolve 上下文给出); 块域 static 的匿名全局创建改由 ND_DECL 降级路径完成(清算拆分线 2.3/3.4a 偏差).
 - [x] **R2.9 op 字段双职解除**: add_type 对 ND_ADD/ND_SUB 统一处理, "已缩放"标记机制删除, p-n 与 p-=n 的 conv/no-op cast 序列统一化(关闭拆分线 1.7 开放点).
-- [ ] **R2.10 杂项归位**: return 隐式 cast 移 sema 的 ND_RETURN case(消除 parse 对 current_fn->ty 的最后依赖); current_fn static, `fn->locals = get_locals()`, builtin_alloca 归属收拾; parse 的函数语义残留清零.
+- [x] **R2.10 杂项归位**: return 隐式 cast 移 sema 的 ND_RETURN case(消除 parse 对 current_fn->ty 的最后依赖); current_fn static, `fn->locals = get_locals()`, builtin_alloca 归属收拾; parse 的函数语义残留清零.
 
 ## R3 语句链整形 [重组, 依赖 R0.2 的 .loc 折叠]
 

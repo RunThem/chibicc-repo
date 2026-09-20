@@ -32,7 +32,8 @@
 | 516c4a0 | R2.6 | 拆全部构造现场调用, sema 改 resolve + 标注/降级两趟独立遍历, parse.c 达层 3 形态 |
 | 59b6d2a | R2.7 | 作用域表一分为二: parse 私有 typedef/tag 影子栈 + sema 私有变量/枚举栈(4.2b 共享表解体) |
 | 99c5bfe | R2.8 | `in_file_scope` oracle 删除, 复合字面量的存储类改由 resolve 上下文标志给出 |
-| (本提交) | R2.9 | `op` 字段"已缩放"标记机制删除: new_add/new_sub 返回完整标注节点, 新增 new_arith/scale_rhs/combine |
+| 11e7757 | R2.9 | `op` 字段"已缩放"标记机制删除: new_add/new_sub 返回完整标注节点, 新增 new_arith/scale_rhs/combine |
+| (本提交) | R2.10 | 四个语义节点构造器迁 sema, locals/globals 访问器删除; parse.c 的 `Obj` 引用归零 |
 
 ## 各步详情
 
@@ -211,7 +212,7 @@
   2. **块域 static 的匿名全局创建留在 pass1, 不移 pass2**(计划文本未达成, 结构性原因): 计划写"改由 ND_DECL 降级路径完成". 实测该移动不可行 - pass1 的 `bind_ident` 要为同一块内后续引用绑定名字, `int f(void){ static int x = 1; return x; }` 里 `return x;` 的 x 在 pass1 就得有 Obj, 否则报 "undefined variable". 若改为"pass1 建一个不在任何链上的占位 Obj, pass2 再补匿名名并挂进 globals", 则 globals 的插入序从 resolve 序变成标注序(数据段顺序随之变), 且占位 Obj 必须避开 locals 链以免被 assign_lvar_offsets 分配栈偏移 - 更多机械, 零可观测收益. 现状即"创建 + 名字登记在 pass1, 数据段序列化(`gvar_init_data`)在 pass2 的降级路径", 拆分线 3.4a 记的偏差实质是"创建发生在 parse", 这一点已由 R2.6 清算; "创建发生在降级趟"的字面要求判定为不采纳.
   3. **实现形态**: `resolving_body` 是 resolve 遍历的上下文标志而非参数 - 与 analyze 的 `brk_label`/`cont_label`/`current_switch`(R1.2)同一处理方式, 上下文成为该遍的私有状态而不是 static 全局的隐式契约. 库化阶段(路线图 5)的 context 对象化会把它与那几个一并收进去, 本线按纪律 5 不做 context 化.
 
-### R2.9 op 字段双职解除 (本提交)
+### R2.9 op 字段双职解除 (11e7757)
 
 - 改了什么: 本步是 [重组] 步 - "已缩放"标记机制整体删除, `Node.op` 自此起只承担 ND_ASSIGN 的复合赋值算符一职(层 3 的忠实信息).
   1. **新增三个辅助函数**: `new_arith(kind, lhs, rhs, tok)` - 施加 usual arithmetic conversions 并**返回完整标注的节点**, 于是 add_type 顶部的早退守卫(`node->ty` 非空)天然承担了"不要重复处理"的记账, 不再需要一个标志字段; `scale_rhs(Type *ptr_ty, rhs, tok)` - 加法算符在指针上的缩放(定长 = 元素尺寸常量 `new_long`, VLA = 运行时尺寸变量 `vla_size`); `combine(op, lhs, rhs, tok)` - "操作数已缩放"的二元组合器, 加法算符走 new_arith, 其余交给 add_type(乘除模与位运算过 conv, 移位不过, 与原先 add_type 的分支逐一对应).
@@ -230,3 +231,22 @@
   2. **`_Atomic(T*)` 的复合赋值不再二次缩放**(修复): 原 to_assign 原子分支的重试循环体是未标注的 `new_binary(op, old, val)`, 落到 add_type 的 ND_ADD **原始**路径又走一次 new_add → 对指针再乘一次元素尺寸. 探针(`_Atomic(int*) ap; void bump(int n){ ap += n; }`): 旧版 `bump` 内出现 **2 处 `imul`**(先把 n*4 存入 val, 循环体内再 *4, 实际步进 n*16), 新版 **1 处**. 改用 `combine` 后循环体直接按算术组合 old 与 val(val 已是缩放后的字节量), 对整型原子(语料覆盖的形状)产物逐字节不变. 该形状 clang 本身拒绝(`invalid operands to binary expression ('_Atomic(int *)' and 'int')`), 语料与 tcc 均无 `_Atomic` 复合赋值(tcc 全树只在 libtcc.c:1848 的注释里出现该词), 故两道 diff 闸门不受影响. 同类: `val` 临时变量的类型从"未转换的右操作数类型"变为"conv 后的公共类型"(如 `_Atomic long l; l += 1;` 的 val 槽由 4 字节变 8 字节), 语义不变, 语料无此写法.
   3. **实现形态**: 计划文本写"add_type 对 ND_ADD/ND_SUB 统一处理", 实施为"new_add/new_sub 返回完整标注节点 + add_type 只做四字段拷贝" - 统一发生在**构造侧**而非标注侧, 因为只有构造函数知道 `ptr - ptr` 的内层 SUB 必须避开 conv. `combine` 是本步新引入的第三个辅助函数: 复合赋值与原子重试循环都需要"操作数已缩放"的组合语义, 而移位不过 conv / 乘除位运算过 conv 的分支差异必须与 add_type 原有分支一一对应, 抽出来才能两处共用.
   4. **`op` 字段的语义收窄已反映在 chibicc.h**: 该字段的注释原本就只描述 ND_ASSIGN 的复合赋值算符("0 means a plain `=`"), 标记机制是 1.7 在其上的私自复用, 故本步无需改 chibicc.h; 校验口径为 `grep '->op'` 的全部命中点(20 处)逐个确认都落在 ND_ASSIGN 上.
+
+### R2.10 杂项归位 (本提交)
+
+- 改了什么: 计划列的四项中三项已由 R2.6 落地(见偏差 1), 本步做的是搬家遗留的接口形态清扫, 外加把"parse 无名字绑定"从断言变成可机器核对的事实.
+  1. **parse.c 不再定义它从不构造的节点**: `new_var_node`(ND_VAR)/`new_vla_ptr`(ND_VLA_PTR)/`new_long`/`new_ulong`(出生即带类型的 ND_NUM)四个构造器整体迁入 sema.c 并收为 static - 解析器发的是未绑定的 ND_IDENT 与 `ty = tok->ty` 的字面量, 这四个形状只由降级产生. chibicc.h 的构造器声明区相应缩为四个(new_node/new_binary/new_unary/new_num). 此后 **parse.c 中 `Obj` 的出现次数为 0**(`grep -c '\bObj\b' parse.c`), 即"表达式层无名字绑定"不再靠人工盘点, 而是一条 grep 就能核对的不变量.
+  2. **locals/globals 的四个访问器删除**: `get_locals`/`set_locals`/`get_globals`/`set_globals` 是拆分线 3.1 为让 parse 读写 sema 的两个清单而加的(其偏差记录写"实际 parse 仍需直接读/重置列表, 故保留四个访问器"); R2.6 之后全部调用点都在 sema.c 内部, 直接用 `locals`/`globals` 两个 static. 计划点名的 `fn->locals = get_locals()` 就此变成 `fn->locals = locals`(在 resolve_function 内). 顺带: `splice_locals` 的返回值自 R2.6 起无调用者读取, 改为 void.
+  3. **`builtin_alloca` 归属注记**: 它与 `declare_builtin_functions`/`new_alloca` 已全部是 sema 的 static, 由 `sema()` 入口初始化; 补一行注释说明"它是 VLA 降级要调用的声明, 不是要发射的全局"(该函数先声明后由 `globals = NULL` 把它移出待发射链, 顺序看着像疏漏, 实为既有行为).
+  规模: parse.c 2171 -> **2145**, sema.c 3112 -> **3130**, chibicc.h 697 -> **696**; parse.c 的 error_tok 维持 **15**(判定表 A 全集); codegen.c / type.c 零改动.
+- 为什么改: 这是 R2 的收口步 - 前九步把语义动作逐个搬进 sema 之后, 剩下的都是"搬家时为了不改动调用方而临时保留的接口形状". 四个构造器留在 parse.c 是拆分线 1.x 各步"构造器归 parse"的惯性, 但 ND_VAR/ND_VLA_PTR 恰恰是**绑定完成后**才存在的节点, 由解析器提供它们的构造器与层 3 的定义直接矛盾; 四个访问器同理, 是 parse 曾经持有清单时代的化石. 清掉之后 parse.c 的导出面正好等于"忠实树的构造器 + parse 入口 + get_ident", sema.c 的导出面正好等于"sema 入口 + const_expr(供 preprocess.c 的 `#if`)".
+- 测试结果: **四闸门全绿, raw 与归一化 diff 双双为空**(纯搬家, 无需重置基线). `docker-snapshot-diff` 与 `docker-snapshot-ndiff` 均退出码 0 报 empty(基线为 R2.9 提交内重置的版本, 测试源本步未变); `docker-test` 退出码 0(41 个测试可执行文件 stage1 + stage2 自举各一遍, driver.sh passed, 诊断锁定 stage1/stage2 各 "43 cases byte-exact"), `docker-test-thirdparty THIRDPARTY=tinycc` 退出码 0. 宿主机分类 A/B(参考 = R2.9 11e7757 二进制): 39 个 `test/*.c` = **39 identical / 0 .loc-only / 0 structural**, 4269 行指针算术压力文件亦 identical. 层边界用 `nm` 复核: `parse.o` 的未定义符号集与 `sema.o` 的导出符号集交集为空, `sema.o` 只导出 `const_expr` 与 `sema` 两个符号.
+- **R2 收官状态**(本步完成即 R2 全部十步结束, 逐项对 PLAN 的"终态验收"里属于 R2 的部分):
+  - parse.c **2145** 行(拆分线终态 2531, 净减 386; PLAN 预期 ~1900-2150, 落在区间上沿), `error_tok` **15** 处 = 判定表 A 全集(B/C/D 分别在 R1.2 / R2.1+R2.4 / R2.2+R2.3 清空), eval 族调用 **0**, add_type/resolve_type/gvar_initializer/attr_align/declare_function/new_lvar/new_gvar/push_scope 调用 **0**, `Obj` 引用 **0**, 对 sema.o 的符号依赖 **0**.
+  - parse.c 的文件作用域 static 变量只剩 `scope`(R2.7 的 typedef/tag 影子栈, PLAN 明确永久保留)一个, 另有 `is_typename` 里的函数局部 `static HashMap map`(关键字表, 首次调用后不再写); 计划点名的 current_fn/gotos/labels/brk_label/cont_label/current_switch/builtin_alloca 全部不在 parse.c(前六个在 sema.c, builtin_alloca 亦在 sema.c).
+  - sema.c **3130** 行(拆分线终态 1552; PLAN 预期 ~1850-2050 是在 R2.6 的两趟遍历落地之前估的, 已不适用 - resolve 遍历本身 + 初始化器 resolver + 布局 + 全部降级都在这一个文件里), 导出面为 `sema` 与 `const_expr` 两个符号.
+  - codegen.c 对 5f53ed0 仍零 diff; type.c 本线只在 R2.3(array_of_dim/typeof_placeholder/array_of 的负尺寸规则)与 R2.5 有过改动, R2.6-R2.10 零改动.
+- 偏差说明: 三项.
+  1. **计划四项中的三项已由 R2.6 达成**(同 R2.6 偏差 1 的预告, 本步实测核对而非推定): return 的隐式 cast 在 add_type 的 ND_RETURN case 读 `sema_fn->ty->return_ty`, parse 的 stmt() 只建忠实 ND_RETURN(其注释即"parser 不知道外层函数"); `current_fn` 这个 static 已不存在, sema 侧对应物 `sema_fn` 是 static; `fn->locals` 的赋值在 resolve_function 内. 本步实际动的是第 4 项("parse 的函数语义残留清零")与计划未列的构造器/访问器形态.
+  2. **构造器搬家是计划外的相邻清扫**(实现形态): 计划 R2.10 的文本只列了函数语义四项, 未提 `new_var_node` 等. 判定其属于"parse 的语义残留清零"的口径内 - 一个为**已绑定名字**提供构造器的文件, 不能说它无名字绑定; 且搬走后 `Obj` 在 parse.c 归零, 给了终态验收一个可 grep 的判据. 纯搬家, 逐字节中立(39/39 identical).
+  3. **`set_globals(NULL)` 保留为 `globals = NULL`**: 该重置把 `declare_builtin_functions` 刚登记的 `alloca` 移出待发射链. 实测它在可观测层面是空操作(alloca 的 `is_definition` 为假, codegen 本就跳过; `mark_live`/`scan_globals` 也不读它), 但它是既有行为, 本步只换写法不改语义, 并补注释说明顺序不是疏漏.

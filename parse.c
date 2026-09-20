@@ -104,32 +104,6 @@ Node *new_num(int64_t val, Token *tok) {
   return node;
 }
 
-Node *new_long(int64_t val, Token *tok) {
-  Node *node = new_node(ND_NUM, tok);
-  node->val = val;
-  node->ty = ty_long;
-  return node;
-}
-
-Node *new_ulong(long val, Token *tok) {
-  Node *node = new_node(ND_NUM, tok);
-  node->val = val;
-  node->ty = ty_ulong;
-  return node;
-}
-
-Node *new_var_node(Obj *var, Token *tok) {
-  Node *node = new_node(ND_VAR, tok);
-  node->var = var;
-  return node;
-}
-
-Node *new_vla_ptr(Obj *var, Token *tok) {
-  Node *node = new_node(ND_VLA_PTR, tok);
-  node->var = var;
-  return node;
-}
-
 char *get_ident(Token *tok) {
   if (tok->kind != TK_IDENT)
     error_tok(tok, "expected an identifier");

@@ -56,29 +56,46 @@ static Obj *locals;
 // Likewise, global variables are accumulated to this list.
 static Obj *globals;
 
-static Obj *get_locals(void) {
-  return locals;
-}
-
-static void set_locals(Obj *vars) {
-  locals = vars;
-}
-
-static Obj *get_globals(void) {
-  return globals;
-}
-
-static void set_globals(Obj *vars) {
-  globals = vars;
-}
-
 // The function sema is currently working on, needed when a reference to
 // a "static inline" function is recorded and when a return statement is
 // converted to the return type. Like the parser's old current_fn, it
 // persists after a [GNU] nested function definition is analyzed.
 static Obj *sema_fn;
 
+// The declaration of `alloca`, which the VLA lowering calls. It is a
+// global object so that the call node can refer to it, but never a
+// definition, so codegen emits nothing for it.
 static Obj *builtin_alloca;
+
+// Constructors for the node shapes only sema produces: a bound name
+// (the parser leaves names unbound, as ND_IDENT), a VLA designator, and
+// a numeric literal whose type is settled at birth rather than read off
+// a token.
+static Node *new_var_node(Obj *var, Token *tok) {
+  Node *node = new_node(ND_VAR, tok);
+  node->var = var;
+  return node;
+}
+
+static Node *new_vla_ptr(Obj *var, Token *tok) {
+  Node *node = new_node(ND_VLA_PTR, tok);
+  node->var = var;
+  return node;
+}
+
+static Node *new_long(int64_t val, Token *tok) {
+  Node *node = new_node(ND_NUM, tok);
+  node->val = val;
+  node->ty = ty_long;
+  return node;
+}
+
+static Node *new_ulong(long val, Token *tok) {
+  Node *node = new_node(ND_NUM, tok);
+  node->val = val;
+  node->ty = ty_ulong;
+  return node;
+}
 
 static Node *new_cast(Node *expr, Type *ty) {
   add_type(expr);
@@ -791,7 +808,7 @@ static void create_param_lvars(Type *param) {
 // function body, so that everything is created in the same order as
 // before.
 static void begin_function(Obj *fn, Type *ty) {
-  set_locals(NULL);
+  locals = NULL;
   create_param_lvars(ty->params);
 
   // A buffer for a struct/union return value is passed
@@ -800,7 +817,7 @@ static void begin_function(Obj *fn, Type *ty) {
   if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
     new_lvar("", pointer_to(rty));
 
-  fn->params = get_locals();
+  fn->params = locals;
 
   if (ty->is_variadic)
     fn->va_area = new_lvar("__va_area__", array_of(ty_char, 136));
@@ -3044,7 +3061,7 @@ static void resolve_function(Node *node) {
   enter_scope();
   begin_function(fn, ty);
   resolve_node(node->body);
-  fn->locals = get_locals();
+  fn->locals = locals;
   leave_scope();
 
   resolving_body = save_body;
@@ -3055,8 +3072,8 @@ static void resolve_function(Node *node) {
 // collected on a fresh variable list and spliced in front of the ones
 // the resolve pass captured, so that the function's frame is complete
 // and no other function's list is polluted.
-static Obj *splice_locals(Obj *fn) {
-  Obj *pass2 = get_locals();
+static void splice_locals(Obj *fn) {
+  Obj *pass2 = locals;
   if (pass2) {
     Obj *tail = pass2;
     while (tail->next)
@@ -3064,16 +3081,15 @@ static Obj *splice_locals(Obj *fn) {
     tail->next = fn->locals;
     fn->locals = pass2;
   }
-  return fn->locals;
 }
 
 static void analyze_function(Obj *fn) {
-  Obj *save = get_locals();
-  set_locals(NULL);
+  Obj *save = locals;
+  locals = NULL;
   add_type(fn->body);
   analyze(fn->body);
   splice_locals(fn);
-  set_locals(save);
+  locals = save;
 }
 
 // Runs semantic analysis over the parser's top-level declaration-record
@@ -3083,7 +3099,9 @@ static void analyze_function(Obj *fn) {
 // the order the parser used to interleave declaration and analysis.
 Obj *sema(Node *toplevel) {
   declare_builtin_functions();
-  set_globals(NULL);
+  // `alloca` is only a declaration for the VLA lowering to call; the
+  // list codegen walks starts after it.
+  globals = NULL;
 
   for (Node *n = toplevel; n; n = n->next) {
     switch (n->kind) {
@@ -3108,5 +3126,5 @@ Obj *sema(Node *toplevel) {
   // Mark the reachable functions live and drop the redundant tentative
   // definitions.
   finalize_globals();
-  return get_globals();
+  return globals;
 }

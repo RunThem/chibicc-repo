@@ -469,15 +469,14 @@ struct Node {
   long double fval;
 };
 
-// Node constructors. Defined in parse.c, but also used by sema.c.
+// Constructors for the faithful-tree nodes. Defined in parse.c; sema
+// uses them to build the nodes its lowerings introduce. The shapes that
+// only a lowering produces - a bound name, a VLA designator, a numeric
+// literal typed at birth - sema constructs itself.
 Node *new_node(NodeKind kind, Token *tok);
 Node *new_binary(NodeKind kind, Node *lhs, Node *rhs, Token *tok);
 Node *new_unary(NodeKind kind, Node *expr, Token *tok);
 Node *new_num(int64_t val, Token *tok);
-Node *new_long(int64_t val, Token *tok);
-Node *new_ulong(long val, Token *tok);
-Node *new_var_node(Obj *var, Token *tok);
-Node *new_vla_ptr(Obj *var, Token *tok);
 
 // Identifier spelling, used by sema when it declares the objects the
 // parser's declaration records name.
