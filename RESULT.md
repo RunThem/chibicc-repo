@@ -27,7 +27,8 @@
 | 162cd2a | R2.1 | 成员访问两段式: ND_MEMBER 留未绑定名字, 成员链/四类检查/DEREF 补插归 sema |
 | d281858 | R2.2 | `_Generic` 改发忠实节点(ND_GENERIC + assoc), 两个类型 builtin 折叠移 sema |
 | 332f31e | R2.3 | 常量求值出 parse 第一批: 数组维度/typeof/aligned 与 _Alignas/case 值改记表达式, resolve_type 回填 |
-| (本提交) | R2.4 | 初始化器忠实化: 忠实 brace 记录(元素序列 + designator 记录)入树, 定位/越界/brace elision/灵活长度全部移 sema |
+| 47e0040 | R2.4 | 初始化器忠实化: 忠实 brace 记录入树, 定位/越界/brace elision/灵活长度全部移 sema |
+| (本提交) | R2.5 | 位域宽度记表达式, 布局动作转 sema 私有(反悔 4.2a), 收尾触发落在定义完成点 |
 
 ## 各步详情
 
@@ -134,3 +135,20 @@
   3. **range designator 的值节点共享**: `[1...2] = <expr>` 旧版对区间每槽位重新解析(独立节点), 新版各槽位共享同一记录表达式节点. 纯表达式产物逐字节不变(41 文件快照含 `[2 ... 10]='a'` 等区间用例, raw diff 空); 含副作用值(elvis 临时变量/字符串匿名全局)时临时对象数量比旧版少(旧版区间每槽位各建一份), 值语义不变. 同类: struct-copy 判定路径旧版"解析-丢弃-再解析"会双份物化临时对象, 新版单份.
   4. **字符串物化与 copy 判定时点后移**: 初始化器内字符串记录的匿名全局物化与结构复制判定的 add_type 从解析现场移到 resolve(降级)时点. 单 declarator 声明内相对顺序不变(降级紧随该语句解析), 仅"同一声明内前一 declarator 的字符串初始化器 + 后一 declarator 的表达式初始化器含字符串字面量"(如 `char *p = "a", *q = f("b");`)会使匿名名编号相对旧版互换; 测试语料无此写法(raw diff 空). 与 R2.3 偏差 2 同类的时点位移.
   5. **多错误输入的首错优先级微移**: VLA 带初始化器且初始化器本身非法时(如 `int x[n] = {[0]=1}`), 旧版先报解析侧语法错("expected an expression"), 新版先报 "variable-sized object may not be initialized"(VLA 检查在 resolve 之前); `void x = <非法初始化器>` 同理由 resolve 侧先报. 单错误输入不变(d01 与 flex/void 锁定用例逐字节同, 43/43 全绿).
+
+### R2.5 位域宽度记录与布局后置 (本提交)
+
+- 改了什么: 布局动作彻底离开 parse(`layout_struct/layout_union` 的直接调用消失, 转 sema 私有), 位域宽度改记表达式 - 拆分线 4.2a 的"解析现场直接铺布局"就此反悔.
+  1. **宽度记录**: `Member` 加 `width_expr`(未求值的宽度表达式); parse 的 `mem->bit_width = const_expr(...)` 改为 `conditional()` 记录. sema 的 `eval_bitfield_widths` 在 layout 开头求值回填(结构/联合体共用), **纪律 7 就此达成: parse.c 的 eval/eval2/eval_double/const_expr/is_const_expr 调用计数 = 0**.
+  2. **布局后置**: `Type` 加 `layout_pending`(成员表列完、尚未铺开时置位; 前向声明不带); `struct_decl/union_decl` 删除对 `layout_struct/layout_union` 的直接调用, 两函数转 sema 私有, 由 `resolve_type` 的 TY_STRUCT/TY_UNION case 驱动. 按纪律 6, 触发点仍是解析现场的 `resolve_type` 调用(parse.c 侧共 5 处): declarator 与 abstract_declarator 出口, struct_members 匿名成员, **struct_decl 与 union_decl 的收尾调用**; 另有 sema 侧 new_var 在登记对象时收尾. 最后两处是必需的: `struct T {...};` 这种不带 declarator 的裸定义(如 tcc 的 `struct sym_version`)在其余四处触发点上都排不到, 若不在此收尾, 类型会永远停在 struct_type() 的占位 size 0, 指针下标的缩放常量折成 0 并造成堆破坏 - 详见测试结果. 收尾调用必须在 `ty->kind` 落定之后: kind 还是 TY_STRUCT 时铺联合会把"取最大成员尺寸"铺成"成员尺寸累加". 嵌套布局顺序由定义收尾点保证(内层在自身右括号处先铺, 先于外层).
+  3. **连带保留 - 数组尺寸回填**: pending 结构上建的具体数组(array_of 当时 base size 是占位 0)在 resolve_type 的 TY_ARRAY case 里按已铺好的 base 重算 size/align(`dim_len` 那条径本就在回填分支算). 定义收尾点生效后, 常规声明符路径不再产生这种数组; 仍会命中的是 `typeof(struct T{...})` 数组 - 数组包在尚未填充的 typeof 记录上, 尺寸只能在填充后重算. VLA/指针分支不动.
+  4. **连带修复 - 上游既有崩溃**: 匿名零宽位域成员(`int : 0;`, name==NULL 且类型非聚合)会让按名查成员的 `mem->name->len` NULL 解引用 - `struct {int c:4; int:0; int d:2;} b; b.d` 与 `= {.d=1}` 两类输入在**新旧二进制上都静默崩**(cc1 子进程段错, 驱动 exit 1 无输出; 该模式自上游 f814033 起存在). 本线代码 `get_struct_member`(R2.1) 与 `find_init_member`(R2.4) 各加 `!mem->name` 跳过守卫, 崩溃输入转为正常编译(与 clang 一致).
+  5. **测试**: test/bitfield.c +4(宽度为 `1+3`/`sizeof(int)*8-8`/枚举/带括号字面量的 sizeof), test/struct.c +4(内联定义结构的数组与嵌套结构数组 sizeof, 以及裸定义聚合经不完整指针下标访问的尺寸缩放 - 见"中途缺陷"), 期望值宿主机 clang 验证, 全部为 R2.4 编译器可编译形状.
+  规模: parse.c 2069 -> 2080(记录注释与两处收尾调用净增), sema.c 2496 -> 2548, chibicc.h 729 -> 731; error_tok parse.c 维持 15(判定表 A); codegen.c 零改动.
+- 为什么改: 位域宽度是常量求值、offset/size/align 是类型系统产物, 都不是语法形状 - 层 3 定义下 parse 一律不该碰. R2.4 清掉初始化器对结构 size 的消费后, 布局时点后移的最后一个障碍(拆分线 4.2a 列的"声明符 size<0 判定/初始化器/数组维度当场要用")只剩数组维度, 由本步的 resolve 回填接住. 布局动作本身已在 sema 内, R2.6 的 resolve 遍历把触发点从现场调用换成树上遍及时, 布局逻辑零改动.
+- 测试结果: **四闸门全绿, raw 逐字节为空**. 对照基线 = R2.4(47e0040)编译器 + 本提交新测试源生成的 41 文件快照, `docker-snapshot-diff` 与 `docker-snapshot-ndiff` 均空; `docker-test` 退出码 0(新增断言两遍全过, 诊断锁定 stage1/stage2 各 43/43); `docker-test-thirdparty THIRDPARTY=tinycc` 退出码 0. 宿主机交叉验证: R2.4 vs R2.5 二进制对全部 test/*.c + 三个压力文件(R2.4 的两个 + R2.5 专项: 表达式宽度/零宽匿名位域/内联嵌套结构数组/前向声明后定义/typedef 数组/packed/aligned(16)+位域) + 两个 tcc 缺陷最小复现文件逐字节相同(压力文件含旧版崩溃输入, 见偏差 1); 13 个宽度/访问错误路径 stderr 逐字节对比(11 同, 2 项为崩溃转接受的偏差 1 类); 布局值与手算及容器内 clang 语义核对(sizeof(struct B)=8, Aligned=16, packed=5, 域值回读 1/2/3/0/-1/7/5/1). 决定性同路径对照: 同一容器同一目录内先后用两个编译器构建并测试 tcc, 两轮退出码均 0, 且 18 个 .o 与链接出的 tcc 二进制逐字节相同(obdiffs=0).
+- 中途缺陷与捕获路径(留档, 说明第三道闸门不可省): 首版把布局只挂在 declarator/new_var 那几个"首见 pending"的触发点上, **不带 declarator 的裸定义**因此永远不铺开. tcc 的 `struct sym_version`(tccelf.c:29)正是这种形状 - 它的指针字段在 tcc.h 里于该 tag 尚不完整时写下, 之后只被下标消费; 于是下标缩放常量折成 0, tcc 一编译 examples/ex1.c 就 `free(): double free detected in tcache 2`(hello-exe/dlltest/abitest 连带失败, 两轮确定性复现). 定位链: 同路径 A/B 显示唯一差异目标是 tccelf.o(其余 .o 全同) → 同路径 `-S` diff 给出 5 处 `mov $24` 变 `mov $0`(tccelf.c:119/120/575/576/577) → 宿主机 20 行最小复现锁定 → 收尾触发改到定义完成点(必须在 `ty->kind` 落定之后, 否则联合按结构铺开, 尺寸从"最大成员"变成"成员累加"). **自研语料/docker-test/raw diff/压力文件全部没抓到**, 因为语料里每个聚合定义都带 declarator; 已在 test/struct.c 补专项回归断言(经验证非空转: 撤掉收尾触发点后该下标折 0, 修复后折 24).
+- 偏差说明: 一项行为偏差, 另两项为形态与口径说明.
+  1. **崩溃输入转正常编译**(条目 4 的 NULL 解引用): `int : 0;` 后接成员访问(`b.d`)或初始化器成员指定(`{.d=1}`)旧版段错静默退出, 新版正确布局并读取(4 位域零宽对齐语义经值核对). 属修复, 非行为回归(崩溃输入不可能有合法依赖).
+  2. **实施形态调整(非行为)**: 计划文本写"布局调用点从解析现场移入 sema 遍历"; 按纪律 6(R2.1-R2.5 只做两段式, R2.6 才改遍历), 本步迁移的是**布局动作** - `layout_struct/layout_union` 的直接调用消失, 改为 `resolve_type` 的 TY_STRUCT/TY_UNION case(内含位宽求值), 而触发调用留在 struct_decl/union_decl 等解析现场. R2.6 的 resolve 遍历拆掉这些现场调用时, 布局与位宽逻辑零改动. 拆分线 4.2a 的"调用点仍在解析现场且直接铺布局"就此反悔.
+  3. 拆分线 4.2a 记的两项时机偏差(常量诊断时机后移、布局时点移到首用点)在收尾点定到定义完成处之后**不再存在**: 位宽非常量诊断与布局计算时机逐字节回到 R2.4 口径(裸定义/后用/指针三类探针全同).

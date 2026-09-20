@@ -1496,7 +1496,10 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
 
       if (consume(&tok, tok, ":")) {
         mem->is_bitfield = true;
-        mem->bit_width = const_expr(&tok, tok);
+        // The width is a constant expression; it is recorded
+        // unevaluated and sema evaluates it when the aggregate is
+        // laid out.
+        mem->width_expr = conditional(&tok, tok);
       }
 
       cur = cur->next = mem;
@@ -1577,30 +1580,38 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
 
   tok = skip(tok, "{");
 
-  // Construct a struct object.
+  // Construct a struct object. The member list is syntax; placing the
+  // members (offsets, size, alignment, bitfield widths) is sema's job.
   struct_members(&tok, tok, ty);
   *rest = attribute_list(tok, ty);
+  ty->layout_pending = true;
 
+  Type *ret = ty;
   if (tag) {
     // If this is a redefinition, overwrite a previous type.
     // Otherwise, register the struct type.
     Type *ty2 = find_current_tag(tag);
     if (ty2) {
       *ty2 = *ty;
-      return ty2;
+      ret = ty2;
+    } else {
+      push_tag_scope(tag, ty);
     }
-
-    push_tag_scope(tag, ty);
   }
 
-  return ty;
+  return ret;
 }
 
 // struct-decl = struct-union-decl
 static Type *struct_decl(Token **rest, Token *tok) {
   Type *ty = struct_union_decl(rest, tok);
   ty->kind = TY_STRUCT;
-  layout_struct(ty);
+  // The closing brace is where the type becomes complete, so this is
+  // where sema is asked to place the members: a use of the type in a
+  // later declaration, or a tag-only definition that never gets a
+  // declarator, must not have to wait for one. The kind is settled
+  // first, because placing the members differs between the two.
+  resolve_type(ty);
   return ty;
 }
 
@@ -1608,7 +1619,7 @@ static Type *struct_decl(Token **rest, Token *tok) {
 static Type *union_decl(Token **rest, Token *tok) {
   Type *ty = struct_union_decl(rest, tok);
   ty->kind = TY_UNION;
-  layout_union(ty);
+  resolve_type(ty);
   return ty;
 }
 

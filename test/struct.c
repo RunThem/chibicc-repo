@@ -1,5 +1,22 @@
 #include "test.h"
 
+// A pointer written while its tag is still incomplete, plus a definition
+// of that tag with no declarator of its own: the subscript through the
+// pointer is then the first thing that needs the size.
+struct BareHolder {
+  struct Bare *p;
+};
+
+struct Bare {
+  int a, b, c, d, e, f;
+};
+
+static int bare_read(struct BareHolder *h, int i) {
+  return h->p[i].a;
+}
+
+static struct Bare bare_objs[2];
+
 int main() {
   ASSERT(1, ({ struct {int a; int b;} x; x.a=1; x.b=2; x.a; }));
   ASSERT(2, ({ struct {int a; int b;} x; x.a=1; x.b=2; x.b; }));
@@ -41,6 +58,8 @@ int main() {
   ASSERT(12, ({ struct {int a[3];} x; sizeof(x); }));
   ASSERT(16, ({ struct {int a;} x[4]; sizeof(x); }));
   ASSERT(24, ({ struct {int a[3];} x[2]; sizeof(x); }));
+  ASSERT(24, ({ struct S {int a; char b;} x[3]; sizeof(x); }));
+  ASSERT(16, ({ struct {struct {char c;} i; int m;} y[2]; sizeof(y); }));
   ASSERT(2, ({ struct {char a; char b;} x; sizeof(x); }));
   ASSERT(0, ({ struct {} x; sizeof(x); }));
   ASSERT(8, ({ struct {char a; int b;} x; sizeof(x); }));
@@ -75,6 +94,10 @@ int main() {
   ASSERT(1, ({ struct T { struct T *next; int x; } a; struct T b; b.x=1; a.next=&b; a.next->x; }));
   ASSERT(4, ({ typedef struct T T; struct T { int x; }; sizeof(T); }));
 
+  ASSERT(24, sizeof(struct Bare));
+  bare_objs[1].a = 7;
+  struct BareHolder h = { bare_objs };
+  ASSERT(7, bare_read(&h, 1));
   ASSERT(2, ({ struct {int a;} x={1}, y={2}; (x=y).a; }));
   ASSERT(1, ({ struct {int a;} x={1}, y={2}; (1?x:y).a; }));
   ASSERT(2, ({ struct {int a;} x={1}, y={2}; (0?x:y).a; }));

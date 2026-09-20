@@ -544,11 +544,6 @@ int attr_align(VarAttr *attr);
 // has no such member.
 Member *get_struct_member(Type *ty, Token *tok);
 
-// Member placement for aggregates: the parser builds the member list
-// and calls these once it is complete.
-void layout_struct(Type *ty);
-void layout_union(Type *ty);
-
 // Initializer resolution and lowering (sema.c). ND_DECL carries the
 // faithful record and is resolved when typed.
 void gvar_initializer(Token **rest, Token *tok, Obj *var);
@@ -621,6 +616,10 @@ struct Type {
   Member *members;
   bool is_flexible;
   bool is_packed;
+  // The member list is complete but sema has not placed the members
+  // yet; resolve_type lays the type out on first sight (an incomplete
+  // forward-declared type never carries this).
+  bool layout_pending;
 
   // Function type
   Type *return_ty;
@@ -643,6 +642,9 @@ struct Member {
   bool is_bitfield;
   int bit_offset;
   int bit_width;
+  // The recorded width expression of a bitfield, unevaluated; sema
+  // evaluates it into bit_width when the aggregate is laid out.
+  Node *width_expr;
 };
 
 extern Type *ty_void;

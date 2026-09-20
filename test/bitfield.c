@@ -52,6 +52,11 @@ int main() {
   ASSERT(8, sizeof(struct {int a:3; int:0; int c:5;}));
   ASSERT(4, sizeof(struct {int a:3; int:0;}));
 
+  ASSERT(4, sizeof(struct {int a : 1 + 3;}));
+  ASSERT(8, sizeof(struct {int a : 3; unsigned b : sizeof(int) * 8 - 8; int c;}));
+  ASSERT(4, ({ enum {W = 2}; sizeof(struct {int a : W;}); }));
+  ASSERT(4, sizeof(struct {int a : (3); int b : 1;}));
+
   printf("OK\n");
   return 0;
 }

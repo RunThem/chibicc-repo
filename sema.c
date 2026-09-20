@@ -13,6 +13,8 @@ static int64_t eval2(Node *node, char ***label);
 static int64_t eval_rval(Node *node, char ***label);
 static double eval_double(Node *node);
 static bool is_const_expr(Node *node);
+static void layout_struct(Type *ty);
+static void layout_union(Type *ty);
 
 // All local variable instances created during parsing are
 // accumulated to this list.
@@ -437,9 +439,32 @@ void resolve_type(Type *ty) {
 
   switch (ty->kind) {
   case TY_PTR:
-  case TY_ARRAY:
   case TY_VLA:
     resolve_type(ty->base);
+    break;
+  case TY_ARRAY:
+    resolve_type(ty->base);
+    // An array the parser built on a not-yet-laid-out aggregate was
+    // sized with placeholder values; recompute now that the element
+    // type is complete. (A pending dimension recomputes below.)
+    if (!ty->dim_len && ty->array_len >= 0) {
+      ty->size = (ty->base->size < 0) ? -1 : ty->base->size * ty->array_len;
+      ty->align = ty->base->align;
+    }
+    break;
+  case TY_STRUCT:
+  case TY_UNION:
+    // The parser records the member list; placing the members is
+    // sema's job. The parser asks at the closing brace, which is where
+    // the type becomes complete, so an aggregate's own members are
+    // already placed by the time an outer one consumes their sizes.
+    if (ty->layout_pending) {
+      ty->layout_pending = false;
+      if (ty->kind == TY_STRUCT)
+        layout_struct(ty);
+      else
+        layout_union(ty);
+    }
     break;
   case TY_FUNC:
     resolve_type(ty->return_ty);
@@ -511,17 +536,32 @@ static int align_down(int n, int align) {
   return align_to(n - align + 1, align);
 }
 
+// Evaluate the recorded bitfield width expressions of a member list.
+// The parser records the width unevaluated; layout is where the value
+// is first needed.
+static void eval_bitfield_widths(Type *ty) {
+  for (Member *mem = ty->members; mem; mem = mem->next) {
+    if (mem->width_expr) {
+      mem->bit_width = eval(mem->width_expr);
+      mem->width_expr = NULL;
+    }
+  }
+}
+
 // Assigns an offset to every member of a struct and computes its size
 // and alignment. The parser builds the member list (the syntax shape)
-// and calls this once the list is complete and the attributes are
-// known; an incomplete type (size < 0) has no members to place yet.
-void layout_struct(Type *ty) {
+// and marks it complete; resolve_type calls this on first sight, and
+// nested aggregates are laid out inner-first by the resolve order.
+static void layout_struct(Type *ty) {
   // An `aligned` attribute on the type is a constant expression the
   // parser recorded; it has to be settled before the offsets are.
   resolve_type(ty);
 
+  // Defensive: an incomplete type has no members to place.
   if (ty->size < 0)
     return;
+
+  eval_bitfield_widths(ty);
 
   int bits = 0;
 
@@ -554,11 +594,13 @@ void layout_struct(Type *ty) {
 
 // Unions need no member offsets (they are all zero), only the union
 // of the member sizes and the largest member alignment.
-void layout_union(Type *ty) {
+static void layout_union(Type *ty) {
   resolve_type(ty);
 
   if (ty->size < 0)
     return;
+
+  eval_bitfield_widths(ty);
 
   for (Member *mem = ty->members; mem; mem = mem->next) {
     if (ty->align < mem->align)
@@ -1134,6 +1176,11 @@ static Member *find_init_member(Type *ty, Token *name) {
         return mem;
       continue;
     }
+
+    // A nameless member (e.g. an anonymous zero-width bitfield) takes
+    // part in layout but can never be designated.
+    if (!mem->name)
+      continue;
 
     // Regular struct member
     if (mem->name->len == name->len && !strncmp(mem->name->loc, name->loc, name->len))
@@ -1782,6 +1829,11 @@ Member *get_struct_member(Type *ty, Token *tok) {
         return mem;
       continue;
     }
+
+    // A nameless member (e.g. an anonymous zero-width bitfield) takes
+    // part in layout but can never be named.
+    if (!mem->name)
+      continue;
 
     // Regular struct member
     if (mem->name->len == tok->len &&
