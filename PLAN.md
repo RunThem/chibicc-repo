@@ -53,7 +53,7 @@
 ## R3 语句链整形 [重组, 依赖 R0.2 的 .loc 折叠]
 
 - [x] **R3.1 声明链自然化**: declaration() 恢复外层 ND_BLOCK 包装(反悔拆分线 2.1 偏差), ND_DECL 锚点按新规范自定义并在 RESULT.md 记录, for-init 同步.
-- [ ] **R3.2 VLA 前缀删除**: EXPR_STMT(NULL_EXPR) 兄弟语句消失, compute_vla_size 调用移入 sema 的 ND_DECL case(反悔拆分线 2.2 偏差).
+- [x] **R3.2 VLA 前缀删除**: EXPR_STMT(NULL_EXPR) 兄弟语句消失, compute_vla_size 调用移入 sema 的 ND_DECL case(反悔拆分线 2.2 偏差).
 - [ ] **R3.3 声明节点入链**: ND_TYPEDEF/ND_ENUM_CONST 进语句链并天然携带所在 ND_BLOCK(反悔拆分线 3.2a/3.4b 偏差; ND_ENUM_CONST 携带显式值表达式, 求值已在 R2.6 迁 sema); sema 在 analyze 时从链上**摘除**它们(codegen 零改动维持); scope_decls/add_scope_decl/get_scope_decls 三件套删除.
 
 ## R4 层 3 补课与文档收尾(与阀门无关, 可随时插队)

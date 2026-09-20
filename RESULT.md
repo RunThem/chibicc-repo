@@ -34,7 +34,8 @@
 | 99c5bfe | R2.8 | `in_file_scope` oracle 删除, 复合字面量的存储类改由 resolve 上下文标志给出 |
 | 11e7757 | R2.9 | `op` 字段"已缩放"标记机制删除: new_add/new_sub 返回完整标注节点, 新增 new_arith/scale_rhs/combine |
 | 8c7c0af | R2.10 | 四个语义节点构造器迁 sema, locals/globals 访问器删除; parse.c 的 `Obj` 引用归零 |
-| (本提交) | R3.1 | declaration() 的合成 ND_BLOCK 取消, ND_DECL 记录直接入所在语句链; 锚点新规范 = 被声明的名字 |
+| 71c19f0 | R3.1 | declaration() 的合成 ND_BLOCK 取消, ND_DECL 记录直接入所在语句链; 锚点新规范 = 被声明的名字 |
+| (本提交) | R3.2 | VLA 尺寸前缀语句删除: compute_vla_size 无 VLA 即返回 NULL, 一条声明降级出至多一条语句, decl_splice 机制删除 |
 
 ## 各步详情
 
@@ -252,7 +253,7 @@
   2. **构造器搬家是计划外的相邻清扫**(实现形态): 计划 R2.10 的文本只列了函数语义四项, 未提 `new_var_node` 等. 判定其属于"parse 的语义残留清零"的口径内 - 一个为**已绑定名字**提供构造器的文件, 不能说它无名字绑定; 且搬走后 `Obj` 在 parse.c 归零, 给了终态验收一个可 grep 的判据. 纯搬家, 逐字节中立(39/39 identical).
   3. **`set_globals(NULL)` 保留为 `globals = NULL`**: 该重置把 `declare_builtin_functions` 刚登记的 `alloca` 移出待发射链. 实测它在可观测层面是空操作(alloca 的 `is_definition` 为假, codegen 本就跳过; `mark_live`/`scan_globals` 也不读它), 但它是既有行为, 本步只换写法不改语义, 并补注释说明顺序不是疏漏.
 
-### R3.1 声明链自然化 (本提交)
+### R3.1 声明链自然化 (71c19f0)
 
 - 改了什么: 声明记录自此直接挂在源码写出的那条语句链上, 合成包装块与"为保 .loc 字节而挑的锚点"两处拆分线残留一并清除.
   1. **parse.c 的 `declaration()` 不再发外层 ND_BLOCK**: 每个 declarator 的 ND_DECL 记录直接进所在链(块体链或 for-init 链), 携带它们的块自此是源码里真实写出的那个 ND_BLOCK. compound_stmt 的调用点改 `chain_append`; for-init 的 `specs_then` 原样可用(它本就是"把一条链接到另一条链后面"). 空声明(`int;`)因此不再产生任何节点(旧为一个空 ND_BLOCK).
@@ -274,3 +275,22 @@
   2. **诊断锚点变化(PLAN R3.1 明确授权"按新规范自定义并记录", 锁定测试同步更新)**: e05 `void x;` 与 e06 `void x = 1;` 的插入符由 `;` 移到 `x`. e07(块域 static, 锚 `=`, 拆分线以来从未移动)与 e08(incomplete type, 锚名字)逐字节不变. 文案全部不变, 只有插入符位置变. 另: 块域 `static void x;`(无初始化器, 无用例)的锚点同样由 `;` 变为名字 - 它走 resolve 侧的 `decl_init ? eq_tok : node->tok`.
   3. **PLAN 文本的实施口径**: "declaration() 恢复外层 ND_BLOCK 包装" 实施为"取消 declaration() 自己发的合成 ND_BLOCK, 记录改由**外层**(源码写出的)块携带". 依据: 拆分线 2.1 的计划原文是"外层 ND_BLOCK 包装取消", 其偏差记录写的正是"未执行", 本步"反悔"该偏差即执行原计划; R3.3 的"天然携带所在 ND_BLOCK"是同一原则; 且按字面"保留包装"理解, 本步只剩锚点一项, 与步名"声明链自然化"和 R3 组标题"语句链整形"不符.
   4. **for-init 的合成块从 parse 移到 sema**(实现形态): codegen 的 `for` 只有单语句 init 槽, 而 codegen 零改动是红线, 因此 init 链降级出多条语句时必须有一层包装. 选择由 sema 在标注趟包(层 4 的"为 codegen 服务的降级"), 而不是让 parse 继续发: 忠实层里 `for (int i = 0, j = 1; ...)` 的 init 就是一条记录链, 与块体内的声明同形. 该包装不带 `is_scope_block`, 作用域仍由 ND_FOR 的 resolve case 给出, 语义不变.
+
+### R3.2 VLA 前缀删除 (本提交)
+
+- 改了什么: 一条声明的降级自此**至多产生一条语句**, 挂在每条声明前面的那条 VLA 尺寸语句(绝大多数情况下是一个裸 NULL_EXPR)消失.
+  1. **`compute_vla_size` 不再用 ND_NULL_EXPR 打底**: 类型里没有 VLA 就返回 NULL; 有则返回按"内层先于外层"次序用 comma 串起来的尺寸赋值(节点数比旧版少掉全部 NULL_EXPR 与外层 comma, 指令序列与 `vla_size` lvar 的创建次序不变).
+  2. **ND_DECL 的降级改为单语句**: 尺寸计算(若需要)与其余部分 - VLA 的 `x = alloca(<size>)`, 或有初始化器时的 MEMZERO + 赋值 comma 链 - 用 comma 串在同一个 ND_EXPR_STMT 里; 定长且无初始化器的声明(`int x;`)不产生任何语句(`decl_remove`, 与块域 static 同一出口).
+  3. **`decl_splice` 机制删除**: 该文件作用域 static 与 type_chain 里的 save/restore/前插三段逻辑一并去掉 - 声明不再需要"往自己前面塞一个兄弟语句"的能力; `decl_remove` 保留.
+  4. **测试**: test/vla.c +6 断言(经指针写一维 VLA 元素; 先声明指针后声明 VLA; 经指针做**二维 VLA 的行下标**写入; 二维 VLA 直接写; 无语句声明; for-init 里的无语句声明), 期望值先用宿主机 clang 算出(7/10/7/3/3/3).
+  规模: sema.c 3146 -> **3133**; parse.c / chibicc.h / codegen.c / type.c **零改动**.
+- 为什么改: 拆分线 2.2 的偏差记录写"'EXPR_STMT(NULL_EXPR) 前缀消失'未达成 - 该语句自身也是 .loc 字节输出的一部分, 只能保留为 parse 侧兄弟语句"; R0.2 折叠 .loc 后这个理由消失. 每条 `int x = 1;` 前面都挂一条空语句, 对层 3/层 4 的消费者是纯噪音(打印器要么多打一个 `;`, 要么得知道它是合成的). 真实的尺寸计算也一并从兄弟语句改成 comma 序列, 是步名"VLA 前缀删除"的彻底形式: 二者不可分 - 只跳过 NULL_EXPR 的话, 声明仍可能降级出两条语句, decl_splice 与前插逻辑就得留着. 顺带少一个文件作用域可变 static(AGENTS.md 库化纪律的方向).
+- 测试结果: 本步为 [重组], 闸门 = 行为三闸门 + 归一化 diff 为空 + 同提交重置 raw 基线.
+  - 归一化 diff: 对照基线 = R3.1(71c19f0)编译器 + **本提交的新测试源**在容器内生成的 41 文件快照, `make docker-snapshot-ndiff` **退出码 0, "snapshot ndiff: empty"**.
+  - raw diff: 非空(32 文件 / 2489 行变化), 逐行核对**全部是删除的 `.loc` 行**(删除 2489 / 新增 0 / 非 .loc/.file 变化 0) - 每条消失的语句正好带走它那一行 .loc, 指令流零变化, 强于 [重组] 步的口径. 本提交内 `make docker-snapshot` 重置 raw 基线, 复跑 `docker-snapshot-diff` 为空.
+  - 宿主机分类 A/B(参考 = 71c19f0 二进制, 同一份新测试源): 39 个 `test/*.c` = **9 identical + 30 normalized-match + 0 structural**, 30 个 normalized-match 的 raw 差异亦全为 .loc/.file. 另两组手写探针: 12 个 VLA 形状(一维/二维/指针到 VLA/同域两个 VLA/嵌套块内 VLA/sizeof/语句表达式内 VLA/for-init VLA)与 10 个"声明不产生语句"形状(`int x;` 连续三条/语句表达式内声明/for-init 无初始化器声明/块域 static 混排/结构与聚合声明) - 对参考编译器 **非 .loc 差异 0**, 归一化后逐字节相同; 4 个语句表达式错误形状 stderr 逐字节相同.
+  - `docker-test` 退出码 0(41 个测试可执行文件 stage1 + stage2 自举各一遍, 含 vla.c 新增 6 条断言; driver.sh passed; 诊断锁定 stage1/stage2 各 "44 cases byte-exact"), `docker-test-thirdparty THIRDPARTY=tinycc` 退出码 0.
+- 偏差说明: 三项.
+  1. **超出计划文本的部分(同方向, 不可分)**: 计划只写"EXPR_STMT(NULL_EXPR) 兄弟语句消失", 实施把真实尺寸计算也改为 comma 序列并删掉 decl_splice 机制(理由见"为什么改"). 计划的后半句"compute_vla_size 调用移入 sema 的 ND_DECL case"在 R2.6 已成立, 本步实测核对: 该函数的三个调用点(compute_vla_size 自身递归 / vla_size_expr / ND_DECL 降级)全在 sema.c, parse.c 零引用.
+  2. **新断言的非空转验证, 含一条反面记录**: 按 gate-blindspots 的纪律做撤改实验 - 把"每个声明都走 compute_vla_size"改成"只有 `ty->kind == TY_VLA` 的声明才走"(一个看起来合理的错误简化), 容器内重跑 test/vla.exe: `int (*p)[n][n] = &v; (*p)[1][2] = 7;` 这条**编译失败(exit 1)** - `scale_rhs` 直接读 `base->vla_size` 而不自行计算, 该尺寸只在声明处算一次. 同时如实记录: 其余几条新断言在这个撤改下**仍然通过** - 一维 `(*p)[2]` 按元素尺寸常量缩放, `sizeof(*x)` 走 vla_size_expr 会按需计算 - 即只有"经指针做**行**下标"这一形状真正钉住该不变量, 而 41 文件语料此前没有它(vla.c 原有的指针到 VLA 用例只做 sizeof). 撤改已还原, 还原后重跑全部闸门.
+  3. **R3.1 的 for-init 包装触发面收窄**(连带效果): 带初始化器的单 declarator for-init 过去降级出 [尺寸兄弟语句, 声明语句] 两条, 现在是一条, 故 sema 的包装只在 2 个以上 declarator(或 VLA + 另一个 declarator)时触发. test/control.c 的 R3.1 四条断言仍覆盖包装路径. 另注: `create_lvar_init` 里作为 comma 链起点的三处 ND_NULL_EXPR 保留 - 它们在表达式内部而非语句层, 是上游形状, 不在本步"兄弟语句"的口径内.

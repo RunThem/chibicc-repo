@@ -1162,11 +1162,11 @@ static void lower_funcall(Node *node, Token *tok) {
     node->ret_buffer = new_lvar("", node->ty);
 }
 
-// Generate code for computing a VLA size.
+// Generate code for computing a VLA size: one assignment per VLA the
+// type holds, sequenced innermost first, or NULL when it holds none - so
+// a declaration of a fixed-size object produces no code at all.
 static Node *compute_vla_size(Type *ty, Token *tok) {
-  Node *node = new_node(ND_NULL_EXPR, tok);
-  if (ty->base)
-    node = new_binary(ND_COMMA, node, compute_vla_size(ty->base, tok), tok);
+  Node *node = ty->base ? compute_vla_size(ty->base, tok) : NULL;
 
   if (ty->kind != TY_VLA)
     return node;
@@ -1181,7 +1181,7 @@ static Node *compute_vla_size(Type *ty, Token *tok) {
   Node *expr = new_binary(ND_ASSIGN, new_var_node(ty->vla_size, tok),
                           new_binary(ND_MUL, ty->vla_len, base_sz, tok),
                           tok);
-  return new_binary(ND_COMMA, node, expr, tok);
+  return node ? new_binary(ND_COMMA, node, expr, tok) : expr;
 }
 
 // `sizeof` of a VLA type: a reference to its runtime size variable,
@@ -2087,11 +2087,10 @@ static void select_generic(Node *node) {
   node->next = nxt;
 }
 
-// The declaration-record splicing of the annotation pass: a lowered
-// declaration may ask for a sibling statement in front of itself (the
-// VLA-size computation) or for its own removal (a block-scope static,
-// which produces no code).
-static Node *decl_splice;
+// Whether the declaration record being lowered produces no statement at
+// all, so that the annotation pass removes it from the chain: a
+// block-scope static (its data image goes to the global section) and a
+// fixed-size object with no initializer.
 static bool decl_remove;
 
 // Walks a statement chain, typing each node. Declaration records that
@@ -2124,23 +2123,15 @@ static void type_chain(Node **head) {
       break;
     }
 
-    Node *save_splice = decl_splice;
     bool save_remove = decl_remove;
-    decl_splice = NULL;
     decl_remove = false;
     add_type(n);
-    Node *splice = decl_splice;
     bool remove = decl_remove;
-    decl_splice = save_splice;
     decl_remove = save_remove;
 
     if (remove) {
       *pp = n->next;
       continue;
-    }
-    if (splice) {
-      splice->next = n;
-      *pp = splice;
     }
     pp = &(*pp)->next;
   }
@@ -2510,17 +2501,16 @@ static void add_type(Node *node) {
     }
     return;
   case ND_DECL: {
-    // Lower a declaration record. A block-scope static was declared as
-    // an anonymous global by the resolve pass; its initializer is
-    // serialized here and the record leaves the chain, which produces
-    // no statement exactly like the old shape. Otherwise the record
-    // becomes an expression statement: a VLA becomes
-    // `x = alloca(<size>)`, with the VLA-size computation spliced in
-    // as the preceding sibling; with an initializer, the MEMZERO +
-    // assignment comma chain (again behind a VLA-size sibling, which
-    // may be a bare NULL_EXPR); without one, the VLA-size computation
-    // itself.
+    // Lower a declaration record to at most one statement. A block-scope
+    // static was declared as an anonymous global by the resolve pass;
+    // its initializer is serialized here and the record leaves the
+    // chain, producing no statement. Otherwise the VLA sizes the type
+    // holds are computed first and sequenced before the rest -
+    // `x = alloca(<size>)` for a VLA, the MEMZERO + assignment comma
+    // chain for an initialized object - and a fixed-size object with no
+    // initializer produces no statement at all.
     Obj *var = node->var;
+    Token *tok = node->tok;
 
     if (node->attr.is_static) {
       if (node->decl_init) {
@@ -2532,6 +2522,13 @@ static void add_type(Node *node) {
       return;
     }
 
+    // Every declared type is walked, not just a VLA one, because a
+    // pointer to a VLA (`int (*p)[n]`) needs the size computed here too:
+    // later arithmetic on it reads the size variable instead of
+    // computing it again.
+    Node *vla_size = compute_vla_size(var->ty, tok);
+    Node *lowered = NULL;
+
     if (var->ty->kind == TY_VLA) {
       // A variable-length object may not be initialized. The parser left
       // the two standing side by side because whether a declaration is a
@@ -2541,42 +2538,32 @@ static void add_type(Node *node) {
         error_tok(node->decl_init->eq_tok,
                   "variable-sized object may not be initialized");
 
-      Token *tok = node->name_tok;
-      decl_splice = new_unary(ND_EXPR_STMT, compute_vla_size(var->ty, tok), tok);
-      // The splice is linked into the chain behind the annotation
-      // descent's back, so it has to arrive fully typed.
-      add_type(decl_splice);
-      node->kind = ND_EXPR_STMT;
-      node->tok = tok;
-      node->lhs = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
-                             new_alloca(new_var_node(var->ty->vla_size, tok)),
-                             tok);
+      lowered = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
+                           new_alloca(new_var_node(var->ty->vla_size, tok)),
+                           tok);
     } else {
+      // A declared object must have a complete, non-void type.
+      check_declared_void(tok, var->ty);
+      if (var->ty->size < 0)
+        error_tok(node->name_tok, "variable has incomplete type");
+
       // The resolve pass resolved the faithful initializer record and
       // completed the declared type with it; what is left here is the
       // lowering to the assignment chain.
-      ResolvedInit *init = node->init_resolved;
-
-      // A declared object must have a complete, non-void type.
-      check_declared_void(node->tok, node->var->ty);
-      if (node->var->ty->size < 0)
-        error_tok(node->name_tok, "variable has incomplete type");
-
-      if (init) {
-        // An initialized declaration keeps the VLA-size computation as
-        // a separate preceding sibling, matching the old shape (for a
-        // type with no VLA in it, the sibling is a bare NULL_EXPR).
-        decl_splice = new_unary(ND_EXPR_STMT,
-                                compute_vla_size(node->var->ty, node->tok),
-                                node->tok);
-        add_type(decl_splice);
-        node->lhs = lvar_init_comma(node->var, init, node->decl_init->tok);
-      } else {
-        node->lhs = compute_vla_size(node->var->ty, node->tok);
-      }
+      if (node->init_resolved)
+        lowered = lvar_init_comma(var, node->init_resolved, node->decl_init->tok);
       node->decl_init = NULL;
-      node->kind = ND_EXPR_STMT;
     }
+
+    if (!vla_size && !lowered) {
+      decl_remove = true;
+      return;
+    }
+
+    node->kind = ND_EXPR_STMT;
+    node->lhs = (vla_size && lowered)
+                  ? new_binary(ND_COMMA, vla_size, lowered, tok)
+                  : (lowered ? lowered : vla_size);
     add_type(node);
     return;
   }
