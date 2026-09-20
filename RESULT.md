@@ -30,7 +30,8 @@
 | 47e0040 | R2.4 | 初始化器忠实化: 忠实 brace 记录入树, 定位/越界/brace elision/灵活长度全部移 sema |
 | 5f07540 | R2.5 | 位域宽度记表达式, 布局动作转 sema 私有(反悔 4.2a), 收尾触发落在定义完成点 |
 | 516c4a0 | R2.6 | 拆全部构造现场调用, sema 改 resolve + 标注/降级两趟独立遍历, parse.c 达层 3 形态 |
-| (本提交) | R2.7 | 作用域表一分为二: parse 私有 typedef/tag 影子栈 + sema 私有变量/枚举栈(4.2b 共享表解体) |
+| 59b6d2a | R2.7 | 作用域表一分为二: parse 私有 typedef/tag 影子栈 + sema 私有变量/枚举栈(4.2b 共享表解体) |
+| (本提交) | R2.8 | `in_file_scope` oracle 删除, 复合字面量的存储类改由 resolve 上下文标志给出 |
 
 ## 各步详情
 
@@ -184,7 +185,7 @@
   7. **诊断时机后移**(多错误输入首错优先级可能微移, 单错误不变): 名字解析/类型检查从构造现场移到 pass1/pass2 遍历, 单错误输入 43/43 逐字节同(e08 锚点改用 name_tok 仍同); 多错误输入的首错优先级可能随遍历顺序变化, 与 R1.2 偏差 4 / R2.3 偏差 2 / R2.4 偏差 5 同类.
   8. **复合赋值 / 前缀自增自降的整结构复制改写**(潜在缺陷规避): pass2 降级 `op=` 与前缀 `++/--` 时对整个 Node 做结构复制再改写, 规避了"语句表达式 body 在改写中丢失"的潜在缺陷(若只改字段, ND_STMT_EXPR 的 body 链会脱钩); 纯表达式产物逐字节不变(归一化 match).
 
-### R2.7 typedef/tag 影子作用域 (本提交)
+### R2.7 typedef/tag 影子作用域 (59b6d2a)
 
 - 改了什么: 作用域表一分为二, 拆分线 4.2b 的"共享表"解体.
   1. **parse.c 自持一个只装文法分类信息的私有作用域栈**: 新增 `ParseScope`(`names` + `tags` 两张 HashMap, C 的两个块作用域)与 `NameEntry`(只有 `Type *type_def` 一个字段). `find_typedef`/`add_typedef`/`add_declared_name`/`find_tag`/`find_current_tag`/`push_tag_scope`/`enter_scope`/`leave_scope` 八个函数连同 `scope` static 全部由 sema.c 迁入 parse.c 并收为 static, chibicc.h 对应的八行声明删除. 变量名遮蔽 typedef 的机制不变: 每个 declarator 声明的名字(变量/函数/形参/枚举常量)仍推一条 `type_def == NULL` 的空条目(R2.6 偏差 4 的 oracle 增强).
@@ -197,3 +198,14 @@
   1. **一张 `names` 表同时装 typedef 名与遮蔽条目**: 计划文本写"仅 typedef/tag 的作用域栈", 实施为 typedef 名与被声明名的空条目同表 - 后者既不是 typedef 也不是 tag, 但它是 oracle 正确工作的前提(`t t=1; t;` 里末尾的 `t` 必须不再被当作类型名), 单独建一张表只会让 find_typedef 多一次查表. 表中不存在任何 `Obj *` 或枚举值, "只装文法分类信息"的实质不变.
   2. **登记侧函数一并收编**: 计划只列了六个查询/驱动函数, `add_typedef`/`add_declared_name` 是它们的写入侧, 同样只被 parse 调用, 故一并转为 parse 私有. 此后 chibicc.h 的 parse/sema 接口只剩 `parse`/`sema`/`const_expr`/`conditional`/`get_ident` 与六个节点构造器.
   3. **"sema 的作用域由 resolve 遍历自管"在 R2.6 已成立**: enter_scope/leave_scope 的 sema 侧调用点自 R2.6 起全在 resolve_node/resolve_function 内, 本步改变的是这些调用落到哪张表上, 不是调用结构. 另: `in_file_scope()` 读的 `scope->next == NULL` 自此是 sema 自己栈的深度(而非共享栈), 语义不变; 该 oracle 的拆除是 R2.8 的内容.
+
+### R2.8 隐藏变量创建归 sema (本提交)
+
+- 改了什么: `in_file_scope()` 删除 - 复合字面量的存储类判定不再从"作用域栈有多深"倒推, 改由 resolve 遍历自己维护的显式上下文标志 `resolving_body` 给出: `resolve_function` 在解析函数体前 save/置位, 出来后恢复(嵌套函数定义从体内进入, 故必须 save 而非清零), `resolve_node` 的 ND_COMPOUND_LITERAL case 据此选 `new_lvar`(体内, 自动存储期)或 `new_anon_gvar`(文件域, 静态存储期). test/complit.c +5 断言: 文件域复合字面量分别位于一个函数定义**之前**与**之后**(`int *before = (int[]){1,2}; int mid(void){...} int *after = (int[]){3,4};`), 加上 mid 体内的一处块域复合字面量, 期望值宿主机 clang 验证. 规模: sema.c 3095 -> **3102**, parse.c/chibicc.h/codegen.c/type.c **零改动**.
+- 为什么改: `scope->next == NULL` 是拆分线 4.2b 留给 parse 的三个 oracle 之一, 它成立的前提是"作用域栈由 parse 驱动, 深度即词法位置" - R2.7 把栈拆开后这个前提在字面上已经失效(读的是 sema 自己的栈), 只是恰好还给出正确答案. 复合字面量的存储期是 C 语义(块内自动, 文件域静态), 应当由 sema 的遍历上下文直接陈述, 而不是从栈深度反推. 至此 4.2b 的三个 oracle 只剩 typedef/tag 分类一项, 而那一项是阶段 3 明确永久保留的.
+- 测试结果: **四闸门全绿, raw 逐字节为空**(无需重置基线). 对照基线做法同前: 用 HEAD(R2.7, 59b6d2a)编译器 + 本提交的新测试源在容器内生成 41 文件快照, 新编译器下 `docker-snapshot-diff`(raw)与 `docker-snapshot-ndiff`(归一化)**均为空**. `docker-test` 退出码 0(新增 5 条断言 stage1 + stage2 自举各一遍全过, 诊断锁定 stage1/stage2 各 "43 cases byte-exact"), `docker-test-thirdparty THIRDPARTY=tinycc` 退出码 0. 宿主机 A/B: 参考编译器(/tmp/cbase27, 自 59b6d2a 构建)与新编译器对同一份新测试源的 39 个 `test/*.c` 输出 `.s` 与 stderr **39/39 逐字节相同**; 另对 4269 行的指针算术压力文件逐字节相同.
+  **新断言的非空转验证**(按 gate-blindspots 的纪律, 撤掉修复看观测值是否翻转): 把 `resolve_function` 末尾的 `resolving_body = save_body;` 删掉重编, `after` 的初始化数据由 `.quad .L..7+0` 退化为 **`.quad +0`**(该复合字面量被当作块域处理, 建成一个挂在 mid 的 locals 链上的 lvar, 于是文件域的重定位指向一个没有名字的局部对象), 匿名全局编号整体少一个; `before`(在任何函数定义之前)不受影响. 即缺了恢复动作时新增的 `after[0]`/`after[1]` 两条断言会读到空指针 - 该形状(文件域复合字面量出现在函数定义**之后**)是 41 文件语料与 test/complit.c 原有内容都没有的, 与 R2.5/R2.6 两次由"新触发点排不到"引起的缺陷同类.
+- 偏差说明: 三项.
+  1. **R2.6 已吸收本步主体**(同 R2.6 偏差 1 的预告): 计划要求的"复合字面量的域判定与 new_lvar/new_anon_gvar 移 ND_COMPOUND_LITERAL case"与"隐藏变量创建归 sema", 在 R2.6 落地两趟遍历时已经完成 - 复合字面量的隐藏变量在 `resolve_node` 的 ND_COMPOUND_LITERAL case 创建, 字符串字面量匿名全局在 ND_STRING case(pass1), `__func__`/`__FUNCTION__`/形参/va_area/alloca_bottom 在 begin_function, 全部临时变量与 ret_buffer 在 pass2 的各降级点. 本步实测核对: `parse.o` 不引用 `new_lvar`/`new_gvar`/`new_anon_gvar`/`new_string_literal` 中任何一个(nm 口径, 见 R2.7 测试结果), 拆分线 2.3 记的"变量创建仍在 parse"偏差就此**完全清算**.
+  2. **块域 static 的匿名全局创建留在 pass1, 不移 pass2**(计划文本未达成, 结构性原因): 计划写"改由 ND_DECL 降级路径完成". 实测该移动不可行 - pass1 的 `bind_ident` 要为同一块内后续引用绑定名字, `int f(void){ static int x = 1; return x; }` 里 `return x;` 的 x 在 pass1 就得有 Obj, 否则报 "undefined variable". 若改为"pass1 建一个不在任何链上的占位 Obj, pass2 再补匿名名并挂进 globals", 则 globals 的插入序从 resolve 序变成标注序(数据段顺序随之变), 且占位 Obj 必须避开 locals 链以免被 assign_lvar_offsets 分配栈偏移 - 更多机械, 零可观测收益. 现状即"创建 + 名字登记在 pass1, 数据段序列化(`gvar_init_data`)在 pass2 的降级路径", 拆分线 3.4a 记的偏差实质是"创建发生在 parse", 这一点已由 R2.6 清算; "创建发生在降级趟"的字面要求判定为不采纳.
+  3. **实现形态**: `resolving_body` 是 resolve 遍历的上下文标志而非参数 - 与 analyze 的 `brk_label`/`cont_label`/`current_switch`(R1.2)同一处理方式, 上下文成为该遍的私有状态而不是 static 全局的隐式契约. 库化阶段(路线图 5)的 context 对象化会把它与那几个一并收进去, 本线按纪律 5 不做 context 化.

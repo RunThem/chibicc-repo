@@ -119,12 +119,6 @@ static void leave_scope(void) {
   scope = scope->next;
 }
 
-// True at file scope, where a compound literal declares an anonymous
-// global rather than a hidden local.
-static bool in_file_scope(void) {
-  return scope->next == NULL;
-}
-
 // Find a variable by name.
 static VarScope *find_var(Token *tok) {
   for (Scope *sc = scope; sc; sc = sc->next) {
@@ -2779,6 +2773,12 @@ static double eval_double(Node *node) {
 // scope with its condition, increment and body - exactly the scopes
 // the parser used to drive while parsing.
 
+// True while the resolve pass is inside a function body. A compound
+// literal owns a hidden local there and an anonymous global at file
+// scope, and this is what says which: the storage class follows from
+// where the resolve pass is, not from the depth of a scope stack.
+static bool resolving_body;
+
 // Walks a faithful initializer record and resolves the expressions it
 // carries (values and designator bounds); resolution and lowering of
 // the record happen later, against the declared type.
@@ -2920,13 +2920,13 @@ static void resolve_node(Node *node) {
     resolve_function(node);
     return;
   case ND_COMPOUND_LITERAL:
-    // The hidden variable is created here, where the scope says
-    // whether the literal lives in an anonymous global or on the
+    // The hidden variable is created here, where the resolve context
+    // says whether the literal lives in an anonymous global or on the
     // stack, and before the initializer record is walked.
     resolve_type_exprs(node->ty_op);
     resolve_type(node->ty_op);
-    node->var = in_file_scope() ? new_anon_gvar(node->ty_op)
-                                : new_lvar("", node->ty_op);
+    node->var = resolving_body ? new_lvar("", node->ty_op)
+                               : new_anon_gvar(node->ty_op);
     resolve_init_record(node->decl_init);
     if (node->decl_init) {
       Type *new_ty;
@@ -3026,11 +3026,18 @@ static void resolve_function(Node *node) {
   fn->body = node->body;
   sema_fn = fn;
 
+  // A [GNU] nested function definition reaches this from inside the
+  // enclosing body, so the flag is saved rather than cleared.
+  bool save_body = resolving_body;
+  resolving_body = true;
+
   enter_scope();
   begin_function(fn, ty);
   resolve_node(node->body);
   fn->locals = get_locals();
   leave_scope();
+
+  resolving_body = save_body;
 }
 
 // Runs the annotation + lowering pass and the control-flow descent over
