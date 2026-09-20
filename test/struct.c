@@ -107,6 +107,11 @@ int main() {
   ASSERT(1, ({ struct S {int a;}; long r; { struct S {char b;}; struct S y; r = sizeof(y); } r; }));
   ASSERT(8, ({ struct S2 {int a;}; long r; { struct S2 *p; r = sizeof(p); } r; }));
 
+  // A tag defined in a block is laid out from the record's position in
+  // that block's chain, so a variable of the type declared right after
+  // it sees the completed layout.
+  ASSERT(9, ({ struct Tag { int x; }; struct Tag t; t.x=9; t.x; }));
+
   printf("OK\n");
   return 0;
 }

@@ -35,7 +35,8 @@
 | 11e7757 | R2.9 | `op` 字段"已缩放"标记机制删除: new_add/new_sub 返回完整标注节点, 新增 new_arith/scale_rhs/combine |
 | 8c7c0af | R2.10 | 四个语义节点构造器迁 sema, locals/globals 访问器删除; parse.c 的 `Obj` 引用归零 |
 | 71c19f0 | R3.1 | declaration() 的合成 ND_BLOCK 取消, ND_DECL 记录直接入所在语句链; 锚点新规范 = 被声明的名字 |
-| (本提交) | R3.2 | VLA 尺寸前缀语句删除: compute_vla_size 无 VLA 即返回 NULL, 一条声明降级出至多一条语句, decl_splice 机制删除 |
+| 6bd967b | R3.2 | VLA 尺寸前缀语句删除: compute_vla_size 无 VLA 即返回 NULL, 一条声明降级出至多一条语句, decl_splice 机制删除 |
+| (本提交) | R3.3 | 核对确认: 记录节点入链/摘除/侧链三件套删除均已由 R2.6+R2.7 完成(编译器零改动), 补 3 条记录位置回归断言 |
 
 ## 各步详情
 
@@ -276,7 +277,7 @@
   3. **PLAN 文本的实施口径**: "declaration() 恢复外层 ND_BLOCK 包装" 实施为"取消 declaration() 自己发的合成 ND_BLOCK, 记录改由**外层**(源码写出的)块携带". 依据: 拆分线 2.1 的计划原文是"外层 ND_BLOCK 包装取消", 其偏差记录写的正是"未执行", 本步"反悔"该偏差即执行原计划; R3.3 的"天然携带所在 ND_BLOCK"是同一原则; 且按字面"保留包装"理解, 本步只剩锚点一项, 与步名"声明链自然化"和 R3 组标题"语句链整形"不符.
   4. **for-init 的合成块从 parse 移到 sema**(实现形态): codegen 的 `for` 只有单语句 init 槽, 而 codegen 零改动是红线, 因此 init 链降级出多条语句时必须有一层包装. 选择由 sema 在标注趟包(层 4 的"为 codegen 服务的降级"), 而不是让 parse 继续发: 忠实层里 `for (int i = 0, j = 1; ...)` 的 init 就是一条记录链, 与块体内的声明同形. 该包装不带 `is_scope_block`, 作用域仍由 ND_FOR 的 resolve case 给出, 语义不变.
 
-### R3.2 VLA 前缀删除 (本提交)
+### R3.2 VLA 前缀删除 (6bd967b)
 
 - 改了什么: 一条声明的降级自此**至多产生一条语句**, 挂在每条声明前面的那条 VLA 尺寸语句(绝大多数情况下是一个裸 NULL_EXPR)消失.
   1. **`compute_vla_size` 不再用 ND_NULL_EXPR 打底**: 类型里没有 VLA 就返回 NULL; 有则返回按"内层先于外层"次序用 comma 串起来的尺寸赋值(节点数比旧版少掉全部 NULL_EXPR 与外层 comma, 指令序列与 `vla_size` lvar 的创建次序不变).
@@ -294,3 +295,25 @@
   1. **超出计划文本的部分(同方向, 不可分)**: 计划只写"EXPR_STMT(NULL_EXPR) 兄弟语句消失", 实施把真实尺寸计算也改为 comma 序列并删掉 decl_splice 机制(理由见"为什么改"). 计划的后半句"compute_vla_size 调用移入 sema 的 ND_DECL case"在 R2.6 已成立, 本步实测核对: 该函数的三个调用点(compute_vla_size 自身递归 / vla_size_expr / ND_DECL 降级)全在 sema.c, parse.c 零引用.
   2. **新断言的非空转验证, 含一条反面记录**: 按 gate-blindspots 的纪律做撤改实验 - 把"每个声明都走 compute_vla_size"改成"只有 `ty->kind == TY_VLA` 的声明才走"(一个看起来合理的错误简化), 容器内重跑 test/vla.exe: `int (*p)[n][n] = &v; (*p)[1][2] = 7;` 这条**编译失败(exit 1)** - `scale_rhs` 直接读 `base->vla_size` 而不自行计算, 该尺寸只在声明处算一次. 同时如实记录: 其余几条新断言在这个撤改下**仍然通过** - 一维 `(*p)[2]` 按元素尺寸常量缩放, `sizeof(*x)` 走 vla_size_expr 会按需计算 - 即只有"经指针做**行**下标"这一形状真正钉住该不变量, 而 41 文件语料此前没有它(vla.c 原有的指针到 VLA 用例只做 sizeof). 撤改已还原, 还原后重跑全部闸门.
   3. **R3.1 的 for-init 包装触发面收窄**(连带效果): 带初始化器的单 declarator for-init 过去降级出 [尺寸兄弟语句, 声明语句] 两条, 现在是一条, 故 sema 的包装只在 2 个以上 declarator(或 VLA + 另一个 declarator)时触发. test/control.c 的 R3.1 四条断言仍覆盖包装路径. 另注: `create_lvar_init` 里作为 comma 链起点的三处 ND_NULL_EXPR 保留 - 它们在表达式内部而非语句层, 是上游形状, 不在本步"兄弟语句"的口径内.
+
+### R3.3 声明节点入链 (本提交)
+
+- 改了什么: **编译器源码零改动** - 本步是逐项核对与记录: 计划要求的四项已由 R2.6(两趟遍历)与 R2.7(作用域表拆分)完成, R3.1 又把 ND_DECL 放回同一条链. 核对结果(行号以本提交为准):
+  1. **ND_TYPEDEF/ND_ENUM_CONST 在语句链上, 由所在 ND_BLOCK 天然携带**: 块体链(parse.c:1109 的枚举记录, 1112 的 typedef 记录), for-init 链(parse.c:1009, 经 `specs_then` 排在声明记录之前), 文件域链(parse.c:2127/2131). 三处都是 `chain_append` 直接挂链, 无侧链; 归属哪个块由链所在的 ND_BLOCK 给出, sema 的 resolve_node 在其 `is_scope_block` 上 push/pop.
+  2. **ND_ENUM_CONST 携带显式值表达式**: parse.c:682-685 记 `lhs`(未求值的 conditional 结果)与 `ty_op`(所属枚举类型); 求值与名字登记在 sema 的 `resolve_enum_records`(sema.c:408), 由 resolve 遍历在记录所在位置调用(拆分线 3.4b 的"解析现场求值"已在 R2.6 迁走).
+  3. **sema 在 codegen 看到链之前摘除它们**: `type_chain` 的 ND_TYPEDEF/ND_ENUM_CONST case(sema.c:2106-2110)`*pp = n->next`; ND_GVAR_DECL(序列化数据后摘除)与 ND_FUNCDEF([GNU] 嵌套定义分析后摘除)在同一处. codegen 因此看不到任何记录节点, 零改动维持.
+  4. **scope_decls/add_scope_decl/get_scope_decls 三件套不存在**: 全树 grep 零命中; `nm` 口径 sema.o 只导出 `sema` 与 `const_expr`, parse.o 的未定义符号集与之**交集为空**.
+  5. **测试**: test/typedef.c +2(块内 typedef 一个 VLA 名字后按下标写; typedef 二维 VLA 后按**行**下标写), test/struct.c +1(块内定义 tag, 紧接声明该类型变量并读写) - 三条都是"记录在链上的位置决定 sema 何时补全类型"的形状, 期望值先用宿主机 clang 算出(7/5/9).
+  规模: parse.c / sema.c / chibicc.h / codegen.c / type.c **全部零改动**; 本提交只含测试与文档.
+- 为什么改: 拆分线 3.2a/3.4b 把 typedef 与枚举常量记成"声明记录", 但 .loc 字节冻结不让它们进语句链(块域 typedef 今天不产生任何节点, 入链就多一行 .loc), 只能挂在 sema 侧的 `scope_decls` 链上, 且"哪条记录属于哪个块"不记录. R2.6 的两趟遍历让 sema 从树上重建作用域, 侧链失去消费者而被删, "进语句链 + 天然携带所在 ND_BLOCK"就此成立; R3.1 之后五类记录节点(ND_DECL/ND_GVAR_DECL/ND_FUNCDEF/ND_TYPEDEF/ND_ENUM_CONST)的入链与摘除口径完全一致.
+- 测试结果: 本步属 [重组] 组, 但**编译器源码零改动**, 故形状闸门为空是构造性的(对照两侧是同一个编译器), 不构成新证据; 行为闸门照跑.
+  - `docker-test` 退出码 0(41 个测试可执行文件 stage1 + stage2 自举各一遍, 含三条新断言各跑两遍; driver.sh passed; 诊断锁定 stage1/stage2 各 "44 cases byte-exact").
+  - `docker-test-thirdparty THIRDPARTY=tinycc` 退出码 0(该脚本不消费 test/*.c, 编译器与 R3.2 提交逐字节同源).
+  - raw / 归一化 diff: 本提交内 `make docker-snapshot` 重置基线以纳入三条新断言(typedef.s/struct.s 变长), 复跑 `docker-snapshot-diff` 与 `docker-snapshot-ndiff` 均为空.
+  - 记录形状的专项核对(宿主机, 参考 = 拆分线终态后 / R3 开工前的 8c7c0af 二进制): 10 个记录形状(块内 typedef/块内 enum/语句表达式内 typedef 与 enum/块内 typedef 一个 struct tag/块域 extern/typedef VLA/带计算值的 enum/块内 tag 定义后使用)对 HEAD **非 .loc 差异 0**, 归一化后逐字节相同; 3 个"语句表达式末语句是记录"的错误形状(`({ typedef int T; })` / `({ enum { A }; })` / `({ extern int q; })`)stderr **逐字节相同**(均报 "statement expression returning void is not supported") - 即 R3.1 的末语句判定改动对记录类节点同样保真.
+  - 累计形状核对(8c7c0af -> HEAD, 含 R3.1/R3.2/R3.3 全部改动与新测试源): 39 个 `test/*.c` = 9 identical + 30 normalized-match + **0 structural**.
+- 偏差说明: 四项, 均无行为偏差.
+  1. **R2.6 已吸收本步主体**(同 R2.6 偏差 1 的预告, 本步实测核对而非推定): 侧链删除, 记录进链, 作用域由树给出, 枚举值求值迁 sema - 四项在 R2.6/R2.7 落地. 本步的净增内容只有三条回归断言与本节记录.
+  2. **摘除发生在标注趟而非 analyze**(计划文本口径调整): 计划写"sema 在 analyze 时从链上摘除". analyze 是控制流下降, 跑在 add_type **之后**, 而记录节点必须在标注之前/之中就被跳过(否则 add_type 会在记录节点上跑标注递归), 且 analyze 的链遍历没有摘除机制(无 `Node **pp` 游标). 实质要求"codegen 零改动维持, 记录不入汇编"由 type_chain 满足.
+  3. **形状闸门在本步是构造性的**(口径说明, 见测试结果): 编译器源码零改动时 raw/归一化 diff 的对照两侧同源, 其"为空"不能算作本步的证据; 本步的证据是行为闸门 + 上述专项核对.
+  4. **`spec_decls` 侧的记录不在本步口径内**: 表达式上下文里定义的枚举(`sizeof(enum E { A })`, 参数 declspec 里的 `int f(enum E { A } x)`)没有语句链位置, 仍挂在 `Type.spec_decls` / `Node.spec_decls` 上, 由 resolve 遍历在该节点位置登记(R2.6 既有形态). 计划未要求改变; 它们是"记录"而非"语句", 与 R3.3 的口径不冲突.

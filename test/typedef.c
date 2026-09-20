@@ -26,6 +26,11 @@ int main() {
   ASSERT(6, ({ typedef int U; long r; { int U = 2; r = U; } U x = 4; r + x; }));
   ASSERT(5, ({ long r; { typedef int V; V x = 5; r = x; } r; }));
 
+  // A typedef record carries the type sema completes at the record's own
+  // position: a VLA behind the name is still a VLA where it is used.
+  ASSERT(7, ({ int n=7; typedef int V[n]; V v; v[0]=7; v[0]; }));
+  ASSERT(5, ({ int n=3; typedef int W[n][n]; W w; w[2][1]=5; w[2][1]; }));
+
   printf("OK\n");
   return 0;
 }
