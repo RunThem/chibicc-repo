@@ -16,21 +16,25 @@
 1. **Token 流(trivia 保留)** - tokenize 的改造目标: 空白/注释/换行作为 trivia 挂在 token 上, 不丢弃; 拼写/位置/编码等文本级信息完整.
 2. **CST(lossless 具体语法树)** - 建立在预处理**之前**的原始文本上, 预处理指令(`#define`/`#if` 等)本身是树的节点; 每个语法 token 与标点都是显式节点, trivia 挂靠; 保证逐字节还原源码. 服务 formatter 与精确重构.
 3. **语法层 AST(忠实, 无类型)** - 从 CST 下降: 消解标点与括号, 但保留每一种源码写法的区分(`a[i]` vs `*(a+i)`, `while` vs `for`, `op=` 复合赋值, `>` vs 交换操作数, 隐式 cast 有标记); 不做降级, 不查名字, 不算类型. 服务 C→C 代码生成等语法级工具. 宏调用在本层的保留策略是开放设计点, 见"开放决策".
-4. **sema 产物(标注 + 降级)** - 名字解析(绑定到 Obj), 类型检查与标注, 常量求值, 结构体布局, 以及为 codegen 服务的降级(临时变量, 指针算术缩放, 隐式 cast). chibicc 的 codegen 消费这一层.
-5. **汇编(codegen)** - x86-64 System V / GAS / ELF, 不属于库.
+4. **sema 产物(纯标注, 保留源码写法)** - 名字解析(绑定到 Obj), 类型检查与标注, 常量求值, 结构体布局, 以及编译期必需的语义结论(泛型选择, sizeof 结论, 隐式 cast 带标记); 语言规定存在的对象(字符串字面量的匿名全局, 复合字面量的无名字对象, ABI 对象)在这一层物化. 不带任何"为某个后端发射服务的整形"(指针算术缩放, 复合赋值/自增自减的读写回环, 关系运算符换序, 临时槽, 语句重排) - 这些属于消费者. 现行线正在把这类整形从 sema 移入 codegen, 见"路线图".
+5. **汇编(codegen)** - x86-64 System V / GAS / ELF, 不属于库. codegen 直接消费第 4 层的标注树, 自己决定怎么把源码写法落成 x86-64(含它需要的临时槽与语句重排).
 
-消费方式: 编译器(驱动器 + codegen)走 1→(展开)→3→4→5 的编译路径; formatter 只消费 1→2; C→C codegen 消费 3; 语义级工具消费 4.
+消费方式: 编译器(驱动器 + codegen)走 1→(展开)→3→4→5 的编译路径; formatter 只消费 1→2; C→C codegen 消费 3; 语义级工具消费 4(标注树对源到源与语义工具都是可直接使用的形态).
 
 ## 面向库的硬性规则(存量代码按路线图收敛, 新代码立即生效)
 
 - 不新增 `exit()` 调用: 现有 `error_tok` 直接 exit(1), 作为库最终要改成可注册的错误回调或错误返回; 新代码不得引入新的 exit 点.
 - 不新增静态全局状态: 语义状态已全部收到 sema.c(12 个文件域 static: `locals` / `globals` / `sema_fn` / `builtin_alloca` / 作用域表 `scope` / 控制流下降的 `brk_label` / `cont_label` / `current_switch` / `gotos` / `labels` / `decl_remove` / `resolving_body`; 外加 `new_unique_name` 的函数内 `id` 计数器), 与库的可重入性冲突; parse.c 只剩 `scope`(typedef/tag 分类 oracle)与 `is_typename` 的关键字表缓存(建一次后只读). 新代码把状态放进显式的 context 结构.
 - API 纪律: 公共头(未来从 `chibicc.h` 拆出)与内部头分离; 中间表示边界处不泄漏编译器内部假设(Linux 路径, 单次进程生命周期, 直接 exit 等).
+- 后端整形只允许出现在 codegen.c: 指针算术缩放, 读写回环, 临时槽与隐藏变量, 语句重排, 标签与唯一名分配, 都不是库层的事. 库层(sema 及以下)只做标注与语义结论(含物化语言规定存在的对象).
+- 检查与诊断留在库层: 夹在降级代码里的检查(左值性, 实参个数, 位域取地址, VLA 不得初始化, 不完整类型等)在降级搬走时必须在库层显式保留; 文案与插入符锚点以 `test/diagnostic.sh` 的逐字节锁定为准.
 - 库名与对外头文件名属于用户决策; 定名前, 文档与代码注释统一用"前端库"指称, 不擅自更名.
 
 ## 路线图
 
-语法语义拆分线(阶段 3 + 4)已细化为 22 步可勾选执行清单并**全部完成**(终态: parse.c 2531 行纯语法 + sema.c 1552 行, codegen.c 零改动; 计划与执行记录已归档为 `PLAN-split.md` / `RESULT-split.md`). 其后的忠实层收尾线(阀门口径放宽; 计划 `PLAN.md`, 执行记录 `RESULT.md`)同样**已全部完成** - 解除字节冻结造成的忠实层偏差后, parse.c 的表达式层达到"无类型标注, 无名字绑定, 无常量求值"的第 3 层形态(终态: parse.c 2148 行 + sema.c 3145 行 + chibicc.h 704 行; codegen.c 相对 5f53ed0 零改动). 下一条线(CST/trivia 阶段 1-2 与库化阶段 5)的先后由用户拍板.
+语法语义拆分线(阶段 3 + 4)已细化为 22 步可勾选执行清单并**全部完成**(终态: parse.c 2531 行纯语法 + sema.c 1552 行, codegen.c 零改动; 计划与执行记录已归档为 `PLAN-split.md` / `RESULT-split.md`). 其后的忠实层收尾线(阀门口径放宽)同样**已全部完成** - 解除字节冻结造成的忠实层偏差后, parse.c 的表达式层达到"无类型标注, 无名字绑定, 无常量求值"的第 3 层形态(终态: parse.c 2148 行 + sema.c 3145 行 + chibicc.h 704 行; codegen.c 相对 5f53ed0 零改动; 计划与执行记录已归档为 `PLAN-faithful.md` / `RESULT-faithful.md`).
+
+**现行线: codegen 直连 sema 产物(取消 sema 降级)**, 计划 `PLAN.md`, 执行记录 `RESULT.md` - 修改 codegen 让它直接消费第 4 层的标注树, sema 不再做任何"为发射服务的整形"; 第 4 层的边界按"语义结论归库层, 发射便利与临时槽归消费者"重划(判据见 `PLAN.md`). 该线完成前, 第 4 层仍带降级, 上面第 4 条描述的是目标形态; 其后的 CST/trivia(阶段 1-2)与库化(阶段 5)的先后仍由用户拍板.
 
 每个阶段完成时三道闸门必须全绿: `make docker-test`(含自举), 汇编等价性 diff(阶段 0 建立), 该阶段新增的针对性测试. 阶段内行为不允许变化, 变化只发生在阶段边界并单独提交.
 
@@ -38,7 +42,7 @@
 1. **trivia 保留**: tokenize.c 改造, 注释/空白/换行挂到 token; 配 token 层测试.
 2. **CST**: 建立在原始文本(含预处理指令)上的 lossless 树; 验收标准是逐字节 round-trip(打印结果 == 输入文件).
 3. **忠实语法 AST**(已实现): 新增 21 个 NodeKind(上游 48 + 21 = 69): 忠实写法类 `ND_SUBSCRIPT`, `ND_GT`/`ND_GE`, `ND_INCDEC`, `ND_WHILE`, `ND_BREAK`/`ND_CONTINUE`, `ND_SIZEOF`/`ND_ALIGNOF`, `ND_STRING`; 未决引用类 `ND_IDENT`(parser 不绑定的名字); 声明记录类 `ND_DECL`, `ND_GVAR_DECL`, `ND_FUNCDEF`, `ND_TYPEDEF`, `ND_ENUM_CONST`, `ND_COMPOUND_LITERAL`; sema 侧载体类 `ND_GENERIC`/`ND_GENERIC_ASSOC`, `ND_TYPES_COMPATIBLE`, `ND_REG_CLASS`. 上游 48 个 kind 中 5 个加忠实性字段(`ND_ASSIGN.op`; `ND_CAST` 的 `ty_op` 与 `is_implicit`; `ND_MEMBER` 的 `arrow_tok`; `ND_COND` 的 `is_elvis`; `ND_FOR` 的标签槽); `ND_MEMZERO` 退出 parse 的树(sema 降级时重建). parse.c 原约 55 处不忠实构造点(复合赋值/自增自减重写, 指针算术缩放, 初始化器拍平, sizeof 折叠, 字符串字面量转匿名全局, 关系运算符交换操作数等)已全部消除, 降级逻辑在 sema.
-4. **sema 独立 pass**: parse.c 去语义化 - 名字解析/类型检查/常量求值/结构体布局/降级全部搬出到新的 sema.c; 解析器只保留 typedef 名字分类 oracle(C 文法要求的最小语义反馈). `eval/eval2/eval_double/is_const_expr`, `add_type`, `struct_decl` 布局, `write_gvar_data` 等随之迁移.
+4. **sema 独立 pass**(已实现, 现行线继续收边): parse.c 去语义化 - 名字解析/类型检查/常量求值/结构体布局/降级全部搬出到新的 sema.c; 解析器只保留 typedef 名字分类 oracle(C 文法要求的最小语义反馈). `eval/eval2/eval_double/is_const_expr`, `add_type`, `struct_decl` 布局, `write_gvar_data` 等随之迁移. 现行线把其中的"降级"再移一层: sema 只留标注, 整形归 codegen(见上).
 5. **库边界固化**: 错误处理回调化, static 全局收敛为 context 对象, 公共头/内部头拆分, Makefile 新增库构建目标.
 6. **参考消费者(可选)**: 最小 formatter(消费 CST)与 C→C 打印器(消费语法层 AST)作为示例, 验证库 API 的好用性.
 
@@ -81,8 +85,10 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 - `parse.c` - 递归下降解析器(2148 行), 只做语法分析与忠实建树: 声明产出记录节点(ND_DECL / ND_GVAR_DECL / ND_FUNCDEF / ND_TYPEDEF / ND_ENUM_CONST)交 sema 消费, 待补全的类型记录(数组维度 / typeof 操作数 / 对齐 / 位宽)挂在类型或节点上留给 sema. 唯一的语义反馈是文法必需的 typedef/tag 分类 oracle(本文件唯一的文件域 static). 诊断只剩 RESULT-split.md 判定表 A 的 15 处文法可判项(B/C/D 已清空, 见 RESULT.md 的 R4.2); parse 不在构造现场调用任何降级(旧的时序原则已废止).
 - `sema.c` - 语义分析与降级(3145 行), 每个函数体两趟(见文件头注释): resolve 遍历重建作用域并绑名、声明对象、补全类型(维度 / typeof / 对齐 / 位宽 / case 值)与布局; 标注+降级遍历用 `add_type`/`type_chain` 定型并降级(指针缩放, 复合赋值与自增, 隐式 cast, 字符串字面量, 初始化器拍平, 函数调用, VLA), 末尾 `analyze` 绑定控制流标签. 常量求值(`eval`/`eval2`/`eval_double`/`is_const_expr`/`const_expr`)与全局初始化器序列化(`write_gvar_data`)也在这一侧, 预处理器 `#if` 经 `const_expr` 调用. 全部语义 static 状态在此.
 - `type.c` - 类型构造器与类型谓词(`is_compatible`/`is_integer` 等).
-- `codegen.c` - AST 翻译成 x86-64 汇编文本, 无优化 pass; 两条前端线全程零改动(相对 5f53ed0 零 diff).
+- `codegen.c` - AST 翻译成 x86-64 汇编文本, 无优化 pass. 在"codegen 直连 sema 产物"线开工前, 它对两条前端线全程零改动(相对 5f53ed0 零 diff); 该线起它承接从 sema 移出的后端整形(见 `PLAN.md`).
 - `main.c` - 驱动器; `hashmap.c`(字符串驻留哈希表), `unicode.c`(UTF 编码表), `strings.c`(字符串辅助)为基础设施.
+
+本节的代码地图描述"codegen 直连 sema 产物"线开工前的现状(sema 侧仍含降级); 该线终态时重写.
 
 ## 设计原则
 
