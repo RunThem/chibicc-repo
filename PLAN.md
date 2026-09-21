@@ -29,8 +29,9 @@ sema.c 3145 行 + chibicc.h 704 行, codegen.c 相对 5f53ed0 零 diff)起步, �
 **判据 2 - 检查与诊断留 sema**
 全部诊断与其锚点留在 sema 的标注/检查路径; 现夹在降级代码里的检查必须在新位置显式保留(赋值给
 数组的 `not an lvalue`, 调用者不是函数, 实参个数, 位域取地址, VLA 不得初始化, 不完整类型, 语句
-表达式末语句形状, 加减法 `invalid operands`). `test/diagnostic.sh` 的 44 例逐字节锁定是这一条的
-量尺.
+表达式末语句形状, 加减法 `invalid operands`). `test/diagnostic.sh` 的逐字节锁定是这一条的量尺:
+原有 44 例只覆盖 parse 的 33 处与 sema 判定表 E, **夹在降级里的检查一例都没有**, 所以 A0.1 先补
+f 系列 9 例(共 53 例)再开始搬 - 语料里只有合法 C, 丢一条检查不会被任何其它闸门看见.
 
 **判据 3 - 对象物化按语义归属**
 C 语言规定存在的对象(字符串字面量的匿名全局, 复合字面量的无名字对象, 参数 / `__va_area__` /
@@ -149,7 +150,7 @@ A8.1 把它搬走后, sema 的标注遍必须在**同一位置**(ND_DECL / ND_CO
 ## 闸门口径
 
 - **[搬迁] 步骤**(整形逻辑换位置, 发射形态不变): 硬闸门 = `make docker-test`(含自举, 内含
-  `test/diagnostic.sh` 的 44 例逐字节) + `make docker-snapshot-ndiff` 为空 +
+  `test/diagnostic.sh` 的 53 例逐字节) + `make docker-snapshot-ndiff` 为空 +
   `make docker-test-thirdparty THIRDPARTY=tinycc`; 同提交内 `make docker-snapshot` 重置 raw 基线
   (`-diff` 只作可读参考).
 - **[就地] 步骤**(发射形态变化, 只在阶段 B): 硬闸门 = 上面三项 + 该步新增的形状断言;
@@ -162,6 +163,11 @@ A8.1 把它搬走后, sema 的标注遍必须在**同一位置**(ND_DECL / ND_CO
   会被走到(临时把对应降级关掉, 重编, 确认输出不变且新 case 命中; 探针不入提交). 每个 eval 的忠实
   case 必须在其对应降级搬走的那一步**之前**有用例覆盖; 没有就在该步补 `test/*.c` 或 `#if` 用例, 不留
   "搬完才发现 eval 那条路没人走过".
+- **诊断锁定只对"单一错误路径"的诊断有意义**(A0.1 实测): 一条诊断若有两个都会失败的兄弟子树,
+  报哪一个取决于 C 不规定的操作数求值顺序, 而宿主 clang 先求 lhs, chibicc 自举出的 stage2 先求
+  rhs(codegen 的整数二元运算是 `gen_expr(rhs); push; gen_expr(lhs); pop`) - 同一份期望在
+  `make test` 与 `make test-stage2` 里必然有一轮失败. 加用例前先问"这条诊断只有一个可能的锚点吗";
+  多路径的形状改用正向快照锁(见 `RESULT.md` 的结构性限制一节).
 - 一步一提交, 返工 = revert 单个提交; 每步汇报固定四项(改了什么 / 为什么 / 闸门结果 / 偏差).
 - 红线互换: codegen 的"零改动红线"本线作废(本线的目标就是改 codegen); 新红线 = **库层
   (parse.c / sema.c / type.c / preprocess.c / tokenize.c)不得再出现后端整形**(指针缩放, 读写回环,
@@ -173,9 +179,11 @@ A8.1 把它搬走后, sema 的标注遍必须在**同一位置**(ND_DECL / ND_CO
 **执行顺序**: A0.1 -> A1.2 -> A1.1 -> A2.1 -> A3.1 -> A5.1 -> A4.1 -> A6.1 -> A9.1 -> A7.1 ->
 A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
 
-- [ ] **A0.1 账本与基线**: `RESULT.md` 的"整形清单表"补上"验收口径"列与漏项(指针算术的结论,
+- [x] **A0.1 账本与基线**: `RESULT.md` 的"整形清单表"补上"验收口径"列与漏项(指针算术的结论,
   `resolve_member` 清 arrow_tok, 嵌套函数体访问一次, 原子 do-while 的预分配标签, 初始化器表达式
-  的定型时机), 复验四闸门(docker-test / 诊断 44 例 / ndiff 空 / tinycc)并留档为本线基线.
+  的定型时机); 诊断锁定补 f 系列 9 例把"夹在降级里的检查"锁住(44 -> 53, 见判据 2); 复验四闸门
+  (docker-test / 诊断 53 例 / ndiff 空 / tinycc)并留档为本线基线; 顺带记录一个基线缺陷
+  (`1 - p` 段错误, 上游 07f9010 起即如此, 本线不修).
 - [ ] **A1.2 结论字段与导出面**(原 A1.2 前移, 因为求值器要读结论): Node 增设结论槽 - `_Generic`
   的选中项, sizeof/alignof 与两个类型 builtin 的结论; `add_type` 写结论而**不**替换节点(本步消费方
   仍是整形替换, 所以零行为变化). 同一步把契约 2 的永久导出面在 `chibicc.h` 声明出来(纯声明 +
@@ -187,8 +195,11 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   `eval_rval` 与 `eval2` 两侧都要), ND_STRING(读物化后的 `node->var`), ND_SIZEOF/ND_ALIGNOF
   (定长读结论, VLA 情形不是常量), ND_TYPES_COMPATIBLE/ND_REG_CLASS/ND_GENERIC(读结论),
   **ND_ADD/ND_SUB 的元素大小缩放与 ptr-ptr 除法**(见"现状锚点", 本项是原计划漏的, 而
-  `int *p = arr + 2;` / `char *s = "abc" + 1;` 这类全局初始化器全走它), ND_INCDEC 与带 op 的
-  ND_ASSIGN(非常量, 保持 "not a compile-time constant" 文案). `#if` 路径随 `const_expr` 一并覆盖.
+  `int *p = arr + 2;` 这类全局初始化器全走它, 实测发 `.quad a+8`; 注意 `char *s = "abc" + 1;`
+  今天在 parse 就报 `expected ','`, 不是可用形状), ND_INCDEC 与带 op 的 ND_ASSIGN(非常量, 保持
+  "not a compile-time constant" 文案). 缩放这条路的验收用**正向快照锁**(A10.2 补
+  `int *q = &s.x + 1;` -> `.quad s+4`); ptr-ptr 的负例锚点取决于求值顺序, 逐字节锁不住(见
+  "闸门口径"的结构性限制). `#if` 路径随 `const_expr` 一并覆盖.
   验收: 常规口径 + 非空转探针 + 逐 case 记录"当前是否有语料覆盖", 没覆盖的在 A10.2 或对应搬运步补.
 - [ ] **A2.1 标签与控制流归 codegen**: codegen 新增整形遍骨架(契约 3 的 (b)(c)), 标签计数器与
   "循环/switch 标签栈", `analyze` 的整段搬入(标签分配, ND_WHILE→ND_FOR, break/continue→ND_GOTO,
@@ -217,6 +228,9 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   `new_arith`/`usual_arith_conv`/`get_common_type`/`new_cast` **留 sema 并导出**(判据 4 + 契约 2);
   sema 的 ND_ADD/ND_SUB case 改为: 跑 `invalid operands` 检查, 定型(含 `usual_arith_conv` 的隐式
   cast), 不缩放不换序. 到这一步 `new_add`/`new_sub`/`scale_rhs` 的临时导出声明随搬删除.
+  注意: `new_sub` 的 VLA 分支今天缺 `lhs->ty->base &&` 守卫, `1 - p` 会段错误(上游 07f9010 起
+  即如此, 见 `RESULT.md` 的基线缺陷记录). 搬运步**原样搬**, 不顺手补守卫 - 那是行为变化, 要修
+  另起一个提交并由用户拍板.
 - [ ] **A6.1 函数调用**: `lower_funcall` 的检查(不是函数, 实参个数, float 提升)与实参转换(隐式
   cast, 判据 1)留 sema, `func_ty` 标注留 sema; 只有调用者返回缓冲(`ret_buffer`)的槽创建搬 codegen
   (用契约 3(c) 的槽工厂; 偏移由归一化第 3 类吃掉).
@@ -259,12 +273,15 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   `Type::vla_size`, 结论槽), sema.c/codegen.c 文件头注释重写(codegen 头要写清整形遍的六条不变量),
   库层"无整形"的 grep 佐证留档, AGENTS.md 的目标架构/现状段/硬性规则按终态更新(含 static 状态清单
   去掉 `decl_remove`).
-- [ ] **A10.2 针对性回归**: 补测试覆盖忠实形态的发射面与本次分析新识别的薄弱面 -
+- [ ] **A10.2 针对性回归**: 补测试覆盖忠实形态的发射面, 以及本次分析新识别的薄弱面 -
   `a[i] += j++`(下标 + 复合赋值 + 后缀自增), `p ?: q`, 大结构体返回值缓冲, VLA 尺寸复用与
   `sizeof(VLA)`, `_Generic` 结果, 位域 op=, 原子 op=, `&&label` 的块域 static 初始化器,
-  语句表达式末语句为记录, **全局初始化器里的 `arr + 2` / `"abc" + 1` / `&s.x + 1` / `p - q`**
-  (eval 缩放路径, 含"必须报 not a compile-time constant"的负例), **先声明后定义的函数里放文件域
-  字符串/复合字面量**(契约 4 的块序探针), **嵌套函数体里带循环与 `&&label`**(契约 3(e)),
+  语句表达式末语句为记录, **全局初始化器里的 `int *p = arr + 2;` / `int *q = &s.x + 1;` /
+  `long d = a - a;`**(eval 缩放路径; 前两例实测发 `.quad a+8` / `.quad s+4`, 第三例必须报
+  "not a compile-time constant"; 注意 `char *s = "abc" + 1;` 今天在 parse 就报 `expected ','`,
+  不是可用形状), **先声明后定义的函数各放一个字符串字面量**(契约 4 的块序探针, 实测形状见
+  `RESULT.md`: `__func__`/`__FUNCTION__` 让每个函数在 `.data` 里至少占两块, 块序是 resolve 遍
+  定义序的逆序), **嵌套函数体里带循环与 `&&label`**(契约 3(e)),
   **共享同一个 VLA 类型的两个声明**(`typedef int T[n]; T a; T b;`, `Type::vla_size` 只算一次),
   **初始化器里含字符串字面量的三元表达式**(契约 5 的物化时机探针).
 
@@ -332,5 +349,5 @@ A 完成即已达成"取消 sema 降级"; B 由用户决定是否做.
   重排/标签分配, 不调用 codegen; 求值器与全局序列化在忠实形态上工作; `decl_remove` 消失.
 - **codegen**: 整形遍只含"需要语句重排或新槽"的项(阶段 A 后含全部, 阶段 B 后为少数), 并满足
   契约 3 的六条不变量; 帧布局与 ABI 与路线图红线一致.
-- **闸门**: `docker-test`(含自举与诊断 44 例) + `tinycc` + 快照口径逐阶段记录.
+- **闸门**: `docker-test`(含自举与诊断 53 例) + `tinycc` + 快照口径逐阶段记录.
 - **对比锚点**: parse.c 2148 / sema.c 3145 / chibicc.h 704 / codegen.c 1595 → 实测填入.

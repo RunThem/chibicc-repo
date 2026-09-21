@@ -1,11 +1,12 @@
 #!/bin/bash
-# 诊断锁定测试 (PLAN R0.1): 逐字节锁定 parse.c 全部 33 处 error_tok 与 sema 判定表 E
-# 错误路径的 "stderr 文案 + 插入符位置". 每个用例 = 一个编译失败的独立源码片段 + 期望的
-# stderr 原文; 运行时在临时目录里以 <用例名>.c 编译, stderr 与期望逐字节 diff.
+# 诊断锁定测试 (PLAN R0.1, A0.1 扩): 逐字节锁定 parse.c 全部 33 处 error_tok, sema 判定表 E
+# 错误路径, 以及夹在降级代码里的 9 处检查的 "stderr 文案 + 插入符位置". 每个用例 = 一个
+# 编译失败的独立源码片段 + 期望的 stderr 原文; 运行时在临时目录里以 <用例名>.c 编译,
+# stderr 与期望逐字节 diff.
 #
-# 用途: 忠实层收尾线(R2)要把大量检查从 parse 移入 sema, 移动时 "文案 + 锚点" 必须保真;
-# 保真时本测试不修改即通过, 若锚点 token 需要重新指定, 须在同一提交内更新期望并在
-# RESULT.md 的偏差记录中说明.
+# 用途: 忠实层收尾线(R2)要把大量检查从 parse 移入 sema, codegen 直连线(A)要把降级从 sema
+# 移入 codegen, 移动时 "文案 + 锚点" 必须保真; 保真时本测试不修改即通过, 若锚点 token 需要
+# 重新指定, 须在同一提交内更新期望并在 RESULT.md 的偏差记录中说明.
 #
 # 已锁定的 4.2c 诊断时机规范(拆分线偏差, 由本测试拍板为标准):
 #   - "too many arguments" 锚定调用右括号 (ND_FUNCALL.tok);
@@ -13,7 +14,8 @@
 #     新锚点规范), 块域 static 路径仍锚 "=".
 #
 # 覆盖清单: 判定表 A 15 处 + B 4 处 + C 11 处 + D 3 处 = parse.c 全部 33 处 error_tok;
-# 判定表 E 10 处中的 9 处, 另加 e11(R3.1 的语句表达式末语句形状回归锁). 唯一未覆盖: sema.c 的 "redeclared as a different kind of
+# 判定表 E 10 处中的 9 处, 另加 e11(R3.1 的语句表达式末语句形状回归锁); f 系列 9 处
+# (A0.1, 夹在降级里的检查). 合计 53 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
 # symbol" - find_func 只返回 is_function 为真的对象, 该守卫恒假, 当前树中不可达.
 # 另: 文件域 "void x;" 当前被接受(无检查), 亦无用例.
 #
@@ -456,6 +458,109 @@ SNIP
 expect e11_stmt_expr_decl <<'WANT'
 e11_stmt_expr_decl.c:1: int f(void) { return ({ int x = 1; }); }
                                              ^ statement expression returning void is not supported
+WANT
+
+# ---- f 系列: 夹在降级代码里的检查 (9 处, PLAN A0.1) ----
+# 这些诊断的 error_tok 今天位于本线要搬进 codegen 的降级路径上或紧挨着它, 而检查本身
+# 按判据 2 必须留在 sema. 搬运前先把 "文案 + 锚点" 锁住, 否则丢掉或漂移都不会被任何
+# 闸门看见(语料里只有合法 C). 对应关系:
+#   f01 add_type 的 ND_ASSIGN 数组左值检查(留 sema);
+#   f02/f03 同一检查, 但只有经 to_assign / new_inc_dec 降级后才到达(A5.1 搬走降级);
+#   f04 new_add 的 invalid operands(A4.1 搬走 new_add, 检查留 sema);
+#   f05 resolve_labels 的配对检查(A2.1 搬走标签分配, 检查留 sema);
+#   f06 常量表达式里的下标 - 今天 add_type 已把它降成 DEREF, eval2 没有 DEREF 的 case,
+#       落到函数末尾的 error_tok; A1.1 给 eval 补上忠实的 ND_SUBSCRIPT 之后, 这条路径必须
+#       报同一文案同一锚点(下标节点自己的 tok);
+#   f07 求值器对函数调用的 not a compile-time constant;
+#   f08/f09 add_type 的 ND_DEREF 两检查(A3.1 改 ND_DEREF 的函数消解分支).
+# 刻意不锁: ptr-ptr 的常量表达式(`int a[2]; long d = a - a;`). 它的两个操作数都会报错, 报哪一个
+# 取决于 `eval2(lhs) - eval(rhs)` 的求值顺序, 而 C 不规定它: clang 编出的 chibicc 先求 lhs
+# (锚第一个 a), chibicc 自举出的 stage2 先求 rhs(锚第二个 a) - 因为 codegen 的整数二元运算
+# 是 `gen_expr(rhs); push; gen_expr(lhs); pop`(rhs 先). 于是同一份期望在 make test 与
+# make test-stage2 里必然有一个失败. 该路径改用正向锁: `int *q = &s.x + 1;` 发 `.quad s+4`,
+# 由汇编快照闸门看住(A10.2 补用例). 详见 RESULT.md 的基线记录.
+# 未锁: new_sub 的 invalid operands - "1 - p" 今天在新 VLA 分支上解引用 NULL
+# (lhs->ty->base 为 NULL)直接段错误, 上游 07f9010 起即如此, 见 RESULT.md 的基线缺陷记录.
+
+snippet f01_assign_to_array <<'SNIP'
+int main() { int a[2]; a = 0; }
+SNIP
+
+expect f01_assign_to_array <<'WANT'
+f01_assign_to_array.c:1: int main() { int a[2]; a = 0; }
+                                                ^ not an lvalue
+WANT
+
+snippet f02_compound_assign_to_array <<'SNIP'
+int main() { int a[2]; a += 1; }
+SNIP
+
+expect f02_compound_assign_to_array <<'WANT'
+f02_compound_assign_to_array.c:1: int main() { int a[2]; a += 1; }
+                                                           ^ not an lvalue
+WANT
+
+snippet f03_incdec_array <<'SNIP'
+int main() { int x[2]; x++; }
+SNIP
+
+expect f03_incdec_array <<'WANT'
+f03_incdec_array.c:1: int main() { int x[2]; x++; }
+                                              ^ not an lvalue
+WANT
+
+snippet f04_invalid_operands_add <<'SNIP'
+void f(int *p, int *q) { p + q; }
+SNIP
+
+expect f04_invalid_operands_add <<'WANT'
+f04_invalid_operands_add.c:1: void f(int *p, int *q) { p + q; }
+                                                         ^ invalid operands
+WANT
+
+snippet f05_undeclared_label <<'SNIP'
+int main() { goto L; }
+SNIP
+
+expect f05_undeclared_label <<'WANT'
+f05_undeclared_label.c:1: int main() { goto L; }
+                                            ^ use of undeclared label
+WANT
+
+snippet f06_subscript_not_constant <<'SNIP'
+int a[2]; int x = a[0];
+SNIP
+
+expect f06_subscript_not_constant <<'WANT'
+f06_subscript_not_constant.c:1: int a[2]; int x = a[0];
+                                                   ^ not a compile-time constant
+WANT
+
+snippet f07_call_not_constant <<'SNIP'
+int g(void); int x = g();
+SNIP
+
+expect f07_call_not_constant <<'WANT'
+f07_call_not_constant.c:1: int g(void); int x = g();
+                                                  ^ not a compile-time constant
+WANT
+
+snippet f08_void_deref_star <<'SNIP'
+void f(void *p) { *p; }
+SNIP
+
+expect f08_void_deref_star <<'WANT'
+f08_void_deref_star.c:1: void f(void *p) { *p; }
+                                           ^ dereferencing a void pointer
+WANT
+
+snippet f09_nonptr_deref_star <<'SNIP'
+void f(int x) { *x; }
+SNIP
+
+expect f09_nonptr_deref_star <<'WANT'
+f09_nonptr_deref_star.c:1: void f(int x) { *x; }
+                                           ^ invalid pointer dereference
 WANT
 
 fail=""
