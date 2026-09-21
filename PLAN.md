@@ -59,12 +59,12 @@
 ## R4 层 3 补课与文档收尾(与阀门无关, 可随时插队)
 
 - [x] **R4.1 隐式 cast 标记**: Node 加 is_implicit(或等价字段), parse 的显式 cast 与 sema 插入的隐式 cast 区分(AGENTS 层 3 承诺"隐式 cast 有标记"兑现; codegen 不读该字段, 字节不变, 常规口径).
-- [ ] **R4.2 文档同步**: AGENTS.md 更新 - NodeKind 清单补 ND_IDENT/ND_TYPEDEF 及 R2.2 新增 kind, 硬性规则段的 static 清单更新, "现状与代码地图"的 parse.c/sema.c 描述重写("解析器只保留 typedef/tag 分类 oracle"的表述扩为完整第 3 层形态); 判定表 B/C/D 全清, 仅 A 保留的事实与时序原则/.loc 原则的废止在 RESULT.md 留档.
+- [x] **R4.2 文档同步**: AGENTS.md 更新 - NodeKind 清单补 ND_IDENT/ND_TYPEDEF 及 R2.2 新增 kind, 硬性规则段的 static 清单更新, "现状与代码地图"的 parse.c/sema.c 描述重写("解析器只保留 typedef/tag 分类 oracle"的表述扩为完整第 3 层形态); 判定表 B/C/D 全清, 仅 A 保留的事实与时序原则/.loc 原则的废止在 RESULT.md 留档.
 
-## 终态验收
+## 终态验收(完成于 R4.2, 逐项实测)
 
-- **parse.c**: 拆分线判定表 A 全保留(15 处), B/C/D 全清; current_fn/gotos/labels/brk_label/cont_label/current_switch/builtin_alloca 等 static 变量归零(仅剩 static 函数); 表达式构造路径无 add_type, 无名字绑定, 无常量求值(grep 口径见纪律 7) - 第 3 层"忠实, 无类型"成立; parse 侧仅剩 typedef/tag 分类 oracle 与声明符层"待补全"类型构建.
-- **sema.c**: resolve 遍历 + 标注/降级遍历两段式; 标签分配, 全部隐藏变量创建, 结构布局, 常量求值, 泛型选择/初始化器定位归 sema.
-- **codegen.c** 对 5f53ed0 仍零 diff.
-- **四项闸门**: 行为三闸门全绿 + 归一化 diff 为空; raw 快照基线为本线终态的重置版.
-- **对比锚点**(对 RESULT-split.md 末节, 本线完成后逐项填写): parse.c 2531 -> 预期 ~1900-2150; sema.c 1552 -> 预期 ~1850-2050; parse.c error_tok 33 -> **15**(判定表 A); chibicc.h 660 -> 随表达式载体字段微增; 拆分线"忠实层已知残留"清单(RNd 一节)清零; "错误诊断两处已知时机位移"节由 R0.1 测试接管后删除.
+- **parse.c**: 拆分线判定表 A 全保留(实测 `grep -c error_tok parse.c` = **15**), B/C/D 全清(18 条对应诊断在 parse.c 均 0 命中, 全部已在 sema.c); `current_fn`/`gotos`/`labels`/`brk_label`/`cont_label`/`current_switch`/`builtin_alloca` 等 static 变量归零 - 文件域 static 只剩 `scope`(typedef/tag 分类 oracle, 即下一句所允许的那一个)与 `is_typename` 的关键字表缓存(建一次后只读, parse.c:885); 表达式构造路径无 `add_type`, 无名字绑定, 无常量求值 - 第 3 层"忠实, 无类型"成立.
+- **sema.c**: resolve 遍历 + 标注/降级遍历两段式; 标签分配, 全部隐藏变量创建, 结构布局, 常量求值, 泛型选择/初始化器定位归 sema(实测: 12 个文件域 static 与 `new_unique_name` 的函数内计数器全在这一侧).
+- **codegen.c** 对 5f53ed0 仍零 diff(实测 `git diff 5f53ed0..HEAD -- codegen.c` 为空). 另记: `type.c` 在收尾线内被 R2.3 改过一次(+26/-1: `array_of` 的尺寸守卫, `array_of_dim` 与 `typeof_placeholder` 两个待补全占位构造), 与"零改动"口径无关但值得知道.
+- **四项闸门**: `docker-test`(含自举)与诊断锁定全程全绿, 归一化 diff 为空; raw 快照基线为本线终态的重置版. thirdparty 闸门按两个口径记: docker 目标(amd64 容器跑在非 x86-64 宿主上)会因既有的 `asm-c-connect-test` 不稳定而失败(HEAD 可复现, 与代码无关 - 见 RESULT.md 的 R4.1 偏差 3); c4ff8bc 新增的原生目标 `make test-thirdparty THIRDPARTY=tinycc`(仅 x86-64 Linux, 不放进 `test/thirdparty/make` shim)在本工作区 **exit 0**, `asm-c-connect-test` 报 ok - 该闸门按此口径成立.
+- **对比锚点**(对 RESULT-split.md 末节, 已在 R4.2 逐项填写): parse.c 2531 -> **2148**(预期 1900-2150, 落在区间内); sema.c 1552 -> **3145**(超出预期 1850-2050, 成因见 RESULT.md 的 R4.2 偏差 1); parse.c error_tok 33 -> **15**(判定表 A 全集); chibicc.h 660 -> **704**(忠实性与载体字段: `ty_op`, `ty_op2`, `name_tok`, `spec_decls`, `decl_init`, `init_resolved`, `is_implicit` 等); 拆分线"忠实层已知残留"清单(RESULT-split.md 的"忠实层的已知残留"条)**已清零**(标签分配归 sema, ND_DECL 的 vla-size 兄弟语句与 scope_decls 侧链分别在 R3.2/R3.3 消除); "错误诊断两处已知时机位移"**已由 R0.1 的诊断锁定测试接管**(test/diagnostic.sh 44 例逐字节锁定; RESULT-split.md 的归档说明已加注记).

@@ -345,4 +345,34 @@
 - 偏差说明: 三项, 均无行为偏差.
   1. **字段名与位置**: 按 PLAN 取 `is_implicit`, 放在 `ty_op2` 之后(与 ND_CAST 的另一字段 `ty_op` 相邻); 实测 `sizeof(Node)` 不变, 不新增对齐空洞.
   2. **"区分"的实现口径 = 默认即显式, 只有 `new_cast` 置位**: 不需要在 parse 侧写 false. 依据: 显式 cast 的唯一构造点(parse.c:1461 的 `new_node`)是零值节点; 全树 `kind = ND_CAST` 仅 sema.c:111 一处, `new_node(ND_CAST` 仅 parse.c:1461 一处; `grep is_implicit codegen.c` 零命中, 印证"codegen 不读该字段".
-  3. **tinycc 闸门失败判定**(见测试结果): 环境既有, 非本步引入. 若后续步骤仍需该闸门, 建议把 `asm-c-connect-test` 纳入 `test/thirdparty/make` 的跳过名单 - 那是环境设施改动, 不在本线口径内, 未擅自实施.
+  3. **tinycc 闸门失败判定**(见测试结果): 环境既有, 非本步引入. 若后续步骤仍需该闸门, 建议把 `asm-c-connect-test` 纳入 `test/thirdparty/make` 的跳过名单 - 那是环境设施改动, 不在本线口径内, 未擅自实施. **后记(c4ff8bc, 2026-09-21)**: 该建议未被采纳, 改为新增原生目标 `make test-thirdparty`(仅 x86-64 Linux; 故意不把 `test/thirdparty/make` shim 放进 PATH, 让真机把三个 Rosetta 不稳定用例与 `asm-c-connect-test` 都真跑), 并在本工作区验证 exit 0. 即该闸门在此环境下可用, 口径是原生目标而非 docker 目标; R4.2 已按新口径复核并更正文档.
+
+### R4.2 文档同步 (本提交)
+
+- 改了什么: **只有文档, 无编译器源码改动**(本提交不含任何 .c/.h). 六项:
+  1. **`AGENTS.md` 的 static 清单**(硬性规则段): 按实测重写 - 旧的 `current_fn`/`gotos`/`labels`/`brk_label`/`cont_label`/`current_switch`/`scope_decls` 已全部不存在; 现在写的是 sema.c 的 12 个文件域 static 与 `new_unique_name` 的函数内 `id` 计数器, 以及 parse.c 仅剩的 `scope`(typedef/tag oracle)与 `is_typename` 的关键字表缓存(建一次后只读).
+  2. **`AGENTS.md` 的 NodeKind 清单**(路线图阶段 3): "约 13 个"补齐为实际的 21 个(上游 48 + 21 = 69), 补入 `ND_IDENT`(parser 不绑定的名字), `ND_TYPEDEF`/`ND_GVAR_DECL`/`ND_FUNCDEF`, 以及 R2.2 引入的 `ND_GENERIC`/`ND_GENERIC_ASSOC`/`ND_TYPES_COMPATIBLE`/`ND_REG_CLASS`; "5 个 kind 加字段"补上 `ND_CAST` 的 `is_implicit`(R4.1).
+  3. **`AGENTS.md` 的现状与代码地图**: parse.c 的描述由"2531 行 + 判定表 A-D + parse 在解析现场调降级(时序原则)"重写为第 3 层完整形态(2148 行; 表达式无类型/名字不绑定/常量不求值; 只留 oracle 与判定表 A 的 15 处; 不在构造现场调降级); sema.c 补两趟结构与常量求值/序列化的归属; codegen.c 的"拆分全程零改动"改为"两条前端线全程零改动(相对 5f53ed0 零 diff)".
+  4. **`AGENTS.md` 的路线图前言**: 忠实层收尾线标记为已完成并给出终态行数; 下一条线的先后交给用户拍板.
+  5. **`RESULT-split.md` 的归档说明**: 加一行注记, 指明判定表 B/C/D 已清空, 时序原则与 .loc 原则已废止, 两处诊断位移已由 R0.1 的诊断锁定测试接管(正文作为历史记录保留, 不删).
+  6. **`PLAN.md` 的终态验收**: 由"待填写"改为逐项实测结果(见测试结果), 并把"static 变量归零(仅剩 static 函数)"修正为"只剩 `scope` 这个 oracle 与关键字表缓存".
+- 为什么改: R4.2 是收尾线的文档同步 - 拆分线的量化基线(RESULT-split.md 末节)与本线终态要在同一处对上, 且 `AGENTS.md` 的"现状"段是后续会话与库化阶段的起点, 不能继续描述已经不存在的 static, 已经不成立的时序原则与已经不存在的判定表 B/C/D.
+- 测试结果: 无代码改动, 故形状/行为闸门为构造性(对照两侧是同一个编译器, 与 R3.3 同理), 未重跑 docker 闸门 - 上一次运行是 R4.1 提交, 与本提交的编译器逐字节同源. 本步的证据是**逐项实测核对**(全部于提交前在本工作区执行):
+
+  | 核对项 | 实测 |
+  |---|---|
+  | `grep -c error_tok parse.c` | **15** = 判定表 A 全集 |
+  | 判定表 B/C/D/E 的 18 条诊断在 parse.c | 全部 **0** 命中; 在 sema.c 全部存在(如 `array designator index exceeds array bounds` 2 处, `invalid pointer dereference` 2 处) |
+  | parse.c 文件域 static | **1**(`scope`, parse.c:141) |
+  | sema.c 文件域 static | **12**; 另有 `new_unique_name` 的函数内 `id` |
+  | parse.c 中 `add_type` 独立调用 / `new_lvar` / `new_gvar` / `brk_label` / `cont_label` / `current_fn` / `scope_decls` / `locals` | 全部 **0** 命中(仅 `add_typedef` 3 处, 名字里含 `add_type`) |
+  | 行数 | parse.c **2148**, sema.c **3145**, chibicc.h **704** |
+  | `git diff 5f53ed0..HEAD -- codegen.c` | 空(零 diff) |
+  | `git diff 02e5c13..HEAD -- type.c` | 仅 R2.3 一处(+26/-1: `array_of` 尺寸守卫, `array_of_dim`, `typeof_placeholder`) |
+
+  thirdparty 闸门按 c4ff8bc 新增的原生口径复核(该提交在本步测量之后落地): `make test-thirdparty THIRDPARTY=tinycc` **exit 0**, `asm-c-connect-test` 报 **ok** - 先前在 docker 目标下的 SIGSEGV 未再现. 日志里的 "Test N failed as expected" 是 tcc 负例用例的预期输出, 不是失败. 本步因此从"仅文档"变为"文档 + 一次闸门复核", 编译器仍未改动.
+- 偏差说明: 四项.
+  1. **sema.c 行数远超 PLAN 的预期区间**(实测 3145, 预期 1850-2050): 差额不是某一步失手, 而是"降级整体落在 sema 侧"的必然 - 表达式层的全部降级(指针缩放/复合赋值与自增/隐式 cast/字符串/初始化器拍平/函数调用/VLA/泛型选择)加常量求值全家, 加两趟遍历的作用域与类型补全, 加布局与全局序列化都在这里; R3.x 又把语句链整形与记录摘除放到这一侧. 留在 parse 的 15 处诊断是"文法可判"的下限, 其实现(声明符与类型构建)本就在 parse, 不构成 sema 的膨胀源.
+  2. **`RESULT-split.md` 按"加注记"而非"删除节"处理**: PLAN 的终态验收写"错误诊断两处已知时机位移节由 R0.1 测试接管后删除"; 本步选择在归档说明里加一行指认它已被 `test/diagnostic.sh` 的 44 例接管, 正文保留 - 归档文件的审计价值在于保留"当时记录了什么", 删除会让这部分信息消失. 若确需删除, 可另开一步处理.
+  3. **`AGENTS.md` 阶段 4 的条目未动**: 它仍以计划口径写"解析器只保留 typedef 名字分类 oracle"; 现状段与阶段 3 条目已更新为实际形态(typedef/tag 两个 oracle 与判定表 A 的 15 处). 阶段 4 条目属历史计划文本, 而 R4.2 的口径只点名 NodeKind 清单 / static 清单 / 现状段三处, 故未改.
+  4. **tinycc 判定的口径更正**(本步的测量晚于 c4ff8bc, 该提交在 R4.1 之后落地): R4.1 的偏差 3 与本步早先写下的 PLAN.md 注记原本只按 docker 目标记"闸门在本工作区失败". c4ff8bc 新增 `make test-thirdparty` 之后, 本步复核得 **exit 0 且 `asm-c-connect-test` ok** - 闸门在本环境可用, 正确口径是原生目标; docker 目标下的失败仍是模拟环境的产物. 已在 PLAN.md 的终态验收与 R4.1 的偏差 3 补记该结论.
