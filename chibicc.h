@@ -299,7 +299,8 @@ typedef enum {
   ND_REG_CLASS,        // "__builtin_reg_class"; sema folds it to its class
   ND_CAST,      // Type cast. The parser leaves an explicit cast untyped
                 // with its target type in ty_op; sema resolves and types
-                // the node. Casts sema inserts are fully typed at birth.
+                // the node. Casts sema inserts are fully typed at birth
+                // and marked is_implicit.
   ND_MEMZERO,   // Zero-clear a stack variable
   ND_DECL,      // Declaration of a local variable: the name token on its
                 // type record, the attributes in `attr` and the faithful
@@ -407,6 +408,13 @@ struct Node {
   // ND_TYPES_COMPATIBLE: the second type operand, the first being
   // ty_op. The type predicates take two types and no subexpression.
   Type *ty_op2;
+
+  // ND_CAST: true for a cast sema inserted to carry out an implicit
+  // conversion, false for one the source wrote. The parser never sets
+  // it, new_cast always does, and the rewrite sites that copy a node's
+  // shape along with it - so a source-to-source tool can tell the two
+  // kinds of cast apart. codegen does not read the flag.
+  bool is_implicit;
 
   // Declaration record nodes (ND_DECL, ND_GVAR_DECL, ND_FUNCDEF): the
   // storage-class and alignment attributes as the parser read them.

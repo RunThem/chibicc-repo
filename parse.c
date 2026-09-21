@@ -1454,8 +1454,10 @@ static Node *cast(Token **rest, Token *tok) {
     if (equal(tok, "{"))
       return unary(rest, start);
 
-    // type cast: kept faithful and untyped, with the target type
-    // recorded for sema to complete and apply.
+    // Type cast: kept faithful and untyped, with the target type
+    // recorded for sema to complete and apply. This is a cast the
+    // source wrote, so is_implicit stays false; the casts sema inserts
+    // to carry out an implicit conversion are the ones new_cast marks.
     Node *node = new_node(ND_CAST, start);
     node->lhs = cast(rest, tok);
     node->ty_op = ty;

@@ -58,7 +58,7 @@
 
 ## R4 层 3 补课与文档收尾(与阀门无关, 可随时插队)
 
-- [ ] **R4.1 隐式 cast 标记**: Node 加 is_implicit(或等价字段), parse 的显式 cast 与 sema 插入的隐式 cast 区分(AGENTS 层 3 承诺"隐式 cast 有标记"兑现; codegen 不读该字段, 字节不变, 常规口径).
+- [x] **R4.1 隐式 cast 标记**: Node 加 is_implicit(或等价字段), parse 的显式 cast 与 sema 插入的隐式 cast 区分(AGENTS 层 3 承诺"隐式 cast 有标记"兑现; codegen 不读该字段, 字节不变, 常规口径).
 - [ ] **R4.2 文档同步**: AGENTS.md 更新 - NodeKind 清单补 ND_IDENT/ND_TYPEDEF 及 R2.2 新增 kind, 硬性规则段的 static 清单更新, "现状与代码地图"的 parse.c/sema.c 描述重写("解析器只保留 typedef/tag 分类 oracle"的表述扩为完整第 3 层形态); 判定表 B/C/D 全清, 仅 A 保留的事实与时序原则/.loc 原则的废止在 RESULT.md 留档.
 
 ## 终态验收

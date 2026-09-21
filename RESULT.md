@@ -317,3 +317,32 @@
   2. **摘除发生在标注趟而非 analyze**(计划文本口径调整): 计划写"sema 在 analyze 时从链上摘除". analyze 是控制流下降, 跑在 add_type **之后**, 而记录节点必须在标注之前/之中就被跳过(否则 add_type 会在记录节点上跑标注递归), 且 analyze 的链遍历没有摘除机制(无 `Node **pp` 游标). 实质要求"codegen 零改动维持, 记录不入汇编"由 type_chain 满足.
   3. **形状闸门在本步是构造性的**(口径说明, 见测试结果): 编译器源码零改动时 raw/归一化 diff 的对照两侧同源, 其"为空"不能算作本步的证据; 本步的证据是行为闸门 + 上述专项核对.
   4. **`spec_decls` 侧的记录不在本步口径内**: 表达式上下文里定义的枚举(`sizeof(enum E { A })`, 参数 declspec 里的 `int f(enum E { A } x)`)没有语句链位置, 仍挂在 `Type.spec_decls` / `Node.spec_decls` 上, 由 resolve 遍历在该节点位置登记(R2.6 既有形态). 计划未要求改变; 它们是"记录"而非"语句", 与 R3.3 的口径不冲突.
+
+### R4.1 隐式 cast 标记 (本提交)
+
+- 改了什么: ND_CAST 自此携带"这个 cast 是谁产生的"这一位信息 - 源码写出的显式 cast 与 sema 为隐式转换插入的 cast 不再同形. 编译器**行为零变化**(该字段不被 codegen 读取, 树形状与指令流逐字节不变).
+  1. **chibicc.h**: `Node` 加 `bool is_implicit`(chibicc.h:417; 注释列明口径: parser 从不置位, `new_cast` 一律置位, 形状复制点随之带过, codegen 不读); `NodeKind` 的 ND_CAST 注释补 "and marked is_implicit".
+  2. **sema.c 的 `new_cast`**(sema.c:107): 隐式 cast 的唯一构造点(`usual_arith_conv` / 赋值 / return / 实参转换 / `new_inc_dec` 的还原 cast 全部经此), 故标记是单点赋值; 函数补注释说明"单点即完备"的理由, 以及显式 cast 走的是 add_type 的解析路径而非此处.
+  3. **sema.c 的 ND_INCDEC 后缀降级**(sema.c:2264): 本步唯一需要手工带过标记的"形状复制"点 - 该 case 把 `new_inc_dec` 的结果(kind/lhs/ty)抄进原节点, 而结果恰是一个隐式 cast(`(typeof A)((A += 1) - 1)` 的外层). 其余改写点无需改动: `to_assign` / `select_generic` / ND_DEREF 去函数 / `ND_SIZEOF` 折叠要么是整体结构体赋值, 要么复制到的不是 cast.
+  4. **parse.c 的 `cast()`**(parse.c:1459): 构造点补注释, 说明该节点的 `is_implicit` 保持 false 的原因.
+  5. **测试**: 编译器行为不变, 故无新断言(该字段不经驱动可观测); 正确性用宿主机插桩验证(见测试结果).
+  规模: chibicc.h 696 -> **704**(+9/-1), sema.c 3133 -> **3145**(+12/-0), parse.c 2146 -> **2148**(+4/-2, 纯注释); `sizeof(Node)` 448 -> **448**(新 bool 落在既有 padding 内, 结构体不增大); codegen.c / type.c **零改动**, parse.c 的 error_tok 维持 **15**.
+- 为什么改: 兑现 AGENTS.md 第 3 层"隐式 cast 有标记"的承诺. 在此之前两类 cast 在树上同形(都是 ND_CAST + ty), 唯一判据是一个从未被写下的隐式不变式 - "`ty_op` 非空即显式"(parse 的显式 cast 带 ty_op, 且 add_type 解析后并不清除它; sema 的隐式 cast 出生即带 ty 而 ty_op 恒为 NULL). 该不变式今天成立但无处声明: 任何一次"顺手清掉 cast 的 ty_op"或"让 new_cast 也记一份目标类型"的改动都会静默毁掉它, 而消费方(源到源打印器 / 分析器)正是靠它决定"这个转换要不要打印""要不要算作作者的意图". 本步把它变成显式且有文档的字段, 并钉住唯一的形状复制点.
+- 测试结果:
+  - 常规闸门(raw 口径): `make docker-snapshot-diff` 退出码 0, **"snapshot diff: empty"** - 41 个 `test/*.c` 的 .s 与基线(HEAD 61fc5a4 的 `make docker-snapshot`)逐字节相同.
+  - `make docker-test` 退出码 0(41 个测试可执行文件 stage1 + stage2 自举各一遍; driver.sh passed; 诊断锁定 stage1/stage2 各 "44 cases byte-exact"; 日志 214 处 passed, fail/error 关键词 0 命中).
+  - 标记正确性的运行时验证(宿主机插桩: 在仓库**副本**的 codegen ND_CAST case 里插一行 `fprintf(stderr, "CAST implicit=%d\n", ...)` 后构建; 仓库本身不含插桩). 三个探针, 左列 = 本提交, 右列 = 同一副本再撤掉 ND_INCDEC 处那行复制:
+
+    | 探针 | 本提交(显式/隐式) | 撤掉复制后(显式/隐式) |
+    |---|---|---|
+    | `int f(double a) { return (int)a; }` | 1 / 1 | 1 / 1 |
+    | `double g(int a) { return a; }` | 0 / 1 | 0 / 1 |
+    | `int h(int a) { int x = a++; return x; }` | 0 / 10 | **1** / 9 |
+
+    P1 的两个数正是"1 个作者写的 cast + 1 个 return 转换(同类型 cast)"; P3 的撤改给出反证: 少了那行复制, `a++` 的降级 cast 被记成**显式**(1/9), 即该复制点是承重的, 不是冗余.
+  - 顺带核实并留档: `usual_arith_conv` / 赋值 / return / 实参转换对新 cast **不做同类型短路**, 故树上存在大量"隐式 cast 且 source type == target type"的节点(codegen 的 cast_table 对同型不发射任何指令). 该布尔量表达的是"由编译器插入", 不是"类型确实变化"; 消费者若要后者需自行比较两侧类型. 本步不改该行为(改它会动树形状, 超出本步口径).
+  - tinycc 闸门: `make docker-test-thirdparty THIRDPARTY=tinycc` 本次**失败**(exit 2, `asm-c-connect-test` SIGSEGV / Error 139). 已在**未改动的 HEAD** 上用 `git stash` 复跑: 同一用例同样失败, 且失败点漂移(崩溃前 stdout 片段本提交为 "144 610", HEAD 为 "8"), 其余失败行完全相同 - 判定为环境既有不稳定(本 devcontainer 是 amd64-under-emulation, 与 AGENTS.md 记的 Rosetta 下 tcc 信号类用例不稳定同源; `asm-c-connect-test` 不在 `test/thirdparty/make` shim 的跳过名单里), 与本步无关.
+- 偏差说明: 三项, 均无行为偏差.
+  1. **字段名与位置**: 按 PLAN 取 `is_implicit`, 放在 `ty_op2` 之后(与 ND_CAST 的另一字段 `ty_op` 相邻); 实测 `sizeof(Node)` 不变, 不新增对齐空洞.
+  2. **"区分"的实现口径 = 默认即显式, 只有 `new_cast` 置位**: 不需要在 parse 侧写 false. 依据: 显式 cast 的唯一构造点(parse.c:1461 的 `new_node`)是零值节点; 全树 `kind = ND_CAST` 仅 sema.c:111 一处, `new_node(ND_CAST` 仅 parse.c:1461 一处; `grep is_implicit codegen.c` 零命中, 印证"codegen 不读该字段".
+  3. **tinycc 闸门失败判定**(见测试结果): 环境既有, 非本步引入. 若后续步骤仍需该闸门, 建议把 `asm-c-connect-test` 纳入 `test/thirdparty/make` 的跳过名单 - 那是环境设施改动, 不在本线口径内, 未擅自实施.

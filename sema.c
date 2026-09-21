@@ -97,6 +97,13 @@ static Node *new_ulong(long val, Token *tok) {
   return node;
 }
 
+// The one place an implicit cast is built: every conversion sema
+// inserts - the usual arithmetic conversions, an assignment, a return
+// or an argument converted to its target type, the cast a lowered
+// increment restores the operand's type with - comes through here, so
+// marking the node is a single assignment. A cast the source wrote
+// arrives as an ND_CAST node from the parser instead, which leaves the
+// flag false, and add_type resolves rather than builds it.
 static Node *new_cast(Node *expr, Type *ty) {
   add_type(expr);
 
@@ -105,6 +112,7 @@ static Node *new_cast(Node *expr, Type *ty) {
   node->tok = expr->tok;
   node->lhs = expr;
   node->ty = copy_type(ty);
+  node->is_implicit = true;
   return node;
 }
 
@@ -2246,10 +2254,14 @@ static void add_type(Node *node) {
     Token *tok = node->tok;
 
     if (node->is_post) {
+      // The result is a cast sema inserted - the one restoring the
+      // operand's type around `(A += 1) - 1` - so its marking has to
+      // travel with the shape it contributes.
       Node *result = new_inc_dec(operand, tok, node->addend);
       node->kind = result->kind;
       node->lhs = result->lhs;
       node->ty = result->ty;
+      node->is_implicit = result->is_implicit;
       return;
     }
 
