@@ -79,6 +79,25 @@ docker-test-thirdparty: docker-image
 	docker run --rm --platform linux/amd64 -v $(CURDIR):/src chibicc:amd64 \
 	  bash -c '$(BOOT) && mkdir -p /work/thirdparty && cd /work && chmod +x /work/test/thirdparty/make && export PATH=/work/test/thirdparty:$$PATH && make -j$$(nproc) chibicc || exit 1; rc=0; for t in $(THIRDPARTY); do echo "=== thirdparty: $$t ==="; [ -d /src/thirdparty/$$t ] && cp -a /src/thirdparty/$$t /work/thirdparty/; bash test/thirdparty/$$t.sh || { echo "thirdparty/$$t.sh FAILED"; rc=1; }; mkdir -p /src/thirdparty && cp -an /work/thirdparty/$$t /src/thirdparty/ 2>/dev/null; done; exit $$rc'
 
+# 同一个 thirdparty 脚本集的本地版(devcontainer 就是这类环境: x86_64 Linux,
+# chibicc 生成的 x86-64 汇编直接由 as/ld 消费, 不需要容器). 与 docker 版的两点
+# 差别, 都是故意的:
+# 1. 不把 test/thirdparty 放进 PATH - 那里的 make shim 只为 Rosetta 跳过
+#    106_pthread/112_backtrace/113_btdll 三个用例, 真 x86-64 上应让它们真跑;
+#    tinycc.sh 首行的 git reset --hard 会恢复此前被 shim 删掉的三个源文件.
+# 2. 不把源码拷到 /work - overlayfs 只对 tcc 的 -run/bcheck 运行时必要(见上),
+#    与原生执行无关.
+# 仅在 x86-64 Linux 上有意义, 其它平台报错并指向 docker-test-thirdparty.
+# 用法: make test-thirdparty THIRDPARTY=tinycc (或 "git sqlite", 默认全跑).
+test-thirdparty: chibicc
+	@[ "$$(uname -s)/$$(uname -m)" = "Linux/x86_64" ] || { \
+	  echo "test-thirdparty: 需要 x86-64 Linux (本机 $$(uname -s)/$$(uname -m)); 请改用 make docker-test-thirdparty"; exit 1; }
+	@bad=`find thirdparty -mindepth 1 ! -user $$(id -un) -print -quit 2>/dev/null`; [ -z "$$bad" ] || { \
+	  echo "test-thirdparty: $$bad 属于其它用户 - docker-test-thirdparty 以 root 回写 clone 缓存, 先跑:"; \
+	  echo "  sudo chown -R $$(id -un):$$(id -gn) thirdparty"; exit 1; }
+	@rc=0; for t in $(THIRDPARTY); do echo "=== thirdparty: $$t ==="; \
+	  bash test/thirdparty/$$t.sh || { echo "thirdparty/$$t.sh FAILED"; rc=1; }; done; exit $$rc
+
 # 汇编快照(拆分线的等价性基线): 在 docker 内构建 chibicc 后对全部 test/*.c
 # 跑 ./chibicc -S, 把 .s 存档到 .cache/snapshot(已被 .gitignore 忽略).
 # 每步重构结束跑 docker-snapshot-diff, 与基线逐字节 diff, 防行为回归;
@@ -133,4 +152,4 @@ docker-snapshot-ndiff: docker-image
 	@rc=0; diff -ru .cache/.ndtmp/base .cache/.ndtmp/new || rc=1; rm -rf .cache/.ndtmp; \
 	  [ $$rc -eq 0 ] && echo "snapshot ndiff: empty" || { echo "snapshot ndiff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: test clean test-stage2 docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff
+.PHONY: test clean test-stage2 test-thirdparty docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff
