@@ -21,6 +21,12 @@
 // It also contains the constant expression evaluator (eval and
 // friends), which both passes use, and which the preprocessor uses
 // for `#if` through const_expr.
+//
+// A handful of its type-level tools are exported for consumers that
+// build nodes of their own - add_type, new_arith, usual_arith_conv,
+// get_common_type, new_cast and the node constructors (see chibicc.h).
+// A consumer obtains its conversions from here rather than restating
+// them; what it contributes is the shape, not the semantics.
 
 #include "chibicc.h"
 
@@ -31,8 +37,6 @@ static double eval_double(Node *node);
 static bool is_const_expr(Node *node);
 static void layout_struct(Type *ty);
 static void layout_union(Type *ty);
-static void add_type(Node *node);
-static void usual_arith_conv(Node **lhs, Node **rhs);
 static void type_chain(Node **head);
 static void analyze(Node *body);
 static void analyze_function(Obj *fn);
@@ -70,27 +74,28 @@ static Obj *builtin_alloca;
 // Constructors for the node shapes only sema produces: a bound name
 // (the parser leaves names unbound, as ND_IDENT), a VLA designator, and
 // a numeric literal whose type is settled at birth rather than read off
-// a token.
-static Node *new_var_node(Obj *var, Token *tok) {
+// a token. Exported (see chibicc.h): a consumer that builds a node needs
+// it to arrive typed, and these are the shapes it cannot build itself.
+Node *new_var_node(Obj *var, Token *tok) {
   Node *node = new_node(ND_VAR, tok);
   node->var = var;
   return node;
 }
 
-static Node *new_vla_ptr(Obj *var, Token *tok) {
+Node *new_vla_ptr(Obj *var, Token *tok) {
   Node *node = new_node(ND_VLA_PTR, tok);
   node->var = var;
   return node;
 }
 
-static Node *new_long(int64_t val, Token *tok) {
+Node *new_long(int64_t val, Token *tok) {
   Node *node = new_node(ND_NUM, tok);
   node->val = val;
   node->ty = ty_long;
   return node;
 }
 
-static Node *new_ulong(long val, Token *tok) {
+Node *new_ulong(long val, Token *tok) {
   Node *node = new_node(ND_NUM, tok);
   node->val = val;
   node->ty = ty_ulong;
@@ -104,7 +109,7 @@ static Node *new_ulong(long val, Token *tok) {
 // marking the node is a single assignment. A cast the source wrote
 // arrives as an ND_CAST node from the parser instead, which leaves the
 // flag false, and add_type resolves rather than builds it.
-static Node *new_cast(Node *expr, Type *ty) {
+Node *new_cast(Node *expr, Type *ty) {
   add_type(expr);
 
   Node *node = calloc(1, sizeof(Node));
@@ -852,7 +857,7 @@ static void declare_builtin_functions(void) {
 // Build the `alloca(<size>)` call node for a VLA declaration. The call
 // arrives fully typed, so add_type skips it and codegen recognizes the
 // builtin by name.
-static Node *new_alloca(Node *sz) {
+Node *new_alloca(Node *sz) {
   Node *node = new_unary(ND_FUNCALL, new_var_node(builtin_alloca, sz->tok), sz->tok);
   node->func_ty = builtin_alloca->ty;
   node->ty = builtin_alloca->ty->return_ty;
@@ -868,7 +873,10 @@ static Node *new_alloca(Node *sz) {
 // the tree, whether the parser wrote it or sema rebuilt it from a
 // compound assignment or a subscript, is scaled and converted exactly
 // once, and no node needs a flag saying which of the two it had.
-static Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
+//
+// Exported: this is how a consumer obtains a typed binary node, and with
+// it sema's conversion decisions, without re-implementing either.
+Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
   add_type(lhs);
   add_type(rhs);
   usual_arith_conv(&lhs, &rhs);
@@ -1930,7 +1938,7 @@ static void serialize_gvar(Node *node) {
   node->init_resolved = NULL;
 }
 
-static Type *get_common_type(Type *ty1, Type *ty2) {
+Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->base)
     return pointer_to(ty1->base);
 
@@ -1966,7 +1974,7 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
 // be promoted to match with the other.
 //
 // This operation is called the "usual arithmetic conversion".
-static void usual_arith_conv(Node **lhs, Node **rhs) {
+void usual_arith_conv(Node **lhs, Node **rhs) {
   Type *ty = get_common_type((*lhs)->ty, (*rhs)->ty);
   *lhs = new_cast(*lhs, ty);
   *rhs = new_cast(*rhs, ty);
@@ -2089,10 +2097,18 @@ static void select_generic(Node *node) {
     if (assoc->lhs != sel)
       add_type(assoc->lhs);
 
+  // The conclusion of the selection, recorded on the node that asked the
+  // question. Nothing reads it yet - the rewrite below still turns this
+  // node *into* the selected expression, and that copy is what the
+  // evaluator and codegen consume today. PLAN A9.1 drops the rewrite and
+  // switches both consumers to this field, which is why the conclusion is
+  // written now, while the two ways of carrying it still agree.
+  //
   // `next` is the parent's link; the result's own link is not its.
   Node *nxt = node->next;
   *node = *sel;
   node->next = nxt;
+  node->generic_sel = sel;
 }
 
 // Whether the declaration record being lowered produces no statement at
@@ -2145,7 +2161,19 @@ static void type_chain(Node **head) {
   }
 }
 
-static void add_type(Node *node) {
+// The annotation pass: types a node and every subtree it owns, inserts
+// the implicit conversions the standard requires, runs the checks that
+// need a typed tree, materializes the objects the language says exist,
+// and records the compile-time conclusions on the nodes.
+//
+// Exported, and re-entrant on purpose: a consumer that builds a node
+// calls it to have the node typed by sema's rules rather than by a copy
+// of them, and sema itself calls it that way from the lowerings. The
+// `node->ty` test makes it idempotent, so a subtree is annotated exactly
+// once - which is also why a consumer must not run its own shaping over a
+// subtree twice: this guard stops a second *annotation*, not a second
+// *lowering* (PLAN contract 3(d)).
+void add_type(Node *node) {
   if (!node || node->ty)
     return;
 

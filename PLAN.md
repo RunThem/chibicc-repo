@@ -184,12 +184,14 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   的定型时机); 诊断锁定补 f 系列 9 例把"夹在降级里的检查"锁住(44 -> 53, 见判据 2); 复验四闸门
   (docker-test / 诊断 53 例 / ndiff 空 / tinycc)并留档为本线基线; 顺带记录一个基线缺陷
   (`1 - p` 段错误, 上游 07f9010 起即如此, 本线不修).
-- [ ] **A1.2 结论字段与导出面**(原 A1.2 前移, 因为求值器要读结论): Node 增设结论槽 - `_Generic`
-  的选中项, sizeof/alignof 与两个类型 builtin 的结论; `add_type` 写结论而**不**替换节点(本步消费方
-  仍是整形替换, 所以零行为变化). 同一步把契约 2 的永久导出面在 `chibicc.h` 声明出来(纯声明 +
-  去 static, 无行为变化). 指针算术**不设**结论字段: 哪一侧是指针, 元素类型是什么, 都可以从 sema
-  已写下的 `ty` 读出来, 加字段反而多一处要同步的真值(若实施时发现两侧各写一遍判断容易漂, 再回来
-  加 `Type *ptr_base`, 记为偏差).
+- [x] **A1.2 结论字段与导出面**(原 A1.2 前移, 因为求值器要读结论): Node 增设结论槽并让 `add_type`
+  **写**结论 - 本步**仍然照旧替换节点**(消费方到 A9.1 才改读字段), 所以零行为变化; 字段先长出来,
+  A9.1 就只是"删掉替换 + 消费方改读". 实测需要的字段只有一个: `_Generic` 的选中项(节点引用);
+  sizeof/alignof 与两个类型 builtin 的结论都是数值, 复用 `val` + `ty`(与 ND_NUM 同槽, A9.1 的消费方
+  可以统一读), 不新增字段. 同一步把契约 2 的永久导出面在 `chibicc.h` 声明出来(去 static + 声明,
+  无行为变化). 指针算术**不设**结论字段: 哪一侧是指针, 元素类型是什么, 都可以从 sema 已写下的 `ty`
+  读出来, 加字段反而多一处要同步的真值(若实施时发现两侧各写一遍判断容易漂, 再回来加
+  `Type *ptr_base`, 记为偏差).
 - [ ] **A1.1 求值器认忠实形态**(原 A1.1 后移): `eval2`/`eval_rval`/`eval_double`/`is_const_expr` 补
   忠实 case - ND_GT/ND_GE(就地判), ND_SUBSCRIPT(按下标取址), ND_MEMBER 的 arrow(指针值 + 偏移,
   `eval_rval` 与 `eval2` 两侧都要), ND_STRING(读物化后的 `node->var`), ND_SIZEOF/ND_ALIGNOF
@@ -201,6 +203,12 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   `int *q = &s.x + 1;` -> `.quad s+4`); ptr-ptr 的负例锚点取决于求值顺序, 逐字节锁不住(见
   "闸门口径"的结构性限制). `#if` 路径随 `const_expr` 一并覆盖.
   验收: 常规口径 + 非空转探针 + 逐 case 记录"当前是否有语料覆盖", 没覆盖的在 A10.2 或对应搬运步补.
+  **已识别的覆盖空洞(A0.1/A1.2 期间实测)**: `is_const_expr` 只有一个真调用者 - `resolve_type`
+  用它判数组维度是定长还是 VLA. 今天 `int n=5; int x[n]; int y[sizeof(x)];` 之所以正确(y 是 VLA),
+  是因为 `add_type` 先把 sizeof 折成 `COMMA(算尺寸, 读尺寸变量)`, `is_const_expr` 看到的是 COMMA ->
+  VAR -> false. A9.1 停止折叠后, `is_const_expr(ND_SIZEOF)` 必须自己按"操作数类型是不是 VLA"返回
+  false, 否则一个 VLA 会被静默当成定长数组. 而 `test/vla.c` 里**没有**"sizeof(VLA) 作维度"的用例
+  (只有 `sizeof(char[2][n])` 作表达式), 所以这条要在 A1.1 就补进 test/vla.c, 不能等 A9.1.
 - [ ] **A2.1 标签与控制流归 codegen**: codegen 新增整形遍骨架(契约 3 的 (b)(c)), 标签计数器与
   "循环/switch 标签栈", `analyze` 的整段搬入(标签分配, ND_WHILE→ND_FOR, break/continue→ND_GOTO,
   case 链, ND_LABEL 与 `&&label` 的名字); **同时删掉 `to_assign` 原子分支的两处预分配**(否则标签

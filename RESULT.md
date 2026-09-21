@@ -176,7 +176,60 @@ void f(void) { char *t = "in f"; (void)t; }
 |---|---|---|
 | 5413ceb | 线间归档 | 忠实层收尾线归档为 `PLAN-faithful.md`/`RESULT-faithful.md`, 新建本线与账本 |
 | c4e7f77 | 计划优化 | 五条搬运契约, 按调用图重排执行顺序, 补四处计划漏项(求值侧缩放, 标签名字空间, arrow_tok 载体, 初始化器定型时机), tinycc 进每步闸门, elvis 的无槽发射挪到 B1.1 |
-| (本提交) | A0.1 | 账本补"验收口径"列与 50-55 行, 诊断锁定 44 -> 53(f 系列, 把夹在降级里的检查锁住), 四闸门基线留档, 记录 `1 - p` 基线缺陷与"诊断锁定只对单路径诊断有意义"的结构性限制 |
+| 4891aa2 | A0.1 | 账本补"验收口径"列与 50-55 行, 诊断锁定 44 -> 53(f 系列, 把夹在降级里的检查锁住), 四闸门基线留档, 记录 `1 - p` 基线缺陷与"诊断锁定只对单路径诊断有意义"的结构性限制 |
+| (本提交) | A1.2 | Node 增 `generic_sel` 结论槽并由 `select_generic` 写入; 契约 2 的永久导出面(10 个类型级符号)去 static 并声明; sizeof 与两个 builtin 的结论复用 `val`/`ty`, 不新增字段 |
+
+## 各步详情
+
+### A0.1 账本与基线 (4891aa2)
+
+- 改了什么: 编译器源码零改动. (1) 本文件的账本表补"验收口径"列, 并补 50-55 六行原计划没有的项
+  (求值侧的指针缩放, `resolve_member` 清 `arrow_tok`, 嵌套函数体的标注位置与访问一次, 原子
+  do-while 的预分配标签, 局部初始化器表达式的定型时机, `.L..%d` 共用计数器); 48 行的描述补上
+  `__func__`/`__FUNCTION__`. (2) `test/diagnostic.sh` 44 -> 53 例, 新增 f 系列 9 例锁住"夹在降级
+  代码里的检查". (3) PLAN.md 补两处: 判据 2 说明为什么要先扩锁定, 闸门口径补"诊断锁定只对单一
+  错误路径的诊断有意义".
+- 为什么改: 本线要搬的 ~800 行降级里嵌着诊断, 而原有 44 例只覆盖 parse 的 33 处与 sema 判定表 E -
+  夹在降级里的那些**一例都没有**. 语料只有合法 C, 丢一条检查不会被任何闸门看见(R3.1 的教训是同一
+  类). 量尺必须在搬之前立起来.
+- 测试结果: 四闸门全绿 - `docker-test` rc=0(两轮诊断各 53 例逐字节), `docker-snapshot-ndiff` 空
+  (41 文件基线), `docker-test-thirdparty THIRDPARTY=tinycc` rc=0; 宿主机本地构建后 diagnostic.sh
+  亦 53/53.
+- 偏差说明: 三处, 都已写进上面的专节. (1) f06 第一次锁的是 ptr-ptr 的 `a - a`, stage2 与宿主构建
+  报不同锚点, 必然有一轮失败 - 换成单路径的"常量表达式里的下标", ptr-ptr 改用正向快照锁.
+  (2) 发现基线缺陷 `1 - p` 段错误(上游 07f9010 起), 记录不修. (3) 契约 4 由推理升级为实测:
+  `__func__`/`__FUNCTION__` 让每个函数在 `.data` 里占两块, 块序确为 resolve 定义序的逆序.
+
+### A1.2 结论字段与导出面 (本提交)
+
+- 改了什么: (1) `chibicc.h` 的 Node 增一个字段 `Node *generic_sel` - ND_GENERIC 的结论槽, 存
+  controlling 表达式选中的那个关联项的结果表达式; `select_generic` 在改写节点之后写它.
+  (2) `chibicc.h` 声明契约 2 的永久导出面 10 个符号, `sema.c` 对应去掉 `static`
+  (`add_type`, `new_arith`, `usual_arith_conv`, `get_common_type`, `new_cast`, `new_long`,
+  `new_ulong`, `new_var_node`, `new_vla_ptr`, `new_alloca`), 并删掉两条与头文件声明冲突的 static
+  前向声明; sema.c 与 chibicc.h 的文件头/段落注释说明这个导出面是干什么的.
+  (3) sizeof/alignof 与两个类型 builtin **不新增字段**: 它们的结论是数值, 今天的折叠已经把它落在
+  `val` 与 `ty` 上(与 ND_NUM 同槽), A9.1 只需要停止改 `kind`, 消费方读法不变.
+  行数: chibicc.h 704 -> 737, sema.c 3145 -> 3173, codegen.c 1595 与 parse.c 2148 零改动.
+- 为什么改: 执行顺序把 A1.2 排在 A1.1 之前, 因为求值器认忠实形态时要读 `_Generic` 的选中项 -
+  字段必须先长出来. 导出面则是契约 2 的落地: 让 A3.1-A9.1 的搬运保持"文本搬家 + 换调用符号",
+  而不是在 codegen 里重述类型决策. 具体到字节: `usual_arith_conv` 对 `ptr + n*4` 也会给两侧插
+  cast(`get_common_type` 一见 `ty1->base` 就返回 `pointer_to(ty1->base)`), codegen 若自己拼缩放和
+  就会少掉那个 cast 节点与它的 `.loc`.
+- 测试结果: 四项全绿, 且 **raw 逐字节为空**(比 ndiff 闸门更强, 无需重置基线) -
+  `docker-snapshot-diff` 与 `docker-snapshot-ndiff` 都报 empty(41 文件); `docker-test` 跑完
+  make test 与 make test-stage2 两轮, 末尾 `diagnostic lock: 53 cases byte-exact`;
+  `docker-test-thirdparty THIRDPARTY=tinycc` 跑完 tcc 全套无 FAILED. 即"长出结论槽 + 导出符号"
+  没有改变任何一个文件的产物字节, 符合本步的零行为变化设计.
+- 偏差说明: 两处. (1) **计划文本自相矛盾, 已改**: 原 A1.2 写"`add_type` 写结论而**不**替换节点
+  (本步消费方仍是整形替换, 所以零行为变化)" - 消费方还在读替换结果时停止替换就不是零变化.
+  实施为: 本步**照旧替换**, 只把结论同时写进字段, 两条载体并存且一致; 停止替换是 A9.1 的事.
+  PLAN.md 的 A1.2 条目已按此改正. (2) 导出面里 `usual_arith_conv`/`get_common_type`/`new_ulong`
+  目前在 sema 之外没有调用者, 一并导出是为了让后续每步都是纯搬家; 若更倾向最小 API 面, A9.2 收口时
+  可以把仍无外部调用者的收回 - 记为待决, 不影响本线闸门.
+  非空转探针(不入提交): 临时在 `select_generic` 末尾打印 `generic_sel` 与 `sel`, 编译
+  `test/generic.c`, 6 次选择全部 `generic_sel == sel`, 证明字段确实被写且指向选中的关联项;
+  探针撤销后 `git diff` 只含 chibicc.h / sema.c / PLAN.md / RESULT.md.
 
 ## 给审核者的提示
 

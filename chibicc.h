@@ -409,6 +409,15 @@ struct Node {
   // ty_op. The type predicates take two types and no subexpression.
   Type *ty_op2;
 
+  // ND_GENERIC: the result expression of the association the controlling
+  // expression selects - the conclusion of the selection, recorded on the
+  // node so a consumer can read it instead of the node having to *become*
+  // it. Written by sema's select_generic. Nothing reads it yet: today the
+  // node is still rewritten to the selected expression as well, and the
+  // rewrite is what the evaluator and codegen consume. PLAN A9.1 drops the
+  // rewrite and switches both consumers to this field.
+  Node *generic_sel;
+
   // ND_CAST: true for a cast sema inserted to carry out an implicit
   // conversion, false for one the source wrote. The parser never sets
   // it, new_cast always does, and the rewrite sites that copy a node's
@@ -509,6 +518,30 @@ Obj *sema(Node *toplevel);
 // preprocessor for `#if`; not part of the parse/sema pipeline below.
 int64_t const_expr(Token **rest, Token *tok);
 Node *conditional(Token **rest, Token *tok);
+
+// The type-level tools a consumer needs in order to build nodes that
+// arrive already typed: the annotation entry point, the constructors for
+// the shapes only sema produces, and the conversions that carry sema's
+// decisions. A consumer (codegen, and later the other users of this
+// library) calls these; it does not re-implement a type decision of its
+// own. That is what keeps the shaping a consumer does - the pointer
+// scaling, the read-modify-write loop, the statement reordering - free of
+// semantics: the shape is the consumer's, every conversion inside it is
+// sema's, obtained from here.
+//
+// Some of these have no caller outside sema.c yet. They are exported now
+// because the lowerings PLAN A3.1-A9.1 move into codegen call them, and
+// exporting them up front keeps those steps pure moves.
+void add_type(Node *node);
+Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok);
+void usual_arith_conv(Node **lhs, Node **rhs);
+Type *get_common_type(Type *ty1, Type *ty2);
+Node *new_cast(Node *expr, Type *ty);
+Node *new_long(int64_t val, Token *tok);
+Node *new_ulong(long val, Token *tok);
+Node *new_var_node(Obj *var, Token *tok);
+Node *new_vla_ptr(Obj *var, Token *tok);
+Node *new_alloca(Node *sz);
 
 //
 // type.c
