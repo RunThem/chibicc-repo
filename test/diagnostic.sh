@@ -1,6 +1,7 @@
 #!/bin/bash
-# 诊断锁定测试 (PLAN R0.1, A0.1 扩): 逐字节锁定 parse.c 全部 33 处 error_tok, sema 判定表 E
-# 错误路径, 以及夹在降级代码里的 9 处检查的 "stderr 文案 + 插入符位置". 每个用例 = 一个
+# 诊断锁定测试 (PLAN R0.1, A0.1 扩): 逐字节锁定拆分线终态时 parse.c 的全部 33 处 error_tok
+# (判定表 A-D; 忠实层收尾线后 B/C/D 的 18 处已移入 sema.c, parse 现仅剩判定表 A 的 15 处),
+# sema 判定表 E 错误路径, 以及夹在降级代码里的 9 处检查的 "stderr 文案 + 插入符位置". 每个用例 = 一个
 # 编译失败的独立源码片段 + 期望的 stderr 原文; 运行时在临时目录里以 <用例名>.c 编译,
 # stderr 与期望逐字节 diff.
 #
@@ -13,7 +14,8 @@
 #   - 块域 "void x;" / "void x = <初始化器>;" 锚定被声明的名字 (ND_DECL.tok, R3.1 的
 #     新锚点规范), 块域 static 路径仍锚 "=".
 #
-# 覆盖清单: 判定表 A 15 处 + B 4 处 + C 11 处 + D 3 处 = parse.c 全部 33 处 error_tok;
+# 覆盖清单: 判定表 A 15 处 + B 4 处 + C 11 处 + D 3 处 = 拆分线终态 parse.c 的全部 33 处
+# error_tok(B/C/D 18 处此后移入 sema.c);
 # 判定表 E 10 处中的 9 处, 另加 e11(R3.1 的语句表达式末语句形状回归锁); f 系列 9 处
 # (A0.1, 夹在降级里的检查). 合计 53 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
 # symbol" - find_func 只返回 is_function 为真的对象, 该守卫恒假, 当前树中不可达.

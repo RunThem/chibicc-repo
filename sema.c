@@ -193,7 +193,10 @@ static Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
   Obj *fn = find_func(name);
 
   if (fn) {
-    // Redeclaration
+    // Redeclaration. The first check is unreachable in the current
+    // tree: find_func only ever returns an is_function object, so
+    // fn->is_function is always true here (the diagnostic lock
+    // leaves it uncovered for exactly that reason).
     if (!fn->is_function)
       error_tok(tok, "redeclared as a different kind of symbol");
     if (fn->is_definition && is_definition)
@@ -790,6 +793,16 @@ static Obj *new_gvar(char *name, Type *ty) {
 // The anonymous names of hidden objects - string literal globals,
 // static locals and the control-flow labels sema allocates - come
 // from this one counter.
+// The one name factory for the objects the compiler names on its
+// own: string-literal globals, block-scope statics, compound
+// literals and control-flow labels all draw from this counter, so
+// their numbers interleave in creation order - and .data block
+// order is creation order, which is why these allocations stay on
+// the sema side even when labels move. The format is load-bearing:
+// the snapshot normalizer renumbers labels whose suffix is exactly
+// ".<digits>", so a prefix change shows up as a diff even when
+// only the numbering moved. A2.1 moves label allocation to codegen
+// against this same namespace (one counter), not a parallel one.
 static char *new_unique_name(void) {
   static int id = 0;
   return format(".L..%d", id++);
@@ -932,6 +945,15 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
     return new_arith(ND_SUB, lhs, rhs, tok);
 
   // pointer to a VLA - num
+  //
+  // Known upstream defect (since 07f9010): `base` is read without a
+  // guard, so `1 - p` (num - ptr) reaches this branch and
+  // dereferences NULL - the driver only surfaces an exit code, not
+  // the crash. Only invalid C gets here, and no gate covers the
+  // shape (RESULT.md records it as a baseline defect). Left as-is on
+  // purpose: A4.1 moves this function verbatim, and adding the guard
+  // would be a behaviour change inside a pure move - it needs its
+  // own commit and a user decision.
   if (lhs->ty->base->kind == TY_VLA)
     return new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
 
@@ -1068,6 +1090,11 @@ static Node *to_assign(Node *node) {
                 tok);
 
     Node *loop = new_node(ND_DO, tok);
+    // Pre-allocated so the descent does not have to: analyze's
+    // ND_FOR/ND_SWITCH guards skip nodes that arrive with labels.
+    // A2.1 moves label allocation to codegen and must delete these
+    // two writes with it - two counters would mint the same .L..N
+    // twice, and as rejects the duplicate label.
     loop->brk_label = new_unique_name();
     loop->cont_label = new_unique_name();
 
@@ -2645,6 +2672,14 @@ static int64_t eval(Node *node) {
 // is a pointer to a global variable and n is a postiive/negative
 // number. The latter form is accepted only as an initialization
 // expression for a global variable.
+//
+// The add_type at the entry is what lets the switch below see
+// lowered shapes only - GT already swapped to LT, SUBSCRIPT already
+// DEREF, STRING already a VAR, sizeof already a number, arr+2
+// already ADD(VAR, MUL(2, 4)). The preprocessor reaches this through
+// const_expr, so `#if` rides the same path. When the lowerings leave
+// the annotation pass (A1.1 makes the evaluator read the faithful
+// shapes itself), this entry call goes away with them.
 static int64_t eval2(Node *node, char ***label) {
   add_type(node);
 
@@ -2756,6 +2791,11 @@ static int64_t eval_rval(Node *node, char ***label) {
   error_tok(node->tok, "invalid initializer");
 }
 
+// Annotates first, like eval2, so it walks lowered shapes; see there.
+// Its one real caller is resolve_type, classifying an array dimension
+// as fixed or variable. The entry call goes away with the lowerings
+// (A1.1), at which point the sizeof-of-a-VLA operand has to answer
+// false by its own kind, not because the fold hid it.
 static bool is_const_expr(Node *node) {
   add_type(node);
 
@@ -2799,6 +2839,9 @@ int64_t const_expr(Token **rest, Token *tok) {
   return eval(node);
 }
 
+// Annotates first, like eval2 (see there): the shapes this switch
+// sees are the lowered ones, and the entry call goes away with the
+// lowerings (A1.1).
 static double eval_double(Node *node) {
   add_type(node);
 

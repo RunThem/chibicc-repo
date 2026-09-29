@@ -517,6 +517,9 @@ Obj *sema(Node *toplevel);
 // Parses and evaluates a constant expression. Used by the
 // preprocessor for `#if`; not part of the parse/sema pipeline below.
 int64_t const_expr(Token **rest, Token *tok);
+
+// The parser's conditional-expression entry point (parse.c), which
+// const_expr uses to read the expression it evaluates.
 Node *conditional(Token **rest, Token *tok);
 
 // The type-level tools a consumer needs in order to build nodes that

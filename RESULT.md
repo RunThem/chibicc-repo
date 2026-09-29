@@ -15,7 +15,7 @@
   docker-test 漏掉真误编译的书面记录); 命令用 docker 版(本机 macOS/arm64, `make test-thirdparty`
   会直接报错退出).
 
-## 基线记录(A0.1, HEAD = c4e7f77 的树 + 本提交)
+## 基线记录(A0.1, HEAD = c4e7f77 的树 + 4891aa2)
 
 - 起始状态: 忠实层终态 20abd43 的代码未动 - parse.c 2148 行, sema.c 3145 行, chibicc.h 704 行,
   codegen.c 1595 行(相对 5f53ed0 零 diff). 本线到目前为止只改了文档与本测试文件.
@@ -177,7 +177,7 @@ void f(void) { char *t = "in f"; (void)t; }
 | 5413ceb | 线间归档 | 忠实层收尾线归档为 `PLAN-faithful.md`/`RESULT-faithful.md`, 新建本线与账本 |
 | c4e7f77 | 计划优化 | 五条搬运契约, 按调用图重排执行顺序, 补四处计划漏项(求值侧缩放, 标签名字空间, arrow_tok 载体, 初始化器定型时机), tinycc 进每步闸门, elvis 的无槽发射挪到 B1.1 |
 | 4891aa2 | A0.1 | 账本补"验收口径"列与 50-55 行, 诊断锁定 44 -> 53(f 系列, 把夹在降级里的检查锁住), 四闸门基线留档, 记录 `1 - p` 基线缺陷与"诊断锁定只对单路径诊断有意义"的结构性限制 |
-| (本提交) | A1.2 | Node 增 `generic_sel` 结论槽并由 `select_generic` 写入; 契约 2 的永久导出面(10 个类型级符号)去 static 并声明; sizeof 与两个 builtin 的结论复用 `val`/`ty`, 不新增字段 |
+| 5b1fd98 | A1.2 | Node 增 `generic_sel` 结论槽并由 `select_generic` 写入; 契约 2 的永久导出面(10 个类型级符号)去 static 并声明; sizeof 与两个 builtin 的结论复用 `val`/`ty`, 不新增字段 |
 
 ## 各步详情
 
@@ -200,7 +200,7 @@ void f(void) { char *t = "in f"; (void)t; }
   (2) 发现基线缺陷 `1 - p` 段错误(上游 07f9010 起), 记录不修. (3) 契约 4 由推理升级为实测:
   `__func__`/`__FUNCTION__` 让每个函数在 `.data` 里占两块, 块序确为 resolve 定义序的逆序.
 
-### A1.2 结论字段与导出面 (本提交)
+### A1.2 结论字段与导出面 (5b1fd98)
 
 - 改了什么: (1) `chibicc.h` 的 Node 增一个字段 `Node *generic_sel` - ND_GENERIC 的结论槽, 存
   controlling 表达式选中的那个关联项的结果表达式; `select_generic` 在改写节点之后写它.
