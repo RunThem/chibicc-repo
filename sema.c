@@ -2657,6 +2657,18 @@ static int64_t eval(Node *node) {
   return eval2(node, NULL);
 }
 
+// The type an operand has beneath the conversion casts the
+// annotation pass wraps it in. Both sides of a `ptr + num` carry the
+// common pointer type after the conversion, so the side that was the
+// pointer is the one whose cast chain bottoms out in a pointer or an
+// array - which is what the faithful pointer arithmetic below needs
+// to know.
+static Type *ty_beyond_convs(Node *node) {
+  while (node->kind == ND_CAST)
+    node = node->lhs;
+  return node->ty;
+}
+
 // Evaluate a given node as a constant expression.
 //
 // A constant expression is either just a number or ptr+n where ptr
@@ -2664,13 +2676,15 @@ static int64_t eval(Node *node) {
 // number. The latter form is accepted only as an initialization
 // expression for a global variable.
 //
-// The add_type at the entry is what lets the switch below see
-// lowered shapes only - GT already swapped to LT, SUBSCRIPT already
-// DEREF, STRING already a VAR, sizeof already a number, arr+2
-// already ADD(VAR, MUL(2, 4)). The preprocessor reaches this through
-// const_expr, so `#if` rides the same path. When the lowerings leave
-// the annotation pass (A1.1 makes the evaluator read the faithful
-// shapes itself), this entry call goes away with them.
+// The add_type at the entry is what types the tree before the switch
+// runs - for the preprocessor it is the only annotation the
+// expression ever gets. It is also, today, what lowers the tree: GT
+// arrives swapped to LT, SUBSCRIPT as DEREF, STRING as a VAR, sizeof
+// as a number, arr+2 as ADD(VAR, MUL(2, 4)), so the switch below
+// sees lowered shapes only. As the lowerings leave the annotation
+// pass (A2.1 onwards), the entry call stays - it still types the
+// tree - but the switch starts seeing faithful kinds, which the
+// cases below now recognize alongside the lowered ones.
 static int64_t eval2(Node *node, char ***label) {
   add_type(node);
 
@@ -2678,10 +2692,41 @@ static int64_t eval2(Node *node, char ***label) {
     return eval_double(node);
 
   switch (node->kind) {
-  case ND_ADD:
+  case ND_ADD: {
+    // The pointer scale of a `ptr + num` is still new_add's to apply
+    // (the rhs arrives as a MUL by the element size), so the value
+    // here is the plain sum. A4.1 takes the scaling out of the
+    // annotation pass, and the evaluator takes it over in this case:
+    // the pointer side is the operand whose cast chain bottoms out in
+    // a pointer or an array, and its element size is the scale.
+    // `ptr + ptr` is rejected by the annotation pass before the
+    // evaluator runs; the mirror here is for the same guarantee.
+    Type *lt = ty_beyond_convs(node->lhs);
+    Type *rt = ty_beyond_convs(node->rhs);
+    if (lt->base && rt->base)
+      error_tok(node->tok, "invalid operands");
     return eval2(node->lhs, label) + eval(node->rhs);
-  case ND_SUB:
+  }
+  case ND_SUB: {
+    // Same for `ptr - num`: the scale is new_sub's while it is the
+    // lowering, and this case picks it up at A4.1. A `num - ptr` is
+    // invalid and rejected upstream. For `ptr - ptr` the lowered form
+    // is `DIV(SUB(...), size)` - a different kind - so this branch
+    // only runs once the subtraction keeps its kind, and it asks both
+    // sides as plain numbers (label == NULL), exactly the question
+    // the lowered DIV asked: the difference of two addresses is not a
+    // constant expression.
+    Type *lt = ty_beyond_convs(node->lhs);
+    Type *rt = ty_beyond_convs(node->rhs);
+    if (lt->base && rt->base) {
+      int64_t lhs = eval2(node->lhs, NULL);
+      int64_t rhs = eval2(node->rhs, NULL);
+      return (lhs - rhs) / lt->base->size;
+    }
+    if (rt->base)
+      error_tok(node->tok, "invalid operands");
     return eval2(node->lhs, label) - eval(node->rhs);
+  }
   case ND_MUL:
     return eval(node->lhs) * eval(node->rhs);
   case ND_DIV:
@@ -2710,6 +2755,18 @@ static int64_t eval2(Node *node, char ***label) {
     return eval(node->lhs) == eval(node->rhs);
   case ND_NE:
     return eval(node->lhs) != eval(node->rhs);
+  case ND_GT:
+    // The faithful `>`: the lowering swapped the operands and turned
+    // this into `<`, so the faithful comparison runs the other way
+    // round, with the signedness taken from the operand the swap
+    // would have moved to the left.
+    if (node->rhs->ty->is_unsigned)
+      return (uint64_t)eval(node->rhs) < eval(node->lhs);
+    return eval(node->rhs) < eval(node->lhs);
+  case ND_GE:
+    if (node->rhs->ty->is_unsigned)
+      return (uint64_t)eval(node->rhs) <= eval(node->lhs);
+    return eval(node->rhs) <= eval(node->lhs);
   case ND_LT:
     if (node->lhs->ty->is_unsigned)
       return (uint64_t)eval(node->lhs) < eval(node->rhs);
@@ -2719,6 +2776,11 @@ static int64_t eval2(Node *node, char ***label) {
       return (uint64_t)eval(node->lhs) <= eval(node->rhs);
     return eval(node->lhs) <= eval(node->rhs);
   case ND_COND:
+    // An elvis never becomes the comma form here: its value passes
+    // through the temporary the lowering stores the operand in, so
+    // it is a runtime value and not a constant.
+    if (node->is_elvis)
+      break;
     return eval(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
   case ND_COMMA:
     return eval2(node->rhs, label);
@@ -2747,6 +2809,17 @@ static int64_t eval2(Node *node, char ***label) {
     *label = &node->unique_label;
     return 0;
   case ND_MEMBER:
+    // `p->arr`, an array member of a pointer operand: the member's
+    // address is the pointer value plus the offset, under the same
+    // two guards the lowered member (DEREF inside) passed through.
+    // A plain `.` member takes the address of its operand instead.
+    if (node->arrow_tok) {
+      if (!label)
+        error_tok(node->tok, "not a compile-time constant");
+      if (node->ty->kind != TY_ARRAY)
+        error_tok(node->tok, "invalid initializer");
+      return eval2(node->lhs, label) + node->member->offset;
+    }
     if (!label)
       error_tok(node->tok, "not a compile-time constant");
     if (node->ty->kind != TY_ARRAY)
@@ -2759,6 +2832,32 @@ static int64_t eval2(Node *node, char ***label) {
       error_tok(node->tok, "invalid initializer");
     *label = &node->var->name;
     return 0;
+  case ND_STRING:
+    // The literal's anonymous global, materialized where the literal
+    // is annotated; the node keeps its kind and points at the
+    // object, so the address is read off the object directly.
+    if (!label)
+      error_tok(node->tok, "not a compile-time constant");
+    *label = &node->var->name;
+    return 0;
+  case ND_SIZEOF:
+  case ND_ALIGNOF: {
+    // The conclusion the annotation pass records in `val` - the same
+    // slot a literal uses. A sizeof of a VLA is a runtime value, so
+    // that one is not a constant; an alignment always is.
+    Type *ty = node->ty_op ? node->ty_op : node->lhs->ty;
+    if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
+      error_tok(node->tok, "not a compile-time constant");
+    return node->val;
+  }
+  case ND_TYPES_COMPATIBLE:
+  case ND_REG_CLASS:
+    // Both fold to a number, recorded in `val`.
+    return node->val;
+  case ND_GENERIC:
+    // The conclusion of the selection: the result expression of the
+    // association the controlling expression picked.
+    return eval2(node->generic_sel, label);
   case ND_NUM:
     return node->val;
   }
@@ -2775,18 +2874,41 @@ static int64_t eval_rval(Node *node, char ***label) {
     return 0;
   case ND_DEREF:
     return eval2(node->lhs, label);
+  case ND_STRING:
+    // The literal's anonymous global, as above.
+    *label = &node->var->name;
+    return 0;
+  case ND_SUBSCRIPT: {
+    // The address of `x[y]`: the base's address plus the index
+    // scaled by the element size. A VLA element size is a runtime
+    // value; an unscaled sum (both operands numbers) mirrors what
+    // the lowered `*(x+y)` evaluated to for that shape.
+    Type *base = node->lhs->ty->base;
+    if (base && base->kind == TY_VLA)
+      error_tok(node->tok, "not a compile-time constant");
+    if (!base)
+      return eval2(node->lhs, label) + eval(node->rhs);
+    return eval2(node->lhs, label) + eval(node->rhs) * base->size;
+  }
   case ND_MEMBER:
+    // `p->x`: the operand is the pointer itself, so the member's
+    // address is the pointer value plus the offset; a `.` member
+    // takes the address of its operand instead.
+    if (node->arrow_tok)
+      return eval2(node->lhs, label) + node->member->offset;
     return eval_rval(node->lhs, label) + node->member->offset;
   }
 
   error_tok(node->tok, "invalid initializer");
 }
 
-// Annotates first, like eval2, so it walks lowered shapes; see there.
-// Its one real caller is resolve_type, classifying an array dimension
-// as fixed or variable. The entry call goes away with the lowerings
-// (A1.1), at which point the sizeof-of-a-VLA operand has to answer
-// false by its own kind, not because the fold hid it.
+// Annotates first, like eval2, so it walks whatever shapes the
+// annotation pass currently produces; see there. Its one real caller
+// is resolve_type, classifying an array dimension as fixed or
+// variable. Once the fold stops rewriting sizeof nodes (A9.1), the
+// sizeof case below has to answer false for a VLA operand by its own
+// kind, not because the fold hid it - otherwise a VLA silently
+// becomes a fixed array.
 static bool is_const_expr(Node *node) {
   add_type(node);
 
@@ -2804,10 +2926,16 @@ static bool is_const_expr(Node *node) {
   case ND_NE:
   case ND_LT:
   case ND_LE:
+  case ND_GT:
+  case ND_GE:
   case ND_LOGAND:
   case ND_LOGOR:
     return is_const_expr(node->lhs) && is_const_expr(node->rhs);
   case ND_COND:
+    // An elvis is a runtime value: the lowering stores the operand
+    // in a temporary first.
+    if (node->is_elvis)
+      return false;
     if (!is_const_expr(node->cond))
       return false;
     return is_const_expr(eval(node->cond) ? node->then : node->els);
@@ -2818,6 +2946,17 @@ static bool is_const_expr(Node *node) {
   case ND_BITNOT:
   case ND_CAST:
     return is_const_expr(node->lhs);
+  case ND_SIZEOF:
+  case ND_ALIGNOF: {
+    // The alignment of a VLA is a constant; its size is not.
+    Type *ty = node->ty_op ? node->ty_op : node->lhs->ty;
+    return node->kind == ND_ALIGNOF || ty->kind != TY_VLA;
+  }
+  case ND_TYPES_COMPATIBLE:
+  case ND_REG_CLASS:
+    return true;
+  case ND_GENERIC:
+    return is_const_expr(node->generic_sel);
   case ND_NUM:
     return true;
   }
@@ -2831,8 +2970,8 @@ int64_t const_expr(Token **rest, Token *tok) {
 }
 
 // Annotates first, like eval2 (see there): the shapes this switch
-// sees are the lowered ones, and the entry call goes away with the
-// lowerings (A1.1).
+// sees are whatever the annotation pass currently produces, and the
+// faithful cases below take over as the lowerings leave it.
 static double eval_double(Node *node) {
   add_type(node);
 
@@ -2854,9 +2993,15 @@ static double eval_double(Node *node) {
   case ND_NEG:
     return -eval_double(node->lhs);
   case ND_COND:
+    // An elvis is a runtime value; see eval2.
+    if (node->is_elvis)
+      break;
     return eval_double(node->cond) ? eval_double(node->then) : eval_double(node->els);
   case ND_COMMA:
     return eval_double(node->rhs);
+  case ND_GENERIC:
+    // The selected association's expression.
+    return eval_double(node->generic_sel);
   case ND_CAST:
     if (is_flonum(node->lhs->ty))
       return eval_double(node->lhs);

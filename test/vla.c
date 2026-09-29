@@ -21,6 +21,14 @@ int main() {
 
   ASSERT(10, ({ int n=5; sizeof(char[2][n]); }));
 
+  // A sizeof of a VLA as an array dimension: the operand's size is a
+  // runtime value, so y is a VLA too (20 elements of int). Guards
+  // is_const_expr's faithful sizeof case, which has to answer false
+  // for a VLA operand by its own kind once the fold stops rewriting
+  // the node (PLAN A1.1/A9.1); a wrong answer turns y into a fixed
+  // array or a spurious not-a-constant error.
+  ASSERT(80, ({ int n=5; int x[n]; int y[sizeof(x)]; sizeof(y); }));
+
   // A declaration whose type holds no VLA and that has no initializer
   // emits no statement; one that needs a size emits a single statement
   // with the computation sequenced before the alloca assignment or the

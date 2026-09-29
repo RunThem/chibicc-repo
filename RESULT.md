@@ -146,7 +146,7 @@ void f(void) { char *t = "in f"; (void)t; }
 | 47 | 全局初始化序列化 | `write_gvar_data`/`gvar_init_data` | 3 对象模型 | sema 留(经 `eval` 认忠实形态) | A1.1 | 诊断 f06/f07 + A10.2 全局初始化器探针 |
 | 48 | 帧辅助对象(参数/`__va_area__`/`__alloca_size__`/大结构体返回缓冲参数)与 `__func__`/`__FUNCTION__` 字符串 | `begin_function` | 3 ABI 对象 + 3 语义对象 | sema 留(resolve 遍, 定义序决定 `.data` 块序) | - | ndiff 空(块序), 见上面的实测证据 |
 | 49 | `Type::vla_size` 与 VLA 尺寸表达式 | `add_type`/`compute_vla_size`/`vla_size_expr` | 3 实现的槽 | codegen(字段改标 codegen 侧) | A7.1 | ndiff 空 + A10.2 VLA 尺寸复用探针 |
-| 50 | 指针算术的元素大小缩放(**求值侧**) | `eval2` ND_ADD/ND_SUB - 今天见到的是 `new_add` 已产出的 `MUL` 子树, 所以 eval 从不缩放 | 1 语义结论 | sema 留: eval 自己按元素大小放大, 认 `num+ptr`, ptr-ptr 以 `label == NULL` 求两侧 | A1.1 | A10.2 的正向快照锁(`.quad s+4` / `.quad a+4`); ptr-ptr 的负例**不可逐字节锁**, 见"诊断锁定的一个结构性限制" |
+| 50 | 指针算术的元素大小缩放(**求值侧**) | `eval2` ND_ADD/ND_SUB - 今天见到的是 `new_add` 已产出的 `MUL` 子树, 所以 eval 从不缩放 | 1 语义结论 | sema 留: eval 自己按元素大小放大, 认 `num+ptr`, ptr-ptr 以 `label == NULL` 求两侧 | A4.1(自 A1.1 移入, 见 A1.1 偏差 1) | A10.2 的正向快照锁(`.quad s+4` / `.quad a+4`); ptr-ptr 的负例**不可逐字节锁**, 见"诊断锁定的一个结构性限制" |
 | 51 | `resolve_member` 清 `arrow_tok` | `resolve_member` 末尾 | 1 发射便利的载体 | 不清: 留在最内层 link 上, 由 codegen 补 DEREF 后清 | A3.1 | ndiff 空 |
 | 52 | 嵌套函数体的标注位置 | `type_chain` 的 ND_FUNCDEF 调 `analyze_function` | 3 顺序 | sema 留原位(只去掉出链); codegen 侧按契约 3(e) 只从 `prog` 进一次 | A8.2 | ndiff 空(块序) + A10.2 嵌套函数探针 |
 | 53 | 原子 do-while 的预分配标签 | `to_assign` 里两处 `new_unique_name` | 1 发射便利 | 删除, 由 codegen 的标注相位分配(`analyze_node` 的 `if (!brk_label)` 守卫随之消失) | A2.1 | .s 无重复标号 + A10.2 原子 op= |
@@ -182,6 +182,7 @@ void f(void) { char *t = "in f"; (void)t; }
 | 5b1fd98 | A1.2 | Node 增 `generic_sel` 结论槽并由 `select_generic` 写入; 契约 2 的永久导出面(10 个类型级符号)去 static 并声明; sizeof 与两个 builtin 的结论复用 `val`/`ty`, 不新增字段 |
 | 0ede0ad | 线间收尾 | 计划锚点里的陷阱标注到代码现场(new_sub 守卫缺失/求值器搭便车/名字工厂共用计数器/原子预分配标签/死检查), diagnostic.sh 头注释"33 处"表述修正, 账本与步骤头占位符回填哈希 |
 | 3228229 | 基线缺陷修复 | new_sub 的 VLA 分支补 `lhs->ty->base &&` 守卫, `1 - p` 与经 compound_op 的 `i -= p` 由段错误转为 `invalid operands`; 诊断锁定新增 f10/f11(53 -> 55) |
+| (本提交) | A1.1 | 求值器四函数补忠实 case(GT/GE, 下标取址, 成员 arrow, STRING, SIZEOF/ALIGNOF 结论, 两个类型 builtin, GENERIC, elvis 守卫, ptr-ptr 除法); ADD/SUB 缩放支移入 A4.1; test/vla.c 补 sizeof(VLA) 作维度回归; 8 组非空转探针 |
 
 ## 各步详情
 
@@ -234,6 +235,67 @@ void f(void) { char *t = "in f"; (void)t; }
   非空转探针(不入提交): 临时在 `select_generic` 末尾打印 `generic_sel` 与 `sel`, 编译
   `test/generic.c`, 6 次选择全部 `generic_sel == sel`, 证明字段确实被写且指向选中的关联项;
   探针撤销后 `git diff` 只含 chibicc.h / sema.c / PLAN.md / RESULT.md.
+
+### A1.1 求值器认忠实形态 (本提交)
+
+- 改了什么: 编译器源只动 sema.c 的求值器四函数与一个新辅助。 (1) `eval2` 补忠实 case:
+  ND_GT/ND_GE 就地反比(带符号位取自交换后的左操作数, 与降级形态逐值一致), ND_STRING(读物化后
+  `node->var`), ND_SIZEOF/ND_ALIGNOF(定长读 `val`, sizeof 的 VLA 操作数报非常量), ND_TYPES_COMPATIBLE
+  /ND_REG_CLASS(读 `val`), ND_GENERIC(`eval2(generic_sel)`), ND_COND 的 is_elvis 守卫(落向函数末尾的
+  非常量 error), ND_ADD/ND_SUB 的 ptr-ptr 除法支(两侧以 `label == NULL` 求, 复现降级 DIV 的提问
+  方式)与 invalid-operands 镜像; 入口注释修正: **入口的 add_type 调用保留** - 它是标注来源(#if 的
+  常量表达式只有这一处定型), 离开的是其中的改写, switch 自此要认忠实 kind。 (2) `eval_rval` 补
+  ND_SUBSCRIPT 取址(基址 + 下标 x 元素尺寸, VLA 尺寸报非常量), ND_MEMBER 的 arrow(指针值 + 偏移),
+  ND_STRING。 (3) `is_const_expr` 补 GT/GE 二元表项, SIZEOF/ALIGNOF(定长 true, sizeof 的 VLA false),
+  两个 builtin true, GENERIC 递归 `generic_sel`, COND 的 is_elvis false。 (4) `eval_double` 补
+  GENERIC 与 is_elvis 守卫。 (5) 新辅助 `ty_beyond_convs`: 穿过 conv 插入的 cast 链读操作数原类型 -
+  忠实指针算术要知道哪一侧原本是指针。 (6) `test/vla.c` 补 sizeof(VLA) 作维度回归
+  (`ASSERT(80, ...)`, 期望值 clang 验证)。 行数: sema.c 3173 -> 3352, 其余零改动。
+- 为什么改: A2.1-A9.1 每搬走一个降级, 求值器就开始见到该 kind 的忠实形态, case 必须先就位 -
+  这是本线唯一"新逻辑"的铺设。 每个 case 的激活步与覆盖:
+
+  | case | 激活步 | 探针 | 语料覆盖 |
+  |---|---|---|---|
+  | GT/GE | A4.1 | 8 组之一(逐值) | 常量比较在语料中存在, 激活步快照核对 |
+  | SUBSCRIPT 取址 | A3.1 | 8 组之一 | initializer.c 的 `&g11[..]` 形状(.quad 已被快照锁) |
+  | MEMBER arrow | A3.1 | 8 组之一 | 常量上下文的 `->` 语料罕见, A3.1/A10.2 核对 |
+  | STRING(两函数) | A9.1 | 8 组之一 | string/literal 等大量全局初始化器 |
+  | SIZEOF/ALIGNOF | A9.1 | 定长支 8 组之一; VLA 维度支由 vla.c 新断言锁定(激活于 A9.1) | sizeof 全域 |
+  | 两个 builtin / GENERIC | A9.1 | 8 组之一(含 double 泛型走 eval_double) | builtin.c/generic.c |
+  | elvis 守卫(三函数) | A9.1 | 8 组之一(错误路径逐字节) | 无常量上下文 elvis(A10.2 的 p?:q 是运行期) |
+  | ptr-ptr 除法 | A4.1 | 8 组之一(负例错误逐字节) | 无负例语料; 计划已知不可逐字节锁 |
+
+  值形下标**不设** eval2 case: 降级把 DEREF 写在同一节点(锚点不变), 忠实形态落函数末尾 error,
+  文案与锚点(下标节点自己的 tok)与 f06 锁定完全一致。
+- 测试结果: 四闸门全绿。 docker-test rc=0(两轮 55 例逐字节, 含 vla.c 新断言); 快照用混合基线
+  (HEAD 编译器 + 新 vla.c 生成对照): raw 与归一化 diff **均为空** - 求值器改动对语料逐字节中性;
+  基线已重置为新编译器 + 新语料并复验; tinycc rc=0。 本地 A/B(HEAD 二进制 vs 新二进制对全部
+  test/*.c 出 -S, atomic/tls 因系统头不可本机构建): 39 文件全部逐字节相同。 **非空转探针 8 组**:
+  探针树上逐项关掉对应降级(GT/GE 交换, 下标改写, arrow 的 DEREF 补插与 arrow_tok 清理, 两处
+  STRING 的 kind 改写, 定长 sizeof 的折叠改写, 两个 builtin 与 GENERIC 的改写, elvis 降级,
+  以及单独一组 ADD/SUB 的 A4.1 预览), 对应输入在探针二进制与主二进制下输出**逐字节相同**
+  (.s 与 stderr, 含错误路径) - 旧路径关闭后唯一能算出正确值的就是新 case, 相同即"命中"的证明。
+- 偏差说明: 四项。
+  1. **ADD/SUB 的缩放支与 num+ptr 认识移入 A4.1**(计划把它们列在本步)。 机制: 这两个 case 的
+     槽位为两个时代共享 - 降级形态的 rhs 已是 `MUL(下标, 尺寸)` 乘积, 忠实缩放支无条件存在会对
+     已缩放的树二次缩放; 首版实现即被闸门抓住(initializer.s 实测 `g11+8` -> `g11+64`, `g26+4` ->
+     `g26+16`, 本地 A/B 定位), 且**无法用形状区分两种时代** - 降级产物 `MUL(2, 4)` 与源码写的
+     `p + 2*4` 同形, 任何启发式都会静默算错。 处置: 缩放支随降级的离开(A4.1)落地, 那时它成为唯一
+     缩放; ptr-ptr 支今日形状是 DIV(不同 kind), 休眠安全, 留在本步。 语料中常量上下文的指针算术
+     (initializer.c)已把降级侧的 `.quad` 值锁进快照, A4.1 搬运时即时核对。 PLAN.md 的 A1.1/A4.1
+     条目与账本行 50 已按此改。
+  2. **elvis 守卫是计划未列的补充**: 计划只点名 INCDEC 与带 op 的 ASSIGN 为非常量, 但 elvis 的
+     `then` 为 NULL - 忠实形态下不设守卫, eval2/eval_double 的 COND case 会 NULL 解引用,
+     is_const_expr 会 NULL 递归。 按今日行为(降级后 tmp lvar 报 "not a compile-time constant",
+     锚 elvis tok)保守处理为非常量, 探针证明错误路径逐字节一致。
+  3. **新基线缺陷(记录不修, 与 `1 - p` 同族)**: `int g; int h; long d = &g - &h;` 段错误(空 stderr
+     退出 1)。 原因: 降级形态 `DIV(SUB(ADDR, ADDR), 4)` 求值时 `eval2(SUB, NULL)` 经 ND_ADDR ->
+     `eval_rval(VAR, NULL)`, 后者无 label 判空直接写 `*label`。 忠实 ptr-ptr 支走同一调用序列,
+     行为逐字节保持(含此缺陷)。 修复属用户拍板项。 经下标写法的 `&a[1] - &a[0]` 干净报错
+     ("not a compile-time constant"), 不触发。
+  4. **is_const_expr(VLA) 支的探针只能覆盖定长支**: sizeof(VLA) 的完整形态要到 A9.1 才出现
+     (VLA 折叠本步照旧), 其判定的真实闸门是 vla.c 新断言在 A9.1 激活时的锁定 - 若届时
+     is_const_expr(ND_SIZEOF) 答错, 该断言会让编译直接失败。
 
 ## 给审核者的提示
 

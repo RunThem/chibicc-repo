@@ -192,23 +192,25 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   无行为变化). 指针算术**不设**结论字段: 哪一侧是指针, 元素类型是什么, 都可以从 sema 已写下的 `ty`
   读出来, 加字段反而多一处要同步的真值(若实施时发现两侧各写一遍判断容易漂, 再回来加
   `Type *ptr_base`, 记为偏差).
-- [ ] **A1.1 求值器认忠实形态**(原 A1.1 后移): `eval2`/`eval_rval`/`eval_double`/`is_const_expr` 补
+- [x] **A1.1 求值器认忠实形态**(原 A1.1 后移): `eval2`/`eval_rval`/`eval_double`/`is_const_expr` 补
   忠实 case - ND_GT/ND_GE(就地判), ND_SUBSCRIPT(按下标取址), ND_MEMBER 的 arrow(指针值 + 偏移,
   `eval_rval` 与 `eval2` 两侧都要), ND_STRING(读物化后的 `node->var`), ND_SIZEOF/ND_ALIGNOF
   (定长读结论, VLA 情形不是常量), ND_TYPES_COMPATIBLE/ND_REG_CLASS/ND_GENERIC(读结论),
-  **ND_ADD/ND_SUB 的元素大小缩放与 ptr-ptr 除法**(见"现状锚点", 本项是原计划漏的, 而
-  `int *p = arr + 2;` 这类全局初始化器全走它, 实测发 `.quad a+8`; 注意 `char *s = "abc" + 1;`
-  今天在 parse 就报 `expected ','`, 不是可用形状), ND_INCDEC 与带 op 的 ND_ASSIGN(非常量, 保持
-  "not a compile-time constant" 文案). 缩放这条路的验收用**正向快照锁**(A10.2 补
-  `int *q = &s.x + 1;` -> `.quad s+4`); ptr-ptr 的负例锚点取决于求值顺序, 逐字节锁不住(见
-  "闸门口径"的结构性限制). `#if` 路径随 `const_expr` 一并覆盖.
-  验收: 常规口径 + 非空转探针 + 逐 case 记录"当前是否有语料覆盖", 没覆盖的在 A10.2 或对应搬运步补.
+  ND_INCDEC 与带 op 的 ND_ASSIGN(非常量, 保持 "not a compile-time constant" 文案; 值形下标不设
+  case - 降级把 DEREF 写在同一节点上, 末尾 error 的文案与锚点天然相同). `#if` 路径随 `const_expr`
+  一并覆盖. **执行修正(见 RESULT.md 偏差)**: ND_ADD/ND_SUB 的元素大小缩放与 num+ptr 认识
+  **移入 A4.1** - 这两个 case 的槽位为降级/忠实两个时代共享, 降级形态的 rhs 已含缩放乘积,
+  缩放支在 A4.1 之前无条件存在会二次缩放(initializer.s 实测 `.quad g11+8` 变 `g11+64`);
+  ptr-ptr 除法支今日形状是 DIV, 休眠安全, 留在本步. 缩放路径的语料覆盖已由 initializer.c 的
+  `.quad` 值锁住, A4.1 搬运时快照闸门即时核对; 正向快照锁的用例仍归 A10.2.
+  验收: 常规口径 + 非空转探针(8 组, 见 RESULT.md) + 逐 case 覆盖登记, 没覆盖的在 A10.2 或对应搬运步补.
   **已识别的覆盖空洞(A0.1/A1.2 期间实测)**: `is_const_expr` 只有一个真调用者 - `resolve_type`
   用它判数组维度是定长还是 VLA. 今天 `int n=5; int x[n]; int y[sizeof(x)];` 之所以正确(y 是 VLA),
   是因为 `add_type` 先把 sizeof 折成 `COMMA(算尺寸, 读尺寸变量)`, `is_const_expr` 看到的是 COMMA ->
   VAR -> false. A9.1 停止折叠后, `is_const_expr(ND_SIZEOF)` 必须自己按"操作数类型是不是 VLA"返回
   false, 否则一个 VLA 会被静默当成定长数组. 而 `test/vla.c` 里**没有**"sizeof(VLA) 作维度"的用例
   (只有 `sizeof(char[2][n])` 作表达式), 所以这条要在 A1.1 就补进 test/vla.c, 不能等 A9.1.
+  (已补: `ASSERT(80, ...)`, 期望值 clang 验证.)
 - [ ] **A2.1 标签与控制流归 codegen**: codegen 新增整形遍骨架(契约 3 的 (b)(c)), 标签计数器与
   "循环/switch 标签栈", `analyze` 的整段搬入(标签分配, ND_WHILE→ND_FOR, break/continue→ND_GOTO,
   case 链, ND_LABEL 与 `&&label` 的名字); **同时删掉 `to_assign` 原子分支的两处预分配**(否则标签
@@ -236,9 +238,12 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   `new_arith`/`usual_arith_conv`/`get_common_type`/`new_cast` **留 sema 并导出**(判据 4 + 契约 2);
   sema 的 ND_ADD/ND_SUB case 改为: 跑 `invalid operands` 检查, 定型(含 `usual_arith_conv` 的隐式
   cast), 不缩放不换序. 到这一步 `new_add`/`new_sub`/`scale_rhs` 的临时导出声明随搬删除.
+  **同一步把求值侧的指针缩放补进 eval2 的 ND_ADD/ND_SUB case**(自 A1.1 移入: 降级离开后这里成为
+  唯一缩放 - 指针侧经 conv 之下找, `num+ptr` 认左手, VLA 元素尺寸报非常量; 语料的 `.quad` 值与
+  A10.2 的正向快照锁核对), ptr-ptr 除法支已在 A1.1 就位.
   注意: `new_sub` 的 VLA 分支今天缺 `lhs->ty->base &&` 守卫, `1 - p` 会段错误(上游 07f9010 起
   即如此, 见 `RESULT.md` 的基线缺陷记录). 搬运步**原样搬**, 不顺手补守卫 - 那是行为变化, 要修
-  另起一个提交并由用户拍板.
+  另起一个提交并由用户拍板. (2026-09-29 已由用户拍板修复: 守卫已就位, 搬运的是修复后的版本.)
 - [ ] **A6.1 函数调用**: `lower_funcall` 的检查(不是函数, 实参个数, float 提升)与实参转换(隐式
   cast, 判据 1)留 sema, `func_ty` 标注留 sema; 只有调用者返回缓冲(`ret_buffer`)的槽创建搬 codegen
   (用契约 3(c) 的槽工厂; 偏移由归一化第 3 类吃掉).
