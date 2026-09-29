@@ -150,7 +150,7 @@ A8.1 把它搬走后, sema 的标注遍必须在**同一位置**(ND_DECL / ND_CO
 ## 闸门口径
 
 - **[搬迁] 步骤**(整形逻辑换位置, 发射形态不变): 硬闸门 = `make docker-test`(含自举, 内含
-  `test/diagnostic.sh` 的 53 例逐字节) + `make docker-snapshot-ndiff` 为空 +
+  `test/diagnostic.sh` 的 55 例逐字节) + `make docker-snapshot-ndiff` 为空 +
   `make docker-test-thirdparty THIRDPARTY=tinycc`; 同提交内 `make docker-snapshot` 重置 raw 基线
   (`-diff` 只作可读参考).
 - **[就地] 步骤**(发射形态变化, 只在阶段 B): 硬闸门 = 上面三项 + 该步新增的形状断言;

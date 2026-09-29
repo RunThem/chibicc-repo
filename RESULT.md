@@ -7,7 +7,7 @@
 ## 闸门口径(本线生效)
 
 - **[搬迁] 步骤**(整形逻辑换位置, 发射形态不变): `make docker-test`(含自举) +
-  `test/diagnostic.sh`(53 例逐字节) + `make docker-snapshot-ndiff` 为空 +
+  `test/diagnostic.sh`(55 例逐字节) + `make docker-snapshot-ndiff` 为空 +
   `make docker-test-thirdparty THIRDPARTY=tinycc`; 同提交内 `make docker-snapshot` 重置 raw 基线.
 - **[就地] 步骤**(发射形态变化, 只在阶段 B): `make docker-test` + 诊断锁定 + tinycc +
   该步新增的形状断言; ndiff 允许非空, 差异须逐条归入预期模式并记在本文件的偏差记录里.
@@ -76,16 +76,18 @@ void f(void) { char *t = "in f"; (void)t; }
 (首次声明序)相反. 若字符串物化搬进 codegen 的整形遍(按 `prog` 走), 块序会变成 "in g", g, g,
 "in f", f, f, ndiff 立刻非空. 这条探针进 A10.2.
 
-## 基线缺陷记录(开工前发现, 本线不修)
+## 基线缺陷记录(开工前发现; 2026-09-29 已修复)
 
-- `void f(int *p) { 1 - p; }` **段错误**(宿主机上表现为 chibicc 退出 1 且 stderr 为空 - 驱动器
+- `void f(int *p) { 1 - p; }` 曾**段错误**(宿主机上表现为 chibicc 退出 1 且 stderr 为空 - 驱动器
   以子进程跑 cc1, 子进程崩溃后父进程只报退出码). 原因: `new_sub` 的 VLA 分支写作
   `if (lhs->ty->base->kind == TY_VLA)`, 左操作数是整数时 `base` 为 NULL. 上游 chibicc 的
   07f9010("Add pointer arithmetic for VLA", 2020-09-03)引入时即缺 `lhs->ty->base &&` 守卫,
   不是本 fork 两条重构线造成的. 影响: 只有非法 C 会触发, 语料与第三方套件都不含此形状, 所以三道
-  闸门一直看不见. 处置: **本线原样搬运, 不顺手补守卫**(补了就是行为变化, 会污染 A4.1 的
-  "纯搬家" diff); 因此 `new_sub` 的 `invalid operands` 只有 ADD 侧被锁(f04), SUB 侧无锁,
-  f 系列的注释里记了原因. 要不要单起一个提交修, 由用户拍板.
+  闸门一直看不见. 处置分两段: 开工时定为**本线原样搬运, 不顺手补守卫**(补了就是行为变化, 会污染
+  A4.1 的"纯搬家" diff), SUB 侧因此无锁(只有 ADD 侧的 f04); **2026-09-29 用户拍板, 单起提交修复** -
+  守卫补上, `1 - p` 与经 compound_op 的 `i -= p`(同走该分支)由段错误转为 `invalid operands`
+  (分别锚 `-` 与 `-=`), 诊断锁定随修复新增 f10/f11 两例(53 -> 55), 期望文本取自修复后的实际输出.
+  A4.1 此后搬运的就是带守卫的版本, "纯搬家" diff 不受污染.
 
 ## 整形清单表(账本, A0.1 核对并补"验收口径"列)
 
@@ -95,7 +97,7 @@ void f(void) { char *t = "in f"; (void)t; }
 
 | # | 项 | 现位置 | 归属 | 目标位置 | 步 | 验收口径 |
 |---|---|---|---|---|---|---|
-| 1 | `+`/`-` 指针缩放与 `num+ptr` 规范化 | `add_type` ND_ADD/ND_SUB, `new_add`/`new_sub`/`scale_rhs`/`new_arith` | 1 发射便利 | codegen 整形遍或发射点 | A4.1 | ndiff 空 + 诊断 f04 |
+| 1 | `+`/`-` 指针缩放与 `num+ptr` 规范化 | `add_type` ND_ADD/ND_SUB, `new_add`/`new_sub`/`scale_rhs`/`new_arith` | 1 发射便利 | codegen 整形遍或发射点 | A4.1 | ndiff 空 + 诊断 f04/f10/f11 |
 | 2 | 常规算术转换插入隐式 cast | `usual_arith_conv`(多处调用) | 1 语义结论 | sema 留(导出给 codegen 调用) | - | 不变 |
 | 3 | 一元 `-` 的操作数提升 | `add_type` ND_NEG | 1 语义结论 | sema 留(只插 cast) | - | 不变 |
 | 4 | `op=` 的读写回环 | `add_type` ND_ASSIGN(op), `to_assign`/`compound_op` | 1 发射便利 | codegen(原子特例进整形遍) | A5.1 | ndiff 空 + 诊断 f02 + A10.2 位域/原子 op= |
@@ -178,6 +180,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | c4e7f77 | 计划优化 | 五条搬运契约, 按调用图重排执行顺序, 补四处计划漏项(求值侧缩放, 标签名字空间, arrow_tok 载体, 初始化器定型时机), tinycc 进每步闸门, elvis 的无槽发射挪到 B1.1 |
 | 4891aa2 | A0.1 | 账本补"验收口径"列与 50-55 行, 诊断锁定 44 -> 53(f 系列, 把夹在降级里的检查锁住), 四闸门基线留档, 记录 `1 - p` 基线缺陷与"诊断锁定只对单路径诊断有意义"的结构性限制 |
 | 5b1fd98 | A1.2 | Node 增 `generic_sel` 结论槽并由 `select_generic` 写入; 契约 2 的永久导出面(10 个类型级符号)去 static 并声明; sizeof 与两个 builtin 的结论复用 `val`/`ty`, 不新增字段 |
+| 0ede0ad | 线间收尾 | 计划锚点里的陷阱标注到代码现场(new_sub 守卫缺失/求值器搭便车/名字工厂共用计数器/原子预分配标签/死检查), diagnostic.sh 头注释"33 处"表述修正, 账本与步骤头占位符回填哈希 |
+| (本提交) | 基线缺陷修复 | new_sub 的 VLA 分支补 `lhs->ty->base &&` 守卫, `1 - p` 与经 compound_op 的 `i -= p` 由段错误转为 `invalid operands`; 诊断锁定新增 f10/f11(53 -> 55) |
 
 ## 各步详情
 

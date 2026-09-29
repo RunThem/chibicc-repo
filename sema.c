@@ -945,16 +945,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
     return new_arith(ND_SUB, lhs, rhs, tok);
 
   // pointer to a VLA - num
-  //
-  // Known upstream defect (since 07f9010): `base` is read without a
-  // guard, so `1 - p` (num - ptr) reaches this branch and
-  // dereferences NULL - the driver only surfaces an exit code, not
-  // the crash. Only invalid C gets here, and no gate covers the
-  // shape (RESULT.md records it as a baseline defect). Left as-is on
-  // purpose: A4.1 moves this function verbatim, and adding the guard
-  // would be a behaviour change inside a pure move - it needs its
-  // own commit and a user decision.
-  if (lhs->ty->base->kind == TY_VLA)
+  if (lhs->ty->base && lhs->ty->base->kind == TY_VLA)
     return new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
 
   // ptr - num

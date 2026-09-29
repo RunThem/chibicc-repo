@@ -1,7 +1,7 @@
 #!/bin/bash
 # 诊断锁定测试 (PLAN R0.1, A0.1 扩): 逐字节锁定拆分线终态时 parse.c 的全部 33 处 error_tok
 # (判定表 A-D; 忠实层收尾线后 B/C/D 的 18 处已移入 sema.c, parse 现仅剩判定表 A 的 15 处),
-# sema 判定表 E 错误路径, 以及夹在降级代码里的 9 处检查的 "stderr 文案 + 插入符位置". 每个用例 = 一个
+# sema 判定表 E 错误路径, 以及夹在降级代码里的 11 处检查的 "stderr 文案 + 插入符位置". 每个用例 = 一个
 # 编译失败的独立源码片段 + 期望的 stderr 原文; 运行时在临时目录里以 <用例名>.c 编译,
 # stderr 与期望逐字节 diff.
 #
@@ -16,8 +16,8 @@
 #
 # 覆盖清单: 判定表 A 15 处 + B 4 处 + C 11 处 + D 3 处 = 拆分线终态 parse.c 的全部 33 处
 # error_tok(B/C/D 18 处此后移入 sema.c);
-# 判定表 E 10 处中的 9 处, 另加 e11(R3.1 的语句表达式末语句形状回归锁); f 系列 9 处
-# (A0.1, 夹在降级里的检查). 合计 53 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
+# 判定表 E 10 处中的 9 处, 另加 e11(R3.1 的语句表达式末语句形状回归锁); f 系列 11 处
+# (A0.1 的 9 处, 夹在降级里的检查; 2026-09-29 基线缺陷修复随修锁定的 f10/f11). 合计 55 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
 # symbol" - find_func 只返回 is_function 为真的对象, 该守卫恒假, 当前树中不可达.
 # 另: 文件域 "void x;" 当前被接受(无检查), 亦无用例.
 #
@@ -462,7 +462,7 @@ e11_stmt_expr_decl.c:1: int f(void) { return ({ int x = 1; }); }
                                              ^ statement expression returning void is not supported
 WANT
 
-# ---- f 系列: 夹在降级代码里的检查 (9 处, PLAN A0.1) ----
+# ---- f 系列: 夹在降级代码里的检查 (11 处, PLAN A0.1 + 基线缺陷修复) ----
 # 这些诊断的 error_tok 今天位于本线要搬进 codegen 的降级路径上或紧挨着它, 而检查本身
 # 按判据 2 必须留在 sema. 搬运前先把 "文案 + 锚点" 锁住, 否则丢掉或漂移都不会被任何
 # 闸门看见(语料里只有合法 C). 对应关系:
@@ -474,15 +474,19 @@ WANT
 #       落到函数末尾的 error_tok; A1.1 给 eval 补上忠实的 ND_SUBSCRIPT 之后, 这条路径必须
 #       报同一文案同一锚点(下标节点自己的 tok);
 #   f07 求值器对函数调用的 not a compile-time constant;
-#   f08/f09 add_type 的 ND_DEREF 两检查(A3.1 改 ND_DEREF 的函数消解分支).
+#   f08/f09 add_type 的 ND_DEREF 两检查(A3.1 改 ND_DEREF 的函数消解分支);
+#   f10/f11 new_sub 的 invalid operands: 裸 `1 - p` 与复合 `i -= p`(compound_op 把 -= 路由
+#       进 new_sub, 同一分支). 2026-09-29 给该分支补上 `lhs->ty->base &&` 守卫后, 这条路径
+#       由段错误转为诊断, 两例随修复锁定(A4.1 搬走 new_sub, 检查留 sema).
 # 刻意不锁: ptr-ptr 的常量表达式(`int a[2]; long d = a - a;`). 它的两个操作数都会报错, 报哪一个
 # 取决于 `eval2(lhs) - eval(rhs)` 的求值顺序, 而 C 不规定它: clang 编出的 chibicc 先求 lhs
 # (锚第一个 a), chibicc 自举出的 stage2 先求 rhs(锚第二个 a) - 因为 codegen 的整数二元运算
 # 是 `gen_expr(rhs); push; gen_expr(lhs); pop`(rhs 先). 于是同一份期望在 make test 与
 # make test-stage2 里必然有一个失败. 该路径改用正向锁: `int *q = &s.x + 1;` 发 `.quad s+4`,
 # 由汇编快照闸门看住(A10.2 补用例). 详见 RESULT.md 的基线记录.
-# 未锁: new_sub 的 invalid operands - "1 - p" 今天在新 VLA 分支上解引用 NULL
-# (lhs->ty->base 为 NULL)直接段错误, 上游 07f9010 起即如此, 见 RESULT.md 的基线缺陷记录.
+# 曾不可锁(2026-09-29 修复): f10/f11 的路径在守卫补上之前是崩溃而非诊断 - "1 - p" 在
+# new_sub 的 VLA 分支上解引用 NULL 直接段错误(上游 07f9010 起), 用户拍板后单起提交修复,
+# 详见 RESULT.md 的基线缺陷记录.
 
 snippet f01_assign_to_array <<'SNIP'
 int main() { int a[2]; a = 0; }
@@ -563,6 +567,24 @@ SNIP
 expect f09_nonptr_deref_star <<'WANT'
 f09_nonptr_deref_star.c:1: void f(int x) { *x; }
                                            ^ invalid pointer dereference
+WANT
+
+snippet f10_sub_invalid_operands <<'SNIP'
+void f(int *p) { 1 - p; }
+SNIP
+
+expect f10_sub_invalid_operands <<'WANT'
+f10_sub_invalid_operands.c:1: void f(int *p) { 1 - p; }
+                                                 ^ invalid operands
+WANT
+
+snippet f11_compound_sub_invalid_operands <<'SNIP'
+void f(int *p) { int i; i -= p; }
+SNIP
+
+expect f11_compound_sub_invalid_operands <<'WANT'
+f11_compound_sub_invalid_operands.c:1: void f(int *p) { int i; i -= p; }
+                                                                 ^ invalid operands
 WANT
 
 fail=""
