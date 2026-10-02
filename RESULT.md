@@ -182,7 +182,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | 5b1fd98 | A1.2 | Node 增 `generic_sel` 结论槽并由 `select_generic` 写入; 契约 2 的永久导出面(10 个类型级符号)去 static 并声明; sizeof 与两个 builtin 的结论复用 `val`/`ty`, 不新增字段 |
 | 0ede0ad | 线间收尾 | 计划锚点里的陷阱标注到代码现场(new_sub 守卫缺失/求值器搭便车/名字工厂共用计数器/原子预分配标签/死检查), diagnostic.sh 头注释"33 处"表述修正, 账本与步骤头占位符回填哈希 |
 | 3228229 | 基线缺陷修复 | new_sub 的 VLA 分支补 `lhs->ty->base &&` 守卫, `1 - p` 与经 compound_op 的 `i -= p` 由段错误转为 `invalid operands`; 诊断锁定新增 f10/f11(53 -> 55) |
-| (本提交) | A1.1 | 求值器四函数补忠实 case(GT/GE, 下标取址, 成员 arrow, STRING, SIZEOF/ALIGNOF 结论, 两个类型 builtin, GENERIC, elvis 守卫, ptr-ptr 除法); ADD/SUB 缩放支移入 A4.1; test/vla.c 补 sizeof(VLA) 作维度回归; 8 组非空转探针 |
+| cd44d0b | A1.1 | 求值器四函数补忠实 case(GT/GE, 下标取址, 成员 arrow, STRING, SIZEOF/ALIGNOF 结论, 两个类型 builtin, GENERIC, elvis 守卫, ptr-ptr 除法); ADD/SUB 缩放支移入 A4.1; test/vla.c 补 sizeof(VLA) 作维度回归; 8 组非空转探针 |
+| (本提交) | A2.1 | 标签与控制流整形归 codegen: 整形遍 + `.L..` 基址续号, sema 检查化(stray 四检查 + 名字串配对), Obj.label_gotos 交接, 原子环预分配删除 |
 
 ## 各步详情
 
@@ -236,7 +237,7 @@ void f(void) { char *t = "in f"; (void)t; }
   `test/generic.c`, 6 次选择全部 `generic_sel == sel`, 证明字段确实被写且指向选中的关联项;
   探针撤销后 `git diff` 只含 chibicc.h / sema.c / PLAN.md / RESULT.md.
 
-### A1.1 求值器认忠实形态 (本提交)
+### A1.1 求值器认忠实形态 (cd44d0b)
 
 - 改了什么: 编译器源只动 sema.c 的求值器四函数与一个新辅助。 (1) `eval2` 补忠实 case:
   ND_GT/ND_GE 就地反比(带符号位取自交换后的左操作数, 与降级形态逐值一致), ND_STRING(读物化后
@@ -296,6 +297,48 @@ void f(void) { char *t = "in f"; (void)t; }
   4. **is_const_expr(VLA) 支的探针只能覆盖定长支**: sizeof(VLA) 的完整形态要到 A9.1 才出现
      (VLA 折叠本步照旧), 其判定的真实闸门是 vla.c 新断言在 A9.1 激活时的锁定 - 若届时
      is_const_expr(ND_SIZEOF) 答错, 该断言会让编译直接失败。
+
+### A2.1 标签与控制流归 codegen (本提交)
+
+- 改了什么: codegen.c 首次承接整形。 (1) 新增整形遍一节(~150 行, 置于 assign_lvar_offsets 之前):
+  `shape/shape_node/shape_chain/shape_children` 是原 `analyze` 家家的搬运版 - 标签分配
+  (`new_label`: `.L..%d`, 基址取 `unique_name_next()` 后自增序号), 循环/switch 标签栈的压入/弹出,
+  ND_WHILE→ND_FOR, break/continue→ND_GOTO, case 的前序挂链与 default 指针, ND_LABEL 的名字与
+  收集; 检查全部不在(codegen 只对过了检查的树做功)。 (2) `resolve_label_refs`: 对每函数遍历
+  **Obj.label_gotos**(sema 交来的 goto/label-value 引用链), 与本函数下降收集的标签按名字串配对,
+  写 `unique_label` - 原 `resolve_labels` 的写入半。 (3) `codegen()` 入口变为
+  "取基址 → shape → assign_lvar_offsets → emit_data → emit_text"。 (4) sema.c: analyze 家家
+  (brk/cont/current_switch 三个 static + `resolve_labels` + `analyze_node/chain/children/analyze`)
+  替换为**纯检查**版本 - `check_node/chain/children` 只跟踪循环/switch 嵌套深度跑 stray 四检查
+  并收集 goto/label(文案与锚点逐字不变), `check_labels` 按名字串配对报 "use of undeclared label"
+  不写名字; `analyze_function` 在检查后把 `gotos` 链存进 `fn->label_gotos` 并清空两链。
+  (5) `to_assign` 原子分支的两处预分配删除(守卫随预分配恒真, 一并删除); 计数器提为文件域
+  `unique_name_id` 并导出只读 `unique_name_next()`。 (6) chibicc.h: Obj 增 `label_gotos` 字段
+  (sema 写 / codegen 读一次), 导出 `unique_name_next`。 规模: codegen.c 1595 -> 1766,
+  sema.c 3352 -> 3332, chibicc.h 750 -> 756。
+- 为什么改: 判据 1 的第 39-41 行 - 标签分配, while 降级, break/continue 改写全是"为发射服务的
+  整形", 归 codegen; 判据 2 的第 43/44 行 - stray 与配对检查留 sema。 账本行 29/39/40/41/43/44/53/55
+  在本步落位: 库层不再分配任何标签(sema 的 `new_unique_name` 只剩 `new_anon_gvar` 一个调用者,
+  匿名全局一族), `.L..` 名字空间一个来源(codegen 从库计数器停点续号), 原子环的 do-while 无标签
+  到达, 由整形遍统一分配。
+- 测试结果: 四闸门全绿。 docker-test rc=0(两轮 55 例逐字节, b01-b04/f05 锁定检查侧, control.c 的
+  `&&label` 块域 static 跳转表与 atomic.c 的 CAS 循环在运行期验证交接字段与守卫分配)。
+  **归一化 diff 空**(权威形状闸门, 依据即计划验收段的首现序列恒等论证)。 raw diff 非空 - 2008 行
+  **逐行核对全部为 `.L..` 编号变化, 0 行非标签**(本地 A/B 39 文件同口径: 1848 标签行 + 8 行
+  diff 对齐伪影的 `.data` 同文对), 本提交内重置 raw 基线并复验为空。 tinycc rc=0。 自检:
+  生成的 .s 无重复标号; 红线 grep - parse/preprocess/tokenize/type 零标签产物, sema 不调 codegen。
+  本步代码**完全在役**(非先埋后用), 语料即非空转证明 - 标签值重编号即新分配器的输出, `&&label`
+  的 .quad 解析即交接字段 + resolve_label_refs 的输出。
+- 偏差说明: 两项, 均为机制补充而非范围变化。
+  1. **Obj.label_gotos 交接字段是计划未写的机制**: 计划验收段假设"整形遍在最前面, 标签名定下即可"
+     对 `&&label` 成立, 但初始化器里的 label-value 节点**只有 sema 的收集链可达**(`add_type` 的
+     ND_LABEL_VAL case - 它们不在语句树里, codegen 的下降走不到, ResolvedInit 又是 sema 私有)。
+     契约 3(f)"初始化器不在自然路径上, 两侧都要显式走"落地为: sema 收集链存到 fn, codegen 用链
+     解析。 字段归属(sema 写/codegen 读一次)记入 A10.1 的逐字段账。
+  2. **嵌套函数与标签编号的既有怪癖照旧**: 宿主函数里位于嵌套定义**之前**的 `&&label` 引用,
+     今天会被嵌套函数的 `resolve_labels` 拿去与嵌套标签配对(而非宿主的); 新机制下同一节点进
+     嵌套函数的 label_gotos 链, 由 codegen 对嵌套标签解析 - 行为逐点一致(含"配同名的嵌套标签
+     则解析成功"这一怪情况)。 该形状无语料无锁定, 双方均为对非法 C 的处置, 不构成回归。
 
 ## 给审核者的提示
 

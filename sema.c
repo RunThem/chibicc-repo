@@ -15,8 +15,13 @@
 //  - the annotation + lowering pass (add_type and type_chain) types
 //    every node and performs the lowerings codegen expects (pointer
 //    scaling, compound assignment, increment, function calls, string
-//    literals, initializer flattening, control-flow labels via
-//    analyze).
+//    literals, initializer flattening), then the control-flow checks
+//    (stray break/continue/case/default, undeclared labels) run as a
+//    descent of their own. The label allocation and the control-flow
+//    rewrites those checks used to ride along with are codegen's
+//    shaping pass; the goto and label-value references each function
+//    collected for the pairing check are handed over through
+//    Obj.label_gotos.
 //
 // It also contains the constant expression evaluator (eval and
 // friends), which both passes use, and which the preprocessor uses
@@ -38,7 +43,7 @@ static bool is_const_expr(Node *node);
 static void layout_struct(Type *ty);
 static void layout_union(Type *ty);
 static void type_chain(Node **head);
-static void analyze(Node *body);
+static void check_control_flow(Node *body);
 static void analyze_function(Obj *fn);
 static void resolve_node(Node *node);
 static void resolve_chain(Node *node);
@@ -216,154 +221,117 @@ static Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
   return fn;
 }
 
-// The state of the control-flow descent (analyze): the loop a
-// break/continue binds to, the switch a case label belongs to, and the
-// gotos and labels of the function descended so far.
-static char *brk_label;
-static char *cont_label;
-static Node *current_switch;
+// The goto and label population of the function being checked: the
+// goto and [GNU] label-value nodes collected while its body was
+// annotated and checked (a label value can live outside the statement
+// tree, in a block-scope static initializer, which only the
+// annotation pass reaches - see add_type's ND_LABEL_VAL case).
 static Node *gotos;
 static Node *labels;
 
-// Sets the unique label of every goto in a function to that of the
-// matching label. Gotos may refer to a label that appears later, so
-// this runs once the whole body has been descended.
-static void resolve_labels(void) {
+// The pairing check: every goto and label value must name a label of
+// the same function. Gotos may refer to a label that appears later,
+// so this runs once the whole body has been checked. The matched name
+// is written by codegen's shaping pass, which is what allocates it.
+static void check_labels(void) {
   for (Node *x = gotos; x; x = x->goto_next) {
-    for (Node *y = labels; y; y = y->goto_next) {
+    bool found = false;
+    for (Node *y = labels; y; y = y->goto_next)
       if (!strcmp(x->label, y->label)) {
-        x->unique_label = y->unique_label;
+        found = true;
         break;
       }
-    }
-
-    if (x->unique_label == NULL)
+    if (!found)
       error_tok(x->tok->next, "use of undeclared label");
   }
 }
 
-static void analyze_node(Node *node);
+// The control-flow checks that ride the descent: the stray
+// break/continue/case/default diagnostics and the collection for the
+// pairing check above. The work half of the old descent - the label
+// allocation, the case chains, and the `while`/`break`/`continue`
+// rewrites - is codegen's shaping pass now; this side only tracks the
+// nesting the checks need (a break binds to the innermost loop or
+// switch, a continue to the innermost loop, a case to the innermost
+// switch - existence is all each check asks). It writes no names.
+static int loop_depth;
+static int switch_depth;
 
-static void analyze_chain(Node *node) {
+static void check_node(Node *node);
+
+static void check_chain(Node *node) {
   for (Node *n = node; n; n = n->next)
-    analyze_node(n);
+    check_node(n);
 }
 
 // Descends every subtree a node owns, statements and expressions alike:
 // a break can sit in a statement expression, which is an expression
 // node holding a statement chain.
-static void analyze_children(Node *node) {
-  analyze_node(node->lhs);
-  analyze_node(node->rhs);
-  analyze_node(node->cond);
-  analyze_node(node->then);
-  analyze_node(node->els);
-  analyze_node(node->init);
-  analyze_node(node->inc);
-  analyze_chain(node->body);
-  analyze_chain(node->args);
-  analyze_node(node->cas_addr);
-  analyze_node(node->cas_old);
-  analyze_node(node->cas_new);
+static void check_children(Node *node) {
+  check_node(node->lhs);
+  check_node(node->rhs);
+  check_node(node->cond);
+  check_node(node->then);
+  check_node(node->els);
+  check_node(node->init);
+  check_node(node->inc);
+  check_chain(node->body);
+  check_chain(node->args);
+  check_node(node->cas_addr);
+  check_node(node->cas_old);
+  check_node(node->cas_new);
 }
 
-// The descent is pre-order: a loop or a switch owns its labels before
-// its body is visited, which is what binds a break in that body to the
-// innermost enclosing one.
-static void analyze_node(Node *node) {
+// Pre-order, like the shaping pass it mirrors: the checks of a loop
+// fire inside it, the stray check of a case inside its switch.
+static void check_node(Node *node) {
   if (!node)
     return;
 
   switch (node->kind) {
   case ND_WHILE:
   case ND_DO:
-  case ND_FOR: {
-    // A loop sema built itself (the compare-and-swap retry loop of an
-    // atomic compound assignment) arrives with its labels allocated.
-    if (!node->brk_label)
-      node->brk_label = new_unique_name();
-    if (!node->cont_label)
-      node->cont_label = new_unique_name();
-
-    char *brk = brk_label;
-    char *cont = cont_label;
-    brk_label = node->brk_label;
-    cont_label = node->cont_label;
-    analyze_children(node);
-    brk_label = brk;
-    cont_label = cont;
-
-    // Lower the faithful `while` to the ND_FOR shape codegen
-    // understands: no init/inc, so cont_label jumps to the loop top.
-    if (node->kind == ND_WHILE)
-      node->kind = ND_FOR;
+  case ND_FOR:
+    loop_depth++;
+    check_children(node);
+    loop_depth--;
     return;
-  }
-  case ND_SWITCH: {
-    if (!node->brk_label)
-      node->brk_label = new_unique_name();
-
-    // A switch is a break target but not a continue target, so the
-    // continue label of an enclosing loop stays in force in the body.
-    Node *sw = current_switch;
-    char *brk = brk_label;
-    current_switch = node;
-    brk_label = node->brk_label;
-    analyze_children(node);
-    current_switch = sw;
-    brk_label = brk;
+  case ND_SWITCH:
+    switch_depth++;
+    check_children(node);
+    switch_depth--;
     return;
-  }
   case ND_CASE:
-    if (!current_switch)
+    if (!switch_depth)
       error_tok(node->tok, node->is_default ? "stray default" : "stray case");
-
-    node->label = new_unique_name();
-    analyze_node(node->lhs);
-
-    // Linked after the body: a case label may sit inside the statement
-    // of an earlier one (`case 0: while (..) { .. case 1: .. }`), and
-    // the chain is prepended, so this order is what puts the outer case
-    // ahead of the buried one in codegen's comparison chain.
-    if (node->is_default) {
-      current_switch->default_case = node;
-    } else {
-      node->case_next = current_switch->case_next;
-      current_switch->case_next = node;
-    }
+    check_node(node->lhs);
     return;
   case ND_BREAK:
-    if (!brk_label)
+    if (!loop_depth && !switch_depth)
       error_tok(node->tok, "stray break");
-    node->unique_label = brk_label;
-    node->kind = ND_GOTO;
     return;
   case ND_CONTINUE:
-    if (!cont_label)
+    if (!loop_depth)
       error_tok(node->tok, "stray continue");
-    node->unique_label = cont_label;
-    node->kind = ND_GOTO;
     return;
   case ND_GOTO:
     node->goto_next = gotos;
     gotos = node;
     return;
   case ND_LABEL:
-    node->unique_label = new_unique_name();
     node->goto_next = labels;
     labels = node;
-    analyze_node(node->lhs);
+    check_node(node->lhs);
     return;
   default:
-    analyze_children(node);
+    check_children(node);
     return;
   }
 }
 
-static void analyze(Node *body) {
-  analyze_chain(body);
-  resolve_labels();
-  gotos = labels = NULL;
+static void check_control_flow(Node *body) {
+  check_chain(body);
+  check_labels();
 }
 
 static void mark_live(Obj *var) {
@@ -803,9 +771,16 @@ static Obj *new_gvar(char *name, Type *ty) {
 // ".<digits>", so a prefix change shows up as a diff even when
 // only the numbering moved. A2.1 moves label allocation to codegen
 // against this same namespace (one counter), not a parallel one.
+static int unique_name_id;
+
 static char *new_unique_name(void) {
-  static int id = 0;
-  return format(".L..%d", id++);
+  return format(".L..%d", unique_name_id++);
+}
+
+// Read-only peek at the counter: a consumer that allocates its own
+// `.L..%d` labels (codegen's shaping pass) continues from here.
+int unique_name_next(void) {
+  return unique_name_id;
 }
 
 static Obj *new_anon_gvar(Type *ty) {
@@ -1080,14 +1055,10 @@ static Node *to_assign(Node *node) {
                            new_unary(ND_DEREF, new_var_node(addr, tok), tok), tok),
                 tok);
 
+    // The loop arrives without labels: codegen's shaping pass
+    // allocates them along with every other loop's (label allocation
+    // left this side with A2.1).
     Node *loop = new_node(ND_DO, tok);
-    // Pre-allocated so the descent does not have to: analyze's
-    // ND_FOR/ND_SWITCH guards skip nodes that arrive with labels.
-    // A2.1 moves label allocation to codegen and must delete these
-    // two writes with it - two counters would mint the same .L..N
-    // twice, and as rejects the duplicate label.
-    loop->brk_label = new_unique_name();
-    loop->cont_label = new_unique_name();
 
     // `val` already holds the operand as `op` would have it - scaled
     // for an additive operator on a pointer - so the retry loop
@@ -3309,7 +3280,16 @@ static void analyze_function(Obj *fn) {
   Obj *save = locals;
   locals = NULL;
   add_type(fn->body);
-  analyze(fn->body);
+  check_control_flow(fn->body);
+
+  // Hand the collected goto and label-value references to codegen's
+  // shaping pass, which pairs them with the labels it allocates. The
+  // label values that sit outside the statement tree (block-scope
+  // static initializers) make this the only chain that reaches them
+  // all.
+  fn->label_gotos = gotos;
+  gotos = labels = NULL;
+
   splice_locals(fn);
   locals = save;
 }

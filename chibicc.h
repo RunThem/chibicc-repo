@@ -155,6 +155,15 @@ struct Obj {
   Obj *alloca_bottom;
   int stack_size;
 
+  // Per function: the goto and [GNU] label-value references of this
+  // body, chained via goto_next. sema's check pass collects them (a
+  // label value can sit outside the statement tree, in a block-scope
+  // static initializer, which its own descent cannot reach) and pairs
+  // them by name for the undeclared-label check; codegen's shaping
+  // pass resolves them against the labels it allocates. Written by
+  // sema, read once by codegen.
+  Node *label_gotos;
+
   // Static inline function
   bool is_live;
   bool is_root;
@@ -545,6 +554,13 @@ Node *new_ulong(long val, Token *tok);
 Node *new_var_node(Obj *var, Token *tok);
 Node *new_vla_ptr(Obj *var, Token *tok);
 Node *new_alloca(Node *sz);
+
+// The next value the anonymous-name counter would hand out, without
+// consuming it. A consumer that allocates its own `.L..%d` control
+// labels continues its own sequence from here, so the two ranges
+// never collide; the counter itself stays sema's and only ever names
+// the objects the language says exist.
+int unique_name_next(void);
 
 //
 // type.c

@@ -211,18 +211,25 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   false, 否则一个 VLA 会被静默当成定长数组. 而 `test/vla.c` 里**没有**"sizeof(VLA) 作维度"的用例
   (只有 `sizeof(char[2][n])` 作表达式), 所以这条要在 A1.1 就补进 test/vla.c, 不能等 A9.1.
   (已补: `ASSERT(80, ...)`, 期望值 clang 验证.)
-- [ ] **A2.1 标签与控制流归 codegen**: codegen 新增整形遍骨架(契约 3 的 (b)(c)), 标签计数器与
+- [x] **A2.1 标签与控制流归 codegen**: codegen 新增整形遍骨架(契约 3 的 (b)(c)), 标签计数器与
   "循环/switch 标签栈", `analyze` 的整段搬入(标签分配, ND_WHILE→ND_FOR, break/continue→ND_GOTO,
   case 链, ND_LABEL 与 `&&label` 的名字); **同时删掉 `to_assign` 原子分支的两处预分配**(否则标签
-  撞名). 名字空间按"现状锚点"的约束处理: 格式仍是 `.L..%d`, codegen 在 `codegen()` 开头向库取一次
-  计数器的下一个值作为基址(库侧只多一个只读 getter, 标签**分配**归 codegen, 红线不破); 若用户更
-  愿意让名字工厂搬到中性文件由两侧共用一个计数器, 也可行, 记为偏差. sema 只保留 stray 四检查与
-  goto/label 配对检查(纯检查, 不写名字, 配对改成比名字字符串); `codegen()` 入口改为
+  撞名; 原子环无标签到达, 整形遍的守卫随之删除 - 恒真分支). 名字空间按"现状锚点"的约束处理:
+  格式仍是 `.L..%d`, codegen 在 `codegen()` 开头向库取一次计数器的下一个值作为基址(库侧只多一个
+  只读 getter, 标签**分配**归 codegen, 红线不破); 若用户更愿意让名字工厂搬到中性文件由两侧共用
+  一个计数器, 也可行, 记为偏差. sema 只保留 stray 四检查与 goto/label 配对检查(纯检查, 不写名字,
+  配对改成比名字字符串; 检查下降只跟踪循环/switch 嵌套深度, 文案与锚点不变).
+  **执行补充(见 RESULT.md 偏差)**: `&&label` 在初始化器里的节点只有 sema 的收集链可达
+  (`add_type` 的 ND_LABEL_VAL case), 契约 3(f) 的"两侧都要显式走"落地为 **Obj.label_gotos 交接
+  字段** - sema 的检查遍把每函数的 goto/label-value 链存到 fn 上, codegen 的整形遍用它做解析
+  (拿到的是收集好的引用链, 自己的下降只收集 ND_LABEL). `codegen()` 入口改为
   "整形遍 → assign_lvar_offsets → emit_data → emit_text".
   验收: ndiff 空 - 依据是归一化第 2 类按**文件内首现顺序**重编号, 与本步无关的只有名字取值:
   数据段标签之间的相对顺序不变(物化没动), 文本段标签之间的相对顺序不变(同一遍下降), 数据段整体
   仍在文本段之前, `&&label` 的 `.quad` 仍紧跟它所属 static 的块标号 - 所以首现序列恒等. 若 ndiff
   非空, 说明某个标签的出现顺序真的变了, 必须归因, 不许直接重置基线.
+  (实测: ndiff 空; raw diff 2008 行**全部**为 `.L..` 编号变化, 0 行非标签 - 同提交重置基线并复验;
+  .s 无重复标号; sema 的 new_unique_name 只剩 new_anon_gvar 一个调用者.)
 - [ ] **A3.1 成员与下标**: ND_SUBSCRIPT 的 `*(x+y)` 降级(codegen 经导出的 `new_add` 建, 契约 2),
   ND_MEMBER 的 arrow DEREF 补插搬 codegen; sema 侧 `resolve_member` 改为**不清 `arrow_tok`**, 把它
   留在需要解引用的那一层 link 上(展平与绑定不变), codegen 补完 DEREF 后清标记; sema 保留

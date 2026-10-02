@@ -1306,6 +1306,171 @@ static void gen_stmt(Node *node) {
   error_tok(node->tok, "invalid statement");
 }
 
+// The shaping pass (PLAN A2.1): the control-flow half of what sema's
+// post-annotation descent used to do, run here as a pre-pass over
+// every function body before anything is assigned or emitted. It
+// allocates the break/continue labels of loops and switches, links
+// the case labels into their switch, gives every label its unique
+// name, resolves the goto and [GNU] label-value references against
+// them, and lowers the faithful `while` and `break`/`continue` to
+// the ND_FOR and ND_GOTO shapes gen_stmt understands. The checks that
+// rode inside this descent - the stray diagnostics and the
+// undeclared-label pairing - stayed in sema, so this pass only does
+// the work on trees that passed them.
+//
+// Label names keep the `.L..%d` format and continue the same number
+// space as sema's anonymous objects, from wherever the library's
+// counter stopped (unique_name_next at entry): the snapshot
+// normalizer renumbers exactly this suffix shape, so a different
+// prefix would surface as a diff even for a pure renumbering, and a
+// fresh sequence from zero would collide with the object names sema
+// already minted.
+static int label_base;  // the counter's stopping point, taken once
+static int label_seq;   // labels handed out since then
+
+static char *brk_label;
+static char *cont_label;
+static Node *current_switch;
+static Node *cg_labels;  // the labels of the function being shaped
+
+static char *new_label(void) {
+  return format(".L..%d", label_base + label_seq++);
+}
+
+static void shape_node(Node *node);
+
+static void shape_chain(Node *node) {
+  for (Node *n = node; n; n = n->next)
+    shape_node(n);
+}
+
+// Descends every subtree a node owns, statements and expressions
+// alike: a break can sit in a statement expression, which is an
+// expression node holding a statement chain.
+static void shape_children(Node *node) {
+  shape_node(node->lhs);
+  shape_node(node->rhs);
+  shape_node(node->cond);
+  shape_node(node->then);
+  shape_node(node->els);
+  shape_node(node->init);
+  shape_node(node->inc);
+  shape_chain(node->body);
+  shape_chain(node->args);
+  shape_node(node->cas_addr);
+  shape_node(node->cas_old);
+  shape_node(node->cas_new);
+}
+
+// The descent is pre-order: a loop or a switch owns its labels before
+// its body is visited, which is what binds a break in that body to the
+// innermost enclosing one.
+static void shape_node(Node *node) {
+  if (!node)
+    return;
+
+  switch (node->kind) {
+  case ND_WHILE:
+  case ND_DO:
+  case ND_FOR: {
+    node->brk_label = new_label();
+    node->cont_label = new_label();
+
+    char *brk = brk_label;
+    char *cont = cont_label;
+    brk_label = node->brk_label;
+    cont_label = node->cont_label;
+    shape_children(node);
+    brk_label = brk;
+    cont_label = cont;
+
+    // Lower the faithful `while` to the ND_FOR shape gen_stmt
+    // understands: no init/inc, so cont_label jumps to the loop top.
+    if (node->kind == ND_WHILE)
+      node->kind = ND_FOR;
+    return;
+  }
+  case ND_SWITCH: {
+    node->brk_label = new_label();
+
+    // A switch is a break target but not a continue target, so the
+    // continue label of an enclosing loop stays in force in the body.
+    Node *sw = current_switch;
+    char *brk = brk_label;
+    current_switch = node;
+    brk_label = node->brk_label;
+    shape_children(node);
+    current_switch = sw;
+    brk_label = brk;
+    return;
+  }
+  case ND_CASE:
+    node->label = new_label();
+    shape_node(node->lhs);
+
+    // Linked after the body: a case label may sit inside the statement
+    // of an earlier one (`case 0: while (..) { .. case 1: .. }`), and
+    // the chain is prepended, so this order is what puts the outer case
+    // ahead of the buried one in the comparison chain below.
+    if (node->is_default) {
+      current_switch->default_case = node;
+    } else {
+      node->case_next = current_switch->case_next;
+      current_switch->case_next = node;
+    }
+    return;
+  case ND_BREAK:
+    node->unique_label = brk_label;
+    node->kind = ND_GOTO;
+    return;
+  case ND_CONTINUE:
+    node->unique_label = cont_label;
+    node->kind = ND_GOTO;
+    return;
+  case ND_GOTO:
+    // Resolved with the function's collected references below, not
+    // here: sema stashed the goto and label-value population on the
+    // Obj, because a label value can sit outside the statement tree.
+    return;
+  case ND_LABEL:
+    node->unique_label = new_label();
+    node->goto_next = cg_labels;
+    cg_labels = node;
+    shape_node(node->lhs);
+    return;
+  default:
+    shape_children(node);
+    return;
+  }
+}
+
+// Pairs the function's collected references (sema's check pass
+// stashed them on Obj.label_gotos) with the labels the descent above
+// allocated, writing the name each one jumps to. The undeclared-label
+// check already ran in sema, so every reference here matched there.
+static void resolve_label_refs(Obj *fn) {
+  for (Node *x = fn->label_gotos; x; x = x->goto_next)
+    for (Node *y = cg_labels; y; y = y->goto_next)
+      if (!strcmp(x->label, y->label)) {
+        x->unique_label = y->unique_label;
+        break;
+      }
+  cg_labels = NULL;
+}
+
+// Shapes every defined function's body. The walk follows prog, so a
+// [GNU] nested function's body - which also hangs inside its host's
+// body before sema's type_chain takes the record off the chain - is
+// visited exactly once, through its own entry here.
+static void shape(Obj *prog) {
+  for (Obj *fn = prog; fn; fn = fn->next) {
+    if (!fn->is_function || !fn->is_definition)
+      continue;
+    shape_chain(fn->body);
+    resolve_label_refs(fn);
+  }
+}
+
 // Assign offsets to local variables.
 static void assign_lvar_offsets(Obj *prog) {
   for (Obj *fn = prog; fn; fn = fn->next) {
@@ -1588,6 +1753,12 @@ void codegen(Obj *prog, FILE *out) {
   File **files = get_input_files();
   for (int i = 0; files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
+
+  // The shaping pass runs first: it is what fills the label fields
+  // gen_stmt reads and resolves the goto references, and nothing may
+  // be assigned or emitted before it (PLAN contract 3).
+  label_base = unique_name_next();
+  shape(prog);
 
   assign_lvar_offsets(prog);
   emit_data(prog);
