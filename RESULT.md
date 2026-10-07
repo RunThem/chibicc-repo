@@ -184,7 +184,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | 3228229 | 基线缺陷修复 | new_sub 的 VLA 分支补 `lhs->ty->base &&` 守卫, `1 - p` 与经 compound_op 的 `i -= p` 由段错误转为 `invalid operands`; 诊断锁定新增 f10/f11(53 -> 55) |
 | cd44d0b | A1.1 | 求值器四函数补忠实 case(GT/GE, 下标取址, 成员 arrow, STRING, SIZEOF/ALIGNOF 结论, 两个类型 builtin, GENERIC, elvis 守卫, ptr-ptr 除法); ADD/SUB 缩放支移入 A4.1; test/vla.c 补 sizeof(VLA) 作维度回归; 8 组非空转探针 |
 | 49d7cac | A2.1 | 标签与控制流整形归 codegen: 整形遍 + `.L..` 基址续号, sema 检查化(stray 四检查 + 名字串配对), Obj.label_gotos 交接, 原子环预分配删除 |
-| (本提交) | A3.1 | 成员与下标整形归 codegen: `x[y]`→`*(x+y)`(经临时导出的 new_add), arrow 的 DEREF 补插(arrow_tok 留最内层 link), `*foo` 只定型不换节点, eval2 补 DEREF 消解, to_assign member 分支适配忠实成员, new_add 依契约 2 临时导出 |
+| e300eb9 | A3.1 | 成员与下标整形归 codegen: `x[y]`→`*(x+y)`(经临时导出的 new_add), arrow 的 DEREF 补插(arrow_tok 留最内层 link), `*foo` 只定型不换节点, eval2 补 DEREF 消解, to_assign member 分支适配忠实成员, new_add 依契约 2 临时导出 |
+| (本提交) | A5.1 | 复合赋值与自增自减整形归 codegen: to_assign/compound_op/combine/new_inc_dec 整体搬入整形遍, add_type 的 ND_ASSIGN(op)/ND_INCDEC 改纯标注, codegen 自建槽工厂(不导出 sema 的 new_var), 原子 retry 环就地 shape 拿标签, new_sub 依契约 2 临时导出 |
 
 ## 各步详情
 
@@ -299,7 +300,7 @@ void f(void) { char *t = "in f"; (void)t; }
      (VLA 折叠本步照旧), 其判定的真实闸门是 vla.c 新断言在 A9.1 激活时的锁定 - 若届时
      is_const_expr(ND_SIZEOF) 答错, 该断言会让编译直接失败。
 
-### A2.1 标签与控制流归 codegen (本提交)
+### A2.1 标签与控制流归 codegen (49d7cac)
 
 - 改了什么: codegen.c 首次承接整形。 (1) 新增整形遍一节(~150 行, 置于 assign_lvar_offsets 之前):
   `shape/shape_node/shape_chain/shape_children` 是原 `analyze` 家家的搬运版 - 标签分配
@@ -341,7 +342,7 @@ void f(void) { char *t = "in f"; (void)t; }
      嵌套函数的 label_gotos 链, 由 codegen 对嵌套标签解析 - 行为逐点一致(含"配同名的嵌套标签
      则解析成功"这一怪情况)。 该形状无语料无锁定, 双方均为对非法 C 的处置, 不构成回归。
 
-### A3.1 成员与下标 (本提交)
+### A3.1 成员与下标 (e300eb9)
 
 - 改了什么: 账本行 23/25/26/51 落位, sema 的 add_type 从此不再改写这三类表达式节点。
   (1) `add_type` ND_SUBSCRIPT 只定型: 节点保持自身, `ty = base`(点类型)。operand-pair 的接受集
@@ -400,8 +401,59 @@ void f(void) { char *t = "in f"; (void)t; }
      语料中该形状仅 function.c 的 `(*add2)`/`(***add2)`(4 行); `(*fp)`(函数指针变量)今天就不
      消解, 树里本有 DEREF, 零变化。
   5. **语料外角落(记录不修)**: `(*alloca)(n)` - 今天 callee 消解为 VAR 后命中 gen_expr 的
-     builtin_alloca 特判; 新形态 callee 是 DEREF, 落通用调用路径。语料(test/ 与 tcc 源码)无此
+     builtin_alloca 特判; 新形态 callee 是 DEREF, 落通用调用路径。 语料(test/ 与 tcc 源码)无此
      形状, 闸门不可见; 若要保真可在整形遍消解该形状, 归 A10.2 或后续拍板。
+
+### A5.1 复合赋值与自增自减 (本提交)
+
+- 改了什么: 账本行 4/6 落位, sema 的 add_type 从此不再改写这两类节点。
+  (1) `to_assign`/`compound_op`/`combine`/`new_inc_dec` 四函数整体搬入 codegen 的整形遍区段
+  (文本原样; 对 `new_add`/`new_sub` 的调用走契约 2 的临时导出, `new_sub` 本步去 static + 声明,
+  A4.1 随其搬走撤除); `add_type` 的 ND_ASSIGN(op) 与 ND_INCDEC 两个 case 改为纯标注:
+  `node->ty = node->lhs->ty` - 三种改写形态(普通 comma, 成员 comma, 原子语句表达式)的结论类型
+  都是左操作数类型。 (2) codegen 的 shape_node 新增 ND_ASSIGN/ND_INCDEC 两 case, 文本镜像 sema
+  原样: 先 shape_children(契约 3(a) 后序), 再改写, `*node = *result` 保留链上 next, 末尾
+  add_type 定型新树(契约 3(d) 只对全新节点; 旧子树已在后序中整形过且全部带标记, 不重入)。
+  (3) 原子 op= 的 do-while 在整形遍内构建, 遍不会自然到达它 - 构建完成后直接
+  `shape_node(loop)`, 用与其它循环同一机制拿 brk/cont 标签(A2.1 已删预分配, 无撞名)。
+  (4) 槽工厂: codegen 自建 `new_lvar`(calloc Obj + align + is_local + 前插
+  `current_fn->locals`), 刻意**不**导出 sema 的 `new_var` - 它做 push_scope 与 resolve_type,
+  是语义层状态操作, 导出即让 codegen 触碰作用域表; `shape()` 每函数先设 `current_fn`。
+  (5) A3.1 的 to_assign member 分支适配(带 arrow_tok 时包回 DEREF)在新时序下成为死代码并删除:
+  整形遍后序先对 lhs 补 DEREF 清标记, to_assign 读到的已是 `MEMBER(DEREF(p))`, 与今天改写产物
+  逐字节相同(含 DEREF 的 token 锚点 - 两者都锚成员 token)。 (6) 契约 3(b) 的原子环 do-while、
+  语句表达式、comma 均在标注相位之前成形, add_type 定型时经既有 case(含 plain assign 的
+  `not an lvalue` 检查 - `arr += 1` 经新树的 DEREF 左值到达, 锚点不变)。
+  测试: 本地探针 40+ 形状的 .s 逐字节相同(全部 op= / 前后缀 ++-- / 指针与数组 / 多层 arrow /
+  匿名展平的点号与 arrow 两种 / 位域 op= 与 ++ / 下标操作数 / 原子 op= 与 ++-- / 语句表达式
+  操作数 / 表达式语境 / `s.self->a` 链); 5 个错误路径 stderr 逐字节相同(文件域初始化器与
+  static 局部初始化器中的复合赋值报 "not a compile-time constant" 且锚 `+=` token - 降级形态经
+  comma→assign 到达的也是同一 token, e1/e4; 数组操作数 "not an lvalue" e2; `p += p`
+  "invalid operands" e3; `++x = 2` e5)。 四闸门: docker-test rc=0(55 例诊断逐字节, 含
+  f01-f03/f04/f10/f11); ndiff 空; raw diff 1248 行全部为栈偏移类(1246 行 `%rbp` 偏移 + 1 对
+  `sub $N, %rsp` 帧大小), 零指令/标签/`.loc` 变化 - 即契约 4 预告的"局部槽只影响栈偏移"
+  (临时量从 sema 标注时的 mid-chain 插入变为整形遍时的链首前插), 同提交重置基线并复验空;
+  tinycc rc=0(与 HEAD worktree 的 A/B 对比: 10 处 "failed as expected" + 6 处 "succeeded"
+  完全一致 - RESULT A3.1 所记"11 处"是当时的计数口径差, 两份日志实质一致, 差异仅 docker 计时
+  噪声)。 自检: 搬走的四函数在 sema 零残留; sema 不调用 codegen; 探针 .s 无重复标号。
+  行数: sema.c 3374 -> 3170, codegen.c 1794 -> 2031, chibicc.h 766 -> 768, parse.c 2148 零改动。
+- 为什么改: 判据 1 的第 4 行(op= 读写回环)与第 6 行(++/-- 降级含后缀取值)全是发射便利。
+  "必须经 new_add/new_sub 而非手拼"由契约 2 的两个陷阱保证(ptr 算术的隐式 cast 与缩放,
+  手搓会丢节点与 .loc); combine 的非加减分支走 add_type(移位不做常规算术转换)随文本原样保留。
+  eval 侧无需改动: eval2/is_const_expr/eval_double 对带 op 的 ND_ASSIGN 与 ND_INCDEC 本就无
+  case, 落到末尾的统一错误/false, 与降级形态的到达路径相比文案与锚点相同(e1/e4 实测)。
+- 偏差说明: 三项。
+  1. **槽工厂的实现形态是计划未定的第一次落地**: 计划只说"用 codegen 自己的槽"(契约 3(c))。
+     实现为 codegen 内 4 行工厂, 不导出 sema 的 new_var(理由见上)。 临时量在 `fn->locals` 里的
+     位置相应改变, 只影响栈偏移, raw diff 的 1248 行全部为此类, ndiff 口径免疫。 A6.1 的
+     ret_buffer 槽复用同一工厂。
+  2. **原子 retry 环的标签走 shape_node(loop) 显式分配**: 契约 3(b) 相位序在"改写发生在整形遍
+     内部"这一新形态下的落地 - 新建循环不在语句链上, 遍的下降到不了它。 与今天(HEAD)的到达
+     路径相比标签的相对分配顺序不变(都在该语句位置、其 lhs/rhs 子树之后), 归一化第 2 类按
+     首现顺序重编号后无差异(ndiff 空实测)。
+  3. **语料外角落(记录不修)**: VLA 维度里的复合赋值(如 `int a[n += 2]`)在 parse 层即被拒
+     (维度只收 conditional, 报 "expected ']'"), 该形状不可达 - 账本行 6 的 A10.2 用例
+     `a[i] += j++` 不受影响; 亦无 eval 路径经此到达。
 
 ## 给审核者的提示
 

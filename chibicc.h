@@ -562,8 +562,10 @@ Node *new_alloca(Node *sz);
 // Temporary exports (PLAN contract 2): the lowerings still living in
 // sema.c that the shaping pass calls while they are on their way out.
 // The step that moves a callee into codegen deletes its declaration
-// here; A9.2 checks the list is empty. new_add leaves sema at A4.1.
+// here; A9.2 checks the list is empty. new_add and new_sub leave sema
+// at A4.1.
 Node *new_add(Node *lhs, Node *rhs, Token *tok);
+Node *new_sub(Node *lhs, Node *rhs, Token *tok);
 
 // The next value the anonymous-name counter would hand out, without
 // consuming it. A consumer that allocates its own `.L..%d` control

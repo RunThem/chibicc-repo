@@ -240,10 +240,16 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   (实测: ndiff 空(混合基线), raw 恰 4 行 `.loc` 增行(`(*add2)` 1 + `(***add2)` 3); to_assign 的
   member 分支在中间态下需把带 arrow_tok 的操作数包回 DEREF, `x[s]`/`f[0]` 两个崩溃形状转为
   `invalid operands` - 均为计划未列偏差, 见 RESULT.md; `new_add` 依契约 2 临时导出, A4.1 撤.)
-- [ ] **A5.1 复合赋值与自增自减**(先于 A4.1, 契约 1): `to_assign`/`compound_op`/`new_inc_dec` 搬
+- [x] **A5.1 复合赋值与自增自减**(先于 A4.1, 契约 1): `to_assign`/`compound_op`/`new_inc_dec` 搬
   codegen, 其中对 `new_add`/`new_sub` 的调用改成调导出符号; 普通与位域成员情形落成"地址一次求值 +
   读改写", 原子 op= 的 do-while + CAS 语句构造用 codegen 自己的槽与标签(标签由 A2.1 的标注相位给,
   本步不再预分配); sema 保留"赋值给数组"等检查.
+  (实测: ndiff 空; raw 1248 行全部为栈偏移类(临时量改由 codegen 的槽工厂链首前插), 零指令/标签/
+  `.loc` 变化, 同提交重置基线; combine 随两个调用者一并搬走; A3.1 的 member 分支 DEREF 回插适配
+  在新时序下死代码删除 - 后序整形已把 arrow 解析完, to_assign 读到的就是 `MEMBER(DEREF(p))`;
+  原子环的标签经 `shape_node(loop)` 就地分配(改写在遍内发生, 遍到不了新建循环), 相对顺序不变;
+  槽工厂为 codegen 自建 4 行, 不导出 sema 的 new_var(push_scope 是语义层状态), 见 RESULT.md 偏差;
+  eval 侧零改动, e1/e4 错误锚点逐字节复验.)
 - [ ] **A4.1 算术与比较**: `new_add`/`new_sub`/`scale_rhs`/`combine` 与 GT/GE 交换搬 codegen;
   `new_arith`/`usual_arith_conv`/`get_common_type`/`new_cast` **留 sema 并导出**(判据 4 + 契约 2);
   sema 的 ND_ADD/ND_SUB case 改为: 跑 `invalid operands` 检查, 定型(含 `usual_arith_conv` 的隐式

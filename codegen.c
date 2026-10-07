@@ -1365,6 +1365,197 @@ static void shape_children(Node *node) {
   shape_node(node->cas_new);
 }
 
+// The temporaries a compound-assignment rewrite introduces are slots
+// of the consumer: they are created here so that they land in the
+// frame layout before assign_lvar_offsets runs (PLAN contract 3).
+static Obj *new_lvar(char *name, Type *ty) {
+  Obj *var = calloc(1, sizeof(Obj));
+  var->name = name;
+  var->ty = ty;
+  var->align = ty->align;
+  var->is_local = true;
+  var->next = current_fn->locals;
+  current_fn->locals = var;
+  return var;
+}
+
+// Builds the `lhs op rhs` combination a compound assignment or an
+// atomic retry loop needs, given an operand whose pointer scaling has
+// already been applied. An additive operator goes through new_arith,
+// which is the shape `+`/`-` produce; the others are handed to add_type,
+// which converts the multiplicative and bitwise ones and leaves the
+// shifts alone.
+static Node *combine(NodeKind op, Node *lhs, Node *rhs, Token *tok) {
+  if (op == ND_ADD || op == ND_SUB)
+    return new_arith(op, lhs, rhs, tok);
+
+  Node *node = new_binary(op, lhs, rhs, tok);
+  add_type(node);
+  return node;
+}
+
+// Build the `lhs op rhs` operand expression for a compound assignment
+// driven by node->op.
+static Node *compound_op(Node *node, Node *lhs, Token *tok) {
+  Node *rhs = node->rhs;
+
+  // `+=`/`-=` are routed through new_add/new_sub so that the operand
+  // checks run and the pointer arithmetic is scaled exactly as for
+  // plain `+`/`-`; the operand they settle on is the one the rebuilt
+  // expression combines with `lhs`.
+  if (node->op == ND_ADD || node->op == ND_SUB) {
+    Node *scaled = node->op == ND_ADD ? new_add(node->lhs, node->rhs, tok)
+                                      : new_sub(node->lhs, node->rhs, tok);
+    rhs = scaled->rhs;
+  }
+
+  return combine(node->op, lhs, rhs, tok);
+}
+
+// Convert op= operators to expressions containing an assignment.
+//
+// `node` is an ND_ASSIGN whose `op` holds the compound assignment
+// operator. In general, `A op= C` is converted to
+// ``tmp = &A, *tmp = *tmp op C`.
+// However, if a given expression is of form `A.x op= C`, the input is
+// converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
+// to bitfields.
+static Node *to_assign(Node *node) {
+  add_type(node->lhs);
+  add_type(node->rhs);
+  Token *tok = node->tok;
+
+  // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
+  // The member has already been through this pass, so an arrow access
+  // arrives as the dereference the address takes - the marker
+  // resolution above put it in place and cleared the marker.
+  if (node->lhs->kind == ND_MEMBER) {
+    Node *operand = node->lhs->lhs;
+    Obj *var = new_lvar("", pointer_to(operand->ty));
+
+    Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
+                             new_unary(ND_ADDR, operand, tok), tok);
+
+    Node *expr2 = new_unary(ND_MEMBER,
+                            new_unary(ND_DEREF, new_var_node(var, tok), tok),
+                            tok);
+    expr2->member = node->lhs->member;
+
+    Node *expr3 = new_unary(ND_MEMBER,
+                            new_unary(ND_DEREF, new_var_node(var, tok), tok),
+                            tok);
+    expr3->member = node->lhs->member;
+
+    Node *expr4 = new_binary(ND_ASSIGN, expr2,
+                             compound_op(node, expr3, tok),
+                             tok);
+
+    return new_binary(ND_COMMA, expr1, expr4, tok);
+  }
+
+  // If A is an atomic type, Convert `A op= B` to
+  //
+  // ({
+  //   T1 *addr = &A; T2 val = (B); T1 old = *addr; T1 new;
+  //   do {
+  //    new = old op val;
+  //   } while (!atomic_compare_exchange_strong(addr, &old, new));
+  //   new;
+  // })
+  if (node->lhs->ty->is_atomic) {
+    // The `val` temporary holds the operand as `op` would have it, so
+    // for `+=`/`-=` the scaling is computed eagerly here - through
+    // new_add/new_sub, which is also what runs the operand checks.
+    Node *rhs = node->rhs;
+    if (node->op == ND_ADD || node->op == ND_SUB) {
+      Node *operand = node->op == ND_ADD ? new_add(node->lhs, node->rhs, tok)
+                                         : new_sub(node->lhs, node->rhs, tok);
+      rhs = operand->rhs;
+    }
+    add_type(rhs);
+
+    Node head = {};
+    Node *cur = &head;
+
+    Obj *addr = new_lvar("", pointer_to(node->lhs->ty));
+    Obj *val = new_lvar("", rhs->ty);
+    Obj *old = new_lvar("", node->lhs->ty);
+    Obj *new = new_lvar("", node->lhs->ty);
+
+    cur = cur->next =
+      new_unary(ND_EXPR_STMT,
+                new_binary(ND_ASSIGN, new_var_node(addr, tok),
+                           new_unary(ND_ADDR, node->lhs, tok), tok),
+                tok);
+
+    cur = cur->next =
+      new_unary(ND_EXPR_STMT,
+                new_binary(ND_ASSIGN, new_var_node(val, tok), rhs, tok),
+                tok);
+
+    cur = cur->next =
+      new_unary(ND_EXPR_STMT,
+                new_binary(ND_ASSIGN, new_var_node(old, tok),
+                           new_unary(ND_DEREF, new_var_node(addr, tok), tok), tok),
+                tok);
+
+    // The retry loop is built here, inside the shaping pass, so the
+    // pass never reaches it on its own descent: it is shaped directly,
+    // which hands it break/continue labels through the same machinery
+    // every other loop uses.
+    Node *loop = new_node(ND_DO, tok);
+
+    // `val` already holds the operand as `op` would have it - scaled
+    // for an additive operator on a pointer - so the retry loop
+    // combines it with the old value without scaling again.
+    Node *body = new_binary(ND_ASSIGN,
+                            new_var_node(new, tok),
+                            combine(node->op, new_var_node(old, tok),
+                                    new_var_node(val, tok), tok),
+                            tok);
+
+    loop->then = new_node(ND_BLOCK, tok);
+    loop->then->body = new_unary(ND_EXPR_STMT, body, tok);
+
+    Node *cas = new_node(ND_CAS, tok);
+    cas->cas_addr = new_var_node(addr, tok);
+    cas->cas_old = new_unary(ND_ADDR, new_var_node(old, tok), tok);
+    cas->cas_new = new_var_node(new, tok);
+    loop->cond = new_unary(ND_NOT, cas, tok);
+    shape_node(loop);
+
+    cur = cur->next = loop;
+    cur = cur->next = new_unary(ND_EXPR_STMT, new_var_node(new, tok), tok);
+
+    Node *stmt_expr = new_node(ND_STMT_EXPR, tok);
+    stmt_expr->body = head.next;
+    return stmt_expr;
+  }
+
+  // Convert `A op= B` to ``tmp = &A, *tmp = *tmp op B`.
+  Obj *var = new_lvar("", pointer_to(node->lhs->ty));
+
+  Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
+                           new_unary(ND_ADDR, node->lhs, tok), tok);
+
+  Node *expr2 =
+    new_binary(ND_ASSIGN,
+               new_unary(ND_DEREF, new_var_node(var, tok), tok),
+               compound_op(node, new_unary(ND_DEREF, new_var_node(var, tok), tok), tok),
+               tok);
+
+  return new_binary(ND_COMMA, expr1, expr2, tok);
+}
+
+// Convert A++ to `(typeof A)((A += 1) - 1)`. Moved from parse.c.
+static Node *new_inc_dec(Node *node, Token *tok, int addend) {
+  add_type(node);
+  Node *expr = new_binary(ND_ASSIGN, node, new_num(addend, tok), tok);
+  expr->op = ND_ADD;
+  Node *sub = new_add(to_assign(expr), new_num(-addend, tok), tok);
+  return new_cast(sub, node->ty);
+}
+
 // The descent is pre-order: a loop or a switch owns its labels before
 // its body is visited, which is what binds a break in that body to the
 // innermost enclosing one.
@@ -1466,6 +1657,49 @@ static void shape_node(Node *node) {
       node->arrow_tok = NULL;
     }
     return;
+  case ND_ASSIGN:
+    shape_children(node);
+    if (node->op) {
+      // A compound assignment as the parser recorded it: rewrite to
+      // the read-modify-write form (handling the member and atomic
+      // cases), then type the result afresh. The rewrite takes the
+      // whole node, because the atomic form becomes a statement
+      // expression, which carries its body outside lhs/rhs.
+      Node *result = to_assign(node);
+      Node *nxt = node->next;
+      *node = *result;
+      node->next = nxt;
+      add_type(node);
+    }
+    return;
+  case ND_INCDEC: {
+    // Lower `++i`/`i--` to the compound-assignment form, rewriting
+    // the node in place.
+    shape_children(node);
+    Node *operand = node->lhs;
+    Token *tok = node->tok;
+
+    if (node->is_post) {
+      // The result is the implicit cast restoring the operand's type
+      // around `(A += 1) - 1`, so its marking has to travel with the
+      // shape it contributes.
+      Node *result = new_inc_dec(operand, tok, node->addend);
+      node->kind = result->kind;
+      node->lhs = result->lhs;
+      node->ty = result->ty;
+      node->is_implicit = result->is_implicit;
+      return;
+    }
+
+    Node *expr = new_binary(ND_ASSIGN, operand, new_num(1, tok), tok);
+    expr->op = node->addend < 0 ? ND_SUB : ND_ADD;
+    Node *result = to_assign(expr);
+    Node *nxt = node->next;
+    *node = *result;
+    node->next = nxt;
+    add_type(node);
+    return;
+  }
   default:
     shape_children(node);
     return;
@@ -1494,6 +1728,9 @@ static void shape(Obj *prog) {
   for (Obj *fn = prog; fn; fn = fn->next) {
     if (!fn->is_function || !fn->is_definition)
       continue;
+    // The rewrite temporaries created below enter this function's
+    // frame, so the slot factory needs to know where to append.
+    current_fn = fn;
     shape_chain(fn->body);
     resolve_label_refs(fn);
   }
