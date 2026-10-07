@@ -112,6 +112,11 @@ int (*fnptr(int (*fn)(int n, ...)))(int, ...) {
   return fn;
 }
 
+// `*add2` is the function itself (6.5.3.2p4); the dereference of the
+// designator is kept as a node through sema and read through by both
+// the evaluator (this initializer) and codegen.
+int (*gfp)(int, int) = *add2;
+
 int param_decay2(int x()) { return x(); }
 
 char *func_fn(void) {
@@ -281,7 +286,10 @@ int main() {
 
   ASSERT(5, (add2)(2,3));
   ASSERT(5, (&add2)(2,3));
+  ASSERT(5, (*add2)(2,3));
   ASSERT(7, ({ int (*fn)(int,int) = add2; fn(2,5); }));
+  ASSERT(7, ({ int (*fn)(int,int) = add2; (*fn)(2,5); }));
+  ASSERT(7, gfp(2,5));
   ASSERT(6, fnptr(add_all)(3, 1, 2, 3));
 
   ASSERT(3, param_decay2(ret3));

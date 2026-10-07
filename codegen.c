@@ -1306,16 +1306,19 @@ static void gen_stmt(Node *node) {
   error_tok(node->tok, "invalid statement");
 }
 
-// The shaping pass (PLAN A2.1): the control-flow half of what sema's
-// post-annotation descent used to do, run here as a pre-pass over
+// The shaping pass (PLAN A2.1, A3.1): the control-flow half of what
+// sema's post-annotation descent used to do, run here as a pre-pass over
 // every function body before anything is assigned or emitted. It
 // allocates the break/continue labels of loops and switches, links
 // the case labels into their switch, gives every label its unique
 // name, resolves the goto and [GNU] label-value references against
 // them, and lowers the faithful `while` and `break`/`continue` to
-// the ND_FOR and ND_GOTO shapes gen_stmt understands. The checks that
-// rode inside this descent - the stray diagnostics and the
-// undeclared-label pairing - stayed in sema, so this pass only does
+// the ND_FOR and ND_GOTO shapes gen_stmt understands. A3.1 added the
+// first expression shapes: `x[y]` becomes `*(x+y)` through new_add,
+// and a member still carrying its arrow marker gets the dereference
+// its operand needs. The checks that rode inside this descent - the
+// stray diagnostics, the undeclared-label pairing and the subscript /
+// member access checks - stayed in sema, so this pass only does
 // the work on trees that passed them.
 //
 // Label names keep the `.L..%d` format and continue the same number
@@ -1437,6 +1440,31 @@ static void shape_node(Node *node) {
     node->goto_next = cg_labels;
     cg_labels = node;
     shape_node(node->lhs);
+    return;
+  case ND_SUBSCRIPT: {
+    // `x[y]` becomes `*(x+y)`: new_add builds the scaled, converted
+    // sum exactly as the annotation pass used to, and the node itself
+    // becomes the dereference of it. sema validated the operand pair
+    // and typed the pointee; the sum arrives fully typed.
+    shape_children(node);
+    Node *add = new_add(node->lhs, node->rhs, node->tok);
+    node->kind = ND_DEREF;
+    node->lhs = add;
+    node->ty = add->ty->base;
+    return;
+  }
+  case ND_MEMBER:
+    // A member still carrying the arrow marker accesses through the
+    // pointer its operand is: the dereference resolve_member stopped
+    // inserting (A3.1) goes in here, anchored at the member token as
+    // before, and the marker goes away. The member binding and the
+    // member's type were settled in sema and are left alone.
+    shape_children(node);
+    if (node->arrow_tok) {
+      node->lhs = new_unary(ND_DEREF, node->lhs, node->tok);
+      add_type(node->lhs);
+      node->arrow_tok = NULL;
+    }
     return;
   default:
     shape_children(node);

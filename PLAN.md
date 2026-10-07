@@ -230,13 +230,16 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   非空, 说明某个标签的出现顺序真的变了, 必须归因, 不许直接重置基线.
   (实测: ndiff 空; raw diff 2008 行**全部**为 `.L..` 编号变化, 0 行非标签 - 同提交重置基线并复验;
   .s 无重复标号; sema 的 new_unique_name 只剩 new_anon_gvar 一个调用者.)
-- [ ] **A3.1 成员与下标**: ND_SUBSCRIPT 的 `*(x+y)` 降级(codegen 经导出的 `new_add` 建, 契约 2),
+- [x] **A3.1 成员与下标**: ND_SUBSCRIPT 的 `*(x+y)` 降级(codegen 经导出的 `new_add` 建, 契约 2),
   ND_MEMBER 的 arrow DEREF 补插搬 codegen; sema 侧 `resolve_member` 改为**不清 `arrow_tok`**, 把它
   留在需要解引用的那一层 link 上(展平与绑定不变), codegen 补完 DEREF 后清标记; sema 保留
   `invalid pointer dereference`/`dereferencing a void pointer`/`not a struct nor a union`/
   `no such member`/`cannot take address of bitfield` 检查; `*foo`(函数指针消解, 6.5.3.2p4)按判据 1
   留 sema 定型, 不再替换节点. 预期偏差: 保留 ND_DEREF 会让 `gen_expr` 多打一条 `.loc`, raw diff
   非空 / ndiff 空(第 1 类折叠), 提前记账.
+  (实测: ndiff 空(混合基线), raw 恰 4 行 `.loc` 增行(`(*add2)` 1 + `(***add2)` 3); to_assign 的
+  member 分支在中间态下需把带 arrow_tok 的操作数包回 DEREF, `x[s]`/`f[0]` 两个崩溃形状转为
+  `invalid operands` - 均为计划未列偏差, 见 RESULT.md; `new_add` 依契约 2 临时导出, A4.1 撤.)
 - [ ] **A5.1 复合赋值与自增自减**(先于 A4.1, 契约 1): `to_assign`/`compound_op`/`new_inc_dec` 搬
   codegen, 其中对 `new_add`/`new_sub` 的调用改成调导出符号; 普通与位域成员情形落成"地址一次求值 +
   读改写", 原子 op= 的 do-while + CAS 语句构造用 codegen 自己的槽与标签(标签由 A2.1 的标注相位给,

@@ -382,7 +382,11 @@ struct Node {
   // ND_MEMBER carries the member name in `tok`, and sema's add_type
   // looks the name up. `arrow_tok` is the `->` token of a pointer
   // access and NULL for a plain `.`; it is the anchor of the checks on
-  // the operand, which is why the token itself is kept.
+  // the operand, which is why the token itself is kept. sema binds the
+  // member and leaves the marker on the innermost link of a flattened
+  // chain; codegen's shaping pass inserts the dereference it stands
+  // for there and clears it, and the evaluator reads it in constant
+  // expressions.
   Member *member;
   Token *arrow_tok;
 
@@ -554,6 +558,12 @@ Node *new_ulong(long val, Token *tok);
 Node *new_var_node(Obj *var, Token *tok);
 Node *new_vla_ptr(Obj *var, Token *tok);
 Node *new_alloca(Node *sz);
+
+// Temporary exports (PLAN contract 2): the lowerings still living in
+// sema.c that the shaping pass calls while they are on their way out.
+// The step that moves a callee into codegen deletes its declaration
+// here; A9.2 checks the list is empty. new_add leaves sema at A4.1.
+Node *new_add(Node *lhs, Node *rhs, Token *tok);
 
 // The next value the anonymous-name counter would hand out, without
 // consuming it. A consumer that allocates its own `.L..%d` control

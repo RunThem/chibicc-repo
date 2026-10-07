@@ -888,7 +888,7 @@ static Node *scale_rhs(Type *ptr_ty, Node *rhs, Token *tok) {
 // so that p+n points to the location n elements (not bytes) ahead of p.
 // In other words, we need to scale an integer value before adding to a
 // pointer value. This function takes care of the scaling.
-static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
+Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   add_type(lhs);
   add_type(rhs);
 
@@ -986,11 +986,21 @@ static Node *to_assign(Node *node) {
   Token *tok = node->tok;
 
   // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
+  // For `p->x` the faithful member still carries the arrow marker and
+  // its operand is the pointer itself, so the dereference the address
+  // takes goes back in here (A5.1 moves this rewrite to codegen);
+  // with an anonymous member in between the innermost link keeps its
+  // marker and codegen's shaping pass resolves it there.
   if (node->lhs->kind == ND_MEMBER) {
-    Obj *var = new_lvar("", pointer_to(node->lhs->lhs->ty));
+    Node *operand = node->lhs->lhs;
+    if (node->lhs->arrow_tok) {
+      operand = new_unary(ND_DEREF, operand, node->lhs->tok);
+      add_type(operand);
+    }
+    Obj *var = new_lvar("", pointer_to(operand->ty));
 
     Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
-                             new_unary(ND_ADDR, node->lhs->lhs, tok), tok);
+                             new_unary(ND_ADDR, operand, tok), tok);
 
     Node *expr2 = new_unary(ND_MEMBER,
                             new_unary(ND_DEREF, new_var_node(var, tok), tok),
@@ -2019,6 +2029,7 @@ static void resolve_member(Node *node) {
     error_tok(operand->tok, "not a struct nor a union");
   }
 
+  bool flattened = false;
   Node *cur = operand;
   for (;;) {
     Member *mem = get_struct_member(ty, node->tok);
@@ -2028,9 +2039,10 @@ static void resolve_member(Node *node) {
     Node *link = new_unary(ND_MEMBER, cur, node->tok);
     link->member = mem;
     if (arrow) {
-      // The dereference belongs to the innermost link.
-      link->lhs = new_unary(ND_DEREF, cur, node->tok);
-      add_type(link->lhs);
+      // The dereference belongs to the innermost link. The marker
+      // stays on it: codegen's shaping pass inserts the dereference
+      // there and clears the marker (A3.1).
+      link->arrow_tok = arrow;
       arrow = NULL;
     }
     link->ty = mem->ty;
@@ -2038,12 +2050,18 @@ static void resolve_member(Node *node) {
 
     if (mem->name)
       break;
+    flattened = true;
     ty = mem->ty;
   }
 
   node->lhs = cur->lhs;
   node->member = cur->member;
-  node->arrow_tok = NULL;
+  // The outermost link dissolved into this node. With flattening the
+  // innermost link stays wrapped and carries the marker, so this
+  // node's own goes away; a single link dissolved whole, leaving this
+  // node as the innermost one.
+  if (flattened)
+    node->arrow_tok = NULL;
 }
 
 // Picks the association of an ND_GENERIC that the controlling expression
@@ -2453,13 +2471,26 @@ void add_type(Node *node) {
     return;
   }
   case ND_SUBSCRIPT: {
-    // Downgrade `x[y]` to `*(x+y)` (with pointer scaling), the only
-    // subscript form codegen understands. The node is rewritten in
-    // place; new_add returns the scaled sum already typed.
-    Node *add = new_add(node->lhs, node->rhs, node->tok);
-    node->kind = ND_DEREF;
-    node->lhs = add;
-    add_type(node);
+    // `x[y]` stays itself and takes the pointee type as its
+    // conclusion. The operand pair is accepted exactly where new_add
+    // accepted it when the lowering lived here - both sides numeric,
+    // or one side carrying a base while the other carries none - and
+    // the pointee then passes the checks the dereference made. The
+    // `*(x+y)` rewrite with its scaling is codegen's (A3.1).
+    Type *lt = node->lhs->ty;
+    Type *rt = node->rhs->ty;
+
+    if (!(is_numeric(lt) && is_numeric(rt)) && !lt->base && !rt->base)
+      error_tok(node->tok, "invalid operands");
+    if (lt->base && rt->base)
+      error_tok(node->tok, "invalid operands");
+
+    Type *base = lt->base ? lt->base : rt->base;
+    if (!base)
+      error_tok(node->tok, "invalid pointer dereference");
+    if (base->kind == TY_VOID)
+      error_tok(node->tok, "dereferencing a void pointer");
+    node->ty = base;
     return;
   }
   case ND_DEREF:
@@ -2467,10 +2498,10 @@ void add_type(Node *node) {
       // [https://www.sigbus.info/n1570#6.5.3.2p4] Dereferencing a
       // function shouldn't do anything: `*foo` is just `foo`. The
       // parser cannot check this without typing the operand, so the
-      // node survives until here and becomes its operand.
-      Node *nxt = node->next;
-      *node = *node->lhs;
-      node->next = nxt;
+      // node survives until here; the conclusion is the function type
+      // and the node stays itself - the evaluator reads through it in
+      // constant expressions, and codegen loads nothing for it.
+      node->ty = node->lhs->ty;
       return;
     }
     if (!node->lhs->ty->base)
@@ -2774,6 +2805,15 @@ static int64_t eval2(Node *node, char ***label) {
     }
     return val;
   }
+  case ND_DEREF:
+    // `*foo` on a function designator is the function itself
+    // (6.5.3.2p4): the annotation pass stopped dissolving the node at
+    // A3.1, so the evaluator reads through it here, reaching the same
+    // operand the dissolved form left in the tree. Any other
+    // dereference is a runtime value and falls to the error below.
+    if (node->lhs->ty->kind == TY_FUNC)
+      return eval2(node->lhs, label);
+    break;
   case ND_ADDR:
     return eval_rval(node->lhs, label);
   case ND_LABEL_VAL:
@@ -2864,7 +2904,9 @@ static int64_t eval_rval(Node *node, char ***label) {
   case ND_MEMBER:
     // `p->x`: the operand is the pointer itself, so the member's
     // address is the pointer value plus the offset; a `.` member
-    // takes the address of its operand instead.
+    // takes the address of its operand instead. No guards here, as
+    // in the lowered form: the operand's own evaluation produces
+    // whatever complaint is due.
     if (node->arrow_tok)
       return eval2(node->lhs, label) + node->member->offset;
     return eval_rval(node->lhs, label) + node->member->offset;

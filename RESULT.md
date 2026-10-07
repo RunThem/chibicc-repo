@@ -183,7 +183,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | 0ede0ad | 线间收尾 | 计划锚点里的陷阱标注到代码现场(new_sub 守卫缺失/求值器搭便车/名字工厂共用计数器/原子预分配标签/死检查), diagnostic.sh 头注释"33 处"表述修正, 账本与步骤头占位符回填哈希 |
 | 3228229 | 基线缺陷修复 | new_sub 的 VLA 分支补 `lhs->ty->base &&` 守卫, `1 - p` 与经 compound_op 的 `i -= p` 由段错误转为 `invalid operands`; 诊断锁定新增 f10/f11(53 -> 55) |
 | cd44d0b | A1.1 | 求值器四函数补忠实 case(GT/GE, 下标取址, 成员 arrow, STRING, SIZEOF/ALIGNOF 结论, 两个类型 builtin, GENERIC, elvis 守卫, ptr-ptr 除法); ADD/SUB 缩放支移入 A4.1; test/vla.c 补 sizeof(VLA) 作维度回归; 8 组非空转探针 |
-| (本提交) | A2.1 | 标签与控制流整形归 codegen: 整形遍 + `.L..` 基址续号, sema 检查化(stray 四检查 + 名字串配对), Obj.label_gotos 交接, 原子环预分配删除 |
+| 49d7cac | A2.1 | 标签与控制流整形归 codegen: 整形遍 + `.L..` 基址续号, sema 检查化(stray 四检查 + 名字串配对), Obj.label_gotos 交接, 原子环预分配删除 |
+| (本提交) | A3.1 | 成员与下标整形归 codegen: `x[y]`→`*(x+y)`(经临时导出的 new_add), arrow 的 DEREF 补插(arrow_tok 留最内层 link), `*foo` 只定型不换节点, eval2 补 DEREF 消解, to_assign member 分支适配忠实成员, new_add 依契约 2 临时导出 |
 
 ## 各步详情
 
@@ -340,11 +341,73 @@ void f(void) { char *t = "in f"; (void)t; }
      嵌套函数的 label_gotos 链, 由 codegen 对嵌套标签解析 - 行为逐点一致(含"配同名的嵌套标签
      则解析成功"这一怪情况)。 该形状无语料无锁定, 双方均为对非法 C 的处置, 不构成回归。
 
+### A3.1 成员与下标 (本提交)
+
+- 改了什么: 账本行 23/25/26/51 落位, sema 的 add_type 从此不再改写这三类表达式节点。
+  (1) `add_type` ND_SUBSCRIPT 只定型: 节点保持自身, `ty = base`(点类型)。operand-pair 的接受集
+  逐分支镜像 new_add - 两侧 numeric, 或恰一侧带 base(不检 num 侧是否 integer, `p[s]` 这类垃圾
+  形状照旧接受, 保零行为变化); 两 base 报 `invalid operands`, 无 base 报 `invalid pointer
+  dereference`, base 为 void 报 `dereferencing a void pointer` - 全部锚 `node->tok`, 与今天经
+  new_add/DEREF 检查的锚点逐字节一致。`*(x+y)` 改写连同缩放搬 codegen 整形遍(经临时导出的
+  `new_add`, 契约 2; 加法侧的 f04 与 `1 - p` 的 f10/f11 检查仍在 new_add/new_sub, A4.1 搬)。
+  (2) `add_type` ND_DEREF 的 `*foo` 消解(6.5.3.2p4)不再 `*node = *node->lhs`: 节点保留, 定型
+  `ty = lhs->ty`(函数指示符类型); codegen 不重建该形状 - gen_expr 的既有 ND_DEREF case 对
+  TY_FUNC 的 load 是 no-op, `(*fp)(..)`(操作数为函数指针变量)今天树里本就有 DEREF, 无变化。
+  (3) `resolve_member` 展平与绑定照旧, 不再补插 DEREF: arrow_tok 留在最内层 link 上(展平发生
+  时清外层节点的自己的标记, 单层时节点 dissolved 后自己就是最内层); codegen 整形遍对带标记的
+  MEMBER 补 DEREF(锚 node->tok, 与今天 resolve_member 用的 token 相同)后清标记。
+  (4) `to_assign` 的 member 分支(仍是 sema 降级, A5.1 搬)适配忠实成员: 带 arrow_tok 时把操作数
+  包回 DEREF 再取址 - 今天的分支读的 `node->lhs->lhs` 是降级形态的 DEREF; 匿名展平的内层 link
+  自带标记由 codegen 解析, 分支对它无需改(struct.c:48 既有用例锁住)。
+  (5) `eval2` 补 ND_DEREF case(操作数为函数指示符时读过去, 其余落函数末尾的非常量错误)-
+  A1.1 覆盖表没有 DEREF 行, 因为消解过的树到不了求值器; 本步起忠实形态到得了, 用例为
+  function.c 的全局 `int (*gfp)(int,int) = *add2;`(.quad add2, 快照锁)。
+  (6) 契约 2 临时导出面新增 `new_add`(去 static + chibicc.h 声明, 注明 A4.1 撤)。
+  测试: struct.c 补 1 层 arrow 的 `+=`/`++` 两例(既有 corpus 只有匿名展平的 `p->a += 2`),
+  function.c 补 `(*add2)(2,3)` 直呼、`(*fn)(2,5)` 指针解呼、`gfp(2,5)` 三断言与 gfp 全局初始化器。
+  行数: sema.c 3332 -> 3374, codegen.c 1766 -> 1794, chibicc.h 756 -> 766, parse.c 2148 零改动。
+- 为什么改: 判据 1 的第 23/25/51 行(下标改写, arrow 补插, arrow_tok 清理全是发射便利)与第 26 行
+  (`*foo` 的结论是定型, 换节点是发射便利)。"codegen 必须经 new_add 而不是自己拼"由契约 2 的
+  陷阱保证: usual_arith_conv 对 ptr 算术两侧都插 cast, 手搓缩放和会丢节点与 .loc - 整形遍调用
+  导出的 new_add, 产出与今天逐字节相同的子树。eval2/eval_rval 的忠实 case(下标取址, 成员
+  arrow)自 A1.1 埋好, 本步按计划激活。
+- 测试结果: 四闸门全绿。docker-test rc=0(两轮 55 例诊断逐字节, f06 的下标锚点/ f08/f09 的
+  DEREF 检查/ f04/f10/f11 不受影响)。ndiff 空 - 因本步改了两个测试文件, 按 A1.1 先例先以
+  **混合基线**(HEAD 编译器 + 新语料)复验, 归一化 diff 为空即编译器变化对语料发射中性; 随后
+  raw diff 恰 **4 行全部为 `.loc` 增行**(function.c 的 `(*add2)` 1 行 + `(***add2)` 3 行, 每个
+  保留的 DEREF 一行, struct.s 零差异), 即计划预告的偏差, 归一化第 1 类折叠吃掉; 同提交重置
+  raw 基线(41 文件)并复验。tinycc rc=0(日志中 11 处 "failed as expected" 是 tcc 自身的预期
+  失败用例, 非回归)。本地 A/B(worktree HEAD 二进制): 33 文件逐字节相同(attribute/offsetof/
+  stdhdr/varargs 的 `.file` 行为 worktree 路径伪影), 错误路径 18 例 16 同(见偏差 1)。自检:
+  41 快照无重复标号; sema 的 new_unique_name 只剩 new_anon_gvar; 红线 grep - parse/preprocess/
+  tokenize/type 无整形, sema 不调 codegen。
+- 偏差说明: 五项。
+  1. **两个崩溃形状转为干净诊断(计划未列, `1 - p` 同族)**: `int x; struct{int a;} s; x[s];` 与
+     `int f(void); f[0];` 今天在 new_add→scale_rhs 里对无 base 的类型读 `->kind` 段错误(退出 1
+     无 stderr); 新检查将其报为 `invalid operands`(锚 `[`) - 即 new_add 自己 fall-through 的
+     文案, 与 f10/f11 的 2026-09-29 拍板方向一致。这是 A3.1 语义上不可避免的: 新检查代码无处
+     保留崩溃。若审核要求严格保留崩溃语义需拆出该分支, 请拍板。另注: `f[0]` 是合法 C(GCC
+     接受, 函数指示符衰变后下标), chibicc 上游从未支持(一直崩溃), 新行为是报错而非支持。
+  2. **to_assign member 分支的 DEREF 回插是计划未写的机制**: 契约 3(a) 预警过 "A5.1 的
+     to_assign 读 node->lhs->lhs", 但中间态(本步落地而 A5.1 未动)下该分支读的是 resolve_member
+     今天补的 DEREF - 不适配则 `p->x += 1` 会把 `&p` 当成员地址(指针变量的地址而非其值)。处置
+     见"(4)"; A5.1 搬走该分支时回插随之离开库层, 不新增红线欠账。
+  3. **eval_rval 的 arrow 分支不设守卫(A1.1 埋的形状实测确认是对的)**: `&p->x` 这类非量地址的
+     错误路径经 `eval2(VAR p)` 报 "invalid initializer" 锚在指针操作数上, 与降级形态一致; 实施
+     中途曾按 eval2 侧的守卫形状给 eval_rval 补守卫(锚移到成员名), 本地 A/B 抓到后回滚 -
+     eval2 与 eval_rval 的守卫差异今天就存在, 不是本线造成的。
+  4. **`.loc` 偏差兑现但比预告窄**: 计划预期 "保留 ND_DEREF 会让 gen_expr 多打一条 .loc" - 实测
+     语料中该形状仅 function.c 的 `(*add2)`/`(***add2)`(4 行); `(*fp)`(函数指针变量)今天就不
+     消解, 树里本有 DEREF, 零变化。
+  5. **语料外角落(记录不修)**: `(*alloca)(n)` - 今天 callee 消解为 VAR 后命中 gen_expr 的
+     builtin_alloca 特判; 新形态 callee 是 DEREF, 落通用调用路径。语料(test/ 与 tcc 源码)无此
+     形状, 闸门不可见; 若要保真可在整形遍消解该形状, 归 A10.2 或后续拍板。
+
 ## 给审核者的提示
 
 - 审核重心: sema 的 `add_type`(每次提交都应少掉若干"改写树形状"的 case, 且剩下的 case 只填
   `ty`/写结论/做检查), codegen 新增的整形遍(是否忠实搬运、是否自带槽与标签分配、是否遵守契约 3
-  的六条不变量), 以及 `test/diagnostic.sh` 的 53 例是否逐字节不变.
+  的六条不变量), 以及 `test/diagnostic.sh` 的 55 例是否逐字节不变.
 - 因 codegen 的"零改动红线"在本线作废, 对比口径从"`git diff 5f53ed0 -- codegen.c` 为空"改为
   "codegen 的改动全部可归入清单表的 codegen 侧项".
 - 每步都应能回答两个问题: 这一步搬的代码在 sema 侧还有没有调用者(契约 1), 以及这一步有没有让
