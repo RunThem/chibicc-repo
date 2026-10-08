@@ -185,7 +185,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | cd44d0b | A1.1 | 求值器四函数补忠实 case(GT/GE, 下标取址, 成员 arrow, STRING, SIZEOF/ALIGNOF 结论, 两个类型 builtin, GENERIC, elvis 守卫, ptr-ptr 除法); ADD/SUB 缩放支移入 A4.1; test/vla.c 补 sizeof(VLA) 作维度回归; 8 组非空转探针 |
 | 49d7cac | A2.1 | 标签与控制流整形归 codegen: 整形遍 + `.L..` 基址续号, sema 检查化(stray 四检查 + 名字串配对), Obj.label_gotos 交接, 原子环预分配删除 |
 | e300eb9 | A3.1 | 成员与下标整形归 codegen: `x[y]`→`*(x+y)`(经临时导出的 new_add), arrow 的 DEREF 补插(arrow_tok 留最内层 link), `*foo` 只定型不换节点, eval2 补 DEREF 消解, to_assign member 分支适配忠实成员, new_add 依契约 2 临时导出 |
-| (本提交) | A5.1 | 复合赋值与自增自减整形归 codegen: to_assign/compound_op/combine/new_inc_dec 整体搬入整形遍, add_type 的 ND_ASSIGN(op)/ND_INCDEC 改纯标注, codegen 自建槽工厂(不导出 sema 的 new_var), 原子 retry 环就地 shape 拿标签, new_sub 依契约 2 临时导出 |
+| 46a2b2a | A5.1 | 复合赋值与自增自减整形归 codegen: to_assign/compound_op/combine/new_inc_dec 整体搬入整形遍, add_type 的 ND_ASSIGN(op)/ND_INCDEC 改纯标注, codegen 自建槽工厂(不导出 sema 的 new_var), 原子 retry 环就地 shape 拿标签, new_sub 依契约 2 临时导出 |
+| (本提交) | A4.1 | 算术与比较归 codegen: new_add/new_sub/scale_rhs 搬入整形遍(static), GT/GE 交换搬 shape_node, sema 的 ND_ADD/ND_SUB 改检查+定型(不插 cast), eval2 补 ADD/SUB 指针缩放(num+ptr 认源码序), 撤两处临时导出并删死码 ty_beyond_convs; 顺带修复两个整形遍重入缺陷(elvis 陈旧字段别名 / 原子环 shape 下潜), 二者均为计划未列, 快照抓出 |
 
 ## 各步详情
 
@@ -404,7 +405,7 @@ void f(void) { char *t = "in f"; (void)t; }
      builtin_alloca 特判; 新形态 callee 是 DEREF, 落通用调用路径。 语料(test/ 与 tcc 源码)无此
      形状, 闸门不可见; 若要保真可在整形遍消解该形状, 归 A10.2 或后续拍板。
 
-### A5.1 复合赋值与自增自减 (本提交)
+### A5.1 复合赋值与自增自减 (46a2b2a)
 
 - 改了什么: 账本行 4/6 落位, sema 的 add_type 从此不再改写这两类节点。
   (1) `to_assign`/`compound_op`/`combine`/`new_inc_dec` 四函数整体搬入 codegen 的整形遍区段
@@ -454,6 +455,49 @@ void f(void) { char *t = "in f"; (void)t; }
   3. **语料外角落(记录不修)**: VLA 维度里的复合赋值(如 `int a[n += 2]`)在 parse 层即被拒
      (维度只收 conditional, 报 "expected ']'"), 该形状不可达 - 账本行 6 的 A10.2 用例
      `a[i] += j++` 不受影响; 亦无 eval 路径经此到达。
+
+### A4.1 算术与比较 (本提交)
+
+- 改了什么: 账本行 1(指针缩放与 num+ptr 规范化)与行 7(/>/>= 交换)落位,sema 的 add_type 不再改写
+  这两类节点; 账本行 50(求值侧缩放)同步落位。
+  (1) `new_add`/`new_sub`/`scale_rhs` 搬 codegen 的整形遍区段(static; 文本原样, 含 2026-09-29
+  拍板的 VLA 守卫修复)。`new_arith`/`usual_arith_conv`/`get_common_type`/`new_cast` 留 sema 导出
+  (契约 2 永久面), 整形遍的 new_add/new_sub/combine 经它们建树, 产出与降级时代逐字节相同(含两侧
+  隐式 cast 与其 `.loc`)。chibicc.h 的两处临时导出声明随之撤除。
+  (2) `add_type` 的 ND_ADD/ND_SUB 改为检查+定型: ADD 的 `ptr+ptr` 报 `invalid operands`(锚 `tok`,
+  与原 new_add 相同), SUB 的 `ptr-ptr` 定型 ty_long(除法树在整形遍建), 其余定型
+  `get_common_type`。**不插 cast**: 隐式 cast 由整形遍的 new_arith 统一补(此处若也插, 树里会有
+  两套 cast; 且 new_arith 会做与降级完全一致的 `is_numeric`/base 判定, 语义结论不重写)。
+  (3) `shape_node` 新增 ND_ADD/ND_SUB case: shape_children(契约 3(a))后经 new_add/new_sub 重建
+  并原位换形; 新增 ND_GT/ND_GE case: 交换操作数成 LT/LE。A1.1 埋的 eval2 忠实 case 本步激活。
+  (4) `eval2` 的 ND_ADD/ND_SUB 是本步唯一的新逻辑(eval 侧缩放): 指针侧按操作数**自身** `ty`
+  判定(忠实树没有可穿透的 conv cast; 显式 cast 必须保有目标类型 - `(int*)0+2` 作 VLA 维度实测
+  抓到过穿透读), 数字侧乘元素尺寸; `num + ptr` 按源码序接受、指针侧经 eval2 带 label 求值(保
+  `2 + gp` 初始化器的 "invalid initializer" 锚点在指针操作数上); VLA 元素尺寸报非常量; ptr-ptr
+  除法支沿用 A1.1(两侧以 label==NULL 求值)。`ty_beyond_convs`(A1.1 为缩放埋的穿透工具)随用途
+  消失而删除。
+  测试: corpus 41 文件 A/B(与 A5.1 二进制): 37 逐字节相同; attribute/offsetof/stdhdr/varargs 的
+  `.file` 为 include 路径解析伪影(base 二进制在 /tmp,a 有差异, 非 .file 差异 0 行)。探针 17 组
+  (op=/自增自减全形状、指针与数组、位域与原子、elvis+自增、`(int*)0+2` 作 VLA 维度、5 个错误
+  路径)逐字节相同。
+- 为什么改: 判据 1 的第 1/7 行(缩放与换序都是发射便利); eval 侧缩放是行 50 的既定归属(eval 是
+  求值器, 常量折叠必须自己认忠实形态)。
+- 偏差说明: 三项, 前两项是**计划未列的整形遍重入缺陷**, 均由 raw 快照抓到并当步修复:
+  1. **elvis 降级留下陈旧字段别名**(sema 修复): `a ?: b` 降级把 ND_COND 节点原地改成 ND_COMMA
+     时只设 kind/lhs/rhs, 原 COND 的 `cond`/`els` 字段仍指向 lhs/rhs 里同一批节点。整形遍的
+     shape_children 会沿陈旧字段再走一遍已整形的子树 - A5.1 前无害(那时表达式 case 只有下标与
+     成员), A4.1 的 ND_ADD case 令其二次缩放/二次 cast(`ASSERT(4, ({int i=3; ++i?:10;}))` 实测
+     多 2 行 `.loc`)。修复: 降级处显式断开三字段(逗号形态只读 lhs/rhs, 别名断开无其它影响)。
+     这是契约 3(d)"不得重入"对树侧的要求 - 树应无别名, 而非要求遍自带 visited 集。
+  2. **原子 retry 环的 shape 下潜重入**(codegen 修复, A5.1 已引入): A5.1 为给 codegen 自建的
+     do-while 拿标签调了 `shape_node(loop)`, 该下潜会进入环内 - 环体里的 combine ADD 属新树,
+     二次 new_add(实测 `(*x)++`/`*x += 5`/`x--` 各多 2 行 `.loc`)。修复: 直接分配
+     `brk_label`/`cont_label`(环内无循环/switch/break/label 可整形), 分配顺序与全树下潜一致。
+  3. **`.file` 伪影照旧**: base 二进制与 new 二进制的 include 搜索路径不同(dirname(argv0)),
+     四个含 chibicc 自带头的用例出现 `.file` 行差异, 非 .file 差异 0 行(A3.1 已记账同款)。
+  修复 1/2 后 raw diff **全空**: 本步不新建局部槽, 栈偏移、标签分配顺序、`.loc` 序列全部逐字节
+  一致, 基线无需重置(与 A5.1 的栈偏移类差异不同 - 那步移动了槽的创建时机, 本步没有)。
+  行数: sema.c 3170 -> 3131, codegen.c 2031 -> 2134, chibicc.h 768 -> 766, parse.c 2148 零改动。
 
 ## 给审核者的提示
 

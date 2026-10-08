@@ -1379,6 +1379,71 @@ static Obj *new_lvar(char *name, Type *ty) {
   return var;
 }
 
+// The scaled operand of an additive operator on a pointer: `p + n`
+// advances by sizeof(*p) * n rather than by n, and when the pointee is
+// a VLA, by its runtime size rather than a compile-time one.
+static Node *scale_rhs(Type *ptr_ty, Node *rhs, Token *tok) {
+  if (ptr_ty->base->kind == TY_VLA)
+    return new_binary(ND_MUL, rhs, new_var_node(ptr_ty->base->vla_size, tok), tok);
+  return new_binary(ND_MUL, rhs, new_long(ptr_ty->base->size, tok), tok);
+}
+
+// In C, `+` operator is overloaded to perform the pointer arithmetic.
+// If p is a pointer, p+n adds not n but sizeof(*p)*n to the value of p,
+// so that p+n points to the location n elements (not bytes) ahead of p.
+// In other words, we need to scale an integer value before adding to a
+// pointer value. This function takes care of the scaling.
+static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
+  add_type(lhs);
+  add_type(rhs);
+
+  // num + num
+  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
+    return new_arith(ND_ADD, lhs, rhs, tok);
+
+  if (lhs->ty->base && rhs->ty->base)
+    error_tok(tok, "invalid operands");
+
+  // Canonicalize `num + ptr` to `ptr + num`.
+  if (!lhs->ty->base && rhs->ty->base) {
+    Node *tmp = lhs;
+    lhs = rhs;
+    rhs = tmp;
+  }
+
+  // ptr + num; a pointer to a VLA scales by its runtime size
+  return new_arith(ND_ADD, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
+}
+
+// Like `+`, `-` is overloaded for the pointer type.
+static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
+  add_type(lhs);
+  add_type(rhs);
+
+  // num - num
+  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
+    return new_arith(ND_SUB, lhs, rhs, tok);
+
+  // pointer to a VLA - num
+  if (lhs->ty->base && lhs->ty->base->kind == TY_VLA)
+    return new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
+
+  // ptr - num
+  if (lhs->ty->base && is_integer(rhs->ty))
+    return new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
+
+  // ptr - ptr, which returns how many elements are between the two. The
+  // difference itself is an element count, so it is typed long and left
+  // alone; only the division that follows it is converted.
+  if (lhs->ty->base && rhs->ty->base) {
+    Node *node = new_binary(ND_SUB, lhs, rhs, tok);
+    node->ty = ty_long;
+    return new_arith(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
+  }
+
+  error_tok(tok, "invalid operands");
+}
+
 // Builds the `lhs op rhs` combination a compound assignment or an
 // atomic retry loop needs, given an operand whose pointer scaling has
 // already been applied. An additive operator goes through new_arith,
@@ -1499,11 +1564,19 @@ static Node *to_assign(Node *node) {
                            new_unary(ND_DEREF, new_var_node(addr, tok), tok), tok),
                 tok);
 
-    // The retry loop is built here, inside the shaping pass, so the
-    // pass never reaches it on its own descent: it is shaped directly,
-    // which hands it break/continue labels through the same machinery
-    // every other loop uses.
     Node *loop = new_node(ND_DO, tok);
+
+    // The retry loop takes its labels here rather than through a
+    // shape_node descent: its interior is codegen-built lowered form
+    // with no control flow to shape (no loops, switches, breaks or
+    // labels inside), and a descent would re-run the expression cases
+    // over nodes this pass just built (contract 3(d) - the snapshot
+    // caught exactly that as a double conversion of the loop body's
+    // operands). The allocation order - break before continue, at the
+    // point the enclosing statement was reached - matches what the
+    // whole-tree descent would have produced.
+    loop->brk_label = new_label();
+    loop->cont_label = new_label();
 
     // `val` already holds the operand as `op` would have it - scaled
     // for an additive operator on a pointer - so the retry loop
@@ -1522,7 +1595,6 @@ static Node *to_assign(Node *node) {
     cas->cas_old = new_unary(ND_ADDR, new_var_node(old, tok), tok);
     cas->cas_new = new_var_node(new, tok);
     loop->cond = new_unary(ND_NOT, cas, tok);
-    shape_node(loop);
 
     cur = cur->next = loop;
     cur = cur->next = new_unary(ND_EXPR_STMT, new_var_node(new, tok), tok);
@@ -1700,6 +1772,37 @@ static void shape_node(Node *node) {
     add_type(node);
     return;
   }
+  case ND_ADD:
+  case ND_SUB: {
+    // The additive lowerings sema's annotation pass used to run:
+    // the pointer scaling, the `num + ptr` canonicalization and the
+    // ptr-ptr element count all live inside new_add/new_sub, which
+    // rebuild the node fully typed exactly as they did when sema
+    // called them - the operand acceptance and the result type were
+    // already checked and recorded by sema's annotation case.
+    shape_children(node);
+    Node *result = node->kind == ND_ADD ? new_add(node->lhs, node->rhs, node->tok)
+                                        : new_sub(node->lhs, node->rhs, node->tok);
+    node->kind = result->kind;
+    node->lhs = result->lhs;
+    node->rhs = result->rhs;
+    node->ty = result->ty;
+    return;
+  }
+  case ND_GT:
+  case ND_GE:
+    // Downgrade the faithful `>` / `>=` back to `<` / `<=` with
+    // swapped operands, which is the only comparison form gen_expr
+    // understands. The conversions sema inserted face the same way on
+    // either side of the swap.
+    shape_children(node);
+    {
+      Node *lhs = node->lhs;
+      node->lhs = node->rhs;
+      node->rhs = lhs;
+      node->kind = node->kind == ND_GT ? ND_LT : ND_LE;
+    }
+    return;
   default:
     shape_children(node);
     return;

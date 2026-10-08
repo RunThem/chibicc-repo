@@ -874,71 +874,6 @@ Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
   return node;
 }
 
-// The scaled operand of an additive operator on a pointer: `p + n`
-// advances by sizeof(*p) * n rather than by n, and when the pointee is
-// a VLA, by its runtime size rather than a compile-time one.
-static Node *scale_rhs(Type *ptr_ty, Node *rhs, Token *tok) {
-  if (ptr_ty->base->kind == TY_VLA)
-    return new_binary(ND_MUL, rhs, new_var_node(ptr_ty->base->vla_size, tok), tok);
-  return new_binary(ND_MUL, rhs, new_long(ptr_ty->base->size, tok), tok);
-}
-
-// In C, `+` operator is overloaded to perform the pointer arithmetic.
-// If p is a pointer, p+n adds not n but sizeof(*p)*n to the value of p,
-// so that p+n points to the location n elements (not bytes) ahead of p.
-// In other words, we need to scale an integer value before adding to a
-// pointer value. This function takes care of the scaling.
-Node *new_add(Node *lhs, Node *rhs, Token *tok) {
-  add_type(lhs);
-  add_type(rhs);
-
-  // num + num
-  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
-    return new_arith(ND_ADD, lhs, rhs, tok);
-
-  if (lhs->ty->base && rhs->ty->base)
-    error_tok(tok, "invalid operands");
-
-  // Canonicalize `num + ptr` to `ptr + num`.
-  if (!lhs->ty->base && rhs->ty->base) {
-    Node *tmp = lhs;
-    lhs = rhs;
-    rhs = tmp;
-  }
-
-  // ptr + num; a pointer to a VLA scales by its runtime size
-  return new_arith(ND_ADD, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
-}
-
-// Like `+`, `-` is overloaded for the pointer type.
-Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
-  add_type(lhs);
-  add_type(rhs);
-
-  // num - num
-  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
-    return new_arith(ND_SUB, lhs, rhs, tok);
-
-  // pointer to a VLA - num
-  if (lhs->ty->base && lhs->ty->base->kind == TY_VLA)
-    return new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
-
-  // ptr - num
-  if (lhs->ty->base && is_integer(rhs->ty))
-    return new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
-
-  // ptr - ptr, which returns how many elements are between the two. The
-  // difference itself is an element count, so it is typed long and left
-  // alone; only the division that follows it is converted.
-  if (lhs->ty->base && rhs->ty->base) {
-    Node *node = new_binary(ND_SUB, lhs, rhs, tok);
-    node->ty = ty_long;
-    return new_arith(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
-  }
-
-  error_tok(tok, "invalid operands");
-}
-
 // Turns a faithful call node into the shape codegen expects: the callee
 // must be a function or a pointer to one, each argument is converted to
 // its parameter type (an argument past the parameter list is promoted
@@ -2053,17 +1988,30 @@ void add_type(Node *node) {
     return;
   case ND_ADD:
   case ND_SUB: {
-    // A raw `+`/`-` from the parser: new_add/new_sub apply the pointer
-    // scaling, the `num + ptr` canonicalization and the usual arithmetic
-    // conversions, and come back fully typed - a plain ADD/SUB, a
-    // pre-typed SUB for `ptr - num`, or a DIV for `ptr - ptr`. The
-    // result replaces this node.
-    Node *result = node->kind == ND_ADD ? new_add(node->lhs, node->rhs, node->tok)
-                                        : new_sub(node->lhs, node->rhs, node->tok);
-    node->kind = result->kind;
-    node->lhs = result->lhs;
-    node->rhs = result->rhs;
-    node->ty = result->ty;
+    // A raw `+`/`-` from the parser: the lowerings (the pointer
+    // scaling, the `num + ptr` canonicalization and the ptr-ptr
+    // element count) are the consumer's now (PLAN A4.1). What stays
+    // here is the operand acceptance - the branches new_add/new_sub
+    // check when they rebuild - and the result type. No conversion
+    // casts: the rebuilding new_arith runs the same usual_arith_conv
+    // it always did, and doubling it would stack cast nodes.
+    Type *lt = node->lhs->ty;
+    Type *rt = node->rhs->ty;
+    if (node->kind == ND_ADD) {
+      if (lt->base && rt->base)
+        error_tok(node->tok, "invalid operands");
+    } else {
+      if (lt->base && rt->base) {
+        // The difference itself is an element count, so it is typed
+        // long; the division that scales it down is built on top.
+        node->ty = ty_long;
+        return;
+      }
+      if (!((is_numeric(lt) && is_numeric(rt)) ||
+            (lt->base && (lt->base->kind == TY_VLA || is_integer(rt)))))
+        error_tok(node->tok, "invalid operands");
+    }
+    node->ty = get_common_type(lt, rt);
     return;
   }
   case ND_MUL:
@@ -2107,18 +2055,13 @@ void add_type(Node *node) {
     return;
   case ND_GT:
   case ND_GE:
-    // Downgrade the faithful `>` / `>=` back to `<` / `<=` with
-    // swapped operands, which is the only comparison form codegen
-    // understands.
-    {
-      Node *lhs = node->lhs;
-      node->lhs = node->rhs;
-      node->rhs = lhs;
-      node->kind = node->kind == ND_GT ? ND_LT : ND_LE;
-    }
-    // fallthrough
   case ND_LT:
   case ND_LE:
+    // The faithful `>`/`>=` keeps its operands and its kind here;
+    // swapping them into the `<`/`<=` shape gen_expr reads is the
+    // consumer's (PLAN A4.1). The conversion does not care which way
+    // the operands face - the common type is symmetric - so the cast
+    // nodes land on the same operands either way.
     usual_arith_conv(&node->lhs, &node->rhs);
     node->ty = ty_int;
     return;
@@ -2234,6 +2177,16 @@ void add_type(Node *node) {
       node->kind = ND_COMMA;
       node->lhs = lhs;
       node->rhs = rhs;
+      // The conditional's own fields would alias nodes the comma now
+      // reaches through lhs/rhs - the operand and the else expression
+      // are the same objects. A consumer's shaping pass walks cond/
+      // then/els of every node it meets, so leaving them in place makes
+      // it descend into the rewritten operands a second time (the
+      // double scaling A4.1's snapshot caught). The comma form reads
+      // only lhs/rhs, so detaching them changes nothing else.
+      node->cond = NULL;
+      node->then = NULL;
+      node->els = NULL;
       add_type(node);
       return;
     }
@@ -2455,18 +2408,6 @@ static int64_t eval(Node *node) {
   return eval2(node, NULL);
 }
 
-// The type an operand has beneath the conversion casts the
-// annotation pass wraps it in. Both sides of a `ptr + num` carry the
-// common pointer type after the conversion, so the side that was the
-// pointer is the one whose cast chain bottoms out in a pointer or an
-// array - which is what the faithful pointer arithmetic below needs
-// to know.
-static Type *ty_beyond_convs(Node *node) {
-  while (node->kind == ND_CAST)
-    node = node->lhs;
-  return node->ty;
-}
-
 // Evaluate a given node as a constant expression.
 //
 // A constant expression is either just a number or ptr+n where ptr
@@ -2476,13 +2417,13 @@ static Type *ty_beyond_convs(Node *node) {
 //
 // The add_type at the entry is what types the tree before the switch
 // runs - for the preprocessor it is the only annotation the
-// expression ever gets. It is also, today, what lowers the tree: GT
-// arrives swapped to LT, SUBSCRIPT as DEREF, STRING as a VAR, sizeof
-// as a number, arr+2 as ADD(VAR, MUL(2, 4)), so the switch below
-// sees lowered shapes only. As the lowerings leave the annotation
-// pass (A2.1 onwards), the entry call stays - it still types the
-// tree - but the switch starts seeing faithful kinds, which the
-// cases below now recognize alongside the lowered ones.
+// expression ever gets. It also still lowers part of the tree:
+// SUBSCRIPT arrives as DEREF, STRING as a VAR, sizeof as a number,
+// an elvis as the comma form, so the switch below sees those lowered
+// shapes only. As the remaining lowerings leave the annotation pass
+// (A6.1 onwards), the entry call stays - it still types the tree -
+// but the switch starts seeing faithful kinds, which the cases below
+// recognize alongside the lowered ones.
 static int64_t eval2(Node *node, char ***label) {
   add_type(node);
 
@@ -2491,38 +2432,58 @@ static int64_t eval2(Node *node, char ***label) {
 
   switch (node->kind) {
   case ND_ADD: {
-    // The pointer scale of a `ptr + num` is still new_add's to apply
-    // (the rhs arrives as a MUL by the element size), so the value
-    // here is the plain sum. A4.1 takes the scaling out of the
-    // annotation pass, and the evaluator takes it over in this case:
-    // the pointer side is the operand whose cast chain bottoms out in
-    // a pointer or an array, and its element size is the scale.
-    // `ptr + ptr` is rejected by the annotation pass before the
-    // evaluator runs; the mirror here is for the same guarantee.
-    Type *lt = ty_beyond_convs(node->lhs);
-    Type *rt = ty_beyond_convs(node->rhs);
+    // The additive lowering is codegen's now, so the faithful shape
+    // reaches here unscaled and this case is the only scaling: the
+    // pointer side is the operand whose own type has a base (the
+    // operands carry their semantic types - there are no conversion
+    // casts to pierce, and an explicit one must keep its target type),
+    // the numeric side is scaled by the element size, and `num + ptr`
+    // is accepted in the source order it was written. A VLA element
+    // size is a runtime value, not a constant. `ptr + ptr` is rejected
+    // by the annotation pass before the evaluator runs; the mirror
+    // here is for the same guarantee.
+    Type *lt = node->lhs->ty;
+    Type *rt = node->rhs->ty;
     if (lt->base && rt->base)
       error_tok(node->tok, "invalid operands");
+    if (lt->base && !rt->base) {
+      if (lt->base->kind == TY_VLA)
+        error_tok(node->tok, "not a compile-time constant");
+      return eval2(node->lhs, label) + eval(node->rhs) * lt->base->size;
+    }
+    if (!lt->base && rt->base) {
+      if (rt->base->kind == TY_VLA)
+        error_tok(node->tok, "not a compile-time constant");
+      // The pointer side goes through eval2 with the caller's label
+      // and unscaled, the numeric side carries the scale - the same
+      // split the canonicalized lowered form had, with the pointer
+      // side still evaluated first.
+      return eval2(node->rhs, label) + eval2(node->lhs, label) * rt->base->size;
+    }
     return eval2(node->lhs, label) + eval(node->rhs);
   }
   case ND_SUB: {
-    // Same for `ptr - num`: the scale is new_sub's while it is the
-    // lowering, and this case picks it up at A4.1. A `num - ptr` is
-    // invalid and rejected upstream. For `ptr - ptr` the lowered form
-    // is `DIV(SUB(...), size)` - a different kind - so this branch
-    // only runs once the subtraction keeps its kind, and it asks both
-    // sides as plain numbers (label == NULL), exactly the question
-    // the lowered DIV asked: the difference of two addresses is not a
-    // constant expression.
-    Type *lt = ty_beyond_convs(node->lhs);
-    Type *rt = ty_beyond_convs(node->rhs);
+    // Same for `ptr - num`: the scaling is this case's now. A
+    // `num - ptr` is invalid and rejected upstream. For `ptr - ptr`
+    // the lowered form is `DIV(SUB(...), size)` - a different kind -
+    // so this branch only runs on the faithful subtraction, and it
+    // asks both sides as plain numbers (label == NULL), exactly the
+    // question the lowered DIV asked: the difference of two addresses
+    // is not a constant expression.
+    Type *lt = node->lhs->ty;
+    Type *rt = node->rhs->ty;
     if (lt->base && rt->base) {
       int64_t lhs = eval2(node->lhs, NULL);
       int64_t rhs = eval2(node->rhs, NULL);
       return (lhs - rhs) / lt->base->size;
     }
-    if (rt->base)
+    if (rt->base && !lt->base)
       error_tok(node->tok, "invalid operands");
+    if (lt->base) {
+      if (lt->base->kind == TY_VLA)
+        error_tok(node->tok, "not a compile-time constant");
+      return eval2(node->lhs, label) - eval(node->rhs) * lt->base->size;
+    }
     return eval2(node->lhs, label) - eval(node->rhs);
   }
   case ND_MUL:

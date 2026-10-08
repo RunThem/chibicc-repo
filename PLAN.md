@@ -250,13 +250,21 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   原子环的标签经 `shape_node(loop)` 就地分配(改写在遍内发生, 遍到不了新建循环), 相对顺序不变;
   槽工厂为 codegen 自建 4 行, 不导出 sema 的 new_var(push_scope 是语义层状态), 见 RESULT.md 偏差;
   eval 侧零改动, e1/e4 错误锚点逐字节复验.)
-- [ ] **A4.1 算术与比较**: `new_add`/`new_sub`/`scale_rhs`/`combine` 与 GT/GE 交换搬 codegen;
+- [x] **A4.1 算术与比较**: `new_add`/`new_sub`/`scale_rhs`/`combine` 与 GT/GE 交换搬 codegen;
   `new_arith`/`usual_arith_conv`/`get_common_type`/`new_cast` **留 sema 并导出**(判据 4 + 契约 2);
   sema 的 ND_ADD/ND_SUB case 改为: 跑 `invalid operands` 检查, 定型(含 `usual_arith_conv` 的隐式
   cast), 不缩放不换序. 到这一步 `new_add`/`new_sub`/`scale_rhs` 的临时导出声明随搬删除.
   **同一步把求值侧的指针缩放补进 eval2 的 ND_ADD/ND_SUB case**(自 A1.1 移入: 降级离开后这里成为
   唯一缩放 - 指针侧经 conv 之下找, `num+ptr` 认左手, VLA 元素尺寸报非常量; 语料的 `.quad` 值与
   A10.2 的正向快照锁核对), ptr-ptr 除法支已在 A1.1 就位.
+  **执行补充(见 RESULT.md 偏差)**: (1) sema 的定型不再插 conv cast(重整与二次 cast 风险, 由
+  codegen 侧 new_arith 补上, 与降级时代逐字节一致); (2) eval2 的 ADD/SUB 缩放直接读操作数自身
+  `ty`(忠实树无可穿透的 conv cast), `num+ptr` 的指针侧经 eval2 带 label 求值(保 `2 + gp` 的
+  "invalid initializer" 锚点), `ty_beyond_convs` 随 A1.1 的用途消失而删除; (3) **两个计划未列的
+  重入缺陷被快照抓到并修复**: elvis 降级留下的陈旧 cond/then/els 别名(同一对象两处引用, 整形遍
+  沿陈旧字段二次下潜)在降级处断开; 原子 retry 环的 `shape_node(loop)` 下潜改为直接分配
+  brk/cont 标签(环形无控制流可整形, 下潜会重跑表达式 case). 修复后 raw diff **全空** - 本步不
+  新建任何局部槽, 栈偏移与标签分配顺序逐字节一致, 基线无需重置.
   注意: `new_sub` 的 VLA 分支今天缺 `lhs->ty->base &&` 守卫, `1 - p` 会段错误(上游 07f9010 起
   即如此, 见 `RESULT.md` 的基线缺陷记录). 搬运步**原样搬**, 不顺手补守卫 - 那是行为变化, 要修
   另起一个提交并由用户拍板. (2026-09-29 已由用户拍板修复: 守卫已就位, 搬运的是修复后的版本.)
