@@ -293,10 +293,17 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   `sizeof(x)=20`(声明时定值)/`sizeof(int[n])=28`(类型名即时求值), 基线对前者给 28 是错的);
   按 [就地] 口径归因后同提交重置基线; (4) generic 的消费方委托多一条 `.loc`(归一化折叠).
   另发现并修正对比脚本缺陷: 双端"静默失败"曾被计为一致(缺 rc 与产物存在性检查), 本步电池已改严.
-- [ ] **A7.1 VLA**: `compute_vla_size`/`vla_size_expr` 与 `Type::vla_size` 的写入搬 codegen(字段
+- [x] **A7.1 VLA**: `compute_vla_size`/`vla_size_expr` 与 `Type::vla_size` 的写入搬 codegen(字段
   注释改标"codegen 侧缓存"), VLA 指针的缩放随 `scale_rhs` 已在 codegen; sema 保留维度求值与
   "VLA 不得初始化"检查. 前置检查: 此时 sema 里不得再有任何读 `ty->vla_size` 的代码(逐个 grep
   确认: `scale_rhs` 已走, `vla_size_expr` 已走, eval 的 sizeof(VLA) 不是常量所以不读).
+  **执行补充(计划未列, 见 RESULT.md 偏差)**: 声明侧不能只搬函数 - sema 的 ND_DECL **保留**
+  持 VLA 的声明记录(物体自身或指针基类型), 链(尺寸计算 + alloca 赋值 + 可选的初始化器链)整个
+  由 codegen 的 shape_node(ND_DECL) 展开; 因指针到 VLA 可带初始化器, `lvar_init_comma` 依
+  契约 2 临时导出(A8.1 撤). 维度表达式先显式整形(类型是它们唯一引用; 以 `ty->vla_size` 已设
+  区分 typedef 共享类型的第二次声明). 实测: 语料差异**全部为栈偏移**(4 文件, 0 .loc 0 指令),
+  ndiff 空, 同提交重置 raw 基线; 指向 VLA 的指针(带/不带初始化器)、typedef 共享 VLA 类型、
+  sizeof(VLA)、维度里 sizeof 五组探针与 A9.1 基线逐字节一致, docker 运行时断言全过.
 - [ ] **A8.1 初始化器消费侧 + ND_DECL 展开**(本线最大一步, 三件事必须同提交, 契约 1): 
   (i) `ResolvedInit`/`InitDesg` 移入 `chibicc.h` 并命名归位(`InitTree`/`InitPath`), 
   `create_lvar_init`/`lvar_init_comma`/`init_desg_expr` 搬 codegen(`init_desg_expr` 直接建已降级

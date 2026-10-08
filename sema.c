@@ -932,28 +932,6 @@ static void lower_funcall(Node *node, Token *tok) {
   // here is the conclusion - the return type - which the pass reads.
 }
 
-// Generate code for computing a VLA size: one assignment per VLA the
-// type holds, sequenced innermost first, or NULL when it holds none - so
-// a declaration of a fixed-size object produces no code at all.
-static Node *compute_vla_size(Type *ty, Token *tok) {
-  Node *node = ty->base ? compute_vla_size(ty->base, tok) : NULL;
-
-  if (ty->kind != TY_VLA)
-    return node;
-
-  Node *base_sz;
-  if (ty->base->kind == TY_VLA)
-    base_sz = new_var_node(ty->base->vla_size, tok);
-  else
-    base_sz = new_num(ty->base->size, tok);
-
-  ty->vla_size = new_lvar("", ty_ulong);
-  Node *expr = new_binary(ND_ASSIGN, new_var_node(ty->vla_size, tok),
-                          new_binary(ND_MUL, ty->vla_len, base_sz, tok),
-                          tok);
-  return node ? new_binary(ND_COMMA, node, expr, tok) : expr;
-}
-
 // The resolved initializer tree: what a faithful initializer record
 // (Initializer in chibicc.h) becomes once designators are evaluated,
 // member names are bound, brace elision is applied and flexible
@@ -961,7 +939,6 @@ static Node *compute_vla_size(Type *ty, Token *tok) {
 // create_lvar_init walks it to build assignments and write_gvar_data
 // serializes it into .data bytes. Since initializers can be nested
 // (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), it is a tree.
-typedef struct ResolvedInit ResolvedInit;
 struct ResolvedInit {
   Type *ty;
   bool is_flexible;
@@ -1538,8 +1515,10 @@ static Node *create_lvar_init(ResolvedInit *init, Type *ty, InitDesg *desg, Toke
 // Build the MEMZERO + assignment comma chain that initializes a local
 // variable from its resolved initializer tree. `tok` anchors the
 // synthesized nodes; the record's first token is where the parser used
-// to anchor them.
-static Node *lvar_init_comma(Obj *var, ResolvedInit *init, Token *tok) {
+// to anchor them. Exported for the consumer's shaping pass, which
+// expands the declarations that hold VLA types; the whole initializer
+// machinery moves there at A8.1 and this declaration goes with it.
+Node *lvar_init_comma(Obj *var, ResolvedInit *init, Token *tok) {
   InitDesg desg = {NULL, 0, NULL, var};
 
   // If a partial initializer list is given, the standard requires
@@ -2286,11 +2265,12 @@ void add_type(Node *node) {
     // Lower a declaration record to at most one statement. A block-scope
     // static was declared as an anonymous global by the resolve pass;
     // its initializer is serialized here and the record leaves the
-    // chain, producing no statement. Otherwise the VLA sizes the type
-    // holds are computed first and sequenced before the rest -
-    // `x = alloca(<size>)` for a VLA, the MEMZERO + assignment comma
-    // chain for an initialized object - and a fixed-size object with no
-    // initializer produces no statement at all.
+    // chain, producing no statement. A type that holds a VLA keeps its
+    // record instead: the size variables are slots of the consumer and
+    // the chain embedding them is built where the slots are (PLAN
+    // A7.1), together with the alloca assignment and - for a pointer
+    // to a VLA, which may be initialized - the assignment chain. What
+    // stays here are the checks and the serialization.
     Obj *var = node->var;
     Token *tok = node->tok;
 
@@ -2304,13 +2284,6 @@ void add_type(Node *node) {
       return;
     }
 
-    // Every declared type is walked, not just a VLA one, because a
-    // pointer to a VLA (`int (*p)[n]`) needs the size computed here too:
-    // later arithmetic on it reads the size variable instead of
-    // computing it again.
-    Node *vla_size = compute_vla_size(var->ty, tok);
-    Node *lowered = NULL;
-
     if (var->ty->kind == TY_VLA) {
       // A variable-length object may not be initialized. The parser left
       // the two standing side by side because whether a declaration is a
@@ -2319,33 +2292,36 @@ void add_type(Node *node) {
       if (node->decl_init)
         error_tok(node->decl_init->eq_tok,
                   "variable-sized object may not be initialized");
-
-      lowered = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
-                           new_alloca(new_var_node(var->ty->vla_size, tok)),
-                           tok);
-    } else {
-      // A declared object must have a complete, non-void type.
-      check_declared_void(tok, var->ty);
-      if (var->ty->size < 0)
-        error_tok(node->name_tok, "variable has incomplete type");
-
-      // The resolve pass resolved the faithful initializer record and
-      // completed the declared type with it; what is left here is the
-      // lowering to the assignment chain.
-      if (node->init_resolved)
-        lowered = lvar_init_comma(var, node->init_resolved, node->decl_init->tok);
-      node->decl_init = NULL;
+      return;
     }
 
-    if (!vla_size && !lowered) {
+    // A declared object must have a complete, non-void type.
+    check_declared_void(tok, var->ty);
+    if (var->ty->size < 0)
+      error_tok(node->name_tok, "variable has incomplete type");
+
+    // A pointer (or deeper) to a VLA: the size computation is the
+    // consumer's, initializer record and all - it computes the sizes
+    // before the assignments run, in its own expansion.
+    for (Type *t = var->ty; t; t = t->base)
+      if (t->kind == TY_VLA)
+        return;
+
+    // The resolve pass resolved the faithful initializer record and
+    // completed the declared type with it; what is left here is the
+    // lowering to the assignment chain.
+    Node *lowered = NULL;
+    if (node->init_resolved)
+      lowered = lvar_init_comma(var, node->init_resolved, node->decl_init->tok);
+    node->decl_init = NULL;
+
+    if (!lowered) {
       decl_remove = true;
       return;
     }
 
     node->kind = ND_EXPR_STMT;
-    node->lhs = (vla_size && lowered)
-                  ? new_binary(ND_COMMA, vla_size, lowered, tok)
-                  : (lowered ? lowered : vla_size);
+    node->lhs = lowered;
     add_type(node);
     return;
   }

@@ -188,7 +188,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | 46a2b2a | A5.1 | 复合赋值与自增自减整形归 codegen: to_assign/compound_op/combine/new_inc_dec 整体搬入整形遍, add_type 的 ND_ASSIGN(op)/ND_INCDEC 改纯标注, codegen 自建槽工厂(不导出 sema 的 new_var), 原子 retry 环就地 shape 拿标签, new_sub 依契约 2 临时导出 |
 | 3cb17ba | A4.1 | 算术与比较归 codegen: new_add/new_sub/scale_rhs 搬入整形遍(static), GT/GE 交换搬 shape_node, sema 的 ND_ADD/ND_SUB 改检查+定型(不插 cast), eval2 补 ADD/SUB 指针缩放(num+ptr 认源码序), 撤两处临时导出并删死码 ty_beyond_convs; 顺带修复两个整形遍重入缺陷(elvis 陈旧字段别名 / 原子环 shape 下潜), 二者均为计划未列, 快照抓出 |
 | 4b61819 | A6.1 | 函数调用返回缓冲的槽创建归 codegen: lower_funcall 只留检查/转换/结论, shape_node 加 ND_FUNCALL case 建 ret_buffer(槽工厂), 语料 raw 全空, sret 探针语义过 docker |
-| (本提交) | A9.1 | 结论类消费侧归 codegen: STRING 保留 kind(gen_addr/gen_expr 新增 case), sizeof/alignof/两个 builtin/generic 只记结论读字段, elvis 降级迁入整形遍(先清 ty 再定型), sizeof(VLA) 经 codegen 自建的槽工厂链, sema 的 vla_size_expr 死码删除; vla.s 的 ndiff 残留为基线冗余重算的删除(与 gcc 逐点一致), 归因后重置基线 |
+| d415c53 | A9.1 | 结论类消费侧归 codegen: STRING 保留 kind(gen_addr/gen_expr 新增 case), sizeof/alignof/两个 builtin/generic 只记结论读字段, elvis 降级迁入整形遍(先清 ty 再定型), sizeof(VLA) 经 codegen 自建的槽工厂链, sema 的 vla_size_expr 死码删除; vla.s 的 ndiff 残留为基线冗余重算的删除(与 gcc 逐点一致), 归因后重置基线 |
+| (本提交) | A7.1 | VLA 尺寸机制归 codegen: compute_vla_size/vla_size_expr 搬整形遍(自建槽工厂), 持 VLA 的声明记录留给 codegen 展开(sema 只留检查), lvar_init_comma 临时导出(带初始化器的指针到 VLA), 维度先显式整形; 语料差异全为栈偏移, ndiff 空, 重置基线 |
 
 ## 各步详情
 
@@ -521,7 +522,7 @@ void f(void) { char *t = "in f"; (void)t; }
   A10.2 的"大结构体返回缓冲"用例。
   行数: sema.c 3131 -> 3132, codegen.c 2134 -> 2144, chibicc.h 766 零改动, parse.c 2148 零改动。
 
-### A9.1 结论类消费侧 (本提交)
+### A9.1 结论类消费侧 (d415c53)
 
 - 改了什么: 账本行 14(物化保留)/15(STRING 形状改写取消)/17(SIZEOF 读结论)/18(两个 builtin)/
   19(GENERIC)/20(elvis 降级搬走)落位, sema 的 add_type 只剩一处"结论非数"的保留(见下)。
@@ -572,6 +573,44 @@ void f(void) { char *t = "in f"; (void)t; }
   4. **generic 的委托多一条 `.loc`**(每节点一条, 归一化第 1 类折叠); gen_expr 不必拆特例。
   另: 本步暴露对比脚本缺陷 - 双端静默失败(rc=1 无产物)曾被计为"一致", p4_elvis 一度假通过;
   电池脚本已加 rc 与产物存在性检查, 之前各步结论不受影响(那些步均无 rc 不一致)。
+
+### A7.1 VLA (本提交)
+
+- 改了什么: 账本行 49 落位。`compute_vla_size` 从 sema 删除, codegen 的同名函数(前一步的镜像
+  转正)成为唯一实现; `vla_size_expr` 同理; `Type::vla_size` 的写入全部发生在整形遍(字段注释
+  改标消费方缓存)。sema 的 ND_DECL 对**持 VLA 的声明**(物体自身 `int x[n]`, 或指针基类型
+  `int (*p)[n]`)**保留记录不再展开**: 仍跑全部检查(VLA 不得初始化 / void / 不完整类型)与
+  块域 static 的序列化, 其余交给 codegen。codegen 的 shape_node 新增 ND_DECL case: 先对类型链
+  的 `vla_len` 逐个整形(以 `ty->vla_size` 未设区分首见类型 - typedef 共享类型的第二声明跳过,
+  避免同一维度节点二次整形), 再建尺寸链(自建槽工厂), 对 VLA 物体接 alloca 赋值、对带初始化器
+  的指针到 VLA 接 `lvar_init_comma`(契约 2 临时导出; 其建出的链含设计符表达式 - 只经
+  init_resolved 引用, 从未过整形遍 - 在此显式 `shape_node(lowered)` 一次, 与尺寸链互不重叠),
+  最后合成 COMMA 并 `add_type`。`ResolvedInit` 的 tag 前向声明进 chibicc.h(A8.1 会把它整个
+  搬过去)。
+- 为什么改: 判据 3 - VLA 尺寸变量是"只为实现服务的槽"; 判据 1 - 尺寸链是发射便利的整形。
+  sema 侧不再读 `ty->vla_size` 的核对: `scale_rhs`/`vla_size_expr`/eval 均已在消费侧或不读
+  (逐个 grep 确认, eval 的 sizeof(VLA) 按类型判非常量)。
+- 闸门: 四闸门全绿。docker-test rc=0(55 例诊断逐字节 + 全部运行时测试, 含 vla.c 断言);
+  **ndiff 空**; raw diff 4 文件(constexpr 12 / control 376 / typedef 28 / vla 104)**
+  全部为栈偏移操作数**, 0 条 .loc、0 条指令变化 - 尺寸变量自标注相位移入整形相位, 只动帧布局
+  (归一化第 3/4 类), 同提交重置基线并复验两 diff 全空; tinycc rc=0(记账同前)。
+- 探针: 五组与 A9.1 基线逐字节一致(指针到 VLA 带初始化器 `int (*p)[n] = &v;`、不带初始化器、
+  二维 VLA 指针、`typedef int T[n]; T a; T b;` 共享类型、`sizeof(int[n])` 与维度里 `sizeof(x)`);
+  docker 内运行时断言全过("vla-a71 ok"), 覆盖经指针写回 vla.c 第 37/39 行的两种形态。
+- 偏差说明: 两项。
+  1. **声明侧的搬法是计划未列的形态**: 计划只写了两个函数搬走, 但 sema 的 ND_DECL 是它们唯一的
+     声明侧调用者, 而 ND_DECL 展开要到 A8.1; 故本步把"持 VLA 的声明记录"整体留给消费方展开
+     (sema 保留全部检查与 static 序列化), `lvar_init_comma` 依契约 2 临时导出(带初始化器的
+     指针到 VLA; A8.1 撤声明并把它搬进 codegen)。这是契约 3(c)"槽在哪建, 链就在哪建"的直接
+     推论, 也是 A9.1 教训(建槽者必须带被调用者)的延伸。
+  2. **维度表达式的显式整形带条件守卫**: 同一类型对象被 typedef 共享时, 第二次声明不再整形
+     其 `vla_len`(首次已做过, 且节点可能在语句树里被下降整形过 - 二次整形会二次缩放)。守卫用
+     `ty->vla_size` 是否已设; 该形状(`typedef int T[a[i]]; T x; T y;` 带下标维度)极端冷门,
+     现有语料与探针不含, 若日后发现再按需加标记位。
+  另记录一个**预存在的限制**(非本步引入, A6.1 实测同样报错): 范围指示符的表达式含下标时
+  (`int x[2] = {[0 ... 1] = p[2]};`) 报 `invalid operands` - 范围展开的共享表达式节点经整形遍
+  多次到达时的形状问题, 归 A8.1(初始化器链搬走时)或后续排查。
+  行数: sema.c 3104 -> 3080, codegen.c 2284 -> 2332, chibicc.h 769 -> 772, parse.c 2148 零改动。
 
 ## 给审核者的提示
 

@@ -1476,15 +1476,14 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   error_tok(tok, "invalid operands");
 }
 
-// The VLA size computation for a type the statement tree does not
-// reach yet - a type-name operand in sizeof. It mirrors sema's
-// compute_vla_size, which serves the declaration path until A7.1
-// moves it here, with the one difference that makes it a consumer's
-// function: the size variables are slots of this consumer (sema's
-// factory would append them to the annotation pass's own chain, and
-// no frame layout would ever see them).
-static Node *shape_compute_vla_size(Type *ty, Token *tok) {
-  Node *node = ty->base ? shape_compute_vla_size(ty->base, tok) : NULL;
+// Generate code for computing a VLA size: one assignment per VLA the
+// type holds, sequenced innermost first, or NULL when it holds none - so
+// a declaration of a fixed-size object produces no code at all. Moved
+// from sema at A7.1 (it was the mirror of this function for one step):
+// the size variables are slots of this consumer, which is also why the
+// builder cannot live in the library any more.
+static Node *compute_vla_size(Type *ty, Token *tok) {
+  Node *node = ty->base ? compute_vla_size(ty->base, tok) : NULL;
 
   if (ty->kind != TY_VLA)
     return node;
@@ -1505,10 +1504,10 @@ static Node *shape_compute_vla_size(Type *ty, Token *tok) {
 // `sizeof` of a VLA type: a reference to its runtime size variable,
 // computed first if this type has not had its size computed yet
 // (e.g. `sizeof(int[n])` with a fresh type).
-static Node *shape_vla_size_expr(Type *ty, Token *tok) {
+static Node *vla_size_expr(Type *ty, Token *tok) {
   if (ty->vla_size)
     return new_var_node(ty->vla_size, tok);
-  Node *lhs = shape_compute_vla_size(ty, tok);
+  Node *lhs = compute_vla_size(ty, tok);
   return new_binary(ND_COMMA, lhs, new_var_node(ty->vla_size, tok), tok);
 }
 
@@ -1939,7 +1938,7 @@ static void shape_node(Node *node) {
           if (t->kind == TY_VLA)
             shape_node(t->vla_len);
 
-      Node *expr = shape_vla_size_expr(ty, node->tok);
+      Node *expr = vla_size_expr(ty, node->tok);
       add_type(expr);
       Node *nxt = node->next;
       *node = *expr;
@@ -1953,6 +1952,55 @@ static void shape_node(Node *node) {
     // are typed but produce no code, so only the selection is shaped.
     shape_node(node->generic_sel);
     return;
+  case ND_DECL: {
+    // A declaration whose type holds a VLA is the consumer's to
+    // expand (PLAN A7.1): the size variables are slots of this
+    // consumer, the alloca assignment is what the object's
+    // declaration becomes, and a pointer to a VLA may also carry an
+    // initializer chain. sema left the record exactly as the parser
+    // wrote it, checks done.
+    Obj *var = node->var;
+    Token *tok = node->tok;
+
+    // The dimensions the size computation embeds have never been
+    // through this pass - the type is their only reference. Shape
+    // them first, innermost first, the order the computation walks;
+    // a type that already has its size computed has been here
+    // through an earlier declaration of the same type (a typedef
+    // shared by two objects), and its dimensions were shaped then.
+    if (!var->ty->vla_size)
+      for (Type *t = var->ty; t; t = t->base)
+        if (t->kind == TY_VLA)
+          shape_node(t->vla_len);
+
+    Node *vla_size = compute_vla_size(var->ty, tok);
+    Node *lowered = NULL;
+
+    if (var->ty->kind == TY_VLA) {
+      lowered = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
+                           new_alloca(new_var_node(var->ty->vla_size, tok)),
+                           tok);
+    } else if (node->init_resolved) {
+      // A pointer to a VLA, initialized: sema's assignment-chain
+      // builder on its way here (contract 2's temporary surface).
+      lowered = lvar_init_comma(var, node->init_resolved, node->decl_init->tok);
+      node->decl_init = NULL;
+      node->init_resolved = NULL;
+      // The chain holds designator expressions this pass has never
+      // seen (their only other reference is the resolved initializer
+      // tree) and the initializer expressions themselves. One
+      // descent shapes them all; the size chain above is a separate
+      // object and is not re-entered through it.
+      shape_node(lowered);
+    }
+
+    node->kind = ND_EXPR_STMT;
+    node->lhs = (vla_size && lowered)
+                  ? new_binary(ND_COMMA, vla_size, lowered, tok)
+                  : (lowered ? lowered : vla_size);
+    add_type(node);
+    return;
+  }
   default:
     shape_children(node);
     return;
