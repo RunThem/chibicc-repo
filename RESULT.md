@@ -189,7 +189,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | 3cb17ba | A4.1 | 算术与比较归 codegen: new_add/new_sub/scale_rhs 搬入整形遍(static), GT/GE 交换搬 shape_node, sema 的 ND_ADD/ND_SUB 改检查+定型(不插 cast), eval2 补 ADD/SUB 指针缩放(num+ptr 认源码序), 撤两处临时导出并删死码 ty_beyond_convs; 顺带修复两个整形遍重入缺陷(elvis 陈旧字段别名 / 原子环 shape 下潜), 二者均为计划未列, 快照抓出 |
 | 4b61819 | A6.1 | 函数调用返回缓冲的槽创建归 codegen: lower_funcall 只留检查/转换/结论, shape_node 加 ND_FUNCALL case 建 ret_buffer(槽工厂), 语料 raw 全空, sret 探针语义过 docker |
 | d415c53 | A9.1 | 结论类消费侧归 codegen: STRING 保留 kind(gen_addr/gen_expr 新增 case), sizeof/alignof/两个 builtin/generic 只记结论读字段, elvis 降级迁入整形遍(先清 ty 再定型), sizeof(VLA) 经 codegen 自建的槽工厂链, sema 的 vla_size_expr 死码删除; vla.s 的 ndiff 残留为基线冗余重算的删除(与 gcc 逐点一致), 归因后重置基线 |
-| (本提交) | A7.1 | VLA 尺寸机制归 codegen: compute_vla_size/vla_size_expr 搬整形遍(自建槽工厂), 持 VLA 的声明记录留给 codegen 展开(sema 只留检查), lvar_init_comma 临时导出(带初始化器的指针到 VLA), 维度先显式整形; 语料差异全为栈偏移, ndiff 空, 重置基线 |
+| 0c1ad27 | A7.1 | VLA 尺寸机制归 codegen: compute_vla_size/vla_size_expr 搬整形遍(自建槽工厂), 持 VLA 的声明记录留给 codegen 展开(sema 只留检查), lvar_init_comma 临时导出(带初始化器的指针到 VLA), 维度先显式整形; 语料差异全为栈偏移, ndiff 空, 重置基线 |
+| (本提交) | A8.1 | 初始化器消费侧 + ND_DECL 展开: ResolvedInit/InitDesg 更名 InitTree/InitPath 进 chibicc.h, create_lvar_init/lvar_init_comma/init_desg_expr 搬 codegen(init_desg_expr 直建 DEREF+缩放, 无中间 SUBSCRIPT), sema 的 ND_DECL 只留检查+static 序列化+显式定型 init expr(annotate_init_exprs), 整形遍链编辑展开记录(expand_decl, 0..n 条语句)并摘除之, for-init 的 BLOCK 归位; decl_remove 静默变量删除 |
 
 ## 各步详情
 
@@ -574,7 +575,7 @@ void f(void) { char *t = "in f"; (void)t; }
   另: 本步暴露对比脚本缺陷 - 双端静默失败(rc=1 无产物)曾被计为"一致", p4_elvis 一度假通过;
   电池脚本已加 rc 与产物存在性检查, 之前各步结论不受影响(那些步均无 rc 不一致)。
 
-### A7.1 VLA (本提交)
+### A7.1 VLA (0c1ad27)
 
 - 改了什么: 账本行 49 落位。`compute_vla_size` 从 sema 删除, codegen 的同名函数(前一步的镜像
   转正)成为唯一实现; `vla_size_expr` 同理; `Type::vla_size` 的写入全部发生在整形遍(字段注释
@@ -611,6 +612,45 @@ void f(void) { char *t = "in f"; (void)t; }
   (`int x[2] = {[0 ... 1] = p[2]};`) 报 `invalid operands` - 范围展开的共享表达式节点经整形遍
   多次到达时的形状问题, 归 A8.1(初始化器链搬走时)或后续排查。
   行数: sema.c 3104 -> 3080, codegen.c 2284 -> 2332, chibicc.h 769 -> 772, parse.c 2148 零改动。
+
+### A8.1 初始化器消费侧 + ND_DECL 展开 (本提交)
+
+- 改了什么: 账本行 33/34/38/46/54 落位, 本线最大一步, 三件事同提交。
+  (i) `InitTree`/`InitPath`(更名自 `ResolvedInit`/`InitDesg`)进 chibicc.h; `init_desg_expr`/
+  `create_lvar_init`/`lvar_init_comma` 搬入 codegen(static; 契约 2 临时导出一并撤除, 清单提前为零)。
+  `init_desg_expr` 的数组步直建降级形态 - `DEREF(new_add(base, NUM idx))` 且定型 - 不再产 ND_SUBSCRIPT
+  (契约 3(d)); `shape_init_exprs` 独立 walker 只对 init 表达式下潜(见偏差 2)。
+  (ii) sema 的 ND_DECL 只留: 块域 static 的数据镜像(gvar_init_data, 位置不变)、VLA 不得初始化
+  检查、void/不完整类型检查、**`annotate_init_exprs` 显式定型每个 init->expr**(契约 5, 本步唯一
+  新 sema 代码); 不再改写 kind, 不再设 `decl_remove`(静态变量连同 type_chain 的移除块一起删除)。
+  ND_COMPOUND_LITERAL: init expr 同样显式定型; 文件域仍序列化 + 改写成 ND_VAR, 块域留记录给消费方。
+  (iii) codegen 的整形遍: `shape_chain` 改为链编辑 walker(`Node **pp`), ND_DECL 经 `expand_decl`
+  展开成 0..n 条语句 - 静态记录 0 条被摘除, 定长无初始化器 0 条, 带初始化器/持 VLA 各 1 条
+  (COMMA(尺寸链, 下降链) 结构逐字节沿用), 块域复合字面量就地展开为 COMMA(初始化链, VAR); for-init
+  的 ND_BLOCK 包装从 sema 移入 FOR 的整形 case(多于一句才包, 构造与 token 不变)。
+- 为什么改: 判据 3(槽归消费方) + 契约 3(c)"槽在哪建链在哪建" + 契约 5(初始化器表达式定型时机);
+  判据 1 的 33/38/46 行(声明展开/for-init 包装/局部初始化链全是发射便利)。
+- 闸门: 四闸门全绿。docker-test rc=0(55 例诊断逐字节, 含 e11 语句表达式锚点; 全部运行时测试,
+  initializer.c 是本机制最大用户); ndiff **空**; raw diff 单文件 vla.s **14 行全为 .loc 的删除**
+  (共享表达式二次整形曾产生的 no-op cast, 见偏差 2), 0 指令 0 偏移变化, 同提交重置基线并复验空;
+  tinycc rc=0(记账同前)。严格 A/B(与 0c1ad27): 语料 36/41 逐字节(4 个 `.file` 伪影 + vla.s 的 .loc),
+  六目录全部探针 rc/.s/stderr 一致。
+- 偏差说明: 三项。
+  1. **语句表达式的值语义无需改动(计划误报为需重述)**: 计划 (iii) 预期需按忠实形状重述语义, 实测
+     旧捕获(`stmt_expr_value`)本就发生在降级之前、比较的就是忠实 kind - 记录不再被 sema 改写后,
+     "末语句是记录即无值"自动成立, 报错位置/文案/锚点逐字节不变(e11 锁定通过)。仅注释更新。
+  2. **初始化器表达式必须独立 walker 定型/整形(计划未列)**: 初期实现对 sema 建出的链(旧)与
+     codegen 建出的链整体下潜, 实测 `int x[3]={1,2,3}` 即报 invalid operands - 设计符目标由
+     `init_desg_expr` 直建降级形态(操作数已被 new_add 转成指针), 整树下潜会把 ADD 再喂 ND_ADD
+     case 二次 new_add。改为两个小 walker(`annotate_init_exprs` 在 sema, `shape_init_exprs` 在
+     codegen)只走 init 表达式; 顺带消除 vla.s 中共享表达式经旧链多次到达产生的 no-op cast
+     (13 行 .loc 类差异的来源, 基线既有, 本步为副作用修复)。函数/initializer/unicode 三个测试
+     文件正是被此缺陷拦下(首次全量 A/B 的 RC 不一致), 修复后全绿。
+  3. **复合字面量的块域展开随 lvar_init_comma 提前搬入 codegen**: A8.3 的清单据此收窄为
+     "文件域序列化留 sema" 的核对项。**预存在限制照旧**: 范围指示符 + 下标表达式
+     (`{[0 ... 1] = p[2]}`)仍报 invalid operands(基线 A6.1 同样报错; 根因是范围展开让同一表达式
+     节点多次到达整形路径, 独立 walker 未改变这一点) - 归 A8.2/A8.3 之后收尾或专门处置。
+  行数: sema.c 3080 -> 2951, codegen.c 2332 -> 2512, chibicc.h 772 -> 807, parse.c 2148 零改动。
 
 ## 给审核者的提示
 

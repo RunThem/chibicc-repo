@@ -304,7 +304,7 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   区分 typedef 共享类型的第二次声明). 实测: 语料差异**全部为栈偏移**(4 文件, 0 .loc 0 指令),
   ndiff 空, 同提交重置 raw 基线; 指向 VLA 的指针(带/不带初始化器)、typedef 共享 VLA 类型、
   sizeof(VLA)、维度里 sizeof 五组探针与 A9.1 基线逐字节一致, docker 运行时断言全过.
-- [ ] **A8.1 初始化器消费侧 + ND_DECL 展开**(本线最大一步, 三件事必须同提交, 契约 1): 
+- [x] **A8.1 初始化器消费侧 + ND_DECL 展开**(本线最大一步, 三件事必须同提交, 契约 1): 
   (i) `ResolvedInit`/`InitDesg` 移入 `chibicc.h` 并命名归位(`InitTree`/`InitPath`), 
   `create_lvar_init`/`lvar_init_comma`/`init_desg_expr` 搬 codegen(`init_desg_expr` 直接建已降级
   形态, 不再产 ND_SUBSCRIPT, 契约 3(d)); 
@@ -316,6 +316,12 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   "展开成多于一句"的产物). 语句表达式的值语义按忠实形状重述: 末语句是记录(声明)即无值, 报
   "statement expression returning void is not supported"(与锁定用例 e11 同锚点, 文案不变).
   文件域序列化(`write_gvar_data`/`gvar_init_data`/`serialize_gvar`)留 sema.
+  **执行修正(见 RESULT.md 偏差)**: (1) 语句表达式的值语义**无需改动** - 旧捕获本就发生在降级之前,
+      忠实树让"末语句是记录"直接可比, sema 的判定与报错位置/文案逐字节不变(e11 闸门锁定); (2) 初始化器
+      表达式用**独立 walker**(`annotate_init_exprs`/`shape_init_exprs`)显式走, 而非对建出的链整体
+      下潜 - 后者会把自建的 DEREF/ADD 再喂给表达式 case(实测 `int x[3]={1,2,3}` 报 invalid operands);
+      顺带消除 vla.s 里共享表达式二次整形产生的 no-op cast; (3) 复合字面量的**块域**展开随之搬入
+      codegen(它调用 lvar_init_comma), 文件域仍留 sema 序列化 + ND_VAR 改写 - A8.3 的清单据此收窄.
 - [ ] **A8.2 其余记录出链**: `type_chain` 对 ND_TYPEDEF/ND_ENUM_CONST/ND_GVAR_DECL/ND_FUNCDEF 的
   摘除搬 codegen - 记录保留在 sema 输出里(库消费者可见, 是"直连"的应有之义); sema 只去掉"出链"
   动作, `serialize_gvar` 与"在此位置标注嵌套函数体"的调用**留在原位**(契约 4); codegen 侧按

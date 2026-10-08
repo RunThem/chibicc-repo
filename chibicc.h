@@ -243,6 +243,43 @@ struct InitDesig {
   Token *name;          // member designator name
 };
 
+// The resolved initializer tree (PLAN A8.1): what a faithful
+// initializer record becomes once designators are evaluated, member
+// names are bound, brace elision is applied and flexible arrays are
+// sized. sema's resolve pass builds it; the consumer's declaration
+// expansion walks it to build the assignment chain, and sema's
+// file-scope serializer walks it into .data bytes. Since initializers
+// can be nested (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), it is a tree.
+typedef struct InitTree InitTree;
+struct InitTree {
+  Type *ty;
+  bool is_flexible;
+
+  // If it's not an aggregate type and has an initializer,
+  // `expr` has an initialization expression.
+  Node *expr;
+
+  // If it's an initializer for an aggregate type (e.g. array or struct),
+  // `children` has initializers for its children.
+  InitTree **children;
+
+  // Only one member can be initialized for a union.
+  // `mem` is used to clarify which member is initialized.
+  Member *mem;
+};
+
+// Designator chain describing the position of an element within a
+// local variable initializer (e.g. `x[1].y[2]`), walked by the
+// consumer's expansion to build the target expression of each
+// assignment.
+typedef struct InitPath InitPath;
+struct InitPath {
+  InitPath *next;
+  int idx;
+  Member *member;
+  Obj *var;
+};
+
 // AST node
 typedef enum {
   ND_NULL_EXPR, // Do nothing
@@ -565,10 +602,8 @@ Node *new_alloca(Node *sz);
 // here; A9.2 checks the list is empty. new_add and new_sub left sema
 // at A4.1; sizeof of a VLA turned out to need the consumer's slot
 // factory when it moved (A9.1), so the consumer builds that chain
-// itself; lvar_init_comma leaves at A8.1, when the resolved
-// initializer tree itself (still defined in sema.c) becomes public.
-typedef struct ResolvedInit ResolvedInit;
-Node *lvar_init_comma(Obj *var, ResolvedInit *init, Token *tok);
+// itself; lvar_init_comma moved with the declaration expansion at
+// A8.1. The list is empty.
 
 // The next value the anonymous-name counter would hand out, without
 // consuming it. A consumer that allocates its own `.L..%d` control

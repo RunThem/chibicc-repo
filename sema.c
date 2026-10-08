@@ -932,42 +932,8 @@ static void lower_funcall(Node *node, Token *tok) {
   // here is the conclusion - the return type - which the pass reads.
 }
 
-// The resolved initializer tree: what a faithful initializer record
-// (Initializer in chibicc.h) becomes once designators are evaluated,
-// member names are bound, brace elision is applied and flexible
-// arrays are sized. Built and consumed only within this file:
-// create_lvar_init walks it to build assignments and write_gvar_data
-// serializes it into .data bytes. Since initializers can be nested
-// (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), it is a tree.
-struct ResolvedInit {
-  Type *ty;
-  bool is_flexible;
-
-  // If it's not an aggregate type and has an initializer,
-  // `expr` has an initialization expression.
-  Node *expr;
-
-  // If it's an initializer for an aggregate type (e.g. array or struct),
-  // `children` has initializers for its children.
-  ResolvedInit **children;
-
-  // Only one member can be initialized for a union.
-  // `mem` is used to clarify which member is initialized.
-  Member *mem;
-};
-
-// Designator chain describing the position of an element within a
-// local variable initializer (e.g. `x[1].y[2]`).
-typedef struct InitDesg InitDesg;
-struct InitDesg {
-  InitDesg *next;
-  int idx;
-  Member *member;
-  Obj *var;
-};
-
-static ResolvedInit *new_resolved_init(Type *ty, bool is_flexible) {
-  ResolvedInit *init = calloc(1, sizeof(ResolvedInit));
+static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
+  InitTree *init = calloc(1, sizeof(InitTree));
   init->ty = ty;
 
   if (ty->kind == TY_ARRAY) {
@@ -976,7 +942,7 @@ static ResolvedInit *new_resolved_init(Type *ty, bool is_flexible) {
       return init;
     }
 
-    init->children = calloc(ty->array_len, sizeof(ResolvedInit *));
+    init->children = calloc(ty->array_len, sizeof(InitTree *));
     for (int i = 0; i < ty->array_len; i++)
       init->children[i] = new_resolved_init(ty->base, false);
     return init;
@@ -988,11 +954,11 @@ static ResolvedInit *new_resolved_init(Type *ty, bool is_flexible) {
     for (Member *mem = ty->members; mem; mem = mem->next)
       len++;
 
-    init->children = calloc(len, sizeof(ResolvedInit *));
+    init->children = calloc(len, sizeof(InitTree *));
 
     for (Member *mem = ty->members; mem; mem = mem->next) {
       if (is_flexible && ty->is_flexible && !mem->next) {
-        ResolvedInit *child = calloc(1, sizeof(ResolvedInit));
+        InitTree *child = calloc(1, sizeof(InitTree));
         child->ty = mem->ty;
         child->is_flexible = true;
         init->children[mem->idx] = child;
@@ -1082,7 +1048,7 @@ static Node *materialize_str(Initializer *rec) {
 
 // Expand a string literal into the elements of a character array,
 // one character (of the element width) per element.
-static void resolve_string(Initializer *rec, ResolvedInit *init) {
+static void resolve_string(Initializer *rec, InitTree *init) {
   Token *tok = rec->str_tok;
   int len = MIN(init->ty->array_len, tok->ty->array_len);
 
@@ -1110,21 +1076,21 @@ static void resolve_string(Initializer *rec, ResolvedInit *init) {
   }
 }
 
-static void resolve_value(Initializer *rec, ResolvedInit *init, InitItem **cursor);
-static void resolve_desig(ResolvedInit *init, InitDesig *d, Initializer *rec, InitItem **cursor);
-static void resolve_array1(Initializer *rec, ResolvedInit *init);
-static void resolve_array_cont(ResolvedInit *init, int i, InitItem **cursor);
-static void resolve_struct1(Initializer *rec, ResolvedInit *init);
-static void resolve_struct_cont(ResolvedInit *init, Member *mem, InitItem **cursor);
-static void resolve_struct_first(ResolvedInit *init, Member *mem, Initializer *rec, InitItem **cursor);
-static void resolve_union(Initializer *rec, ResolvedInit *init, InitItem **cursor);
+static void resolve_value(Initializer *rec, InitTree *init, InitItem **cursor);
+static void resolve_desig(InitTree *init, InitDesig *d, Initializer *rec, InitItem **cursor);
+static void resolve_array1(Initializer *rec, InitTree *init);
+static void resolve_array_cont(InitTree *init, int i, InitItem **cursor);
+static void resolve_struct1(Initializer *rec, InitTree *init);
+static void resolve_struct_cont(InitTree *init, Member *mem, InitItem **cursor);
+static void resolve_struct_first(InitTree *init, Member *mem, Initializer *rec, InitItem **cursor);
+static void resolve_union(Initializer *rec, InitTree *init, InitItem **cursor);
 static int count_flex_list(InitItem *items, Type *ty);
 static int count_flex(Initializer *rec, InitItem **cursor, Type *ty);
 
 // Consume one braced-list item: apply its designator chain (if any)
 // and resolve its value. *cursor advances past the item and any
 // siblings the value consumes through brace elision.
-static void resolve_item(InitItem **cursor, ResolvedInit *init) {
+static void resolve_item(InitItem **cursor, InitTree *init) {
   InitItem *it = *cursor;
   *cursor = it->next;
   resolve_desig(init, it->desigs, it->init, cursor);
@@ -1134,7 +1100,7 @@ static void resolve_item(InitItem **cursor, ResolvedInit *init) {
 // is the record-driven form of the old designation(): `[n]` moves
 // within an array, `.name` within a struct or union, and after a
 // struct member the following siblings continue with the next members.
-static void resolve_desig(ResolvedInit *init, InitDesig *d, Initializer *rec, InitItem **cursor) {
+static void resolve_desig(InitTree *init, InitDesig *d, Initializer *rec, InitItem **cursor) {
   if (!d) {
     resolve_value(rec, init, cursor);
     return;
@@ -1183,7 +1149,7 @@ static void resolve_desig(ResolvedInit *init, InitDesig *d, Initializer *rec, In
 // Fill array elements from sibling items (brace-elision continuation
 // or post-designator continuation), stopping at a designated item or
 // when the items run out.
-static void resolve_array_cont(ResolvedInit *init, int i, InitItem **cursor) {
+static void resolve_array_cont(InitTree *init, int i, InitItem **cursor) {
   for (; i < init->ty->array_len && *cursor && !(*cursor)->desigs; i++)
     resolve_item(cursor, init->children[i]);
 }
@@ -1191,7 +1157,7 @@ static void resolve_array_cont(ResolvedInit *init, int i, InitItem **cursor) {
 // Resolve a braced array initializer, designated items included.
 // Elements past the end of the array are silently dropped, as the
 // parser used to skip them.
-static void resolve_array1(Initializer *rec, ResolvedInit *init) {
+static void resolve_array1(Initializer *rec, InitTree *init) {
   int i = 0;
   InitItem *cursor = rec->items;
 
@@ -1219,7 +1185,7 @@ static void resolve_array1(Initializer *rec, ResolvedInit *init) {
 
 // Fill struct members from sibling items, stopping at a designated
 // item or when the items run out.
-static void resolve_struct_cont(ResolvedInit *init, Member *mem, InitItem **cursor) {
+static void resolve_struct_cont(InitTree *init, Member *mem, InitItem **cursor) {
   for (; mem && *cursor && !(*cursor)->desigs; mem = mem->next)
     resolve_item(cursor, init->children[mem->idx]);
 }
@@ -1227,7 +1193,7 @@ static void resolve_struct_cont(ResolvedInit *init, Member *mem, InitItem **curs
 // Brace-elision entry for structs: the expression a struct was
 // "initialized" with becomes the first member's initializer and the
 // siblings continue with the following members.
-static void resolve_struct_first(ResolvedInit *init, Member *mem, Initializer *rec, InitItem **cursor) {
+static void resolve_struct_first(InitTree *init, Member *mem, Initializer *rec, InitItem **cursor) {
   if (mem) {
     resolve_value(rec, init->children[mem->idx], cursor);
     mem = mem->next;
@@ -1236,7 +1202,7 @@ static void resolve_struct_first(ResolvedInit *init, Member *mem, Initializer *r
 }
 
 // Resolve a braced struct initializer.
-static void resolve_struct1(Initializer *rec, ResolvedInit *init) {
+static void resolve_struct1(Initializer *rec, InitTree *init) {
   Member *mem = init->ty->members;
   InitItem *cursor = rec->items;
 
@@ -1267,7 +1233,7 @@ static void resolve_struct1(Initializer *rec, ResolvedInit *init) {
 // take only one initializer, and that initializes the first union
 // member by default. You can initialize another member using a
 // designated initializer.
-static void resolve_union(Initializer *rec, ResolvedInit *init, InitItem **cursor) {
+static void resolve_union(Initializer *rec, InitTree *init, InitItem **cursor) {
   if (rec->kind == INIT_LIST) {
     InitItem *it = rec->items;
 
@@ -1310,7 +1276,7 @@ static void resolve_union(Initializer *rec, ResolvedInit *init, InitItem **curso
 // counting pass; designator bounds are not checked here (the build
 // pass checks them against the completed length).
 static int count_flex_list(InitItem *items, Type *ty) {
-  ResolvedInit *dummy = new_resolved_init(ty->base, true);
+  InitTree *dummy = new_resolved_init(ty->base, true);
   int i = 0, max = 0;
   InitItem *cursor = items;
 
@@ -1334,7 +1300,7 @@ static int count_flex_list(InitItem *items, Type *ty) {
 // The brace-elision form of count_flex_list: the first value is the
 // record itself and the siblings follow it.
 static int count_flex(Initializer *rec, InitItem **cursor, Type *ty) {
-  ResolvedInit *dummy = new_resolved_init(ty->base, true);
+  InitTree *dummy = new_resolved_init(ty->base, true);
   int i = 0, max = 0;
 
   resolve_value(rec, dummy, cursor);
@@ -1359,7 +1325,7 @@ static int count_flex(Initializer *rec, InitItem **cursor, Type *ty) {
 }
 
 // Resolve one initializer record against its target slot.
-static void resolve_value(Initializer *rec, ResolvedInit *init, InitItem **cursor) {
+static void resolve_value(Initializer *rec, InitTree *init, InitItem **cursor) {
   Type *ty = init->ty;
 
   if (ty->kind == TY_ARRAY && rec->kind == INIT_STR) {
@@ -1438,9 +1404,9 @@ static void resolve_value(Initializer *rec, ResolvedInit *init, InitItem **curso
 // flexible arrays and complete flexible struct/union members. *new_ty
 // receives the completed type (it may differ from ty for flexible
 // arrays and flexible members).
-static ResolvedInit *resolve_initializer(Initializer *rec, Type *ty, Type **new_ty) {
+static InitTree *resolve_initializer(Initializer *rec, Type *ty, Type **new_ty) {
   InitItem *cursor = NULL;
-  ResolvedInit *init = new_resolved_init(ty, true);
+  InitTree *init = new_resolved_init(ty, true);
   resolve_value(rec, init, &cursor);
 
   if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && ty->is_flexible) {
@@ -1458,78 +1424,6 @@ static ResolvedInit *resolve_initializer(Initializer *rec, Type *ty, Type **new_
 
   *new_ty = init->ty;
   return init;
-}
-
-static Node *init_desg_expr(InitDesg *desg, Token *tok) {
-  if (desg->var)
-    return new_var_node(desg->var, tok);
-
-  if (desg->member) {
-    Node *node = new_unary(ND_MEMBER, init_desg_expr(desg->next, tok), tok);
-    node->member = desg->member;
-    return node;
-  }
-
-  Node *lhs = init_desg_expr(desg->next, tok);
-  Node *node = new_node(ND_SUBSCRIPT, tok);
-  node->lhs = lhs;
-  node->rhs = new_num(desg->idx, tok);
-  return node;
-}
-
-static Node *create_lvar_init(ResolvedInit *init, Type *ty, InitDesg *desg, Token *tok) {
-  if (ty->kind == TY_ARRAY) {
-    Node *node = new_node(ND_NULL_EXPR, tok);
-    for (int i = 0; i < ty->array_len; i++) {
-      InitDesg desg2 = {desg, i};
-      Node *rhs = create_lvar_init(init->children[i], ty->base, &desg2, tok);
-      node = new_binary(ND_COMMA, node, rhs, tok);
-    }
-    return node;
-  }
-
-  if (ty->kind == TY_STRUCT && !init->expr) {
-    Node *node = new_node(ND_NULL_EXPR, tok);
-
-    for (Member *mem = ty->members; mem; mem = mem->next) {
-      InitDesg desg2 = {desg, 0, mem};
-      Node *rhs = create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
-      node = new_binary(ND_COMMA, node, rhs, tok);
-    }
-    return node;
-  }
-
-  if (ty->kind == TY_UNION) {
-    Member *mem = init->mem ? init->mem : ty->members;
-    InitDesg desg2 = {desg, 0, mem};
-    return create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
-  }
-
-  if (!init->expr)
-    return new_node(ND_NULL_EXPR, tok);
-
-  Node *lhs = init_desg_expr(desg, tok);
-  return new_binary(ND_ASSIGN, lhs, init->expr, tok);
-}
-
-// Build the MEMZERO + assignment comma chain that initializes a local
-// variable from its resolved initializer tree. `tok` anchors the
-// synthesized nodes; the record's first token is where the parser used
-// to anchor them. Exported for the consumer's shaping pass, which
-// expands the declarations that hold VLA types; the whole initializer
-// machinery moves there at A8.1 and this declaration goes with it.
-Node *lvar_init_comma(Obj *var, ResolvedInit *init, Token *tok) {
-  InitDesg desg = {NULL, 0, NULL, var};
-
-  // If a partial initializer list is given, the standard requires
-  // that unspecified elements are set to 0. Here, we simply
-  // zero-initialize the entire memory region of a variable before
-  // initializing it with user-supplied values.
-  Node *lhs = new_node(ND_MEMZERO, tok);
-  lhs->var = var;
-
-  Node *rhs = create_lvar_init(init, var->ty, &desg, tok);
-  return new_binary(ND_COMMA, lhs, rhs, tok);
 }
 
 // A variable definition with an initializer is a shorthand notation
@@ -1573,7 +1467,7 @@ static void write_buf(char *buf, uint64_t val, int sz) {
 }
 
 static Relocation *
-write_gvar_data(Relocation *cur, ResolvedInit *init, Type *ty, char *buf, int offset) {
+write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset) {
   if (ty->kind == TY_ARRAY) {
     int sz = ty->base->size;
     for (int i = 0; i < ty->array_len; i++)
@@ -1640,7 +1534,7 @@ write_gvar_data(Relocation *cur, ResolvedInit *init, Type *ty, char *buf, int of
 
 // Serialize a resolved initializer tree into the .data image of a
 // global variable.
-static void gvar_init_data(Obj *var, ResolvedInit *init) {
+static void gvar_init_data(Obj *var, InitTree *init) {
   Relocation head = {};
   char *buf = calloc(1, var->ty->size);
   write_gvar_data(&head, init, var->ty, buf, 0);
@@ -1839,12 +1733,6 @@ static void select_generic(Node *node) {
   node->ty = sel->ty;
 }
 
-// Whether the declaration record being lowered produces no statement at
-// all, so that the annotation pass removes it from the chain: a
-// block-scope static (its data image goes to the global section) and a
-// fixed-size object with no initializer.
-static bool decl_remove;
-
 // Walks a statement chain, typing each node. Declaration records that
 // produce no code (typedefs, enum constants, extern declarations and
 // [GNU] nested function definitions) are consumed here and removed
@@ -1875,18 +1763,37 @@ static void type_chain(Node **head) {
       break;
     }
 
-    bool save_remove = decl_remove;
-    decl_remove = false;
     add_type(n);
-    bool remove = decl_remove;
-    decl_remove = save_remove;
-
-    if (remove) {
-      *pp = n->next;
-      continue;
-    }
     pp = &(*pp)->next;
   }
+}
+
+// Types every initializer expression a resolved record holds (PLAN
+// A8.1, contract 5). The descent never reaches them - they live on
+// the resolved tree, not on any subtree a parent owns - and the
+// expansion that used to type them is the consumer's now, so the
+// annotation is explicit here, in the same position the old
+// expansion ran.
+static void annotate_init_exprs(InitTree *init) {
+  if (!init)
+    return;
+
+  if (init->expr) {
+    add_type(init->expr);
+    return;
+  }
+
+  if (!init->children)
+    return;
+
+  if (init->ty->kind == TY_ARRAY) {
+    for (int i = 0; i < init->ty->array_len; i++)
+      annotate_init_exprs(init->children[i]);
+    return;
+  }
+
+  for (Member *mem = init->ty->members; mem; mem = mem->next)
+    annotate_init_exprs(init->children[mem->idx]);
 }
 
 // The annotation pass: types a node and every subtree it owns, inserts
@@ -1919,9 +1826,9 @@ void add_type(Node *node) {
   }
 
   // A statement expression's value is its last statement, and only an
-  // expression statement as written has one: a declaration record
-  // lowers to an expression statement in place, so the shape is
-  // captured here, before the body is lowered.
+  // expression statement as written has one: a declaration record is
+  // a record here - the consumer expands it later, and the expansion
+  // produces no value (PLAN A8.1) - so the faithful shape decides.
   Node *stmt_expr_value = NULL;
   if (node->kind == ND_STMT_EXPR) {
     stmt_expr_value = node->body;
@@ -1937,14 +1844,6 @@ void add_type(Node *node) {
   add_type(node->then);
   add_type(node->els);
   type_chain(&node->init);
-  // codegen's `for` has a single-statement init slot, so an init
-  // declaration that lowered to more than one statement is wrapped in a
-  // block here. The parser leaves the records as a chain.
-  if (node->init && node->init->next) {
-    Node *blk = new_node(ND_BLOCK, node->init->tok);
-    blk->body = node->init;
-    node->init = blk;
-  }
   add_type(node->inc);
   type_chain(&node->body);
 
@@ -2262,15 +2161,14 @@ void add_type(Node *node) {
     }
     return;
   case ND_DECL: {
-    // Lower a declaration record to at most one statement. A block-scope
-    // static was declared as an anonymous global by the resolve pass;
-    // its initializer is serialized here and the record leaves the
-    // chain, producing no statement. A type that holds a VLA keeps its
-    // record instead: the size variables are slots of the consumer and
-    // the chain embedding them is built where the slots are (PLAN
-    // A7.1), together with the alloca assignment and - for a pointer
-    // to a VLA, which may be initialized - the assignment chain. What
-    // stays here are the checks and the serialization.
+    // A declaration record keeps its shape (PLAN A8.1): the checks
+    // run here, a block-scope static's initializer is serialized here
+    // (the data image's position in the emission is contract 4), and
+    // the initializer expressions are annotated here - explicitly,
+    // because nothing else reaches them: the expansion that used to
+    // type them is the consumer's now (contract 5). The consumer's
+    // shaping pass expands what remains into 0..n statements and
+    // removes the record from the chain when there are none.
     Obj *var = node->var;
     Token *tok = node->tok;
 
@@ -2280,74 +2178,47 @@ void add_type(Node *node) {
         node->decl_init = NULL;
         node->init_resolved = NULL;
       }
-      decl_remove = true;
       return;
     }
 
-    if (var->ty->kind == TY_VLA) {
+    if (var->ty->kind == TY_VLA && node->decl_init)
       // A variable-length object may not be initialized. The parser left
       // the two standing side by side because whether a declaration is a
       // VLA one depends on the dimension being a constant expression;
       // the `=` is where that used to be reported.
-      if (node->decl_init)
-        error_tok(node->decl_init->eq_tok,
-                  "variable-sized object may not be initialized");
-      return;
+      error_tok(node->decl_init->eq_tok,
+                "variable-sized object may not be initialized");
+
+    if (var->ty->kind != TY_VLA) {
+      // A declared object must have a complete, non-void type.
+      check_declared_void(tok, var->ty);
+      if (var->ty->size < 0)
+        error_tok(node->name_tok, "variable has incomplete type");
     }
 
-    // A declared object must have a complete, non-void type.
-    check_declared_void(tok, var->ty);
-    if (var->ty->size < 0)
-      error_tok(node->name_tok, "variable has incomplete type");
-
-    // A pointer (or deeper) to a VLA: the size computation is the
-    // consumer's, initializer record and all - it computes the sizes
-    // before the assignments run, in its own expansion.
-    for (Type *t = var->ty; t; t = t->base)
-      if (t->kind == TY_VLA)
-        return;
-
-    // The resolve pass resolved the faithful initializer record and
-    // completed the declared type with it; what is left here is the
-    // lowering to the assignment chain.
-    Node *lowered = NULL;
-    if (node->init_resolved)
-      lowered = lvar_init_comma(var, node->init_resolved, node->decl_init->tok);
-    node->decl_init = NULL;
-
-    if (!lowered) {
-      decl_remove = true;
-      return;
-    }
-
-    node->kind = ND_EXPR_STMT;
-    node->lhs = lowered;
-    add_type(node);
+    annotate_init_exprs(node->init_resolved);
     return;
   }
   case ND_COMPOUND_LITERAL: {
     // Materialize the compound literal. The resolve pass created the
     // hidden variable it owns - a hidden local in block scope - and
-    // resolved its initializer record against the variable's type.
-    // The node lowers to `initializer-comma, var`. At file scope the
-    // variable is an anonymous global whose data is serialized here,
-    // and the node lowers to a reference of it.
+    // resolved its initializer record against the variable's type. At
+    // file scope the variable is an anonymous global whose data is
+    // serialized here and the node becomes a reference of it; in
+    // block scope the consumer builds the initializer comma and the
+    // reference (PLAN A8.1). The initializer expressions are
+    // annotated here either way - nothing else reaches them.
     Obj *var = node->var;
-    Token *tok = node->tok;
 
-    ResolvedInit *init = node->init_resolved;
+    annotate_init_exprs(node->init_resolved);
 
-    if (var->is_local) {
-      node->kind = ND_COMMA;
-      node->lhs = lvar_init_comma(var, init, node->decl_init->tok);
-      node->rhs = new_var_node(var, tok);
-    } else {
-      gvar_init_data(var, init);
+    if (!var->is_local) {
+      gvar_init_data(var, node->init_resolved);
       node->kind = ND_VAR;
+      node->decl_init = NULL;
+      node->init_resolved = NULL;
     }
-    node->decl_init = NULL;
-    node->init_resolved = NULL;
-    add_type(node);
+    node->ty = var->ty;
     return;
   }
   }

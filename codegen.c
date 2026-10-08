@@ -1373,10 +1373,27 @@ static char *new_label(void) {
 }
 
 static void shape_node(Node *node);
+static bool expand_decl(Node *node);
 
-static void shape_chain(Node *node) {
-  for (Node *n = node; n; n = n->next)
+// Walks a statement chain, editing it in place: a declaration record
+// expands to its statements or is removed entirely (PLAN A8.1), so the
+// walker follows whatever sits at the position afterwards.
+static void shape_chain(Node **head) {
+  for (Node **pp = head; *pp;) {
+    Node *n = *pp;
+
+    if (n->kind == ND_DECL) {
+      if (!expand_decl(n)) {
+        *pp = n->next;
+        continue;
+      }
+      pp = &(*pp)->next;
+      continue;
+    }
+
     shape_node(n);
+    pp = &(*pp)->next;
+  }
 }
 
 // Descends every subtree a node owns, statements and expressions
@@ -1388,10 +1405,10 @@ static void shape_children(Node *node) {
   shape_node(node->cond);
   shape_node(node->then);
   shape_node(node->els);
-  shape_node(node->init);
+  shape_chain(&node->init);
   shape_node(node->inc);
-  shape_chain(node->body);
-  shape_chain(node->args);
+  shape_chain(&node->body);
+  shape_chain(&node->args);
   shape_node(node->cas_addr);
   shape_node(node->cas_old);
   shape_node(node->cas_new);
@@ -1509,6 +1526,182 @@ static Node *vla_size_expr(Type *ty, Token *tok) {
     return new_var_node(ty->vla_size, tok);
   Node *lhs = compute_vla_size(ty, tok);
   return new_binary(ND_COMMA, lhs, new_var_node(ty->vla_size, tok), tok);
+}
+
+// The target expression of one initializer assignment (PLAN A8.1,
+// moved from sema): the path from the variable to the element the
+// record initializes. The subscript step is built directly as the
+// dereference of the scaled addition - the shape the faithful
+// subscript would lower to - so no intermediate node needs a second
+// walk (contract 3(d)).
+static Node *init_desg_expr(InitPath *desg, Token *tok) {
+  if (desg->var)
+    return new_var_node(desg->var, tok);
+
+  if (desg->member) {
+    Node *node = new_unary(ND_MEMBER, init_desg_expr(desg->next, tok), tok);
+    node->member = desg->member;
+    return node;
+  }
+
+  Node *lhs = init_desg_expr(desg->next, tok);
+  Node *add = new_add(lhs, new_num(desg->idx, tok), tok);
+  Node *node = new_unary(ND_DEREF, add, tok);
+  node->ty = add->ty->base;
+  return node;
+}
+
+// Builds the assignment chain of a local initializer, walking the
+// resolved tree (moved from sema at A8.1). Aggregates recurse into
+// their children; a union walks only the member the record selected;
+// a partial list is preceded by the MEMZERO in lvar_init_comma below.
+static Node *create_lvar_init(InitTree *init, Type *ty, InitPath *desg, Token *tok) {
+  if (ty->kind == TY_ARRAY) {
+    Node *node = new_node(ND_NULL_EXPR, tok);
+    for (int i = 0; i < ty->array_len; i++) {
+      InitPath desg2 = {desg, i};
+      Node *rhs = create_lvar_init(init->children[i], ty->base, &desg2, tok);
+      node = new_binary(ND_COMMA, node, rhs, tok);
+    }
+    return node;
+  }
+
+  if (ty->kind == TY_STRUCT && !init->expr) {
+    Node *node = new_node(ND_NULL_EXPR, tok);
+
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+      InitPath desg2 = {desg, 0, mem};
+      Node *rhs = create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
+      node = new_binary(ND_COMMA, node, rhs, tok);
+    }
+    return node;
+  }
+
+  if (ty->kind == TY_UNION) {
+    Member *mem = init->mem ? init->mem : ty->members;
+    InitPath desg2 = {desg, 0, mem};
+    return create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
+  }
+
+  if (!init->expr)
+    return new_node(ND_NULL_EXPR, tok);
+
+  Node *lhs = init_desg_expr(desg, tok);
+  return new_binary(ND_ASSIGN, lhs, init->expr, tok);
+}
+
+// Shapes every expression a resolved initializer record holds, once
+// each. The designator targets the expansion builds are already
+// lowered form - running the pass over them again would re-run the
+// expression cases over nodes this pass just built (the A4.1 lesson)
+// - but the initializer expressions are old nodes nothing else in the
+// tree references, and an expression shared by several records (a
+// range designator) is shaped exactly once here.
+static void shape_init_exprs(InitTree *init);
+
+// Build the MEMZERO + assignment comma chain that initializes a local
+// variable from its resolved initializer tree. `tok` anchors the
+// synthesized nodes; the record's first token is where the parser used
+// to anchor them. Moved from sema at A8.1 with the declaration
+// expansion; sema itself no longer builds it.
+static Node *lvar_init_comma(Obj *var, InitTree *init, Token *tok) {
+  InitPath desg = {NULL, 0, NULL, var};
+
+  // If a partial initializer list is given, the standard requires
+  // that unspecified elements are set to 0. Here, we simply
+  // zero-initialize the entire memory region of a variable before
+  // initializing it with user-supplied values.
+  Node *lhs = new_node(ND_MEMZERO, tok);
+  lhs->var = var;
+
+  Node *rhs = create_lvar_init(init, var->ty, &desg, tok);
+  return new_binary(ND_COMMA, lhs, rhs, tok);
+}
+
+static void shape_init_exprs(InitTree *init) {
+  if (!init)
+    return;
+
+  if (init->expr) {
+    shape_node(init->expr);
+    return;
+  }
+
+  if (!init->children)
+    return;
+
+  if (init->ty->kind == TY_ARRAY) {
+    for (int i = 0; i < init->ty->array_len; i++)
+      shape_init_exprs(init->children[i]);
+    return;
+  }
+
+  for (Member *mem = init->ty->members; mem; mem = mem->next)
+    shape_init_exprs(init->children[mem->idx]);
+}
+
+// Expands one declaration record into the statement it stands for -
+// none, one, or (for nothing today, but the shape is 0..n) - and says
+// whether the chain position it sat at keeps a statement. The record
+// arrives exactly as the parser wrote it: sema ran the checks, left
+// the initializer record resolved, and the block-scope static's data
+// image is already in .data. Moved from sema at A8.1; the VLA half
+// came over at A7.1, when the size slots did.
+static bool expand_decl(Node *node) {
+  Obj *var = node->var;
+  Token *tok = node->tok;
+
+  // A block-scope static produces no statement: its data image was
+  // serialized by the annotation pass.
+  if (node->attr.is_static)
+    return false;
+
+  Node *vla_size = NULL;
+  for (Type *t = var->ty; t; t = t->base) {
+    if (t->kind == TY_VLA) {
+      // The dimensions the size computation embeds have never been
+      // through this pass - the type is their only reference. Shape
+      // them first, innermost first, the order the computation walks;
+      // a type that already has its size computed has been here
+      // through an earlier declaration of the same type (a typedef
+      // shared by two objects), and its dimensions were shaped then.
+      if (!var->ty->vla_size)
+        shape_node(t->vla_len);
+      vla_size = compute_vla_size(var->ty, tok);
+      break;
+    }
+  }
+
+  Node *lowered = NULL;
+
+  if (var->ty->kind == TY_VLA) {
+    // `var = alloca(<size>)`: the size chain computed just above.
+    lowered = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
+                         new_alloca(new_var_node(var->ty->vla_size, tok)),
+                         tok);
+  } else if (node->init_resolved) {
+    // The initializer comma; a pointer to a VLA reaches here too,
+    // with the size chain sequenced in front of the assignments.
+    lowered = lvar_init_comma(var, node->init_resolved, node->decl_init->tok);
+    node->decl_init = NULL;
+    // The initializer expressions have never been through this pass
+    // and nothing else in the tree references them; the size chain
+    // and the designator targets are already lowered form and are
+    // not touched again.
+    shape_init_exprs(node->init_resolved);
+    node->init_resolved = NULL;
+  }
+
+  // A fixed-size object with no initializer produces no statement.
+  if (!vla_size && !lowered)
+    return false;
+
+  node->kind = ND_EXPR_STMT;
+  node->lhs = (vla_size && lowered)
+                ? new_binary(ND_COMMA, vla_size, lowered, tok)
+                : (lowered ? lowered : vla_size);
+  add_type(node);
+  return true;
 }
 
 // Builds the `lhs op rhs` combination a compound assignment or an
@@ -1721,6 +1914,19 @@ static void shape_node(Node *node) {
     // understands: no init/inc, so cont_label jumps to the loop top.
     if (node->kind == ND_WHILE)
       node->kind = ND_FOR;
+
+    // gen_stmt's `for` has a single-statement init slot, so an init
+    // chain the expansion left with more than one statement - or none
+    // at all - is reduced here (PLAN A8.1, moved from sema).
+    if (node->kind == ND_FOR) {
+      if (!node->init) {
+        // nothing to do
+      } else if (node->init->next) {
+        Node *blk = new_node(ND_BLOCK, node->init->tok);
+        blk->body = node->init;
+        node->init = blk;
+      }
+    }
     return;
   }
   case ND_SWITCH: {
@@ -1952,55 +2158,29 @@ static void shape_node(Node *node) {
     // are typed but produce no code, so only the selection is shaped.
     shape_node(node->generic_sel);
     return;
-  case ND_DECL: {
-    // A declaration whose type holds a VLA is the consumer's to
-    // expand (PLAN A7.1): the size variables are slots of this
-    // consumer, the alloca assignment is what the object's
-    // declaration becomes, and a pointer to a VLA may also carry an
-    // initializer chain. sema left the record exactly as the parser
-    // wrote it, checks done.
-    Obj *var = node->var;
-    Token *tok = node->tok;
-
-    // The dimensions the size computation embeds have never been
-    // through this pass - the type is their only reference. Shape
-    // them first, innermost first, the order the computation walks;
-    // a type that already has its size computed has been here
-    // through an earlier declaration of the same type (a typedef
-    // shared by two objects), and its dimensions were shaped then.
-    if (!var->ty->vla_size)
-      for (Type *t = var->ty; t; t = t->base)
-        if (t->kind == TY_VLA)
-          shape_node(t->vla_len);
-
-    Node *vla_size = compute_vla_size(var->ty, tok);
-    Node *lowered = NULL;
-
-    if (var->ty->kind == TY_VLA) {
-      lowered = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
-                           new_alloca(new_var_node(var->ty->vla_size, tok)),
-                           tok);
-    } else if (node->init_resolved) {
-      // A pointer to a VLA, initialized: sema's assignment-chain
-      // builder on its way here (contract 2's temporary surface).
-      lowered = lvar_init_comma(var, node->init_resolved, node->decl_init->tok);
-      node->decl_init = NULL;
-      node->init_resolved = NULL;
-      // The chain holds designator expressions this pass has never
-      // seen (their only other reference is the resolved initializer
-      // tree) and the initializer expressions themselves. One
-      // descent shapes them all; the size chain above is a separate
-      // object and is not re-entered through it.
-      shape_node(lowered);
-    }
-
-    node->kind = ND_EXPR_STMT;
-    node->lhs = (vla_size && lowered)
-                  ? new_binary(ND_COMMA, vla_size, lowered, tok)
-                  : (lowered ? lowered : vla_size);
-    add_type(node);
+  case ND_DECL:
+    expand_decl(node);
     return;
-  }
+  case ND_COMPOUND_LITERAL:
+    // A block-scope compound literal: the initializer comma and the
+    // reference to the hidden object (PLAN A8.1; the object itself
+    // was created by sema's resolve pass, where the language says it
+    // exists). The file-scope case becomes a plain reference in sema,
+    // whose serializer owns the data.
+    {
+      Obj *var = node->var;
+
+      shape_init_exprs(node->init_resolved);
+      Node *lowered = lvar_init_comma(var, node->init_resolved,
+                                      node->decl_init->tok);
+      Node *comma = new_binary(ND_COMMA, lowered,
+                               new_var_node(var, node->tok), node->tok);
+      add_type(comma);
+      Node *nxt = node->next;
+      *node = *comma;
+      node->next = nxt;
+    }
+    return;
   default:
     shape_children(node);
     return;
@@ -2032,7 +2212,7 @@ static void shape(Obj *prog) {
     // The rewrite temporaries created below enter this function's
     // frame, so the slot factory needs to know where to append.
     current_fn = fn;
-    shape_chain(fn->body);
+    shape_chain(&fn->body);
     resolve_label_refs(fn);
   }
 }
