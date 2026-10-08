@@ -190,7 +190,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | 4b61819 | A6.1 | 函数调用返回缓冲的槽创建归 codegen: lower_funcall 只留检查/转换/结论, shape_node 加 ND_FUNCALL case 建 ret_buffer(槽工厂), 语料 raw 全空, sret 探针语义过 docker |
 | d415c53 | A9.1 | 结论类消费侧归 codegen: STRING 保留 kind(gen_addr/gen_expr 新增 case), sizeof/alignof/两个 builtin/generic 只记结论读字段, elvis 降级迁入整形遍(先清 ty 再定型), sizeof(VLA) 经 codegen 自建的槽工厂链, sema 的 vla_size_expr 死码删除; vla.s 的 ndiff 残留为基线冗余重算的删除(与 gcc 逐点一致), 归因后重置基线 |
 | 0c1ad27 | A7.1 | VLA 尺寸机制归 codegen: compute_vla_size/vla_size_expr 搬整形遍(自建槽工厂), 持 VLA 的声明记录留给 codegen 展开(sema 只留检查), lvar_init_comma 临时导出(带初始化器的指针到 VLA), 维度先显式整形; 语料差异全为栈偏移, ndiff 空, 重置基线 |
-| (本提交) | A8.1 | 初始化器消费侧 + ND_DECL 展开: ResolvedInit/InitDesg 更名 InitTree/InitPath 进 chibicc.h, create_lvar_init/lvar_init_comma/init_desg_expr 搬 codegen(init_desg_expr 直建 DEREF+缩放, 无中间 SUBSCRIPT), sema 的 ND_DECL 只留检查+static 序列化+显式定型 init expr(annotate_init_exprs), 整形遍链编辑展开记录(expand_decl, 0..n 条语句)并摘除之, for-init 的 BLOCK 归位; decl_remove 静默变量删除 |
+| 1a80f25 | A8.1 | 初始化器消费侧 + ND_DECL 展开: ResolvedInit/InitDesg 更名 InitTree/InitPath 进 chibicc.h, create_lvar_init/lvar_init_comma/init_desg_expr 搬 codegen(init_desg_expr 直建 DEREF+缩放, 无中间 SUBSCRIPT), sema 的 ND_DECL 只留检查+static 序列化+显式定型 init expr(annotate_init_exprs), 整形遍链编辑展开记录(expand_decl, 0..n 条语句)并摘除之, for-init 的 BLOCK 归位; decl_remove 静默变量删除 |
+| (本提交) | A8.2 | 其余记录出链: sema 的 type_chain 停止摘除 TYPEDEF/ENUM_CONST/GVAR_DECL/FUNCDEF(记录留在输出里), serialize_gvar 与嵌套体标注调用留在原位; codegen 链编辑 walker 摘除四类记录且不下潜嵌套体(契约 3(e), 从 prog 单次进入); raw diff 全空 |
 
 ## 各步详情
 
@@ -613,7 +614,7 @@ void f(void) { char *t = "in f"; (void)t; }
   多次到达时的形状问题, 归 A8.1(初始化器链搬走时)或后续排查。
   行数: sema.c 3104 -> 3080, codegen.c 2284 -> 2332, chibicc.h 769 -> 772, parse.c 2148 零改动。
 
-### A8.1 初始化器消费侧 + ND_DECL 展开 (本提交)
+### A8.1 初始化器消费侧 + ND_DECL 展开 (1a80f25)
 
 - 改了什么: 账本行 33/34/38/46/54 落位, 本线最大一步, 三件事同提交。
   (i) `InitTree`/`InitPath`(更名自 `ResolvedInit`/`InitDesg`)进 chibicc.h; `init_desg_expr`/
@@ -651,6 +652,22 @@ void f(void) { char *t = "in f"; (void)t; }
      (`{[0 ... 1] = p[2]}`)仍报 invalid operands(基线 A6.1 同样报错; 根因是范围展开让同一表达式
      节点多次到达整形路径, 独立 walker 未改变这一点) - 归 A8.2/A8.3 之后收尾或专门处置。
   行数: sema.c 3080 -> 2951, codegen.c 2332 -> 2512, chibicc.h 772 -> 807, parse.c 2148 零改动。
+
+### A8.2 其余记录出链 (本提交)
+
+- 改了什么: 账本行 37/52 落位。sema 的 `type_chain` 不再从链上摘除记录, 降为纯遍历(`Node *` 签名,
+  去掉 `Node **pp` 链编辑): ND_TYPEDEF/ND_ENUM_CONST 直接跳过(resolve 遍已完成其工作),
+  ND_GVAR_DECL 的 `serialize_gvar` 与 ND_FUNCDEF 的 `analyze_function` 调用**留在原位**(契约 4:
+  数据镜像与嵌套体标注的位置即语义顺序)。codegen 的链编辑 walker 扩展: 四类记录一律摘除 -
+  ND_FUNCDEF **不下潜其 body**(契约 3(e): 嵌套体挂在宿主函数体内也挂在 `prog` 上, 整形遍只从
+  `prog` 进一次; 宿主链上只摘记录)。
+- 为什么改: 判据 1(出链是发射便利); 记录保留是"直连"的应有之义 - 库消费者可见源码结构。
+- 闸门: 四闸门全绿。docker-test rc=0(55 例诊断逐字节); ndiff 空; **raw diff 全空** - 本步不改任何
+  发射(记录此前也不发射, 只是由 sema 摘除), 无需重置基线; tinycc rc=0(记账同前)。
+- 验证: 语料 41 文件 37 逐字节 + 4 个 `.file` 伪影(A8.1 重置后的 vla.s 已自然对齐); 六目录全部探针
+  一致; 新增两组探针: 函数体内 typedef/enum/extern + 嵌套函数定义(返回嵌套调用结果)与 for-init
+  的 `enum {...} e = B` + 循环体 typedef - 逐字节一致即嵌套体只被整形一次、位置正确的实证。
+- 偏差: 无。行数: sema.c 2951 -> 2946, codegen.c 2512 -> 2524, chibicc.h 807 零改动, parse.c 零改动。
 
 ## 给审核者的提示
 

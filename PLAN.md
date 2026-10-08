@@ -322,10 +322,14 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
       下潜 - 后者会把自建的 DEREF/ADD 再喂给表达式 case(实测 `int x[3]={1,2,3}` 报 invalid operands);
       顺带消除 vla.s 里共享表达式二次整形产生的 no-op cast; (3) 复合字面量的**块域**展开随之搬入
       codegen(它调用 lvar_init_comma), 文件域仍留 sema 序列化 + ND_VAR 改写 - A8.3 的清单据此收窄.
-- [ ] **A8.2 其余记录出链**: `type_chain` 对 ND_TYPEDEF/ND_ENUM_CONST/ND_GVAR_DECL/ND_FUNCDEF 的
+- [x] **A8.2 其余记录出链**: `type_chain` 对 ND_TYPEDEF/ND_ENUM_CONST/ND_GVAR_DECL/ND_FUNCDEF 的
   摘除搬 codegen - 记录保留在 sema 输出里(库消费者可见, 是"直连"的应有之义); sema 只去掉"出链"
   动作, `serialize_gvar` 与"在此位置标注嵌套函数体"的调用**留在原位**(契约 4); codegen 侧按
   契约 3(e) 保证嵌套函数体只从 `prog` 进一次. 到这一步 sema 的 `decl_remove` 静态变量应当消失.
+  (实测: 全量 A/B 逐字节一致(含 vla.s - A8.1 的 .loc 差异在基线重置后自然消失), raw diff **全空**;
+  嵌套函数(带 typedef/enum/extern 的体内记录)与 for-init 的 enum+声明链探针逐字节一致;
+  `type_chain` 降为纯遍历(`Node *` 签名), 摘除/展开全在 codegen 的链编辑 walker; 嵌套体从
+  `prog` 单次进入, 宿主链上只摘记录不下潜.)
 - [ ] **A8.3 复合字面量**: 无名字对象的创建留 sema 的 resolve 遍(顺序不变, `.data` 块序保真),
   `gvar_init_data` 留 sema 的标注遍, "初始化链 + 对象引用"的整形归 codegen(复用 A8.1 已搬的
   `lvar_init_comma`).

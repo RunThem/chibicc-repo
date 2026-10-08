@@ -42,7 +42,7 @@ static double eval_double(Node *node);
 static bool is_const_expr(Node *node);
 static void layout_struct(Type *ty);
 static void layout_union(Type *ty);
-static void type_chain(Node **head);
+static void type_chain(Node *head);
 static void check_control_flow(Node *body);
 static void analyze_function(Obj *fn);
 static void resolve_node(Node *node);
@@ -1733,38 +1733,33 @@ static void select_generic(Node *node) {
   node->ty = sel->ty;
 }
 
-// Walks a statement chain, typing each node. Declaration records that
-// produce no code (typedefs, enum constants, extern declarations and
-// [GNU] nested function definitions) are consumed here and removed
-// from the chain, so that codegen sees exactly the shape it saw when
-// the parser emitted the lowerings in place.
-static void type_chain(Node **head) {
-  for (Node **pp = head; *pp;) {
-    Node *n = *pp;
-
+// Walks a statement chain, typing each node. The declaration records
+// stay in the chain (PLAN A8.2): a consumer that wants the source's
+// structure sees it, and the consumer's expansion is what turns a
+// record into statements or into nothing. What stays here is the work
+// that has to happen at the record's position: the enum constants and
+// typedefs were resolved by the resolve pass (nothing left to do),
+// serialized global data keeps its position in the emission (contract
+// 4), and a [GNU] nested function definition's body is analyzed at
+// this position of the enclosing body, as the parser used to.
+static void type_chain(Node *head) {
+  for (Node *n = head; n; n = n->next) {
     switch (n->kind) {
     case ND_TYPEDEF:
     case ND_ENUM_CONST:
-      *pp = n->next;
       continue;
     case ND_GVAR_DECL:
       serialize_gvar(n);
-      *pp = n->next;
       continue;
     case ND_FUNCDEF:
-      // A [GNU] nested function definition: its body is analyzed at
-      // this position of the enclosing body, as the parser used to,
-      // and the record then leaves the chain.
       if (n->body)
         analyze_function(n->var);
-      *pp = n->next;
       continue;
     default:
       break;
     }
 
     add_type(n);
-    pp = &(*pp)->next;
   }
 }
 
@@ -1843,9 +1838,9 @@ void add_type(Node *node) {
   add_type(node->cond);
   add_type(node->then);
   add_type(node->els);
-  type_chain(&node->init);
+  type_chain(node->init);
   add_type(node->inc);
-  type_chain(&node->body);
+  type_chain(node->body);
 
   for (Node *n = node->args; n; n = n->next)
     add_type(n);

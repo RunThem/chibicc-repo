@@ -1376,23 +1376,35 @@ static void shape_node(Node *node);
 static bool expand_decl(Node *node);
 
 // Walks a statement chain, editing it in place: a declaration record
-// expands to its statements or is removed entirely (PLAN A8.1), so the
-// walker follows whatever sits at the position afterwards.
+// expands to its statements or is removed entirely (PLAN A8.1), and
+// the other records - typedefs, enum constants, extern declarations
+// and [GNU] nested function definitions - produce no statement at all
+// and are unhooked here (PLAN A8.2). A nested function's body is not
+// entered from here: the program list is its home and this pass walks
+// it from there exactly once (contract 3(e)).
 static void shape_chain(Node **head) {
   for (Node **pp = head; *pp;) {
     Node *n = *pp;
 
-    if (n->kind == ND_DECL) {
+    switch (n->kind) {
+    case ND_TYPEDEF:
+    case ND_ENUM_CONST:
+    case ND_GVAR_DECL:
+    case ND_FUNCDEF:
+      *pp = n->next;
+      continue;
+    case ND_DECL:
       if (!expand_decl(n)) {
         *pp = n->next;
         continue;
       }
       pp = &(*pp)->next;
       continue;
+    default:
+      shape_node(n);
+      pp = &(*pp)->next;
+      continue;
     }
-
-    shape_node(n);
-    pp = &(*pp)->next;
   }
 }
 
