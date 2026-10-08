@@ -187,7 +187,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | e300eb9 | A3.1 | 成员与下标整形归 codegen: `x[y]`→`*(x+y)`(经临时导出的 new_add), arrow 的 DEREF 补插(arrow_tok 留最内层 link), `*foo` 只定型不换节点, eval2 补 DEREF 消解, to_assign member 分支适配忠实成员, new_add 依契约 2 临时导出 |
 | 46a2b2a | A5.1 | 复合赋值与自增自减整形归 codegen: to_assign/compound_op/combine/new_inc_dec 整体搬入整形遍, add_type 的 ND_ASSIGN(op)/ND_INCDEC 改纯标注, codegen 自建槽工厂(不导出 sema 的 new_var), 原子 retry 环就地 shape 拿标签, new_sub 依契约 2 临时导出 |
 | 3cb17ba | A4.1 | 算术与比较归 codegen: new_add/new_sub/scale_rhs 搬入整形遍(static), GT/GE 交换搬 shape_node, sema 的 ND_ADD/ND_SUB 改检查+定型(不插 cast), eval2 补 ADD/SUB 指针缩放(num+ptr 认源码序), 撤两处临时导出并删死码 ty_beyond_convs; 顺带修复两个整形遍重入缺陷(elvis 陈旧字段别名 / 原子环 shape 下潜), 二者均为计划未列, 快照抓出 |
-| (本提交) | A6.1 | 函数调用返回缓冲的槽创建归 codegen: lower_funcall 只留检查/转换/结论, shape_node 加 ND_FUNCALL case 建 ret_buffer(槽工厂), 语料 raw 全空, sret 探针语义过 docker |
+| 4b61819 | A6.1 | 函数调用返回缓冲的槽创建归 codegen: lower_funcall 只留检查/转换/结论, shape_node 加 ND_FUNCALL case 建 ret_buffer(槽工厂), 语料 raw 全空, sret 探针语义过 docker |
+| (本提交) | A9.1 | 结论类消费侧归 codegen: STRING 保留 kind(gen_addr/gen_expr 新增 case), sizeof/alignof/两个 builtin/generic 只记结论读字段, elvis 降级迁入整形遍(先清 ty 再定型), sizeof(VLA) 经 codegen 自建的槽工厂链, sema 的 vla_size_expr 死码删除; vla.s 的 ndiff 残留为基线冗余重算的删除(与 gcc 逐点一致), 归因后重置基线 |
 
 ## 各步详情
 
@@ -500,7 +501,7 @@ void f(void) { char *t = "in f"; (void)t; }
   一致, 基线无需重置(与 A5.1 的栈偏移类差异不同 - 那步移动了槽的创建时机, 本步没有)。
   行数: sema.c 3170 -> 3131, codegen.c 2031 -> 2134, chibicc.h 768 -> 766, parse.c 2148 零改动。
 
-### A6.1 函数调用 (本提交)
+### A6.1 函数调用 (4b61819)
 
 - 改了什么: 账本行 11 落位。`lower_funcall`(sema)只留三件事: 被调用者检查(不是函数, 锚 callee
   token)、实参逐个别名化转换(too many/too few 锚调用右括号; float 提升在变参尾)、返回类型结论
@@ -519,6 +520,58 @@ void f(void) { char *t = "in f"; (void)t; }
   正确: 初始化、复用缓冲的赋值、链式调用、结构体数组逐个赋值全部通过("sret ok")。该探针归
   A10.2 的"大结构体返回缓冲"用例。
   行数: sema.c 3131 -> 3132, codegen.c 2134 -> 2144, chibicc.h 766 零改动, parse.c 2148 零改动。
+
+### A9.1 结论类消费侧 (本提交)
+
+- 改了什么: 账本行 14(物化保留)/15(STRING 形状改写取消)/17(SIZEOF 读结论)/18(两个 builtin)/
+  19(GENERIC)/20(elvis 降级搬走)落位, sema 的 add_type 只剩一处"结论非数"的保留(见下)。
+  (1) ND_STRING: 物化(匿名全局, 含块域 static 场景的顺序)原地保留, `node->kind = ND_VAR` 改写取消;
+  codegen 的 gen_addr/gen_expr 各加 `case ND_STRING:` 落进 ND_VAR 同一段代码(var 字段同源,
+  全局 lea/GOTPCREL、数组不 load 全部同路), 输出逐字节不变(plan 预期的 raw 等价实测成立)。
+  (2) ND_SIZEOF/ND_ALIGNOF: 只写结论 `val`(size/align)与 `ty = ty_ulong`, 保留 kind 与操作数
+  (ty_op 或 lhs - eval 的 A1.1 case 要读操作数类型判 VLA); sizeof(VLA) 不写 val, 由消费方定型。
+  (3) ND_TYPES_COMPATIBLE/ND_REG_CLASS: 只写 `val` 与 `ty = ty_int`(旧路径经 `kind=ND_NUM;
+  add_type` 得 ty_int, 同值)。
+  (4) ND_GENERIC: select_generic 不再 `*node = *sel`, 改为 `add_type(sel); node->generic_sel = sel;
+  node->ty = sel->ty;`(选中项在此定型 - 旧路径靠替换后的 add_type 补上); 消费方 gen_expr/gen_addr
+  各加委托 case, 整形遍只 shape 选中项(控制表达式与未选中臂不产代码, 与基线的替换语义等价;
+  未选中臂的 `.loc`/槽消耗随之不出现)。add_type 入口的 GENERIC 特判保留(先于普通下降)。
+  (5) elvis: sema 只定型 - 结论 = 降级形内层 COND 的类型(cond->ty 或 els->ty 为 void 则 ty_void,
+  否则 get_common_type(cond->ty, els->ty)); codegen 的整形遍新增 ND_COND case 原地降级为
+  `tmp = a, tmp ? tmp : b`(文本镜像 sema 原版 + 槽工厂), **先清 `node->ty` 再 `add_type(node)`** -
+  sema 结论已在场, 不清则新树完全未定型(实测 gen_expr 崩在 store(NULL), `return 3 ?: 5;` 即触发)。
+  字段断连(cond/then/els=NULL)一并保留(A4.1 的别名教训)。
+  (6) sizeof(VLA): codegen 自建 `shape_compute_vla_size`/`shape_vla_size_expr`(镜像 sema 文本,
+  唯一实质差异 = 用自己的 `new_lvar`), shape 的 ND_SIZEOF case 做 VLA 分支; 类型名操作数的维度
+  表达式先经 `shape_node`(无语句树可达, 只在 vla_size 未设时 - 声明类型的维度在声明自己的链里,
+  由下降到达, 二者以 vla_size 是否已设区分)。**sema 的 vla_size_expr 删除**: 折叠取消后它成死码,
+  且实测它在 codegen 侧本不可用(见偏差 1), 契约 2 的临时导出列表提前清空。
+  测试: 严格电池(修好 rc/产物检查的脚本)覆盖 30+ 探针(全部 op=/自增自减/指针/位域/原子/elvis/
+  sizeof 家族/builtin/generic/字符串/VLA 尺寸)与 41 文件语料, 全部 rc 一致; 差异分类: 4 个 `.file`
+  伪影、arith 686 行全栈偏移(elvis 临时槽相位)、generic 13 行全 `.loc`、vla 8 `.loc`+370 偏移+
+  9 行冗余重算删除(见偏差 3)。docker 实测: 四闸门中 docker-test rc=0(含自举与 vla.c 运行时断言),
+  tinycc rc=0; ndiff 残留恰为偏差 3(归因), 重置基线并复验两 diff 全空。
+- 偏差说明: 四项。
+  1. **`vla_size_expr` 在 codegen 侧不可用(计划未预见, 快照抓出)**: 它调 compute_vla_size, 其中
+     `ty->vla_size = new_lvar(...)` 是 **sema 的槽工厂** - codegen 调用时变量挂进 sema 的陈旧
+     locals 链, 不属于任何 fn->locals, 偏移 0(`lea 0(%rbp)` 写 saved rbp; docker 测试侥幸通过但
+     栈帧已损)。修复: codegen 自建镜像 builder 用自己的工厂; sema 的 vla_size_expr 死码删除,
+     临时导出清单提前为零(原计划 A7.1 撤)。教训与 A5.1/A6.1 同款: **凡建槽者移入 codegen, 它的
+     被调用者也必须带过来或镜像**。
+  2. **elvis 降级前的 `node->ty` 必须清空**: sema 现在先写结论, 原地降级后的 `add_type(node)` 会
+     因 ty 已在场立即返回, 新树未定型 -> store(NULL) 段错误(所有 elvis 形状; docker-test 首次
+     失败即此)。修后与 A6.1 逐字节一致(全部 elvis 探针)。
+  3. **基线在维度里冗余重算 VLA 尺寸, 本步不再重算(行为变化, 归因后接受)**: 基线的 resolve 期
+     折叠使 `int y[sizeof(x)]` 的维度携带一份 x 尺寸的内联重算(声明处已算过一次, 且重算读的是
+     运行时当时的 n); 新形态的 sizeof(x) 读声明处算好的槽。docker 内三方实测(声明后改写 n:
+     `int n=5; int x[n]; n=7; int y[sizeof(x)];`): 基线 `sx=20 sy=112`(y 按 28 个元素分配 - 错),
+     gcc `sx=20 sy=80`, 新构建 `sx=20 sy=80` - **新行为与 gcc 逐点一致, 基线是错的**(sizeof(x)
+     按 C 语义必须给 x 声明时的尺寸)。vla.s 的 ndiff 残留(13 行: 一段重算被读替代)即此项,
+     按 [就地] 口径逐条归因后同提交重置基线; 该角落记入 A10.2 的对照知识(新行为与 gcc 一致,
+     可直接作为回归期望)。
+  4. **generic 的委托多一条 `.loc`**(每节点一条, 归一化第 1 类折叠); gen_expr 不必拆特例。
+  另: 本步暴露对比脚本缺陷 - 双端静默失败(rc=1 无产物)曾被计为"一致", p4_elvis 一度假通过;
+  电池脚本已加 rc 与产物存在性检查, 之前各步结论不受影响(那些步均无 rc 不一致)。
 
 ## 给审核者的提示
 

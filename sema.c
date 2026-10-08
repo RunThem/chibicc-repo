@@ -954,16 +954,6 @@ static Node *compute_vla_size(Type *ty, Token *tok) {
   return node ? new_binary(ND_COMMA, node, expr, tok) : expr;
 }
 
-// `sizeof` of a VLA type: a reference to its runtime size variable,
-// computed first if this type has not had its size computed yet
-// (e.g. `sizeof(int[n])` with a fresh type).
-static Node *vla_size_expr(Type *ty, Token *tok) {
-  if (ty->vla_size)
-    return new_var_node(ty->vla_size, tok);
-  Node *lhs = compute_vla_size(ty, tok);
-  return new_binary(ND_COMMA, lhs, new_var_node(ty->vla_size, tok), tok);
-}
-
 // The resolved initializer tree: what a faithful initializer record
 // (Initializer in chibicc.h) becomes once designators are evaluated,
 // member names are bound, brace elision is applied and flexible
@@ -1859,18 +1849,15 @@ static void select_generic(Node *node) {
     if (assoc->lhs != sel)
       add_type(assoc->lhs);
 
-  // The conclusion of the selection, recorded on the node that asked the
-  // question. Nothing reads it yet - the rewrite below still turns this
-  // node *into* the selected expression, and that copy is what the
-  // evaluator and codegen consume today. PLAN A9.1 drops the rewrite and
-  // switches both consumers to this field, which is why the conclusion is
-  // written now, while the two ways of carrying it still agree.
-  //
-  // `next` is the parent's link; the result's own link is not its.
-  Node *nxt = node->next;
-  *node = *sel;
-  node->next = nxt;
+  // The conclusion of the selection: the result expression of the
+  // association the controlling expression picked, recorded on the
+  // node that asked the question - and the node keeps its kind, so
+  // the consumer reads the field rather than a replaced tree (PLAN
+  // A9.1). The selection itself is typed here for the same reason
+  // the unselected ones are above.
+  add_type(sel);
   node->generic_sel = sel;
+  node->ty = sel->ty;
 }
 
 // Whether the declaration record being lowered produces no statement at
@@ -1939,14 +1926,16 @@ void add_type(Node *node) {
   if (!node || node->ty)
     return;
 
-  // A generic selection is resolved before anything else, because the
-  // node becomes the association it selects: the result has to be typed
-  // as a fresh node, so that a subtree which registers itself by
+  // A generic selection is resolved before anything else: the
+  // resolution types the controlling expression, the associations and
+  // the selected result - and records the conclusion on this node,
+  // which keeps its kind (PLAN A9.1). The order matters: the
+  // associations are typed in the resolution, never by the generic
+  // descent below, so that a subtree which registers itself by
   // identity while being typed - a `&&label` joining the gotos list -
-  // registers the node that stays in the tree.
+  // registers exactly once.
   if (node->kind == ND_GENERIC) {
     select_generic(node);
-    add_type(node);
     return;
   }
 
@@ -2087,10 +2076,11 @@ void add_type(Node *node) {
     node->ty = node->lhs->ty;
     return;
   case ND_STRING: {
-    // Lower a string literal to a reference to its anonymous global,
-    // which is created here, where the literal is typed.
+    // Materialize the literal's anonymous global, created here where
+    // the literal is typed (PLAN contract 4). The node keeps its kind
+    // and points at the object: the consumers - the evaluator and
+    // codegen's address generation - read `node->var`.
     Obj *var = new_string_literal(node->tok->str, node->tok->ty);
-    node->kind = ND_VAR;
     node->var = var;
     node->ty = var->ty;
     return;
@@ -2107,9 +2097,15 @@ void add_type(Node *node) {
     return;
   case ND_SIZEOF:
   case ND_ALIGNOF: {
-    // Fold sizeof/_Alignof to their values. A fixed-length type folds
-    // to a number and a VLA folds to a reference of its runtime size
-    // variable; a `sizeof expr` operand is typed but never evaluated.
+    // The conclusion is a number: the size or the alignment of the
+    // resolved type, recorded in the same `val` slot a literal uses.
+    // A `sizeof expr` operand is typed but never evaluated, so its
+    // nodes are not part of what the consumer emits. A sizeof of a
+    // VLA is a runtime value, not a constant: the consumer's shaping
+    // pass rebuilds that one as the comma expression that computes
+    // and reads the size variable (PLAN A9.1; the builder itself is
+    // still sema's until A7.1). The operand stays on the node for
+    // that case - it is what identifies the type.
     Type *ty = node->ty_op;
     if (!ty) {
       add_type(node->lhs);
@@ -2118,39 +2114,26 @@ void add_type(Node *node) {
       resolve_type(ty);
     }
 
-    Node *folded;
+    node->ty = ty_ulong;
     if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
-      folded = vla_size_expr(ty, node->tok);
-    else
-      folded = new_ulong(node->kind == ND_SIZEOF ? ty->size : ty->align, node->tok);
+      return;
 
-    // The folded node replaces this one in the tree, so it has to
-    // arrive fully typed: the annotation descent visits this position
-    // exactly once and never comes back to the fresh nodes.
-    add_type(folded);
-
-    node->kind = folded->kind;
-    node->lhs = folded->lhs;
-    node->rhs = folded->rhs;
-    node->var = folded->var;
-    node->val = folded->val;
-    node->ty = folded->ty;
-    node->ty_op = NULL;
+    node->val = node->kind == ND_SIZEOF ? ty->size : ty->align;
     return;
   }
   case ND_TYPES_COMPATIBLE:
-    // Fold `__builtin_types_compatible_p(T1, T2)` to 0 or 1.
+    // `__builtin_types_compatible_p(T1, T2)`: a 0/1 conclusion in
+    // `val`, typed like the literal it always folded to.
     resolve_type(node->ty_op);
     resolve_type(node->ty_op2);
     node->val = is_compatible(node->ty_op, node->ty_op2);
     node->ty_op = NULL;
     node->ty_op2 = NULL;
-    node->kind = ND_NUM;
-    add_type(node);
+    node->ty = ty_int;
     return;
   case ND_REG_CLASS: {
-    // Fold `__builtin_reg_class(T)` to its register class: integer or
-    // pointer, floating-point, or anything else.
+    // `__builtin_reg_class(T)`: integer or pointer, floating-point,
+    // or anything else, as a 0/1/2 conclusion in `val`.
     resolve_type(node->ty_op);
     Type *ty = node->ty_op;
     int64_t val = 2;
@@ -2161,34 +2144,23 @@ void add_type(Node *node) {
 
     node->ty_op = NULL;
     node->val = val;
-    node->kind = ND_NUM;
-    add_type(node);
+    node->ty = ty_int;
     return;
   }
   case ND_COND:
     if (node->is_elvis) {
-      // Lower the GNU `a ?: b` to `tmp = a, tmp ? tmp : b`.
-      // The node itself is rewritten to the comma expression.
-      Obj *var = new_lvar("", node->cond->ty);
-      Node *lhs = new_binary(ND_ASSIGN, new_var_node(var, node->tok), node->cond, node->tok);
-      Node *rhs = new_node(ND_COND, node->tok);
-      rhs->cond = new_var_node(var, node->tok);
-      rhs->then = new_var_node(var, node->tok);
-      rhs->els = node->els;
-      node->kind = ND_COMMA;
-      node->lhs = lhs;
-      node->rhs = rhs;
-      // The conditional's own fields would alias nodes the comma now
-      // reaches through lhs/rhs - the operand and the else expression
-      // are the same objects. A consumer's shaping pass walks cond/
-      // then/els of every node it meets, so leaving them in place makes
-      // it descend into the rewritten operands a second time (the
-      // double scaling A4.1's snapshot caught). The comma form reads
-      // only lhs/rhs, so detaching them changes nothing else.
-      node->cond = NULL;
-      node->then = NULL;
-      node->els = NULL;
-      add_type(node);
+      // The GNU `a ?: b` keeps its shape here; lowering it to
+      // `tmp = a, tmp ? tmp : b` is the consumer's shaping pass
+      // (PLAN A9.1), which also owns the temporary slot. What stays
+      // is the conclusion: the type the lowered conditional would
+      // have - the common type of the operand and the else arm, or
+      // void when either is, exactly as the inner conditional of the
+      // lowered form concludes it.
+      Type *ty = node->cond->ty;
+      if (ty->kind == TY_VOID || node->els->ty->kind == TY_VOID)
+        node->ty = ty_void;
+      else
+        node->ty = get_common_type(ty, node->els->ty);
       return;
     }
     if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {

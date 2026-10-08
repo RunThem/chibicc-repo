@@ -275,13 +275,24 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   sret 探针(多结构体返回混声明)偏移整体移动(diff 66 行全部为栈偏移操作数), docker 内实测语义
   正确("sret ok") - 该探针归 A10.2 的"大结构体返回缓冲"用例; shape_node 的 ND_FUNCALL case 经
   shape_children 后建槽, 与 gen_expr 读 ret_buffer 的时机(emit 时)一致.)
-- [ ] **A9.1 结论类的消费侧**(先于 A7.1, 契约 1): ND_STRING 物化后只记 `node->var` 而不改 kind
+- [x] **A9.1 结论类的消费侧**(先于 A7.1, 契约 1): ND_STRING 物化后只记 `node->var` 而不改 kind
   (物化位置与顺序不变, 契约 4), codegen 的 `gen_addr`/`gen_expr` 增 ND_STRING case(同 tok, 同指令,
   预期 raw 也逐字节相同); ND_SIZEOF/ND_ALIGNOF/ND_TYPES_COMPATIBLE/ND_REG_CLASS/ND_GENERIC 不再被
   替换, 消费方读结论字段 - 其中 **sizeof(VLA) 仍是 codegen 的整形项**(它要建 `COMMA(算尺寸, 读尺寸
   变量)` 这棵运行期表达式, 本步经临时导出的 `vla_size_expr` 建, A7.1 再把该函数搬过来);
   ND_COND 的 elvis 降级搬 codegen, **阶段 A 保持字节等价**: 仍建临时槽, 仍落成 `tmp = a, tmp ? tmp : b`
   (无槽就地发射是发射形态变化, 归 B1.1, 不在阶段 A 混入 [就地] 口径).
+  **执行补充(见 RESULT.md 偏差)**: (1) `vla_size_expr` **未导出也未保留** - 实测它在 codegen 侧
+  不可用: compute_vla_size 里的 `new_lvar` 是 sema 的槽工厂, codegen 调用会把尺寸变量挂进 sema 的
+  陈旧链(偏移 0, 栈帧损坏); 改为 codegen 自建 `shape_compute_vla_size`/`shape_vla_size_expr`
+  (镜像文本, 用自己的槽工厂), sema 的 vla_size_expr 随折叠取消成为死码删除 - 契约 2 的临时导出
+  列表提前清空, A7.1 只剩搬 compute_vla_size 与 sema 侧收尾; (2) elvis 的 codegen 降级必须
+  **先清 `node->ty`** 再 `add_type`(sema 结论已在场, 不清则新树完全未定型, gen_expr 崩在 store(NULL));
+  (3) 移除 eager fold 后, 维度里 `sizeof(x)` 不再内联重算尺寸(基线在 resolve 折叠时重算过一遍),
+  vla.s 的 ndiff 残留恰为这段冗余计算删除 - 语义经 docker 实测与 gcc 逐点一致(含 n 改写角落:
+  `sizeof(x)=20`(声明时定值)/`sizeof(int[n])=28`(类型名即时求值), 基线对前者给 28 是错的);
+  按 [就地] 口径归因后同提交重置基线; (4) generic 的消费方委托多一条 `.loc`(归一化折叠).
+  另发现并修正对比脚本缺陷: 双端"静默失败"曾被计为一致(缺 rc 与产物存在性检查), 本步电池已改严.
 - [ ] **A7.1 VLA**: `compute_vla_size`/`vla_size_expr` 与 `Type::vla_size` 的写入搬 codegen(字段
   注释改标"codegen 侧缓存"), VLA 指针的缩放随 `scale_rhs` 已在 codegen; sema 保留维度求值与
   "VLA 不得初始化"检查. 前置检查: 此时 sema 里不得再有任何读 `ty->vla_size` 的代码(逐个 grep

@@ -563,7 +563,10 @@ Node *new_alloca(Node *sz);
 // sema.c that the shaping pass calls while they are on their way out.
 // The step that moves a callee into codegen deletes its declaration
 // here; A9.2 checks the list is empty. new_add and new_sub left sema
-// at A4.1.
+// at A4.1; sizeof of a VLA turned out to need the consumer's slot
+// factory when it moved (A9.1), so the consumer builds that chain
+// itself and vla_size_expr was never exported - the list is empty
+// ahead of schedule.
 
 // The next value the anonymous-name counter would hand out, without
 // consuming it. A consumer that allocates its own `.L..%d` control

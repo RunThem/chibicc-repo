@@ -80,6 +80,10 @@ static char *reg_ax(int sz) {
 // It's an error if a given node does not reside in memory.
 static void gen_addr(Node *node) {
   switch (node->kind) {
+  case ND_STRING:
+    // The literal's anonymous global (PLAN A9.1: the node keeps its
+    // kind), a global object like any other - the ND_VAR handling
+    // below covers it through the same `var` field.
   case ND_VAR:
     // Variable-length array, which is always local.
     if (node->var->ty->kind == TY_VLA) {
@@ -167,6 +171,12 @@ static void gen_addr(Node *node) {
       return;
     }
     break;
+  case ND_GENERIC:
+    // The selection's conclusion, an lvalue if the selected result
+    // is one (PLAN A9.1: the node keeps its kind and the field
+    // carries the result).
+    gen_addr(node->generic_sel);
+    return;
   case ND_ASSIGN:
   case ND_COND:
     if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION) {
@@ -725,6 +735,23 @@ static void gen_expr(Node *node) {
     println("  mov $%ld, %%rax", node->val);
     return;
   }
+  case ND_SIZEOF:
+  case ND_ALIGNOF:
+  case ND_TYPES_COMPATIBLE:
+  case ND_REG_CLASS:
+    // The conclusions sema recorded in `val` (PLAN A9.1): a size, an
+    // alignment, a type compatibility or a register class - all
+    // numbers, all typed like the literals they used to fold to, so
+    // the integer form above applies. A sizeof of a VLA never
+    // arrives here: the shaping pass lowered it to the comma that
+    // reads the size variable.
+    println("  mov $%ld, %%rax", node->val);
+    return;
+  case ND_GENERIC:
+    // The selection's conclusion (PLAN A9.1): emit the selected
+    // result expression.
+    gen_expr(node->generic_sel);
+    return;
   case ND_NEG:
     gen_expr(node->lhs);
 
@@ -748,6 +775,11 @@ static void gen_expr(Node *node) {
 
     println("  neg %%rax");
     return;
+  case ND_STRING:
+    // The literal's anonymous global (PLAN A9.1: the node keeps its
+    // kind): an array in expression context, so the ND_VAR handling
+    // below takes its address and the array load is a no-op - the
+    // same instructions the lowered ND_VAR produced.
   case ND_VAR:
     gen_addr(node);
     load(node->ty);
@@ -1444,6 +1476,42 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   error_tok(tok, "invalid operands");
 }
 
+// The VLA size computation for a type the statement tree does not
+// reach yet - a type-name operand in sizeof. It mirrors sema's
+// compute_vla_size, which serves the declaration path until A7.1
+// moves it here, with the one difference that makes it a consumer's
+// function: the size variables are slots of this consumer (sema's
+// factory would append them to the annotation pass's own chain, and
+// no frame layout would ever see them).
+static Node *shape_compute_vla_size(Type *ty, Token *tok) {
+  Node *node = ty->base ? shape_compute_vla_size(ty->base, tok) : NULL;
+
+  if (ty->kind != TY_VLA)
+    return node;
+
+  Node *base_sz;
+  if (ty->base->kind == TY_VLA)
+    base_sz = new_var_node(ty->base->vla_size, tok);
+  else
+    base_sz = new_num(ty->base->size, tok);
+
+  ty->vla_size = new_lvar("", ty_ulong);
+  Node *expr = new_binary(ND_ASSIGN, new_var_node(ty->vla_size, tok),
+                          new_binary(ND_MUL, ty->vla_len, base_sz, tok),
+                          tok);
+  return node ? new_binary(ND_COMMA, node, expr, tok) : expr;
+}
+
+// `sizeof` of a VLA type: a reference to its runtime size variable,
+// computed first if this type has not had its size computed yet
+// (e.g. `sizeof(int[n])` with a fresh type).
+static Node *shape_vla_size_expr(Type *ty, Token *tok) {
+  if (ty->vla_size)
+    return new_var_node(ty->vla_size, tok);
+  Node *lhs = shape_compute_vla_size(ty, tok);
+  return new_binary(ND_COMMA, lhs, new_var_node(ty->vla_size, tok), tok);
+}
+
 // Builds the `lhs op rhs` combination a compound assignment or an
 // atomic retry loop needs, given an operand whose pointer scaling has
 // already been applied. An additive operator goes through new_arith,
@@ -1812,6 +1880,78 @@ static void shape_node(Node *node) {
     shape_children(node);
     if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
       node->ret_buffer = new_lvar("", node->ty);
+    return;
+  case ND_COND:
+    shape_children(node);
+    if (node->is_elvis) {
+      // Lower the GNU `a ?: b` to `tmp = a, tmp ? tmp : b` - the
+      // form sema's annotation pass used to build, kept byte-
+      // identical in stage A (the slot-free emission is B1.1). The
+      // temporary is the consumer's slot now; the node is rewritten
+      // in place, and the fields the comma does not own are detached
+      // so that this pass cannot walk the same operands twice
+      // through them (the A4.1 snapshot's re-entrancy lesson).
+      Obj *var = new_lvar("", node->cond->ty);
+      Node *lhs = new_binary(ND_ASSIGN, new_var_node(var, node->tok),
+                             node->cond, node->tok);
+      Node *rhs = new_node(ND_COND, node->tok);
+      rhs->cond = new_var_node(var, node->tok);
+      rhs->then = new_var_node(var, node->tok);
+      rhs->els = node->els;
+      node->kind = ND_COMMA;
+      node->lhs = lhs;
+      node->rhs = rhs;
+      // The conditional's own fields would alias nodes the comma now
+      // reaches through lhs/rhs - the operand and the else expression
+      // are the same objects. This pass walks cond/then/els of every
+      // node it meets, so leaving them in place would descend into
+      // the rewritten operands a second time (the A4.1 snapshot's
+      // re-entrancy lesson). The comma form reads only lhs/rhs, so
+      // detaching them changes nothing else.
+      node->cond = NULL;
+      node->then = NULL;
+      node->els = NULL;
+      // The conclusion sema recorded was for the conditional shape;
+      // the fresh comma and its assign need their own typing, and
+      // add_type would stop at the stale field.
+      node->ty = NULL;
+      add_type(node);
+    }
+    return;
+  case ND_SIZEOF: {
+    // A sizeof of a VLA is the one conclusion that is a runtime
+    // value: lower it to the comma that computes and reads the size
+    // variable. Every other sizeof arrives concluded in `val`, and no
+    // form evaluates its operand, so there is nothing below to shape
+    // either way.
+    Type *ty = node->ty_op ? node->ty_op : node->lhs->ty;
+    if (ty->kind == TY_VLA) {
+      // A type-name operand carries a fresh type, and the dimension
+      // expressions the chain is about to embed have never been
+      // through this pass - no statement tree reaches them. Shape
+      // them first, innermost first, the order the size computation
+      // walks. A declaration's type is left alone: its dimensions
+      // sit in the declaration's own lowered chain and the descent
+      // reaches them there (the declaration annotation set vla_size
+      // on exactly those types, which is how the two cases differ).
+      if (!ty->vla_size)
+        for (Type *t = ty; t; t = t->base)
+          if (t->kind == TY_VLA)
+            shape_node(t->vla_len);
+
+      Node *expr = shape_vla_size_expr(ty, node->tok);
+      add_type(expr);
+      Node *nxt = node->next;
+      *node = *expr;
+      node->next = nxt;
+    }
+    return;
+  }
+  case ND_GENERIC:
+    // Only the selected association's expression reaches the
+    // emission; the controlling expression and the unselected arms
+    // are typed but produce no code, so only the selection is shaped.
+    shape_node(node->generic_sel);
     return;
   default:
     shape_children(node);
