@@ -268,9 +268,13 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   注意: `new_sub` 的 VLA 分支今天缺 `lhs->ty->base &&` 守卫, `1 - p` 会段错误(上游 07f9010 起
   即如此, 见 `RESULT.md` 的基线缺陷记录). 搬运步**原样搬**, 不顺手补守卫 - 那是行为变化, 要修
   另起一个提交并由用户拍板. (2026-09-29 已由用户拍板修复: 守卫已就位, 搬运的是修复后的版本.)
-- [ ] **A6.1 函数调用**: `lower_funcall` 的检查(不是函数, 实参个数, float 提升)与实参转换(隐式
+- [x] **A6.1 函数调用**: `lower_funcall` 的检查(不是函数, 实参个数, float 提升)与实参转换(隐式
   cast, 判据 1)留 sema, `func_ty` 标注留 sema; 只有调用者返回缓冲(`ret_buffer`)的槽创建搬 codegen
   (用契约 3(c) 的槽工厂; 偏移由归一化第 3 类吃掉).
+  (实测: 语料 raw diff **全空**(本步不引入语料可见的偏移变化 - 整形遍的创建顺序与标注遍一致);
+  sret 探针(多结构体返回混声明)偏移整体移动(diff 66 行全部为栈偏移操作数), docker 内实测语义
+  正确("sret ok") - 该探针归 A10.2 的"大结构体返回缓冲"用例; shape_node 的 ND_FUNCALL case 经
+  shape_children 后建槽, 与 gen_expr 读 ret_buffer 的时机(emit 时)一致.)
 - [ ] **A9.1 结论类的消费侧**(先于 A7.1, 契约 1): ND_STRING 物化后只记 `node->var` 而不改 kind
   (物化位置与顺序不变, 契约 4), codegen 的 `gen_addr`/`gen_expr` 增 ND_STRING case(同 tok, 同指令,
   预期 raw 也逐字节相同); ND_SIZEOF/ND_ALIGNOF/ND_TYPES_COMPATIBLE/ND_REG_CLASS/ND_GENERIC 不再被

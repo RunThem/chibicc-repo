@@ -877,9 +877,10 @@ Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
 // Turns a faithful call node into the shape codegen expects: the callee
 // must be a function or a pointer to one, each argument is converted to
 // its parameter type (an argument past the parameter list is promoted
-// instead, since it belongs to a variadic tail), and a struct or union
-// return value gets the buffer the caller owns. `tok` is the call's
-// closing paren, where the argument-count diagnostics are anchored.
+// instead, since it belongs to a variadic tail), and the result type is
+// recorded - a struct or union one tells the consumer to allocate the
+// buffer the call writes into. `tok` is the call's closing paren, where
+// the argument-count diagnostics are anchored.
 static void lower_funcall(Node *node, Token *tok) {
   Node *fn = node->lhs;
   Type *ty = fn->ty;
@@ -925,10 +926,10 @@ static void lower_funcall(Node *node, Token *tok) {
   node->args = head.next;
   node->ty = ty->return_ty;
 
-  // If a function returns a struct, it is caller's responsibility
-  // to allocate a space for the return value.
-  if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
-    node->ret_buffer = new_lvar("", node->ty);
+  // A struct or union return value gets the caller-owned buffer, but
+  // the slot itself is the consumer's (PLAN A6.1): codegen's shaping
+  // pass creates it before the frame layout is assigned. What stays
+  // here is the conclusion - the return type - which the pass reads.
 }
 
 // Generate code for computing a VLA size: one assignment per VLA the

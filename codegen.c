@@ -1803,6 +1803,16 @@ static void shape_node(Node *node) {
       node->kind = node->kind == ND_GT ? ND_LT : ND_LE;
     }
     return;
+  case ND_FUNCALL:
+    // The caller's return buffer is a slot of the consumer (PLAN
+    // A6.1): sema checked the callee, converted the arguments and
+    // recorded the return type; a struct or union one means the call
+    // needs a buffer, created here so it lands in the frame before
+    // assign_lvar_offsets runs.
+    shape_children(node);
+    if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
+      node->ret_buffer = new_lvar("", node->ty);
+    return;
   default:
     shape_children(node);
     return;

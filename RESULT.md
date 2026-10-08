@@ -186,7 +186,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | 49d7cac | A2.1 | 标签与控制流整形归 codegen: 整形遍 + `.L..` 基址续号, sema 检查化(stray 四检查 + 名字串配对), Obj.label_gotos 交接, 原子环预分配删除 |
 | e300eb9 | A3.1 | 成员与下标整形归 codegen: `x[y]`→`*(x+y)`(经临时导出的 new_add), arrow 的 DEREF 补插(arrow_tok 留最内层 link), `*foo` 只定型不换节点, eval2 补 DEREF 消解, to_assign member 分支适配忠实成员, new_add 依契约 2 临时导出 |
 | 46a2b2a | A5.1 | 复合赋值与自增自减整形归 codegen: to_assign/compound_op/combine/new_inc_dec 整体搬入整形遍, add_type 的 ND_ASSIGN(op)/ND_INCDEC 改纯标注, codegen 自建槽工厂(不导出 sema 的 new_var), 原子 retry 环就地 shape 拿标签, new_sub 依契约 2 临时导出 |
-| (本提交) | A4.1 | 算术与比较归 codegen: new_add/new_sub/scale_rhs 搬入整形遍(static), GT/GE 交换搬 shape_node, sema 的 ND_ADD/ND_SUB 改检查+定型(不插 cast), eval2 补 ADD/SUB 指针缩放(num+ptr 认源码序), 撤两处临时导出并删死码 ty_beyond_convs; 顺带修复两个整形遍重入缺陷(elvis 陈旧字段别名 / 原子环 shape 下潜), 二者均为计划未列, 快照抓出 |
+| 3cb17ba | A4.1 | 算术与比较归 codegen: new_add/new_sub/scale_rhs 搬入整形遍(static), GT/GE 交换搬 shape_node, sema 的 ND_ADD/ND_SUB 改检查+定型(不插 cast), eval2 补 ADD/SUB 指针缩放(num+ptr 认源码序), 撤两处临时导出并删死码 ty_beyond_convs; 顺带修复两个整形遍重入缺陷(elvis 陈旧字段别名 / 原子环 shape 下潜), 二者均为计划未列, 快照抓出 |
+| (本提交) | A6.1 | 函数调用返回缓冲的槽创建归 codegen: lower_funcall 只留检查/转换/结论, shape_node 加 ND_FUNCALL case 建 ret_buffer(槽工厂), 语料 raw 全空, sret 探针语义过 docker |
 
 ## 各步详情
 
@@ -456,7 +457,7 @@ void f(void) { char *t = "in f"; (void)t; }
      (维度只收 conditional, 报 "expected ']'"), 该形状不可达 - 账本行 6 的 A10.2 用例
      `a[i] += j++` 不受影响; 亦无 eval 路径经此到达。
 
-### A4.1 算术与比较 (本提交)
+### A4.1 算术与比较 (3cb17ba)
 
 - 改了什么: 账本行 1(指针缩放与 num+ptr 规范化)与行 7(/>/>= 交换)落位,sema 的 add_type 不再改写
   这两类节点; 账本行 50(求值侧缩放)同步落位。
@@ -498,6 +499,26 @@ void f(void) { char *t = "in f"; (void)t; }
   修复 1/2 后 raw diff **全空**: 本步不新建局部槽, 栈偏移、标签分配顺序、`.loc` 序列全部逐字节
   一致, 基线无需重置(与 A5.1 的栈偏移类差异不同 - 那步移动了槽的创建时机, 本步没有)。
   行数: sema.c 3170 -> 3131, codegen.c 2031 -> 2134, chibicc.h 768 -> 766, parse.c 2148 零改动。
+
+### A6.1 函数调用 (本提交)
+
+- 改了什么: 账本行 11 落位。`lower_funcall`(sema)只留三件事: 被调用者检查(不是函数, 锚 callee
+  token)、实参逐个别名化转换(too many/too few 锚调用右括号; float 提升在变参尾)、返回类型结论
+  (node->func_ty 与 node->ty)。`ret_buffer` 的槽创建删除, 注释改为指向消费者。codegen 的
+  shape_node 新增 ND_FUNCALL case: shape_children(参数里的整形先做完, 契约 3(a))后, 返回类型是
+  struct/union 时经槽工厂建 `new_lvar("", node->ty)` - 与 A5.1 的临时量同一工厂、同一相位, 都在
+  assign_lvar_offsets 之前(契约 3(c))。
+- 为什么改: 判据 3 - 返回缓冲是"只为实现服务的槽"(调用者自己的内存), 不是语言规定存在的对象;
+  检查是真检查, 留 sema(判据 2)。
+- 闸门: 四闸门全绿。docker-test rc=0(55 例诊断逐字节, 覆盖 f 系列"不是函数/实参个数"所在用例);
+  ndiff 空; **raw diff 全空** - 语料没有"同时含复合赋值临时量与结构体返回缓冲"的函数, 两处槽的
+  创建顺序在整形遍里与基线一致, 无需重置基线; tinycc rc=0(记账同前)。
+- 偏差: 一项, 补验证而非缺陷。sret 探针(5 个结构体返回调用混声明/初始化器/链式调用/结构体数组
+  赋值)相对 A5.1 二进制有 66 行差异, 全部为栈偏移操作数(diff 对齐的 4 行 `shr` 为同文重配对) -
+  即账本行 11 预告的"偏移由归一化第 3 类吃掉"在本探针上的实例。语义在 docker(真 x86-64)内实测
+  正确: 初始化、复用缓冲的赋值、链式调用、结构体数组逐个赋值全部通过("sret ok")。该探针归
+  A10.2 的"大结构体返回缓冲"用例。
+  行数: sema.c 3131 -> 3132, codegen.c 2134 -> 2144, chibicc.h 766 零改动, parse.c 2148 零改动。
 
 ## 给审核者的提示
 
