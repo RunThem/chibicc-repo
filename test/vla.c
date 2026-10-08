@@ -41,6 +41,15 @@ int main() {
   ASSERT(3, ({ int x; int y; x=1; y=2; x+y; }));
   ASSERT(3, ({ int s=0; for (int x; ; ) { s++; if (s==3) break; } s; }));
 
+  // PLAN A10.2: a VLA type shared by two declarations computes its
+  // size once and a sizeof reads it; rewriting the dimension variable
+  // afterwards does not change the declared object's size, while a
+  // fresh type-name's sizeof reads the current value (both match gcc).
+  ASSERT(20, ({ int n=5; typedef int T[n]; T a; (int)sizeof(T); }));
+  ASSERT(1, ({ int n=5; typedef int T[n]; T a; T b; a[0]=1; b[4]=2; a[0]+b[4]-2; }));
+  ASSERT(20, ({ int n=5; int x[n]; n=7; (int)sizeof(x); }));
+  ASSERT(28, ({ int n=5; int x[n]; n=7; (int)sizeof(int[n]); }));
+
   printf("OK\n");
   return 0;
 }

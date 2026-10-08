@@ -38,6 +38,13 @@ typedef struct { char a, b[]; } T65;
 T65 g65 = {'f','o','o',0};
 T65 g66 = {'f','o','o','b','a','r',0};
 
+// PLAN A10.2: the global scalar forms lock the evaluator's pointer
+// arithmetic scaling (the .quad values are snapshot-locked too).
+static int gsel[3] = {7, 8, 9};
+int *gpp = gsel + 2;
+struct GPair { int a, b; } gpair;
+int *gqp = &gpair.b + 1;
+
 int main() {
   ASSERT(1, ({ int x[3]={1,2,3}; x[0]; }));
   ASSERT(2, ({ int x[3]={1,2,3}; x[1]; }));
@@ -283,6 +290,14 @@ int main() {
   ASSERT(3, ({ int x[3][2]={[0 ... 1]={1,2}, [2]={3}}; x[2][0]; }));
 
   ASSERT(6, ({ struct {int n; int d[];} x={3,{1,2,3}}; x.n + x.d[2]; }));
+
+  // PLAN A10.2: the initializer's expression is typed and its string
+  // literals materialized at the declaration (the A8.1 contract-5
+  // seam).
+  ASSERT('a', ({ int c=1; char *p = c ? "a" : "b"; p[0]; }));
+  ASSERT(1, gpp == gsel + 2);
+  ASSERT(9, gpp[0]);
+  ASSERT(1, gqp == (int *)((char *)&gpair + 8));
 
   printf("OK\n");
   return 0;

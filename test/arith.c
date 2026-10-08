@@ -139,6 +139,13 @@ int main() {
   ASSERT(6, (long double)3*2);
   ASSERT(5, (long double)3+2.0);
 
+  // PLAN A10.2: shapes the faithful pipeline brings together - a
+  // pointer elvis, and a subscript under a compound assignment whose
+  // right side is a post-increment.
+  ASSERT(5, ({ int a=3; int *p=&a; *(p ?: &a) + 2; }));
+  ASSERT(3, ({ int i=1, j=2; int a[3]={0,1,2}; a[i] += j++; a[i]; }));
+  ASSERT(3, ({ int i=1, j=2; int a[3]={0,1,2}; a[i] += j++; j; }));
+
   printf("OK\n");
   return 0;
 }

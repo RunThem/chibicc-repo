@@ -331,6 +331,14 @@ static void check_node(Node *node) {
     labels = node;
     check_node(node->lhs);
     return;
+  case ND_FUNCDEF:
+    // A [GNU] nested definition: its own analysis ran when the record
+    // was reached - checks, label pairing and all - and its body is
+    // not this function's to descend. Walking it here would collect
+    // the nested function's goto and label nodes into this function's
+    // lists, rewriting the very `goto_next` chain its own resolution
+    // was handed (the collected list is a single-linked one).
+    return;
   default:
     check_children(node);
     return;
@@ -2880,11 +2888,18 @@ static void resolve_function(Node *node) {
     return;
 
   fn->body = node->body;
-  sema_fn = fn;
 
   // A [GNU] nested function definition reaches this from inside the
-  // enclosing body, so the flag is saved rather than cleared.
+  // enclosing body's resolution, and begin_function starts the local
+  // list from scratch - so the enclosing function's context is saved
+  // and restored around it, here and in the annotation pass
+  // (analyze_function), which reads sema_fn for the return
+  // conversions. The flag is saved for the same reach reason.
+  Obj *save_locals = locals;
+  Obj *save_fn = sema_fn;
   bool save_body = resolving_body;
+
+  sema_fn = fn;
   resolving_body = true;
 
   enter_scope();
@@ -2894,6 +2909,8 @@ static void resolve_function(Node *node) {
   leave_scope();
 
   resolving_body = save_body;
+  sema_fn = save_fn;
+  locals = save_locals;
 }
 
 // Runs the annotation + lowering pass and the control-flow descent over
@@ -2913,6 +2930,11 @@ static void splice_locals(Obj *fn) {
 }
 
 static void analyze_function(Obj *fn) {
+  // The return conversions read the function being annotated, and a
+  // nested definition's analysis runs from inside its host's, so the
+  // context is saved and restored like the local list.
+  Obj *save_fn = sema_fn;
+  sema_fn = fn;
   Obj *save = locals;
   locals = NULL;
   add_type(fn->body);
@@ -2928,6 +2950,7 @@ static void analyze_function(Obj *fn) {
 
   splice_locals(fn);
   locals = save;
+  sema_fn = save_fn;
 }
 
 // Runs semantic analysis over the parser's top-level declaration-record

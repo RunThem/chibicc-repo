@@ -58,6 +58,12 @@ int main() {
   ASSERT(3, ({ int x=3; atomic_exchange(&x, 5); }));
   ASSERT(5, ({ int x=3; atomic_exchange(&x, 5); x; }));
 
+  // PLAN A10.2: the retry-loop forms, including a shift.
+  ASSERT(8, ({ _Atomic int x=3; x += 5; x; }));
+  ASSERT(4, ({ _Atomic int x=10; x -= 6; x; }));
+  ASSERT(6, ({ _Atomic int x=3; x *= 2; x; }));
+  ASSERT(0, ({ _Atomic int x=3; x >>= 2; x; }));
+
   printf("OK\n");
   return 0;
 }

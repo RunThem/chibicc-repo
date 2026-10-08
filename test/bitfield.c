@@ -57,6 +57,10 @@ int main() {
   ASSERT(4, ({ enum {W = 2}; sizeof(struct {int a : W;}); }));
   ASSERT(4, sizeof(struct {int a : (3); int b : 1;}));
 
+  // PLAN A10.2: compound assignment on a bitfield member.
+  ASSERT(5, ({ struct {int a:4;} x={0}; x.a += 5; x.a; }));
+  ASSERT(3, ({ struct {int a:4;} x={7}; x.a -= 4; x.a; }));
+
   printf("OK\n");
   return 0;
 }

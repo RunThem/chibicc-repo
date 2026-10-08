@@ -29,6 +29,9 @@ int main() {
   ASSERT(5, _Generic(1, int: _Generic(1.0, double: 5, default: 6), default: 7));
   ASSERT(2, _Generic((int[3]){0}, int *: 2, int: 3, default: 4));
 
+  // PLAN A10.2: the recorded selection read from an initializer.
+  ASSERT(9, ({ int x = _Generic(1, int: 9, default: 8); x; }));
+
   printf("OK\n");
   return 0;
 }

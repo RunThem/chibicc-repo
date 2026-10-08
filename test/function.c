@@ -214,6 +214,29 @@ long double to_ldouble(int x) {
   return x;
 }
 
+// PLAN A10.2: declared before defined, each with its own __func__
+// string (the block order is snapshot-locked).
+int late_declared(void);
+int early_def(void) { return __func__[0]; }
+int late_declared(void) { return __func__[0]; }
+
+// PLAN A10.2: a nested function whose body carries a loop and a
+// label-value jump table (the contracts 3(e)/4 intersection).
+int nested_probe(void) {
+  int f(int n) {
+    static void *tab[3] = {&&l0, &&l1, &&l2};
+    int s = 0;
+    goto *tab[n];
+  l0: s += 1; goto done;
+  l1: s += 2; goto done;
+  l2: s += 4;
+  done:
+    for (int i = 0; i < 2; i++) s++;
+    return s;
+  }
+  return f(1) + f(2);
+}
+
 int main() {
   ASSERT(3, ret3());
   ASSERT(8, add2(3, 5));
@@ -397,6 +420,10 @@ int main() {
 
   ASSERT(1, to_ldouble(5.0) == 5.0);
   ASSERT(0, to_ldouble(5.0) == 5.2);
+
+  ASSERT(101, early_def());
+  ASSERT(108, late_declared());
+  ASSERT(10, nested_probe());
 
   printf("OK\n");
 }

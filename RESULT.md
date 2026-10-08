@@ -194,7 +194,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | 9e3a5c9 | A8.2 | 其余记录出链: sema 的 type_chain 停止摘除 TYPEDEF/ENUM_CONST/GVAR_DECL/FUNCDEF(记录留在输出里), serialize_gvar 与嵌套体标注调用留在原位; codegen 链编辑 walker 摘除四类记录且不下潜嵌套体(契约 3(e), 从 prog 单次进入); raw diff 全空 |
 | 5812e79 | A8.3 | 复合字面量(验证提交, 无代码改动): 内容已在 A8.1 落地; 补两组块域/文件域探针 + docker 运行时断言("complit-a83 ok") + 全探针 A/B 逐字节, 四闸门全绿 raw 全空; 记录两个预存在限制(裸后缀 `.`/`[` 与 static 初始化) |
 | 5245cc3 | A9.2 | add_type 收尾核对: 34 case 逐项审计全为纯标注; 最后一处形状改写(文件域复合字面量→ND_VAR)修为保留 kind + eval 侧读 var; 契约 2 临时导出面为空; 红线 grep 全 0; raw 全空 |
-| (本提交) | A10.1 | 归属清扫与文档: chibicc.h 8 处字段归属标注, sema.c/codegen.c 文件头重写(codegen 新增整形遍六不变量头注释), 库层无整形 grep 留档(A9.2 节), AGENTS.md static 清单/目标架构/现状段按终态更新; 纯文档, 闸门全绿 |
+| fade478 | A10.1 | 归属清扫与文档: chibicc.h 8 处字段归属标注, sema.c/codegen.c 文件头重写(codegen 新增整形遍六不变量头注释), 库层无整形 grep 留档(A9.2 节), AGENTS.md static 清单/目标架构/现状段按终态更新; 纯文档, 闸门全绿 |
+| (本提交) | A10.2 | 针对性回归测试: 八文件补测(下标+op=+后缀自增 / 指针 elvis / 大结构体返回缓冲 / VLA 尺寸复用与 sizeof / generic / 位域与原子 op= / 全局初始化器缩放 / 声明后定义字符串 / 嵌套函数循环与 &&label); docker 运行时断言全过; 嵌套函数项触出并修复两个预存在缺陷(resolve/analyze 的 locals 与 sema_fn 未跨嵌套保存); 快照随语料重置, 编译器维度 A/B 中性 |
 
 ## 各步详情
 
@@ -716,6 +717,36 @@ void f(void) { char *t = "in f"; (void)t; }
 - 闸门: 四闸门全绿; raw diff 全空(本步改动发射中性, complit.c 的序列化路径不变); 语料 37/41 逐字节
   (4 `.file` 伪影), 七目录全探针一致。行数: sema.c 2946 -> 2960, codegen.c 2524 零改动, chibicc.h
   807 零改动, parse.c 2148 零改动。
+
+### A10.2 针对性回归测试 (本提交)
+
+- 改了什么: 计划清单逐项落测试(八文件), 另修复嵌套函数项触出的两个预存在缺陷。
+  (1) **补测**(每项断言值经 docker 运行时验证): arith.c 增 `*(p ?: &a)` 与 `a[i] += j++`(下标 +
+  复合赋值 + 后缀自增的组合, 两断言锁 i 与 j); struct.c 增 RetBuf(十 int 结构体)的初始化/赋值/
+  链式调用; vla.c 增 typedef 共享 VLA 类型两次声明、`sizeof(VLA)` 复用与 `n` 改写角落(`sizeof(x)`
+  给声明时值 20, `sizeof(int[n])` 给当前值 28 - 与 gcc 逐点一致, 即 A9.1 修正的语义锁);
+  generic.c 增初始化器中的选中结果; bitfield.c 增位域 op=; atomic.c 增原子 op= 族(含 `>>=`);
+  initializer.c 增契约 5 探针(`c ? "a" : "b"` 的物化)与全局缩放探针(`int *gpp = gsel + 2;`
+  地址关系断言, `int *gqp = &gpair.b + 1;` 同理; `.quad` 值随快照锁定); function.c 增先声明后定义
+  的两函数各带 `__func__` 字符串, 与嵌套函数(循环 + `&&label` 跳表)。
+  (2) **预存在缺陷修复(嵌套函数)**: 补测的嵌套函数项在基线与当前构建上同样失败(死循环/段错误),
+  语料从未运行过嵌套函数。根因两处, 同属上下文未跨嵌套保存: `resolve_function` 的嵌套调用经
+  `begin_function` 把外层正在积累的 `locals` 链冲掉(外层帧辅助对象 `__alloca_size__` 等未进
+  `fn->locals`, 偏移 0, 写出 saved rbp - m5 死循环/m4 段错误的机制), 且 `sema_fn` 不恢复使外层
+  注解读内层返回类型。修复: resolve_function 与 analyze_function 各保存/恢复 `locals` 与 `sema_fn`。
+  验证: m4/m5/标签跳表 nl.c 与完整 function.c 在 docker 内全部通过("OK"); A5.1/A6.1/A8.1 基线
+  复验缺陷同样存在(非本线引入)。**仍存的原有未支持限制**: 嵌套函数读外层变量(静态链)给出静默
+  错值(m6), 与 upstream 的既有边界一致, 记录不移。
+- 为什么改: 计划 A10.2 明列这些薄弱面为回归对象; 嵌套函数项不修复则无法成立, 属"补测暴露并
+  当步修复"的范畴(先例: A4.1 的重入缺陷)。
+- 闸门: 四闸门全绿。docker-test rc=0(55 例诊断逐字节 + 全部运行时断言, 含新八项); ndiff 空;
+  raw 全空(快照随语料重置 - 新断言字符串进 `.data`, 属语料维度; 编译器维度由本地 A/B 证明中性:
+  与 A8.1 基线对同一新语料 36/41 逐字节 + function.c 的差异恰为修复的帧偏移 + 4 个 `.file` 伪影);
+  tinycc rc=0(记账同前)。
+- 偏差: 两项。1) 嵌套函数调用族在基线即坏被发现(上述); 外层变量捕获的静默错值为其残留限制,
+  未修。2) 我的初版 `initializer.c` 断言期望值写错(`c=1` 选 "a" 而断言 'b'), 由 docker-test 抓出
+  改正 - 闸门有效性的正面证据。行数: sema.c 2968 -> 2991(修复 23 行净增), codegen.c 2556 零改动,
+  chibicc.h 821 零改动, parse.c 2148 零改动; 测试八文件净增约 65 行(含注释)。
 
 ## 给审核者的提示
 

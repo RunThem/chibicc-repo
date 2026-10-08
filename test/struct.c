@@ -17,6 +17,10 @@ static int bare_read(struct BareHolder *h, int i) {
 
 static struct Bare bare_objs[2];
 
+// PLAN A10.2: a ten-int return exercises the caller-owned buffer.
+struct RetBuf { int a[10]; };
+struct RetBuf ret_buf(int n) { struct RetBuf b; b.a[0] = n; b.a[9] = n * 2; return b; }
+
 int main() {
   ASSERT(1, ({ struct {int a; int b;} x; x.a=1; x.b=2; x.a; }));
   ASSERT(2, ({ struct {int a; int b;} x; x.a=1; x.b=2; x.b; }));
@@ -113,6 +117,13 @@ int main() {
   // that block's chain, so a variable of the type declared right after
   // it sees the completed layout.
   ASSERT(9, ({ struct Tag { int x; }; struct Tag t; t.x=9; t.x; }));
+
+  // PLAN A10.2: the caller-owned return buffer - a slot the shaping
+  // pass creates - across initializer, assignment and chained calls.
+  ASSERT(3, ({ struct RetBuf b = ret_buf(3); b.a[0]; }));
+  ASSERT(6, ({ struct RetBuf b = ret_buf(3); b.a[9]; }));
+  ASSERT(8, ({ struct RetBuf b; b = ret_buf(4); b.a[9]; }));
+  ASSERT(15, (ret_buf(5).a[9] + ret_buf(3).a[0] + 2));
 
   printf("OK\n");
   return 0;
