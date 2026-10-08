@@ -191,7 +191,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | d415c53 | A9.1 | 结论类消费侧归 codegen: STRING 保留 kind(gen_addr/gen_expr 新增 case), sizeof/alignof/两个 builtin/generic 只记结论读字段, elvis 降级迁入整形遍(先清 ty 再定型), sizeof(VLA) 经 codegen 自建的槽工厂链, sema 的 vla_size_expr 死码删除; vla.s 的 ndiff 残留为基线冗余重算的删除(与 gcc 逐点一致), 归因后重置基线 |
 | 0c1ad27 | A7.1 | VLA 尺寸机制归 codegen: compute_vla_size/vla_size_expr 搬整形遍(自建槽工厂), 持 VLA 的声明记录留给 codegen 展开(sema 只留检查), lvar_init_comma 临时导出(带初始化器的指针到 VLA), 维度先显式整形; 语料差异全为栈偏移, ndiff 空, 重置基线 |
 | 1a80f25 | A8.1 | 初始化器消费侧 + ND_DECL 展开: ResolvedInit/InitDesg 更名 InitTree/InitPath 进 chibicc.h, create_lvar_init/lvar_init_comma/init_desg_expr 搬 codegen(init_desg_expr 直建 DEREF+缩放, 无中间 SUBSCRIPT), sema 的 ND_DECL 只留检查+static 序列化+显式定型 init expr(annotate_init_exprs), 整形遍链编辑展开记录(expand_decl, 0..n 条语句)并摘除之, for-init 的 BLOCK 归位; decl_remove 静默变量删除 |
-| (本提交) | A8.2 | 其余记录出链: sema 的 type_chain 停止摘除 TYPEDEF/ENUM_CONST/GVAR_DECL/FUNCDEF(记录留在输出里), serialize_gvar 与嵌套体标注调用留在原位; codegen 链编辑 walker 摘除四类记录且不下潜嵌套体(契约 3(e), 从 prog 单次进入); raw diff 全空 |
+| 9e3a5c9 | A8.2 | 其余记录出链: sema 的 type_chain 停止摘除 TYPEDEF/ENUM_CONST/GVAR_DECL/FUNCDEF(记录留在输出里), serialize_gvar 与嵌套体标注调用留在原位; codegen 链编辑 walker 摘除四类记录且不下潜嵌套体(契约 3(e), 从 prog 单次进入); raw diff 全空 |
+| (本提交) | A8.3 | 复合字面量(验证提交, 无代码改动): 内容已在 A8.1 落地; 补两组块域/文件域探针 + docker 运行时断言("complit-a83 ok") + 全探针 A/B 逐字节, 四闸门全绿 raw 全空; 记录两个预存在限制(裸后缀 `.`/`[` 与 static 初始化) |
 
 ## 各步详情
 
@@ -653,7 +654,7 @@ void f(void) { char *t = "in f"; (void)t; }
      节点多次到达整形路径, 独立 walker 未改变这一点) - 归 A8.2/A8.3 之后收尾或专门处置。
   行数: sema.c 3080 -> 2951, codegen.c 2332 -> 2512, chibicc.h 772 -> 807, parse.c 2148 零改动。
 
-### A8.2 其余记录出链 (本提交)
+### A8.2 其余记录出链 (9e3a5c9)
 
 - 改了什么: 账本行 37/52 落位。sema 的 `type_chain` 不再从链上摘除记录, 降为纯遍历(`Node *` 签名,
   去掉 `Node **pp` 链编辑): ND_TYPEDEF/ND_ENUM_CONST 直接跳过(resolve 遍已完成其工作),
@@ -668,6 +669,23 @@ void f(void) { char *t = "in f"; (void)t; }
   一致; 新增两组探针: 函数体内 typedef/enum/extern + 嵌套函数定义(返回嵌套调用结果)与 for-init
   的 `enum {...} e = B` + 循环体 typedef - 逐字节一致即嵌套体只被整形一次、位置正确的实证。
 - 偏差: 无。行数: sema.c 2951 -> 2946, codegen.c 2512 -> 2524, chibicc.h 807 零改动, parse.c 零改动。
+
+### A8.3 复合字面量 (本提交, 验证)
+
+- 改了什么: **无代码改动**。计划中 A8.3 的三项内容(无名字对象创建留 resolve 遍 / gvar_init_data
+  留 sema 标注遍 / "初始化链 + 对象引用"整形归 codegen)已在 A8.1 落地 - A7.1 让 lvar_init_comma
+  临时导出时, 块域复合字面量的展开(其唯一消费者)随之提前搬入 codegen, 计划未预见此牵连(见 A8.1
+  偏差 3)。本步按计划执行顺序补齐验收: 针对性探针 + 语义实测 + 闸门复核, 并记档。
+- 验证: (1) 语料自身覆盖 complit.c(文件域字面量, 含函数定义前/中/后的 `.data` 块序 - resolve 遍
+  降入函数体后再回文件域的路径)与 initializer.c 的设计符/括号后成员与下标形状; (2) 新增两组探针:
+  块域(成员访问 `((struct S){1,2}).a`、函数实参、`((int[]){5,6,7})[1]`、`((int[3]){[1]=9})[1]`、
+  `&(struct S){10,20}`、循环体内新鲜对象)与文件域(`int *before = (int[]){1,2};` 与 `mid()` 定义
+  前后、`&(struct S){.b=7,.a=6}` 指定初始化), 与基线二进制逐字节一致; (3) docker 真 x86-64 运行时
+  断言全过("complit-a83 ok"); 四闸门全绿(docker-test 55 例逐字节, ndiff 空, raw 全空, tinycc rc=0)。
+- 预存在限制(基线同报错, 非本步引入): 复合字面量后直接跟 `.`/`[...]`(不带外层括号,
+  如 `(struct S){1,2}.a`)在 parse 层报 "expected ','"; 块域 static 用复合字面量初始化报
+  "not a compile-time constant"。两者均记入 A10.2 的对照知识, 后续处置归属待定。
+  行数: 四文件零改动。
 
 ## 给审核者的提示
 
