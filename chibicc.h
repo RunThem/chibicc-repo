@@ -401,8 +401,9 @@ struct Node {
   Node *init;
   Node *inc;
 
-  // "break" and "continue" labels, allocated by sema's analyze pass
-  // when it descends into the loop or the switch.
+  // "break" and "continue" labels of a loop or a switch. Written by
+  // codegen's shaping pass - the label allocation is the consumer's
+  // since A2.1 - and read by gen_stmt at emission time.
   char *brk_label;
   char *cont_label;
 
@@ -427,29 +428,44 @@ struct Node {
   Member *member;
   Token *arrow_tok;
 
-  // Function call
+  // Function call. func_ty and the conversions on the arguments are
+  // sema's (the annotation); pass_by_stack is computed by codegen's
+  // push_args when it emits the call, and ret_buffer - the caller-owned
+  // buffer a struct or union return writes into - is a slot codegen's
+  // shaping pass creates (A6.1), read by gen_expr.
   Type *func_ty;
   Node *args;
   bool pass_by_stack;
   Obj *ret_buffer;
 
-  // Goto or labeled statement, or labels-as-values
+  // Goto or labeled statement, or labels-as-values. `label` is the
+  // spelled name the parser recorded (and the goto/label pairing
+  // check compares); `unique_label` is the `.L..` name codegen's
+  // shaping pass allocates for the label a goto resolves to.
+  // `goto_next` links the function's collected goto and label-value
+  // references while the pairing check and the shaping pass resolve
+  // them.
   char *label;
   char *unique_label;
   Node *goto_next;
 
-  // Switch. sema's analyze pass links the case labels of a body into
-  // the switch that encloses them.
+  // Switch: the case labels of the body, linked into the switch that
+  // encloses them by codegen's shaping pass (A2.1), read by gen_stmt
+  // when it emits the comparison chain. `label` above carries each
+  // case's own `.L..` name.
   Node *case_next;
   Node *default_case;
 
-  // [GNU] `a ?: b` conditional. sema lowers it to
-  // `tmp = a, tmp ? tmp : b`.
+  // [GNU] `a ?: b` conditional. sema types it; codegen's shaping pass
+  // lowers it to `tmp = a, tmp ? tmp : b` (A9.1), and the evaluator
+  // and is_const_expr treat it as a runtime value through this flag.
   bool is_elvis;
 
   // ND_SIZEOF/ND_ALIGNOF: the operand type for the `sizeof(type)`
   // form. The `sizeof expr` form carries its unevaluated operand in
-  // `lhs` instead. sema folds the node to its value. ND_CAST (from the
+  // `lhs` instead. sema records the size or alignment in `val`; a
+  // VLA operand is not a constant and codegen's shaping pass builds
+  // the runtime size expression for it (A9.1/A7.1). ND_CAST (from the
   // parser), ND_GENERIC_ASSOC, ND_TYPES_COMPATIBLE, ND_REG_CLASS,
   // ND_DECL, ND_GVAR_DECL, ND_FUNCDEF and ND_COMPOUND_LITERAL carry
   // their declared/target/operand type here as well.
@@ -462,10 +478,8 @@ struct Node {
   // ND_GENERIC: the result expression of the association the controlling
   // expression selects - the conclusion of the selection, recorded on the
   // node so a consumer can read it instead of the node having to *become*
-  // it. Written by sema's select_generic. Nothing reads it yet: today the
-  // node is still rewritten to the selected expression as well, and the
-  // rewrite is what the evaluator and codegen consume. PLAN A9.1 drops the
-  // rewrite and switches both consumers to this field.
+  // it. Written by sema's select_generic; the evaluator, gen_expr and
+  // gen_addr read it (A9.1). The node keeps its kind.
   Node *generic_sel;
 
   // ND_CAST: true for a cast sema inserted to carry out an implicit

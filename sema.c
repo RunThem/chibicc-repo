@@ -12,14 +12,22 @@
 //    alignments, bitfield widths, case values) and lays aggregates
 //    out;
 //
-//  - the annotation + lowering pass (add_type and type_chain) types
-//    every node and performs the lowerings codegen expects (pointer
-//    scaling, compound assignment, increment, function calls, string
-//    literals, initializer flattening), then the control-flow checks
-//    (stray break/continue/case/default, undeclared labels) run as a
-//    descent of their own. The label allocation and the control-flow
-//    rewrites those checks used to ride along with are codegen's
-//    shaping pass; the goto and label-value references each function
+//  - the annotation pass (add_type and type_chain) types every node,
+//    inserts the implicit conversions the standard requires, runs the
+//    checks that need a typed tree, records the compile-time
+//    conclusions on the nodes (sizeof values, generic selections, the
+//    type builtins) and materializes the objects the language says
+//    exist (a string literal's anonymous global, a compound literal's
+//    hidden object, a block-scope static's data image). It rewrites
+//    no tree shape: everything the older lines called lowering -
+//    pointer scaling, compound assignment and inc/dec round trips,
+//    the call, subscript, member, string, VLA, initializer and
+//    declaration shaping - is codegen's shaping pass (PLAN.md, the
+//    codegen-direct line). The control-flow checks (stray
+//    break/continue/case/default, undeclared labels) run as a
+//    descent of their own; the label allocation and the control-flow
+//    rewrites those checks used to ride along with are the shaping
+//    pass's, and the goto and label-value references each function
 //    collected for the pairing check are handed over through
 //    Obj.label_gotos.
 //

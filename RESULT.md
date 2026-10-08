@@ -193,7 +193,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | 1a80f25 | A8.1 | 初始化器消费侧 + ND_DECL 展开: ResolvedInit/InitDesg 更名 InitTree/InitPath 进 chibicc.h, create_lvar_init/lvar_init_comma/init_desg_expr 搬 codegen(init_desg_expr 直建 DEREF+缩放, 无中间 SUBSCRIPT), sema 的 ND_DECL 只留检查+static 序列化+显式定型 init expr(annotate_init_exprs), 整形遍链编辑展开记录(expand_decl, 0..n 条语句)并摘除之, for-init 的 BLOCK 归位; decl_remove 静默变量删除 |
 | 9e3a5c9 | A8.2 | 其余记录出链: sema 的 type_chain 停止摘除 TYPEDEF/ENUM_CONST/GVAR_DECL/FUNCDEF(记录留在输出里), serialize_gvar 与嵌套体标注调用留在原位; codegen 链编辑 walker 摘除四类记录且不下潜嵌套体(契约 3(e), 从 prog 单次进入); raw diff 全空 |
 | 5812e79 | A8.3 | 复合字面量(验证提交, 无代码改动): 内容已在 A8.1 落地; 补两组块域/文件域探针 + docker 运行时断言("complit-a83 ok") + 全探针 A/B 逐字节, 四闸门全绿 raw 全空; 记录两个预存在限制(裸后缀 `.`/`[` 与 static 初始化) |
-| (本提交) | A9.2 | add_type 收尾核对: 34 case 逐项审计全为纯标注; 最后一处形状改写(文件域复合字面量→ND_VAR)修为保留 kind + eval 侧读 var; 契约 2 临时导出面为空; 红线 grep 全 0; raw 全空 |
+| 5245cc3 | A9.2 | add_type 收尾核对: 34 case 逐项审计全为纯标注; 最后一处形状改写(文件域复合字面量→ND_VAR)修为保留 kind + eval 侧读 var; 契约 2 临时导出面为空; 红线 grep 全 0; raw 全空 |
+| (本提交) | A10.1 | 归属清扫与文档: chibicc.h 8 处字段归属标注, sema.c/codegen.c 文件头重写(codegen 新增整形遍六不变量头注释), 库层无整形 grep 留档(A9.2 节), AGENTS.md static 清单/目标架构/现状段按终态更新; 纯文档, 闸门全绿 |
 
 ## 各步详情
 
@@ -688,7 +689,7 @@ void f(void) { char *t = "in f"; (void)t; }
   "not a compile-time constant"。两者均记入 A10.2 的对照知识, 后续处置归属待定。
   行数: 四文件零改动。
 
-### A9.2 add_type 收尾核对 (本提交)
+### A9.2 add_type 收尾核对 (5245cc3)
 
 - 审计表(34 case, 逐项核对; "标注" = 只写 ty/val/结论 或插隐式 cast 或跑检查/绑定):
   ND_NUM/ND_VAR/ND_VLA_PTR/ND_IDENT(绑名兜底)/ND_MUL..ND_BITXOR(conv+ty)/ND_NEG(cast)/ND_GT..ND_LE 与
@@ -713,7 +714,7 @@ void f(void) { char *t = "in f"; (void)t; }
   ABI 对象(参数、大结构体返回参数、`__va_area__`、`__alloca_size__`、声明对象、复合字面量隐藏对象);
   调用 codegen 0 处(仅注释提及)。
 - 闸门: 四闸门全绿; raw diff 全空(本步改动发射中性, complit.c 的序列化路径不变); 语料 37/41 逐字节
-  (4 `.file` 伪影), 七目录全探针一致。行数: sema.c 2946 -> 2964, codegen.c 2524 零改动, chibicc.h
+  (4 `.file` 伪影), 七目录全探针一致。行数: sema.c 2946 -> 2960, codegen.c 2524 零改动, chibicc.h
   807 零改动, parse.c 2148 零改动。
 
 ## 给审核者的提示

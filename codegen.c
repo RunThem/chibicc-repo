@@ -1,3 +1,32 @@
+// This file turns the annotated tree into x86-64 assembly - and hosts
+// the shaping pass, the part of the old pipeline that rewrote the
+// faithful tree into the shapes the emitter understands. The pass runs
+// once per function before anything is assigned or emitted (PLAN.md's
+// codegen-direct line moved its pieces here step by step), under six
+// invariants (plan contract 3):
+//
+//  (a) post-order: a node's subtrees are shaped before the node is
+//      rewritten - an outer rewrite may rely on an inner one;
+//  (b) phase order: all expression and declaration shaping happens
+//      before the control-flow labeling, so loops built during the
+//      first phase still receive their labels;
+//  (c) per-function context: the temporary slots the rewrites create
+//      are appended to the current function's locals, and every slot
+//      exists before assign_lvar_offsets runs;
+//  (d) no re-entry: subtrees the pass builds are built already lowered,
+//      and the pass never walks a subtree it has shaped again - the
+//      tree carries no aliases that could lead it back in;
+//  (e) visit once: a nested function's body is shaped exactly once,
+//      from the program list, never through its host's body;
+//  (f) initializers are off the natural path: the resolved initializer
+//      trees are walked explicitly (shape_init_exprs), never by
+//      descending a node's fields.
+//
+// The pass also owns the label namespace and the temporary slots
+// (Obj.ret_buffer, Type::vla_size and friends); the fields it writes
+// are marked as such in chibicc.h. Everything below is the emitter:
+// no optimization passes, by design.
+
 #include "chibicc.h"
 
 #define GP_MAX 6
@@ -1338,20 +1367,23 @@ static void gen_stmt(Node *node) {
   error_tok(node->tok, "invalid statement");
 }
 
-// The shaping pass (PLAN A2.1, A3.1): the control-flow half of what
-// sema's post-annotation descent used to do, run here as a pre-pass over
-// every function body before anything is assigned or emitted. It
-// allocates the break/continue labels of loops and switches, links
-// the case labels into their switch, gives every label its unique
-// name, resolves the goto and [GNU] label-value references against
-// them, and lowers the faithful `while` and `break`/`continue` to
-// the ND_FOR and ND_GOTO shapes gen_stmt understands. A3.1 added the
-// first expression shapes: `x[y]` becomes `*(x+y)` through new_add,
-// and a member still carrying its arrow marker gets the dereference
-// its operand needs. The checks that rode inside this descent - the
-// stray diagnostics, the undeclared-label pairing and the subscript /
-// member access checks - stayed in sema, so this pass only does
-// the work on trees that passed them.
+// The shaping pass, at its terminal shape: the control-flow half of
+// what sema's post-annotation descent used to do, plus every
+// expression and declaration rewrite the older lines performed
+// (subscripts, members, compound assignment and inc/dec, additive
+// scaling and comparisons, calls, strings and other conclusions, the
+// elvis, VLA sizes, declarations and initializers - PLAN steps A2.1
+// through A9.2). It allocates the break/continue labels of loops and
+// switches, links the case labels into their switch, gives every label
+// its unique name, resolves the goto and [GNU] label-value references
+// against them, lowers `while` and `break`/`continue` to the ND_FOR
+// and ND_GOTO shapes gen_stmt understands, expands declaration records
+// into statements, and rewrites expressions into the forms the emitter
+// reads. The checks that rode inside those descents - the stray
+// diagnostics, the undeclared-label pairing and the operand checks -
+// stayed in sema, so this pass only does the work on trees that passed
+// them. The six invariants it lives by are stated at the top of the
+// file.
 //
 // Label names keep the `.L..%d` format and continue the same number
 // space as sema's anonymous objects, from wherever the library's

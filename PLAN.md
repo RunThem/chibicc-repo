@@ -349,11 +349,17 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   读 `node->var`(A1.1 的字符串模式); 契约 2 临时导出面已为空(A8.1 起); 红线 grep 全 0 - 缩放/
   读写回环/标签分配(仅剩 new_anon_gvar 一个调用者)/语句重排/建槽(6 处全为参数/ABI/声明/复合字面量
   对象)/调用 codegen 均为清; 四闸门全绿, raw 全空.)
-- [ ] **A10.1 归属清扫与文档**: `chibicc.h` 逐字段标注归属(codegen 写入的字段: `ret_buffer`,
+- [x] **A10.1 归属清扫与文档**: `chibicc.h` 逐字段标注归属(codegen 写入的字段: `ret_buffer`,
   `brk_label`/`cont_label`, `unique_label`/`label`, `case_next`/`default_case`, `pass_by_stack`,
   `Type::vla_size`, 结论槽), sema.c/codegen.c 文件头注释重写(codegen 头要写清整形遍的六条不变量),
   库层"无整形"的 grep 佐证留档, AGENTS.md 的目标架构/现状段/硬性规则按终态更新(含 static 状态清单
   去掉 `decl_remove`).
+  (实测: chibicc.h 的 8 处归属标注(brk/cont 标签、pass_by_stack/ret_buffer、label/unique_label/
+  goto_next、case 链、is_elvis、ty_op、generic_sel、Type::vla_size 已在 A7.1 标注); sema.c 头部
+  的"标注+降级"改为"纯标注遍(无形状改写)"并列出物化清单; codegen.c 新增文件头(整形遍定位 + 契约 3
+  六条不变量 + 字段归属指引); AGENTS.md 的 static 清单(10 个, 去掉 brk_label/cont_label/
+  current_switch/decl_remove 等已迁出项)、目标架构第 4 条、现状段与代码地图按终态重写; 四闸门全绿,
+  raw 全空(纯注释/文档).)
 - [ ] **A10.2 针对性回归**: 补测试覆盖忠实形态的发射面, 以及本次分析新识别的薄弱面 -
   `a[i] += j++`(下标 + 复合赋值 + 后缀自增), `p ?: q`, 大结构体返回值缓冲, VLA 尺寸复用与
   `sizeof(VLA)`, `_Generic` 结果, 位域 op=, 原子 op=, `&&label` 的块域 static 初始化器,
