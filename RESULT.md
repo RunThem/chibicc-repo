@@ -192,7 +192,8 @@ void f(void) { char *t = "in f"; (void)t; }
 | 0c1ad27 | A7.1 | VLA 尺寸机制归 codegen: compute_vla_size/vla_size_expr 搬整形遍(自建槽工厂), 持 VLA 的声明记录留给 codegen 展开(sema 只留检查), lvar_init_comma 临时导出(带初始化器的指针到 VLA), 维度先显式整形; 语料差异全为栈偏移, ndiff 空, 重置基线 |
 | 1a80f25 | A8.1 | 初始化器消费侧 + ND_DECL 展开: ResolvedInit/InitDesg 更名 InitTree/InitPath 进 chibicc.h, create_lvar_init/lvar_init_comma/init_desg_expr 搬 codegen(init_desg_expr 直建 DEREF+缩放, 无中间 SUBSCRIPT), sema 的 ND_DECL 只留检查+static 序列化+显式定型 init expr(annotate_init_exprs), 整形遍链编辑展开记录(expand_decl, 0..n 条语句)并摘除之, for-init 的 BLOCK 归位; decl_remove 静默变量删除 |
 | 9e3a5c9 | A8.2 | 其余记录出链: sema 的 type_chain 停止摘除 TYPEDEF/ENUM_CONST/GVAR_DECL/FUNCDEF(记录留在输出里), serialize_gvar 与嵌套体标注调用留在原位; codegen 链编辑 walker 摘除四类记录且不下潜嵌套体(契约 3(e), 从 prog 单次进入); raw diff 全空 |
-| (本提交) | A8.3 | 复合字面量(验证提交, 无代码改动): 内容已在 A8.1 落地; 补两组块域/文件域探针 + docker 运行时断言("complit-a83 ok") + 全探针 A/B 逐字节, 四闸门全绿 raw 全空; 记录两个预存在限制(裸后缀 `.`/`[` 与 static 初始化) |
+| 5812e79 | A8.3 | 复合字面量(验证提交, 无代码改动): 内容已在 A8.1 落地; 补两组块域/文件域探针 + docker 运行时断言("complit-a83 ok") + 全探针 A/B 逐字节, 四闸门全绿 raw 全空; 记录两个预存在限制(裸后缀 `.`/`[` 与 static 初始化) |
+| (本提交) | A9.2 | add_type 收尾核对: 34 case 逐项审计全为纯标注; 最后一处形状改写(文件域复合字面量→ND_VAR)修为保留 kind + eval 侧读 var; 契约 2 临时导出面为空; 红线 grep 全 0; raw 全空 |
 
 ## 各步详情
 
@@ -670,7 +671,7 @@ void f(void) { char *t = "in f"; (void)t; }
   的 `enum {...} e = B` + 循环体 typedef - 逐字节一致即嵌套体只被整形一次、位置正确的实证。
 - 偏差: 无。行数: sema.c 2951 -> 2946, codegen.c 2512 -> 2524, chibicc.h 807 零改动, parse.c 零改动。
 
-### A8.3 复合字面量 (本提交, 验证)
+### A8.3 复合字面量 (5812e79, 验证)
 
 - 改了什么: **无代码改动**。计划中 A8.3 的三项内容(无名字对象创建留 resolve 遍 / gvar_init_data
   留 sema 标注遍 / "初始化链 + 对象引用"整形归 codegen)已在 A8.1 落地 - A7.1 让 lvar_init_comma
@@ -686,6 +687,34 @@ void f(void) { char *t = "in f"; (void)t; }
   如 `(struct S){1,2}.a`)在 parse 层报 "expected ','"; 块域 static 用复合字面量初始化报
   "not a compile-time constant"。两者均记入 A10.2 的对照知识, 后续处置归属待定。
   行数: 四文件零改动。
+
+### A9.2 add_type 收尾核对 (本提交)
+
+- 审计表(34 case, 逐项核对; "标注" = 只写 ty/val/结论 或插隐式 cast 或跑检查/绑定):
+  ND_NUM/ND_VAR/ND_VLA_PTR/ND_IDENT(绑名兜底)/ND_MUL..ND_BITXOR(conv+ty)/ND_NEG(cast)/ND_GT..ND_LE 与
+  ND_EQ/ND_NE(conv+ty)/ND_NOT..ND_SHR(ty)/ND_CAST(ty)/ND_COMMA(ty)/ND_MEMBER(绑成员+ty)/
+  ND_ADDR(位域检查+ty)/ND_SUBSCRIPT(检查+ty)/ND_DEREF(检查+ty)/ND_CAS/ND_EXCH(检查+ty)/
+  ND_ADD/ND_SUB(检查+ty, 不插 cast)/ND_ASSIGN(op: ty; plain: 左值检查+cast+ty)/ND_INCDEC(ty)/
+  ND_FUNCALL(lower_funcall: 检查+实参 cast+func_ty+ty, 无槽)/ND_SIZEOF/ALIGNOF(结论+ty)/两个类型
+  builtin(结论+ty)/ND_GENERIC(select_generic: 结论, 不改写)/ND_COND(elvis 只定型; 普通 conv+ty)/
+  ND_RETURN(cast)/ND_STMT_EXPR(值捕获+ty 或报错)/ND_LABEL_VAL(收集+ty)/ND_STRING(物化+var+ty, 不改
+  kind)/ND_DECL(检查+static 序列化+init 表达式定型)/ND_COMPOUND_LITERAL(定型+序列化) - **全部无形状
+  改写**。
+- 本步唯一代码改动(审计发现): 文件域复合字面量原在 add_type 里改写 `node->kind = ND_VAR`(eval 侧
+  便利), 使 add_type 不完全纯; 现保留 kind 与 `node->var`, eval2/eval_rval 新增 ND_COMPOUND_LITERAL
+  case 直接读对象(A1.1 的字符串模式), 块域情形按非常量报错(文案锚点与旧路径一致 - 旧路径经改写后的
+  VAR 走的是 `is_local -> not a compile-time constant`)。文件域字面量只经 write_gvar_data 序列化,
+  不落 codegen, 故无需 gen 侧 case。
+- 契约 2 临时导出面: 已为空(chibicc.h 仅存说明注释; A8.1 撤 lvar_init_comma 后清零)。
+- 红线 grep 佐证(库层 parse.c/sema.c/type.c/preprocess.c/tokenize.c):
+  缩放(new_add/new_sub/scale_rhs) 0 处; 读写回环(to_assign/compound_op/new_inc_dec/is_atomic) 0 处;
+  标签分配(new_unique_name 调用者) 仅 new_anon_gvar(语言规定对象); 语句重排(降级 analyze/标签字段
+  写入) 0 处(sema 的 analyze_function 只是逐函数标注驱动 + 检查); 建槽(sema new_lvar) 6 处全为语言/
+  ABI 对象(参数、大结构体返回参数、`__va_area__`、`__alloca_size__`、声明对象、复合字面量隐藏对象);
+  调用 codegen 0 处(仅注释提及)。
+- 闸门: 四闸门全绿; raw diff 全空(本步改动发射中性, complit.c 的序列化路径不变); 语料 37/41 逐字节
+  (4 `.file` 伪影), 七目录全探针一致。行数: sema.c 2946 -> 2964, codegen.c 2524 零改动, chibicc.h
+  807 零改动, parse.c 2148 零改动。
 
 ## 给审核者的提示
 

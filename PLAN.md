@@ -340,10 +340,15 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   ("complit-a83 ok"); 四闸门全绿(raw 全空). 两个预存在限制记录在案(基线同报错): 复合字面量直接跟
   `.`/`[...]`(无外层括号)在 parse 层报 "expected ','"; 块域 static 以复合字面量初始化报
   "not a compile-time constant".)
-- [ ] **A9.2 add_type 收尾核对**: `add_type` 至此应为纯标注遍 - 填 `ty`, 插隐式 cast, 做检查,
+- [x] **A9.2 add_type 收尾核对**: `add_type` 至此应为纯标注遍 - 填 `ty`, 插隐式 cast, 做检查,
   写结论, 物化(位置不变), 绑定成员; 逐项核对账本表, 确认没有任何 case 改写树形状. 同一步撤掉
   契约 2 的临时导出面, 并按新红线 grep 佐证库层(缩放 / 读写回环 / 槽创建 / 语句重排 / 标签分配 /
   调用 codegen 均为 0 处).
+  (实测: 34 个 case 逐项核对(表见 RESULT.md), 全部纯标注 - **审计发现并修掉最后一处形状改写**:
+  文件域复合字面量原被改写为 ND_VAR, 现保留 kind, 由 eval 侧新增的 ND_COMPOUND_LITERAL case 直接
+  读 `node->var`(A1.1 的字符串模式); 契约 2 临时导出面已为空(A8.1 起); 红线 grep 全 0 - 缩放/
+  读写回环/标签分配(仅剩 new_anon_gvar 一个调用者)/语句重排/建槽(6 处全为参数/ABI/声明/复合字面量
+  对象)/调用 codegen 均为清; 四闸门全绿, raw 全空.)
 - [ ] **A10.1 归属清扫与文档**: `chibicc.h` 逐字段标注归属(codegen 写入的字段: `ret_buffer`,
   `brk_label`/`cont_label`, `unique_label`/`label`, `case_next`/`default_case`, `pass_by_stack`,
   `Type::vla_size`, 结论槽), sema.c/codegen.c 文件头注释重写(codegen 头要写清整形遍的六条不变量),

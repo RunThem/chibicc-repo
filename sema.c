@@ -2209,7 +2209,6 @@ void add_type(Node *node) {
 
     if (!var->is_local) {
       gvar_init_data(var, node->init_resolved);
-      node->kind = ND_VAR;
       node->decl_init = NULL;
       node->init_resolved = NULL;
     }
@@ -2423,6 +2422,14 @@ static int64_t eval2(Node *node, char ***label) {
       error_tok(node->tok, "not a compile-time constant");
     *label = &node->var->name;
     return 0;
+  case ND_COMPOUND_LITERAL:
+    // A file-scope compound literal's hidden object, whose data the
+    // annotation pass serialized; the consumer reads the object -
+    // the node keeps its kind since A9.2, like a string.
+    if (node->var->is_local)
+      error_tok(node->tok, "not a compile-time constant");
+    *label = &node->var->name;
+    return 0;
   case ND_SIZEOF:
   case ND_ALIGNOF: {
     // The conclusion the annotation pass records in `val` - the same
@@ -2459,6 +2466,13 @@ static int64_t eval_rval(Node *node, char ***label) {
     return eval2(node->lhs, label);
   case ND_STRING:
     // The literal's anonymous global, as above.
+    *label = &node->var->name;
+    return 0;
+  case ND_COMPOUND_LITERAL:
+    // The file-scope literal's hidden global, as above: its address
+    // is the object's, and a block-scope one is not a constant.
+    if (node->var->is_local)
+      error_tok(node->tok, "not a compile-time constant");
     *label = &node->var->name;
     return 0;
   case ND_SUBSCRIPT: {
