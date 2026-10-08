@@ -10,6 +10,10 @@ sema.c 3145 行 + chibicc.h 704 行, codegen.c 相对 5f53ed0 零 diff)起步, �
 本线结束时: **sema 的产物 = 忠实语法树 + 标注**(名字绑定, 类型, 编译期必需的语义结论, 布局,
 语言规定存在的对象); 一切"为某个后端发射服务的整形"与"只为实现服务的槽"在 codegen 一侧完成.
 
+阶段 A(边界搬迁)完成于 2026-10-08(终态提交 4aa1615/a350311); **阶段 B(发射点直读)经用户同日
+拍板后开工**, 细化计划见"阶段 B"段(含与草稿的五处偏差), 执行顺序为
+B1.1a -> B1.1b -> B1.1c -> B1.2a -> B1.1e -> B1.2b(可裁) -> B1.3 -> 终态验收.
+
 新会话恢复方法: 通读 AGENTS.md -> 读本文件的"搬运契约" -> 查看勾选状态与 `RESULT.md` 的提交一览
 -> `git log --oneline` 确认最后完成的步骤 -> 从执行顺序里的第一个未勾选项继续; 开工前先跑 A0.1
 的四闸门复验. 行号一律以函数名为准.
@@ -155,6 +159,10 @@ A8.1 把它搬走后, sema 的标注遍必须在**同一位置**(ND_DECL / ND_CO
   (`-diff` 只作可读参考).
 - **[就地] 步骤**(发射形态变化, 只在阶段 B): 硬闸门 = 上面三项 + 该步新增的形状断言;
   `docker-snapshot-ndiff` 允许非空, 但差异必须逐条归入预期模式并记入 `RESULT.md`.
+- **阶段 B 生效的收紧口径**(2026-10-08): [就地] 项以"生成的指令序列逐字节不变"为默认要求, 变化
+  须逐条归因并记入 `RESULT.md` 的偏差一节(elvis 的临时槽移除是唯一预期变化); 形状断言是**指令形
+  回归锁**, 不是"旧形消失"的证明 - .s 里看不见树形, 树形的消失由源码层核对证明(整形遍不再含
+  对应 case + 每个忠实 kind 在发射点有落点).
 - **tinycc 进每步闸门**(本线相对上一线的口径变化): 实测约 15 s, 而 RESULT-faithful 的 R2.5 记录
   证明 `docker-test` 的 41 文件语料对"tag-only 定义 + 不完整类型期写下的指针"这类形状是盲的, 只有
   tcc 的源码抓到过真误编译. 本线搬的是 ~800 行降级逻辑, 不值得为省 15 s 复用那个盲区.
@@ -380,19 +388,75 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   四闸门与 tinycc 全绿. 语句表达式末语句为记录项: 既有 e11 诊断锁定已覆盖. ptr-ptr 负例仍不可
   逐字节锁(结构性限制, 见 RESULT.md).)
 
-## 阶段 B: 就地化(让"直连"名副其实, 可裁)
+## 阶段 B: 发射点直读(用户 2026-10-08 拍板做; 本节为同日细化的执行计划)
 
-阶段 A 之后 codegen 仍先把 sema 的树整回旧形状再发射; 阶段 B 把"只需换个发射方式"的项从整形遍
-搬进发射点, 让整形遍只剩"需要语句重排或新槽"的少数项(原子 op=, 返回缓冲, VLA, elvis, ND_DECL).
-A 完成即已达成"取消 sema 降级"; B 由用户决定是否做.
+阶段 A 之后 codegen 仍先把 sema 的忠实树整回旧形状再发射(`shape()`, 在 `codegen()` 最前); 阶段 B
+把"只需换个发射方式"的项从整形遍搬进发射点, 让整形遍只剩需要槽/语句/标签的残留项(op= 与自增
+自减, VLA, 返回缓冲, 复合字面量, case 链与标签分配, 记录摘除, 以及 ND_ADD/ND_SUB 的缩放).
 
-- [ ] **B1.1 发射点直读(表达式层)**: ND_SUBSCRIPT, ND_MEMBER(arrow), ND_GT/ND_GE, ND_STRING,
-  ND_SIZEOF/ND_ALIGNOF, ND_GENERIC, elvis(改成条件值留在 rax, 不建槽)在 `gen_addr`/`gen_expr`
-  就地处理, 对应整形 case 删除; 每项一个提交([就地] 口径).
-- [ ] **B1.2 发射点直读(语句层)**: ND_WHILE, ND_BREAK/ND_CONTINUE(标签栈), ND_DECL(初始化链
-  就地摊成语句)由 `gen_stmt` 直接处理, 整形遍对应部分删除.
-- [ ] **B1.3 形状断言**: 对 .s 加模式断言(下标不再出现中间 DEREF 形, elvis 不再出现槽, while
-  不再出现 FOR 形等), 与行为闸门共同作为阶段 B 的验收.
+**核心设计决策**: 每一项 = 删除整形遍的改写分支 + 在发射点就地读忠实形状, 且**生成的指令序列
+逐字节保持**; 唯一例外是 elvis(去掉临时槽 - B1.1 明文承诺的形态变化, 也是唯一预期非空 ndiff 的
+步). 理由: (a) "codegen 中没有优化 pass - 这是故意的"(AGENTS.md), B 是结构清理不是代码生成改进;
+(b) 逐字节等价是行为不变的最强自证, 而 `snapshot-normalize.awk` 不吞指令行(只折叠 .loc/.file,
+.L 重编号, rbp 偏移, 帧大小, addq 立即数), 所以 ndiff 空可作每步的证明; (c) 求值顺序是可观察
+行为 - 今日 `a > b` 被交换后**先求值 a**, 必须保持. 代价: 大部分步的 .s 完全不变, B 的收益在树
+形态与整形遍面积上, 不在生成代码上.
+
+**时序约束(实测, 决定什么必须留整形遍)**: 槽 - `new_lvar` 的调用点(`compute_vla_size`,
+`to_assign` 三分支, `ret_buffer`)必须全部早于 `assign_lvar_offsets`; 标签 - `unique_label` 是唯一
+在 `emit_data` 之前被消费的标签字段(块域 static 的 `&&label` 经 `Relocation.label` 解引用), 标签
+分配继续留整形遍, 编号不变; 初始化器表达式与 VLA 维度不在自然路径上, 整形遍仍须显式到达(它们
+可能含残留项), `shape_init_exprs` 保留但职责从"降级"改为"到达".
+
+- [ ] **B1.1 发射点直读(表达式层)**
+  - [ ] **B1.1a ND_SUBSCRIPT**: 删 `shape_node` 的 case; `gen_addr` 加 case(经 `new_add` 建
+    已定型节点后立即 `gen_expr` 它); `gen_expr` 加 case(`gen_addr` + `load`). 补测试:
+    `p[i] += 1`(op= 经 `ADDR(SUBSCRIPT)` 走新落点)与 VLA 下标. 预期 ndiff 空.
+  - [ ] **B1.1b ND_MEMBER(arrow)**: 删 case(含 `arrow_tok` 清除); `gen_addr` 按 `arrow_tok` 选
+    `gen_expr`(指针值)或 `gen_addr`(点访问); **同步修 `to_assign` 的成员分支** - 它今日依赖
+    "arrow 已补成 DEREF"的前提, 改为 arrow 取指针表达式本身 / dot 取 `ADDR(基址)`, 槽类型统一
+    `pointer_to(base->ty)`, 指令不变. 补测试: 前缀 `++p->x`/`--p->x`, `p->x -= v`,
+    `p->arr[i] += 1`, 指针成员 `p->next += 1`, 位域 arrow op=(现有只有 `p->a += 2`/`p->a++`).
+    预期 ndiff 空.
+  - [ ] **B1.1c ND_GT/ND_GE**: 删 case; 三条比较路径(float/double, long double, 整数)各加 GT/GE
+    处理, 逐条镜像今日交换后的**物理求值顺序与指令文本**(整数与 float/double 先求值左操作数,
+    long double 先求值右操作数; 条件助记符与符号性读数保持"交换后会到左边"的那个操作数的口径,
+    与求值器 sema.c 的 `ND_GT` case 一致). 补 unsigned 与浮点探针. 预期 ndiff 空(本步最需要
+    逐字节证明 - 助记符在 .s 里可见).
+  - [ ] **B1.1e elvis 无槽发射**: 删 `shape_node` 的 `is_elvis` 分支; `gen_expr(ND_COND)` 加无槽
+    分支(条件值留在 rax/xmm0; long double 先 `fld %st(0)` 预复制 - `cmp_zero` 的
+    `fldz/fucomip/fstp` 会吃掉 x87 值; 两支各自按 `node->ty` 补 cast, 因为 sema 的 elvis 路径
+    不插 cast). 补 float / long double / unsigned / 指针探针(先证明探针在改动前的编译器上通过).
+    预期 ndiff **非空**(arith.s 的临时槽存/读指令消失; 帧大小与偏移被归一化第 3/4 类吃掉),
+    逐条归因后同提交重置 raw 基线并把 diff 归因记入 `RESULT.md`.
+  - 已由 A9.1 顺带完成, 本线只核对记录(不单列提交): ND_STRING(`gen_addr` 直读 `var`),
+    ND_SIZEOF/ND_ALIGNOF(`gen_expr` 读 `val`; 只剩 VLA 分支留整形遍 - 它建槽),
+    ND_GENERIC(`gen_expr` 读 `generic_sel`; 整形遍的 case 是往选中子树里的遍历, 保留).
+  - **不做**(写明理由, 归 B2 候选): ND_ADD/ND_SUB 的缩放 - faithful 与降级后的 kind 相同, 发射点
+    无法区分"待降级"与"已降级", 需要标记字段或重构二元发射路径, 且零 .s 收益.
+- [ ] **B1.2 发射点直读(语句层)**
+  - [ ] **B1.2a ND_WHILE + ND_BREAK/ND_CONTINUE**: 删 `kind = ND_FOR` 的重写与 break/continue 两个
+    case, 删整形遍的 `brk_label`/`cont_label` 环境 static; `gen_stmt` 加 `ND_WHILE` case(与今日
+    FOR 无 init/inc 的发射逐字节相同)与 `ND_BREAK`/`ND_CONTINUE` case + 发射侧环境 static(循环
+    保存/恢复两者, switch 只保存 break - 镜像"switch 是 break 目标不是 continue 目标").
+    补测试: switch 里的 continue, statement expression 里的 break. 预期 ndiff 空.
+  - [ ] **B1.2b ND_DECL(可裁, 排在最后)**: 拆分 - 整形遍保留 VLA 声明的展开(尺寸槽必须先于
+    `assign_lvar_offsets`)与 init 树的残留行走; `gen_stmt` 处理其余(static 跳过, 无初始化跳过,
+    有初始化就地建 `lvar_init_comma` 并 `add_type` + `gen_expr`). 先探针 `shape_node` 的表达式
+    位置 ND_DECL 分支是否可达. 预期 ndiff 空; 若拆分比预期绕或出现非空差异则跳过并记录理由
+    (B 的其余部分不受影响).
+- [ ] **B1.3 形状断言**: 新 `test/shape.sh <chibicc>`(镜像 `diagnostic.sh` 的风格: snippet/expect
+  heredoc + 临时目录 + 计数 + 失败 exit 1), 用 `$chibicc -S -o- -xc -` 编译片段后对 .s 断言, 挂进
+  Makefile 的 `test` 与 `test-stage2`(从而进 docker-test 两轮); 断言随各步增量写入, 本步收口.
+  每项: 下标 = 缩放+加序列; arrow = `add $off` 与取值; GT/GE = 三路径的助记符与操作数角色;
+  while/break/continue = 标签布局与跳转; elvis = **断言无栈存/读往返** + 条件跳转存在.
+  口径修正(见下): 这是指令形**回归锁**, 不是"旧形消失"的证明 - .s 里看不见 DEREF/FOR 这类
+  **树**形; 旧形消失的证明在源码层(整形遍不再含这些 case)+ 各发射点的覆盖.
+
+**与本节草稿的五处偏差(2026-10-08 计划细化时修订)**: (1) B1.3 措辞从"旧形消失"改为指令形回归锁
++ 源码层核对(理由见上); (2) ND_STRING/ND_SIZEOF/ND_GENERIC 三项已由 A9.1 完成, 改为核对记录;
+(3) 剔出 ND_ADD/ND_SUB 并写明理由; (4) ND_DECL 标为可裁并给出拆分方案; (5) 闸门口径从 [就地] 的
+"允许非空"改为"以逐字节不变为默认, 变化需逐条归因"(更严, 非更松).
 
 ## 开放决策(实施时由用户拍板)
 
