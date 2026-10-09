@@ -424,7 +424,7 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
     与求值器 sema.c 的 `ND_GT` case 一致). 补 unsigned 与浮点探针. 预期 ndiff 空(本步最需要
     逐字节证明 - 助记符在 .s 里可见). (实施偏差: 改为在二元发射尾部统一换序后进原比较路径 -
     指令文本与求值顺序不变, 但不复制三份比较逻辑; 见 RESULT.md 的偏差记录.)
-  - [ ] **B1.1e elvis 无槽发射**: 删 `shape_node` 的 `is_elvis` 分支; `gen_expr(ND_COND)` 加无槽
+  - [x] **B1.1e elvis 无槽发射**: 删 `shape_node` 的 `is_elvis` 分支; `gen_expr(ND_COND)` 加无槽
     分支(条件值留在 rax/xmm0; long double 先 `fld %st(0)` 预复制 - `cmp_zero` 的
     `fldz/fucomip/fstp` 会吃掉 x87 值; 两支各自按 `node->ty` 补 cast, 因为 sema 的 elvis 路径
     不插 cast). 补 float / long double / unsigned / 指针探针(先证明探针在改动前的编译器上通过).

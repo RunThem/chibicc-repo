@@ -918,6 +918,38 @@ static void gen_expr(Node *node) {
     println("  rep stosb");
     return;
   case ND_COND: {
+    if (node->is_elvis) {
+      // The GNU `a ?: b` (PLAN B1.1e): the value of the test is the
+      // result, so it stays in the register the test left it in -
+      // rax, xmm0, or the x87 stack top - and no temporary slot is
+      // needed. sema recorded only the conclusion (the common type of
+      // the two arms) without converting the faithful operands, so
+      // each arm is converted to that type here. The label names are
+      // the ones the old `tmp = a, tmp ? tmp : b` lowering emitted.
+      int c = count();
+      gen_expr(node->cond);
+
+      // cmp_zero consumes whatever value it compares on the x87
+      // stack; the duplicate taken here is the one left behind as the
+      // truthy arm's result.
+      if (node->cond->ty->kind == TY_LDOUBLE)
+        println("  fld %%st(0)");
+
+      cmp_zero(node->cond->ty);
+      println("  je .L.else.%d", c);
+      cast(node->cond->ty, node->ty);
+      println("  jmp .L.end.%d", c);
+      println(".L.else.%d:", c);
+
+      // The falsy arm drops the test's value before computing its own.
+      if (node->cond->ty->kind == TY_LDOUBLE)
+        println("  fstp %%st(0)");
+
+      gen_expr(node->els);
+      cast(node->els->ty, node->ty);
+      println(".L.end.%d:", c);
+      return;
+    }
     int c = count();
     gen_expr(node->cond);
     cmp_zero(node->cond->ty);
@@ -2186,41 +2218,10 @@ static void shape_node(Node *node) {
       node->ret_buffer = new_lvar("", node->ty);
     return;
   case ND_COND:
+    // Both spellings keep their shape: the GNU `a ?: b` is emitted
+    // slot-free from its own fields (PLAN B1.1e, in gen_expr), and
+    // the ordinary conditional's arms were converted by sema.
     shape_children(node);
-    if (node->is_elvis) {
-      // Lower the GNU `a ?: b` to `tmp = a, tmp ? tmp : b` - the
-      // form sema's annotation pass used to build, kept byte-
-      // identical in stage A (the slot-free emission is B1.1). The
-      // temporary is the consumer's slot now; the node is rewritten
-      // in place, and the fields the comma does not own are detached
-      // so that this pass cannot walk the same operands twice
-      // through them (the A4.1 snapshot's re-entrancy lesson).
-      Obj *var = new_lvar("", node->cond->ty);
-      Node *lhs = new_binary(ND_ASSIGN, new_var_node(var, node->tok),
-                             node->cond, node->tok);
-      Node *rhs = new_node(ND_COND, node->tok);
-      rhs->cond = new_var_node(var, node->tok);
-      rhs->then = new_var_node(var, node->tok);
-      rhs->els = node->els;
-      node->kind = ND_COMMA;
-      node->lhs = lhs;
-      node->rhs = rhs;
-      // The conditional's own fields would alias nodes the comma now
-      // reaches through lhs/rhs - the operand and the else expression
-      // are the same objects. This pass walks cond/then/els of every
-      // node it meets, so leaving them in place would descend into
-      // the rewritten operands a second time (the A4.1 snapshot's
-      // re-entrancy lesson). The comma form reads only lhs/rhs, so
-      // detaching them changes nothing else.
-      node->cond = NULL;
-      node->then = NULL;
-      node->els = NULL;
-      // The conclusion sema recorded was for the conditional shape;
-      // the fresh comma and its assign need their own typing, and
-      // add_type would stop at the stale field.
-      node->ty = NULL;
-      add_type(node);
-    }
     return;
   case ND_SIZEOF: {
     // A sizeof of a VLA is the one conclusion that is a runtime

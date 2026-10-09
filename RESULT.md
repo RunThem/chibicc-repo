@@ -868,6 +868,33 @@ void f(void) { char *t = "in f"; (void)t; }
   嵌套 switch)在改动前后两个编译器上输出逐字节一致, 且同一份新 `test/control.c` 亦然. 行数:
   codegen.c 2569 -> 2611, `test/shape.sh` 175 -> 213, `test/control.c` +6.
 
+### B1.1e elvis 无槽发射 (本提交)
+
+- 改了什么: 整形遍删掉 `ND_COND` 的 `is_elvis` 分支(建临时槽 + 改写成
+  `tmp = a, tmp ? tmp : b` + 摘字段防重入的 34 行); `gen_expr(ND_COND)` 新增 `is_elvis` 分支:
+  值留在测试后的寄存器里(rax / xmm0 / x87 栈顶)直跳 end, 两支各按 `node->ty` 补 cast(sema 的
+  elvis 路径只记结论不插 cast). long double 要一步 `fld %st(0)` 预复制 - `cmp_zero` 的
+  `fldz/fucomip/fstp` 会把 x87 栈顶吃掉 - 假值路径再 `fstp %st(0)` 丢弃测试值. 标号名保持
+  旧形的 `.L.else.%d`/`.L.end.%d`, 使 diff 只含本步的形态变化. parse/sema/type/chibicc.h 零改动.
+- 为什么: B1.1 里唯一承诺"改变发射形态"的项(去掉临时槽). 时序安全: 整形遍少建一个槽, 其余
+  槽(op=/VLA/返回缓冲)不受影响; 标号计数与 `.L..N` 编号不变(本步不分配标号).
+- 前置验证: 九条新探针在**改动前**的编译器上先跑通(计划要求), 期望值再用宿主编译器交叉核对.
+- 闸门: 四闸门全绿. docker-test rc=0(诊断 55 例逐字节 ×2, 含自举; 九条新 elvis 断言全过);
+  tinycc rc=0; 形状断言 19 段(新增 2 段: int 形里不出现经 `%rdi` 的间接存 + 真值路径直跳 end;
+  long double 形里 `fld %st(0)` 预复制且不再有 `fstpt` 写槽); ndiff 见偏差 - 归因后重置基线,
+  重置后**空**.
+- 覆盖: `test/arith.c` 补九条(double 真假两向, long double 真假两向, unsigned, int/unsigned
+  混合真假两向, short/char 提升), 原有 4 条(int 常量、尾自增、指针)保留.
+- 偏差: 无编译器偏差(去槽是本步的目的). 两处**实测的形态细节**记档: (1) 真值支的 cast 会替代
+  旧形"重载 + cast"里的那次冗余 cast(旧形有一次多余的 movsxd, 新形一次); (2) 值语义不变 -
+  唯一可观察差异是 struct elvis 的结果从"临时槽的地址"变为"原对象地址"(内容相同, 地址语义本
+  无保证), 语料与 tcc 均无此用法的依赖. 快照基线随语料重置(同前几步先例); ndiff 只在 `arith.s`
+  一处: 旧侧净删 4 行槽存/读指令, 新侧为九条新断言的数据与代码. **编译器维度中性另由两组本地
+  A/B 隔离证明**: (a) 同一份**旧**语料(HEAD 的 arith.c)在两个编译器上, 归一化后旧侧只多出
+  槽机器(4 处 store + 8 处 reload), 新侧**零新增**; (b) 八形态 elvis 探针文件(整型/double/
+  long double/unsigned/int→long/指针/char/short)的差异全部为槽机器与偏移重排. 行数:
+  codegen.c 2611 -> 2612, `test/shape.sh` 213 -> 231, `test/arith.c` +15.
+
 ## 给审核者的提示
 
 - 审核重心: sema 的 `add_type`(每次提交都应少掉若干"改写树形状"的 case, 且剩下的 case 只填

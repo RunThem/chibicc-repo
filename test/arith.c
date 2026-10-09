@@ -145,6 +145,21 @@ int main() {
   ASSERT(5, 0?:5);
   ASSERT(4, ({ int i = 3; ++i?:10; }));
 
+  // PLAN B1.1e: elvis operand pairs whose types the slot-free emission
+  // has to convert (double, long double, unsigned, char/short
+  // promotions), in both the truthy and the falsy direction - the
+  // long double ones are where the test value lives on the x87 stack.
+  // Expected values cross-checked with the host compiler.
+  ASSERT(2, ({ double x = 0; x ?: 2.5; }));
+  ASSERT(1, ({ double x = 1.5; x ?: 2.5; }));
+  ASSERT(3, ({ long double x = 0; (int)(x ?: 3.0L); }));
+  ASSERT(2, ({ long double x = 2.0L; (int)(x ?: 9.0L); }));
+  ASSERT(7, ({ unsigned x = 7; x ?: 9; }));
+  ASSERT(8, ({ int x = 0; unsigned y = 8; (int)(x ?: y); }));
+  ASSERT(3, ({ int x = 3; unsigned y = 8; (int)(x ?: y); }));
+  ASSERT(4, ({ short s = 0; s ?: 4; }));
+  ASSERT(6, ({ char c = 0; c ?: 6; }));
+
   ASSERT(3, (long double)3);
   ASSERT(5, (long double)3+2);
   ASSERT(6, (long double)3*2);

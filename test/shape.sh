@@ -169,6 +169,24 @@ SNIP
 wantline b12a_switch_continue '^  jmp \.L\.\.3$'
 wantline b12a_switch_continue '^  jmp \.L\.\.4$'
 
+# ---- B1.1e elvis: 测试值留在寄存器, 不建临时槽 -----------------------------
+# int 形: 值留在 rax, 真值路径直跳 end; 该形里不出现经 %rdi 的间接存
+# (旧降级把测试值存进临时槽又读回, 那正是本步去掉的东西).
+snippet b11e_elvis_int <<'SNIP'
+int f(int a, int b) { return a ?: b; }
+SNIP
+want b11e_elvis_int cmp je jmp
+wantline b11e_elvis_int '^  je \.L\.else\.1$'
+absent b11e_elvis_int '%\(%rdi\)$'
+
+# long double 形: 测试值用 `fld %st(0)` 预复制(cmp_zero 的 fldz/fucomip/fstp
+# 会吃掉 x87 栈顶), 真值路径把它留作结果, 假值路径显式丢弃; 不再有 fstpt 写槽.
+snippet b11e_elvis_ldouble <<'SNIP'
+long double f(long double a, long double b) { return a ?: b; }
+SNIP
+want b11e_elvis_ldouble fldt fldz fucomip fstp
+absent b11e_elvis_ldouble 'fstpt'
+
 # ---- 汇总 ----------------------------------------------------------------
 fail=""
 count=0
