@@ -582,27 +582,32 @@ sema.c 里三处描述 B1.1b/B1.1e 机制的陈旧注释订正(纯注释, 无逻
    两个坏变体的反证记录(见"阶段 B2"段).
 
 ## 终态验收(本线完成时逐项实测填写; 阶段 A 完成于 2026-10-08 提交 4aa1615, 阶段 B 完成于
-2026-10-08 提交 2892160)
+2026-10-08 提交 2892160, 阶段 B2 完成于 2026-10-09 提交 a8a97ae)
 
 - **库层**: [完成] `add_type` 34 case 逐项审计无形状改写(A9.2 节表); sema.c 的缩放/读写回环/
   标签分配/语句重排/调用 codegen 经逐项 grep 均为 0 处, 建槽仅剩语言与 ABI 对象(6 处 new_lvar,
   A9.2 节); 求值器与全局序列化在忠实形态上工作(A1.1 + 各步 case); `decl_remove` 已消失(A8.1);
   后加的两处上下文修复(A10.2 嵌套函数)与文件域复合字面量读 var(A9.2)已入档. 阶段 B 未改库层
-  (parse/sema/type/chibicc.h 在 B 的八次提交里零改动).
+  (parse/sema/type/chibicc.h 在 B 的八次提交里零改动); 阶段 B2 对库层的改动 = `chibicc.h` 新增
+  codegen 侧字段 `is_lowered`(归属标注随字段), 加两处陈旧注释订正(B2.2) - parse.c/type.c 与
+  sema.c 的**逻辑**零改动.
 - **codegen**: [完成] 阶段 A 的整形遍保留, 但 B 把"只需换发射方式"的项搬进了发射点: 下标
   (`gen_addr`/`gen_expr` 经 `new_add` 现建现发), 箭头成员(`gen_addr` 按 `arrow_tok` 分流,
   `to_assign` 的成员分支按同一条标记取承载对象), `>`/`>=`(二元尾部换序后进原比较路径),
   elvis(`gen_expr(ND_COND)` 无槽, long double 用 `fld %st(0)` 预复制), `while` 与
   break/continue(`gen_stmt` 的循环形 + 发射侧环境标签栈), 声明(`gen_stmt(ND_DECL)` 就地摊初始化
-  链). **整形遍的残留 = 需要槽/语句/标签的项**: op= 与自增自减, VLA 尺寸(声明与 sizeof), 返回
-  缓冲, 复合字面量, case 链与标签分配, 记录摘除, 以及 ND_ADD/ND_SUB 的缩放(见偏差 (3));
+  链); B2 再把加法也搬进来: `gen_expr` 顶部把未标记的 `ND_ADD`/`ND_SUB` 替换成
+  `new_add`/`new_sub` 的产物, 三个降级工厂标记自己的产出. **整形遍的残留 = 需要槽/语句/标签的项**:
+  op= 与自增自减, VLA 尺寸(声明与 sizeof), 返回缓冲, 复合字面量, case 链与标签分配, 记录摘除;
   六个不变量按残留重写于文件头注释. 帧布局与 ABI 与红线一致(参数表/返回缓冲/VLA 尺寸变量各步
-  ndiff/raw 记录在案); 除 elvis 的临时槽移除外, 全部搬迁项的指令序列逐字节不变.
+  ndiff/raw 记录在案); 除 elvis 的临时槽移除与 B2 的嵌套维度修正外, 全部搬迁项的指令序列逐字节
+  不变.
 - **闸门**: [完成] 每步 docker-test(含自举与诊断 55 例逐字节) + tinycc + 快照口径记录于
-  RESULT.md 各步; A8.1/A10.2/B1.1b/B1.1c/B1.2a/B1.1e 六次因语料变化按先例重置快照基准(编译器
-  维度由本地 A/B 证明中性), B1.1a/B1.2b 两步 ndiff 为空无需重置; 形状断言 `test/shape.sh`
-  23 段挂进 `make test`/`test-stage2`, 随各步增量添加(B1.3 收口).
-- **对比锚点(实测)**: parse.c 2148 / sema.c 2991 / chibicc.h 821 / codegen.c 2649
-  (起始 2148 / 3145 / 704 / 1595; sema 净 -154, codegen 净 +1054, chibicc.h +117
-  - 阶段 A 的账目见 RESULT.md 各步, 阶段 B 的账目见 B 各步), 另新增 `test/shape.sh` 268 行,
-  测试语料净增约 70 行(B 各步).
+  RESULT.md 各步; A8.1/A10.2/B1.1b/B1.1c/B1.2a/B1.1e/B2.1 七次因语料变化按先例重置快照基准
+  (编译器维度由本地 A/B 证明中性: B2.1 是 41 文件里 40 个逐字节一致, vla.s 的 24 行差异逐条归因),
+  B1.1a/B1.2b 两步 ndiff 为空无需重置; 形状断言 `test/shape.sh` 33 段挂进
+  `make test`/`test-stage2`, 随各步增量添加(B1.3 建, B2.1 补十段).
+- **对比锚点(实测)**: parse.c 2148 / sema.c 2991 / chibicc.h 830 / codegen.c 2677
+  (起始 2148 / 3145 / 704 / 1595; sema 净 -154, codegen 净 +1082, chibicc.h +126
+  - 阶段 A 的账目见 RESULT.md 各步, 阶段 B 与 B2 的账目见各自各步), 另新增 `test/shape.sh` 340 行,
+  测试语料净增约 80 行(B 与 B2 各步).

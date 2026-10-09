@@ -1020,11 +1020,39 @@ docker 闸门, 结论引用最近一次代码提交(B1.2b/B1.3)的闸门记录.
   codegen.c 2649 -> 2677(+55/-27), chibicc.h 821 -> 830(+9), `test/shape.sh` 268 -> 340,
   `test/atomic.c` +7, `test/vla.c` +7, `PLAN.md` +11(偏差条).
 
+### B2.2 终态验收 (本提交)
+
+本线(B2 之后)的最后一项收口; 本提交是文档与注释提交, 编译器逻辑零改动, 闸门重跑记录如下.
+
+- 改了什么: (1) `PLAN.md` 的终态验收段按 B2 终态更新 - 标题补"阶段 B2 完成于 2026-10-09 提交
+  a8a97ae", 库层项补 B2 的改动账(chibicc.h 新增 codegen 侧字段 + 两处注释订正, 库层逻辑零改动),
+  codegen 项的发射点清单补加法并把 `ND_ADD`/`ND_SUB 的缩放`从残留清单移走, 闸门项补第七次语料维度
+  重置与"40/41 逐字节一致"的 A/B, 锚点更新为 parse.c 2148 / sema.c 2991 / chibicc.h 830 /
+  codegen.c 2677 + `test/shape.sh` 340 行 33 段. (2) `AGENTS.md`: 现行线段(阶段 A/B/B2 均完成,
+  残留清单去掉加法, 候选只剩 CST/trivia 与库化), 现状段与 codegen.c 代码地图条目(加法移入发射点
+  清单, 记 `is_lowered` 判别), 两处 "shape.sh 23 段" -> 33 段. (3) 三处陈旧注释订正: `chibicc.h`
+  的 `arrow_tok`(原文说"整形遍补插 DEREF 并清标记", B1.1b 已作废)与 `is_elvis`(原文说"整形遍降级
+  成 tmp = a, tmp ? tmp : b", B1.1e 已作废), 以及 `sema.c` 的 `resolve_member` 里同源的一句
+  ("整形遍在此补插 DEREF 并清标记 (A3.1)").
+- 为什么: 本线最后一项收口. 那三处注释描述的是本线自己已经作废的机制, 且都是字段归属账本上的
+  条目(审查者读它来判断字段由谁写) - 与 B2 新增字段同处一文件, 一并订正并记录, 免得下一轮把它
+  当成现状.
+- 闸门: 逻辑零改动的复核 - 本机重建后 25 探针 A/B **空**、shape lock 33 段全过; 容器里
+  `make docker-test` rc=0(自举; 诊断 55 例逐字节 ×2; shape lock 33 段 ×2)与
+  `make docker-snapshot-ndiff` **空**(注释不进发射, 快照自 B2.1 重置后保持一致). 未跑
+  tinycc: 本提交无逻辑改动, 沿用 B2.1 的 rc=0.
+- 偏差: 无. 行数: `RESULT.md` 与本段之外 +约 30 行, `AGENTS.md` 四处更新, `PLAN.md` 终态段重写,
+  `chibicc.h` 与 `sema.c` 只动注释(代码行数不变).
+
 ## 给审核者的提示
 
 - 审核重心: sema 的 `add_type`(每次提交都应少掉若干"改写树形状"的 case, 且剩下的 case 只填
   `ty`/写结论/做检查), codegen 新增的整形遍(是否忠实搬运、是否自带槽与标签分配、是否遵守契约 3
   的六条不变量), 以及 `test/diagnostic.sh` 的 55 例是否逐字节不变.
+- B2 单独的审核重心: `chibicc.h` 的 `is_lowered` 三处写入点是否穷尽(codegen 自建的加减节点只有
+  `new_add`/`new_sub`/`combine` 三个产地, 含 ptr-ptr 情形里 `DIV` 之下的裸 `SUB`), `gen_expr` 顶部
+  的降级是否**替换**而非递归(递归会改变 `.loc` 布局), 以及 `shape_node` 里确实不再有任何加减
+  case; 反证工具留在 `RESULT.md` B2.1 的偏差条(去掉标记的两个坏变体给出确定症状).
 - 因 codegen 的"零改动红线"在本线作废, 对比口径从"`git diff 5f53ed0 -- codegen.c` 为空"改为
   "codegen 的改动全部可归入清单表的 codegen 侧项".
 - 每步都应能回答两个问题: 这一步搬的代码在 sema 侧还有没有调用者(契约 1), 以及这一步有没有让

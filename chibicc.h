@@ -431,9 +431,10 @@ struct Node {
   // access and NULL for a plain `.`; it is the anchor of the checks on
   // the operand, which is why the token itself is kept. sema binds the
   // member and leaves the marker on the innermost link of a flattened
-  // chain; codegen's shaping pass inserts the dereference it stands
-  // for there and clears it, and the evaluator reads it in constant
-  // expressions.
+  // chain (clearing it on the dissolved outer node); the evaluator
+  // reads it in constant expressions, and codegen's gen_addr and
+  // to_assign read it as the dereference the `->` stands for (PLAN
+  // B1.1b - the marker stays on the node, nothing rewrites it away).
   Member *member;
   Token *arrow_tok;
 
@@ -465,9 +466,10 @@ struct Node {
   Node *case_next;
   Node *default_case;
 
-  // [GNU] `a ?: b` conditional. sema types it; codegen's shaping pass
-  // lowers it to `tmp = a, tmp ? tmp : b` (A9.1), and the evaluator
-  // and is_const_expr treat it as a runtime value through this flag.
+  // [GNU] `a ?: b` conditional. sema types it; gen_expr emits it from
+  // its own fields without a slot - the test value stays in the
+  // register (PLAN B1.1e) - and the evaluator and is_const_expr treat
+  // it as a runtime value through this flag.
   bool is_elvis;
 
   // ND_SIZEOF/ND_ALIGNOF: the operand type for the `sizeof(type)`

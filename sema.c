@@ -1674,8 +1674,9 @@ static void resolve_member(Node *node) {
     link->member = mem;
     if (arrow) {
       // The dereference belongs to the innermost link. The marker
-      // stays on it: codegen's shaping pass inserts the dereference
-      // there and clears the marker (A3.1).
+      // stays on it: codegen's gen_addr reads it as the dereference
+      // the `->` stands for (PLAN B1.1b - the shaping pass no longer
+      // rewrites it away).
       link->arrow_tok = arrow;
       arrow = NULL;
     }
