@@ -6,8 +6,14 @@
 # 该形态", 不是"旧树形消失"的证明 - .s 里看不见 DEREF/FOR 这类树形, 树形的消失
 # 由源码层核对证明(整形遍不再含对应 case, 见 PLAN.md 阶段 B 段与 RESULT.md 各步).
 #
-# 断言按步增量添加: B1.1a 下标 / B1.1b 箭头成员 / B1.1c GT-GE / B1.2a while 与
-# break-continue / B1.1e elvis(无槽) / B1.2b ND_DECL(若做).
+# 断言按步增量添加, 覆盖清单(共 23 段):
+#   b11a 下标(读/写/交换写法/VLA/多级)      - PLAN B1.1a
+#   b11b 箭头成员/点成员/展平匿名链/复合赋值 - PLAN B1.1b
+#   b11c 整数/无符号/浮点/长双精度 的 > 与 >= - PLAN B1.1c
+#   b11d 字符串/sizeof/泛型(A9.1 已直读)     - PLAN B1.1 的核对项
+#   b11e elvis 无槽(int 形 / long double 形) - PLAN B1.1e
+#   b12a while 循环形 / break 与 continue / switch 只占 break - PLAN B1.2a
+#   b12b 声明的初始化链                      - PLAN B1.2b
 #
 # 用法: test/shape.sh ./chibicc (由 make test 与 make test-stage2 调用)
 
@@ -186,6 +192,28 @@ long double f(long double a, long double b) { return a ?: b; }
 SNIP
 want b11e_elvis_ldouble fldt fldz fucomip fstp
 absent b11e_elvis_ldouble 'fstpt'
+
+# ---- B1.1d 已由 A9.1 直读的三项: 补上它们的指令形回归锁 ---------------------
+# 字符串字面量: 表达式里用的是匿名全局的地址(lea .L..N(%rip)), 不复制内容.
+snippet b11d_string <<'SNIP'
+char *f(void) { return "hello"; }
+SNIP
+wantline b11d_string '^  lea \.L\.\.[0-9]+\(%rip\), %rax$'
+absent b11d_string '^  call'
+
+# sizeof/_Alignof: 结论记在 val 里, 直接发立即数.
+snippet b11d_sizeof <<'SNIP'
+int f(void) { return sizeof(int) + _Alignof(long); }
+SNIP
+wantline b11d_sizeof '^  mov \$4, %rax$'
+wantline b11d_sizeof '^  mov \$8, %rax$'
+
+# _Generic: 只有选中项进发射, 控制表达式与未选中项不发码.
+snippet b11d_generic <<'SNIP'
+int f(void) { return _Generic(1, int: 11, default: 22); }
+SNIP
+wantline b11d_generic '^  mov \$11, %rax$'
+absent b11d_generic '\$22'
 
 # ---- B1.2b ND_DECL: 声明在发射点摊成初始化链 ------------------------------
 # 定长聚合的初始化 = 先整体清零(`rep stosb`)再逐元素赋值, 形状与旧降级相同;

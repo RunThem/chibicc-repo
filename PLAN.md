@@ -446,7 +446,7 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
     有初始化就地建 `lvar_init_comma` 并 `add_type` + `gen_expr`). 先探针 `shape_node` 的表达式
     位置 ND_DECL 分支是否可达. 预期 ndiff 空; 若拆分比预期绕或出现非空差异则跳过并记录理由
     (B 的其余部分不受影响).
-- [ ] **B1.3 形状断言**: 新 `test/shape.sh <chibicc>`(镜像 `diagnostic.sh` 的风格: snippet/expect
+- [x] **B1.3 形状断言**: 新 `test/shape.sh <chibicc>`(镜像 `diagnostic.sh` 的风格: snippet/expect
   heredoc + 临时目录 + 计数 + 失败 exit 1), 用 `$chibicc -S -o- -xc -` 编译片段后对 .s 断言, 挂进
   Makefile 的 `test` 与 `test-stage2`(从而进 docker-test 两轮); 断言随各步增量写入, 本步收口.
   每项: 下标 = 缩放+加序列; arrow = `add $off` 与取值; GT/GE = 三路径的助记符与操作数角色;
