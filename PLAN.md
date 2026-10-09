@@ -409,7 +409,7 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
 可能含残留项), `shape_init_exprs` 保留但职责从"降级"改为"到达".
 
 - [ ] **B1.1 发射点直读(表达式层)**
-  - [ ] **B1.1a ND_SUBSCRIPT**: 删 `shape_node` 的 case; `gen_addr` 加 case(经 `new_add` 建
+  - [x] **B1.1a ND_SUBSCRIPT**: 删 `shape_node` 的 case; `gen_addr` 加 case(经 `new_add` 建
     已定型节点后立即 `gen_expr` 它); `gen_expr` 加 case(`gen_addr` + `load`). 补测试:
     `p[i] += 1`(op= 经 `ADDR(SUBSCRIPT)` 走新落点)与 VLA 下标. 预期 ndiff 空.
   - [ ] **B1.1b ND_MEMBER(arrow)**: 删 case(含 `arrow_tok` 清除); `gen_addr` 按 `arrow_tok` 选

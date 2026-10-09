@@ -767,6 +767,27 @@ void f(void) { char *t = "in f"; (void)t; }
 - 闸门: 纯文档提交, 不跑 docker 四闸门(无代码变化); 提交后推送 origin/main.
 - 偏差: 五处, 逐条记在 `PLAN.md` 的阶段 B 段末.
 
+### B1.1a ND_SUBSCRIPT (本提交)
+
+- 改了什么: `shape_node` 的 `ND_SUBSCRIPT` case(经 `new_add` 把 `x[y]` 改写成 `*(x+y)` 的
+  12 行)删除; `gen_addr` 新增 `ND_SUBSCRIPT` case(经 `new_add` 建已定型节点后立即 `gen_expr`),
+  `gen_expr` 新增 `ND_SUBSCRIPT` case(`gen_addr` + `load`), 文件头部加 `new_add` 的前向声明;
+  parse/sema/type/chibicc.h 零改动.
+- 为什么: 阶段 B 的第一项 - 下标不再经"树里改写"到达发射, 缩放和在建地址的那一刻由同一个
+  `new_add` 现建现发, 指令序列按设计逐字节保持. 时序无风险: `new_add`/`scale_rhs` 不建槽
+  (VLA 基址只读既有 `vla_size` 槽, 该槽由整形遍的 VLA 声明展开创建, 仍在 `assign_lvar_offsets`
+  之前); 新节点也不会被二次降级(现建的 `ND_ADD` 走 gen_expr 的普通二元路径, 不再进本 case).
+- 闸门: 四闸门全绿. docker-test rc=0(诊断 55 例逐字节 ×2, 含自举); `docker-snapshot-ndiff`
+  **空**(41 文件, 下标遍及全部语料, 空即逐字节等价); tinycc rc=0; 新形状断言 `test/shape.sh`
+  5 段全过(读/写/交换写法/VLA/多级), 已挂进 Makefile 的 `test` 与 `test-stage2`(容器内两轮各
+  `shape lock: 5 snippets`).
+- 覆盖: 本步无需新增 .c 用例 - `a[i] += j++`(op= 经 `ADDR(SUBSCRIPT)` 的路径)在
+  `test/arith.c:146-147`, VLA 下标缩放(读 `vla_size` 槽)在 `test/vla.c:18`, `&g11[1].a` 在
+  `test/initializer.c:22`. 形状断言按新落点补 5 段(见上).
+- 偏差: 无. (断言首轮发现的 2D 序列差异是我的断言写错 - 外层索引先求值, 实为
+  `imul imul add add`, 已改正; 属断言笔误, 非编译器偏差.) 行数: codegen.c 2556 -> 2563
+  (+19/-12), `test/shape.sh` 新增 109 行, Makefile +2 行.
+
 ## 给审核者的提示
 
 - 审核重心: sema 的 `add_type`(每次提交都应少掉若干"改写树形状"的 case, 且剩下的 case 只填

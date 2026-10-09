@@ -42,6 +42,7 @@ static Obj *current_fn;
 
 static void gen_expr(Node *node);
 static void gen_stmt(Node *node);
+static Node *new_add(Node *lhs, Node *rhs, Token *tok);
 
 __attribute__((format(printf, 1, 2)))
 static void println(char *fmt, ...) {
@@ -190,6 +191,17 @@ static void gen_addr(Node *node) {
     gen_expr(node->lhs);
     gen_addr(node->rhs);
     return;
+  case ND_SUBSCRIPT: {
+    // `x[y]` keeps its faithful spelling (PLAN B1.1a): the scaled,
+    // converted sum the shaping pass used to build ahead of time is
+    // built here, at the point the address is needed, and emitted
+    // right away. new_add types it and applies the element-size
+    // scaling exactly as the pass did, so the instructions are the
+    // ones the old `*(x+y)` form produced.
+    Node *add = new_add(node->lhs, node->rhs, node->tok);
+    gen_expr(add);
+    return;
+  }
   case ND_MEMBER:
     gen_addr(node->lhs);
     println("  add $%d, %%rax", node->member->offset);
@@ -827,6 +839,13 @@ static void gen_expr(Node *node) {
     }
     return;
   }
+  case ND_SUBSCRIPT:
+    // `x[y]` in value context (PLAN B1.1a): the address gen_addr
+    // computes, then the pointee load - the instructions of the old
+    // `*(x+y)` form, with the sum built on demand.
+    gen_addr(node);
+    load(node->ty);
+    return;
   case ND_DEREF:
     gen_expr(node->lhs);
     load(node->ty);
@@ -2021,18 +2040,6 @@ static void shape_node(Node *node) {
     cg_labels = node;
     shape_node(node->lhs);
     return;
-  case ND_SUBSCRIPT: {
-    // `x[y]` becomes `*(x+y)`: new_add builds the scaled, converted
-    // sum exactly as the annotation pass used to, and the node itself
-    // becomes the dereference of it. sema validated the operand pair
-    // and typed the pointee; the sum arrives fully typed.
-    shape_children(node);
-    Node *add = new_add(node->lhs, node->rhs, node->tok);
-    node->kind = ND_DEREF;
-    node->lhs = add;
-    node->ty = add->ty->base;
-    return;
-  }
   case ND_MEMBER:
     // A member still carrying the arrow marker accesses through the
     // pointer its operand is: the dereference resolve_member stopped
