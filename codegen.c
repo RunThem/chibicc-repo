@@ -203,7 +203,15 @@ static void gen_addr(Node *node) {
     return;
   }
   case ND_MEMBER:
-    gen_addr(node->lhs);
+    // A member access still carrying its `->` marker (PLAN B1.1b) goes
+    // through the pointer value its operand is, so the address it
+    // contributes is that value itself; the plain `.` form keeps
+    // taking the operand's address. The member binding and the
+    // member's type were settled in sema.
+    if (node->arrow_tok)
+      gen_expr(node->lhs);
+    else
+      gen_addr(node->lhs);
     println("  add $%d, %%rax", node->member->offset);
     return;
   case ND_FUNCALL:
@@ -1814,15 +1822,23 @@ static Node *to_assign(Node *node) {
   Token *tok = node->tok;
 
   // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
-  // The member has already been through this pass, so an arrow access
-  // arrives as the dereference the address takes - the marker
-  // resolution above put it in place and cleared the marker.
+  // The member keeps its marker now (PLAN B1.1b), so the address of
+  // the object the member lives in is read off the marker: a member
+  // that is itself the innermost link of an arrow access takes the
+  // pointer operand's value (its pointee is the object), every other
+  // member - a plain `.` access, or an arrow access buried deeper in
+  // a flattened anonymous chain - takes the operand's address. The
+  // temporary holds that object either way, so expr2/expr3 can name
+  // the member on it; the slot and the built shapes are the ones the
+  // pre-B lowering produced.
   if (node->lhs->kind == ND_MEMBER) {
     Node *operand = node->lhs->lhs;
-    Obj *var = new_lvar("", pointer_to(operand->ty));
+    bool arrow = node->lhs->arrow_tok;
+    Obj *var = new_lvar("", pointer_to(arrow ? operand->ty->base : operand->ty));
+    Node *addr = arrow ? operand : new_unary(ND_ADDR, operand, tok);
 
     Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
-                             new_unary(ND_ADDR, operand, tok), tok);
+                             addr, tok);
 
     Node *expr2 = new_unary(ND_MEMBER,
                             new_unary(ND_DEREF, new_var_node(var, tok), tok),
@@ -2039,19 +2055,6 @@ static void shape_node(Node *node) {
     node->goto_next = cg_labels;
     cg_labels = node;
     shape_node(node->lhs);
-    return;
-  case ND_MEMBER:
-    // A member still carrying the arrow marker accesses through the
-    // pointer its operand is: the dereference resolve_member stopped
-    // inserting (A3.1) goes in here, anchored at the member token as
-    // before, and the marker goes away. The member binding and the
-    // member's type were settled in sema and are left alone.
-    shape_children(node);
-    if (node->arrow_tok) {
-      node->lhs = new_unary(ND_DEREF, node->lhs, node->tok);
-      add_type(node->lhs);
-      node->arrow_tok = NULL;
-    }
     return;
   case ND_ASSIGN:
     shape_children(node);

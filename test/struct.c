@@ -58,6 +58,20 @@ int main() {
   ASSERT(29, ({ struct { struct {int a;}; int b; } x={14,15}; x.a+x.b; }));
   ASSERT(16, ({ struct { struct {int a;}; int b; } x; int *p=&x.a; *p=16; x.a; }));
 
+  // The other member spellings of a compound assignment or an inc/dec
+  // reach the member rewrite through their own operand forms: prefix
+  // and postfix, arrow and dot, a pointer member (its scaling), a
+  // member subscript, an explicit dereference and a bit-field.
+  ASSERT(11, ({ struct {int a;} x, *p=&x; p->a=10; ++p->a; x.a; }));
+  ASSERT(9, ({ struct {int a;} x, *p=&x; p->a=10; --p->a; x.a; }));
+  ASSERT(2, ({ struct {int a;} x, *p=&x; p->a=10; p->a-=8; x.a; }));
+  ASSERT(11, ({ struct {int a;} x; x.a=10; ++x.a; x.a; }));
+  ASSERT(10, ({ struct {int a;} x; x.a=11; x.a--; x.a; }));
+  ASSERT(21, ({ struct {int a;} x, *p=&x; (*p).a=20; (*p).a+=1; x.a; }));
+  ASSERT(13, ({ struct {int a[2];} x, *p=&x; p->a[0]=10; p->a[0]+=3; x.a[0]; }));
+  ASSERT(4, ({ struct {unsigned a:4;} x, *p=&x; p->a=1; p->a+=3; x.a; }));
+  ASSERT(9, ({ struct {int *q;} x, *p=&x; int a[2]; a[0]=8; a[1]=9; p->q=a; p->q+=1; *p->q; }));
+
   ASSERT(4, ({ struct {int a;} x; sizeof(x); }));
   ASSERT(8, ({ struct {int a; int b;} x; sizeof(x); }));
   ASSERT(8, ({ struct {int a, b;} x; sizeof(x); }));

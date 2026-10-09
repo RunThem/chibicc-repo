@@ -70,6 +70,38 @@ int f(int a[2][3], long i, long j) { return a[i][j]; }
 SNIP
 want b11a_subscript_2d imul imul add add
 
+# ---- B1.1b ND_MEMBER(arrow): 箭头成员读指针值 + 偏移, 点成员取操作数地址 ----
+# 读(箭头): 先取指针的值(mov, 参数直接寻址), 再加成员偏移(add).
+snippet b11b_member_arrow_read <<'SNIP'
+struct S { int x; };
+int f(struct S *p) { return p->x; }
+SNIP
+want b11b_member_arrow_read mov add movsxd
+absent b11b_member_arrow_read '^  call'
+
+# 读(点): 取的是操作数的地址(lea), 无指针取值 - 与箭头形区分.
+snippet b11b_member_dot_read <<'SNIP'
+struct S { int x; };
+int f(struct S s) { return s.x; }
+SNIP
+want b11b_member_dot_read lea add movsxd
+
+# 读(展平匿名链): 每一级 link 各加一次偏移(两个 add).
+snippet b11b_member_anon_read <<'SNIP'
+struct S { struct { int a; }; };
+int f(struct S *p) { return p->a; }
+SNIP
+want b11b_member_anon_read add add
+
+# 复合赋值(展平匿名链): 承载对象的地址经临时槽写入与读回, 链上的偏移仍在
+# 发射点解析(指针取值 mov + 偏移 add).
+snippet b11b_member_anon_op_assign <<'SNIP'
+struct S { struct { int a; }; };
+void f(struct S *p, int v) { p->a += v; }
+SNIP
+want b11b_member_anon_op_assign mov add mov
+absent b11b_member_anon_op_assign '^  call'
+
 # ---- 汇总 ----------------------------------------------------------------
 fail=""
 count=0

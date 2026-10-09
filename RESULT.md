@@ -788,6 +788,32 @@ void f(void) { char *t = "in f"; (void)t; }
   `imul imul add add`, 已改正; 属断言笔误, 非编译器偏差.) 行数: codegen.c 2556 -> 2563
   (+19/-12), `test/shape.sh` 新增 109 行, Makefile +2 行.
 
+### B1.1b ND_MEMBER(arrow) (本提交)
+
+- 改了什么: `shape_node` 的 `ND_MEMBER` case 删除(它往最内层 link 补 DEREF 并清 `arrow_tok`);
+  `gen_addr` 的 `ND_MEMBER` 按 `arrow_tok` 选落点(箭头: `gen_expr`(指针值); 点: `gen_addr`);
+  **`to_assign` 的成员分支**同步改: 它原来读 `node->lhs->lhs` 并以"arrow 已补成 DEREF"为前提
+  (原注释即如此), 现在按 `node->lhs->arrow_tok` 分流 - 该成员自身是最内层 link 时承载对象是
+  指针的指向物, 地址取指针值, 槽类型 `pointer_to(operand->ty->base)`; 其余(点访问, 或展平匿名
+  链里更深的箭头)取 `ADDR(operand)`, 槽类型 `pointer_to(operand->ty)`. parse/sema/type/
+  chibicc.h 零改动.
+- 为什么: 箭头成员的 DEREF 不再由整形遍补插, 标记从此只由发射点与求值器读. 本步的关键风险是
+  `to_assign` 的前提断裂(契约 3(a) 举的正是这个例子): 展平匿名链里被赋值成员的父亲可能正是
+  那个带标记的 link, 只看"链上有没有标记"会把 `p->a += v`(a 在匿名结构里)算错一级 - 本地 A/B
+  与 `struct.c` 语料都覆盖了它.
+- 闸门: 四闸门全绿. docker-test rc=0(诊断 55 例逐字节 ×2, 含自举; 新增 struct.c 九条全过);
+  tinycc rc=0; 形状断言 9 段(新增 4 段: 箭头读 / 点读 / 展平匿名读 / 展平匿名复合赋值);
+  ndiff 见偏差 - 语料维度重置后**空**.
+- 覆盖: `test/struct.c` 补九条(前缀 `++p->x`/`--p->x`, `p->a-=v`, 点 `++x.a`/`x.a--`,
+  `(*p).a+=1`, 成员下标 `p->a[0]+=3`, 位域箭头 `p->a+=3`, 指针成员 `p->q+=1`); 原有
+  `p->a+=2`(匿名展平)与 `p->a++` 保留.
+- 偏差: 无编译器偏差. 快照基线随语料重置(先例 A8.1/A10.2): ndiff 唯一变化文件是 `struct.s`,
+  内容为新增断言的字面量数据与随之而来的新代码(102 个 hunk, 非数据行只有新增的 `.local/.data`
+  串块); **编译器维度中性由本地 A/B 证明** - 同一份新 `test/struct.c`(含九条新断言), 改动前后
+  两个编译器输出逐字节一致, 另在 member 探针文件(前缀/后缀/展平/点/指针成员/下标成员/
+  `(*p).x`)上做了同样对照. 行数: codegen.c 2563 -> 2566, `test/shape.sh` 109 -> 141,
+  `test/struct.c` +14.
+
 ## 给审核者的提示
 
 - 审核重心: sema 的 `add_type`(每次提交都应少掉若干"改写树形状"的 case, 且剩下的 case 只填

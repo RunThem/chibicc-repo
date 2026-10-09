@@ -412,7 +412,7 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   - [x] **B1.1a ND_SUBSCRIPT**: 删 `shape_node` 的 case; `gen_addr` 加 case(经 `new_add` 建
     已定型节点后立即 `gen_expr` 它); `gen_expr` 加 case(`gen_addr` + `load`). 补测试:
     `p[i] += 1`(op= 经 `ADDR(SUBSCRIPT)` 走新落点)与 VLA 下标. 预期 ndiff 空.
-  - [ ] **B1.1b ND_MEMBER(arrow)**: 删 case(含 `arrow_tok` 清除); `gen_addr` 按 `arrow_tok` 选
+  - [x] **B1.1b ND_MEMBER(arrow)**: 删 case(含 `arrow_tok` 清除); `gen_addr` 按 `arrow_tok` 选
     `gen_expr`(指针值)或 `gen_addr`(点访问); **同步修 `to_assign` 的成员分支** - 它今日依赖
     "arrow 已补成 DEREF"的前提, 改为 arrow 取指针表达式本身 / dot 取 `ADDR(基址)`, 槽类型统一
     `pointer_to(base->ty)`, 指令不变. 补测试: 前缀 `++p->x`/`--p->x`, `p->x -= v`,
