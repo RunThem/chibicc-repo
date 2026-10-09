@@ -814,6 +814,33 @@ void f(void) { char *t = "in f"; (void)t; }
   `(*p).x`)上做了同样对照. 行数: codegen.c 2563 -> 2566, `test/shape.sh` 109 -> 141,
   `test/struct.c` +14.
 
+### B1.1c ND_GT/ND_GE (本提交)
+
+- 改了什么: `shape_node` 的 `ND_GT`/`ND_GE` case 删除(交换操作数 + kind 降级为 LT/LE);
+  `gen_expr` 的二元发射尾部在类型分派之前接住这两个 kind: 用一个**当次发射才建、随即丢弃**的
+  `ND_LT`/`ND_LE` 节点(`new_binary(kind, node->rhs, node->lhs, tok)`, ty 拷贝)走原比较路径.
+  parse/sema/type/chibicc.h 零改动.
+- 为什么: 忠实 `>`/`>=` 保留操作数与 kind, 交换从树改写变成发射点的一次构造. 与计划原稿的偏差
+  (见下): 原稿写"三条比较路径各加 GT/GE 处理, 逐条镜像", 实施改为在尾部统一换序后再进原路径 -
+  两条实现产出的**求值顺序与指令文本都等于降级形态**(交换后左操作数落在 rhs 位先求值; 整数条件
+  setl/setb, 浮点与 long double 取 seta; 整数符号性读 `node->rhs->ty->is_unsigned`, 即"交换后
+  会到左边"的那个操作数, 与求值器 sema.c 的 ND_GT case 同口径), 但不再把比较逻辑复制三份, 也不
+  再需要逐路径论证等价 - 字节等价从"论证"变成"构造". 将来若要改发 `setg` 原生形, 落点也只有
+  这一处.
+- 闸门: 四闸门全绿. docker-test rc=0(诊断 55 例逐字节 ×2, 含自举; 新增 unsigned/长双精度断言
+  全过); tinycc rc=0; 形状断言 14 段(新增 5 段: 整数 `>` 取 setl 且**不得**出现 setg, 无符号 `>`
+  取 setb 且不得 seta, 无符号 `>=` 取 setbe, 浮点与 long double 取 seta); ndiff 见偏差 -
+  语料维度重置后**空**.
+- 覆盖: `test/arith.c` 补十处(无符号 `>`/`>=`/`<` 与混合有符号-无符号对, 取"有符号比较会得到
+  相反答案"的值; long double 的 `>`/`>=` 四例), `test/float.c` 补十二处(float/double 的
+  `>`/`>=`). 改动前语料里没有无符号 `>` 与 long double `>` 的用例.
+- 偏差: 无编译器偏差; 一处计划偏差(实现形态, 见上, 效果更保守: 不复制比较逻辑). 快照基线随语料
+  重置(先例 A8.1/A10.2): ndiff 唯一变化文件是 `arith.s` 与 `float.s`(即改动的两个语料文件);
+  把 diff 逐行归一化(`.L..N` 与偏移折叠)后**基线侧没有任何形状消失**, 新增侧只有 `.size/.byte`
+  数据指令(新断言的字面量); **编译器维度中性另有本地 A/B 直证** - 同一份新语料, 改动前后两个
+  编译器输出逐字节一致. 行数: codegen.c 2566 -> 2569, `test/shape.sh` 141 -> 175,
+  `test/arith.c` +17, `test/float.c` +12.
+
 ## 给审核者的提示
 
 - 审核重心: sema 的 `add_type`(每次提交都应少掉若干"改写树形状"的 case, 且剩下的 case 只填

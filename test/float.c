@@ -48,6 +48,12 @@ int main() {
   ASSERT(0, 5.1<=5);
   ASSERT(1, 5.0<=5);
   ASSERT(1, 4.9<=5);
+  ASSERT(1, 5.1>5);
+  ASSERT(0, 5.0>5);
+  ASSERT(0, 4.9>5);
+  ASSERT(1, 5.1>=5);
+  ASSERT(1, 5.0>=5);
+  ASSERT(0, 4.9>=5);
 
   ASSERT(1, 2e3f==2e3);
   ASSERT(0, 2e3f==2e5);
@@ -58,6 +64,12 @@ int main() {
   ASSERT(0, 5.1f<=5);
   ASSERT(1, 5.0f<=5);
   ASSERT(1, 4.9f<=5);
+  ASSERT(1, 5.1f>5);
+  ASSERT(0, 5.0f>5);
+  ASSERT(0, 4.9f>5);
+  ASSERT(1, 5.1f>=5);
+  ASSERT(1, 5.0f>=5);
+  ASSERT(0, 4.9f>=5);
 
   ASSERT(6, 2.3+3.8);
   ASSERT(-1, 2.3-3.8);

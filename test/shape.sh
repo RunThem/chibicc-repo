@@ -102,6 +102,40 @@ SNIP
 want b11b_member_anon_op_assign mov add mov
 absent b11b_member_anon_op_assign '^  call'
 
+# ---- B1.1c ND_GT/ND_GE: 交换在发射点做, 条件与求值顺序镜像降级形态 --------
+# 整数 `>`: 左操作数先求值(降级后它落在 rhs 位), 条件取 setl - 等价于降级后的
+# `<` 形; 不得取 setg(说明换了发射形态).
+snippet b11c_gt_int <<'SNIP'
+int f(int a, int b) { return a > b; }
+SNIP
+want b11c_gt_int cmp setl movzb
+absent b11c_gt_int 'setg'
+
+# 无符号 `>`: 条件取 setb(不得取 seta).
+snippet b11c_gt_unsigned <<'SNIP'
+int f(unsigned a, unsigned b) { return a > b; }
+SNIP
+want b11c_gt_unsigned cmp setb
+absent b11c_gt_unsigned 'seta'
+
+# 无符号 `>=`: 条件取 setbe.
+snippet b11c_ge_unsigned <<'SNIP'
+int f(unsigned a, unsigned b) { return a >= b; }
+SNIP
+want b11c_ge_unsigned cmp setbe
+
+# 浮点 `>`: ucomi + seta(左操作数先求值).
+snippet b11c_gt_float <<'SNIP'
+int f(float a, float b) { return a > b; }
+SNIP
+want b11c_gt_float ucomiss seta
+
+# long double `>`: fcomip + seta.
+snippet b11c_gt_ldouble <<'SNIP'
+int f(long double a, long double b) { return a > b; }
+SNIP
+want b11c_gt_ldouble fcomip seta
+
 # ---- 汇总 ----------------------------------------------------------------
 fail=""
 count=0

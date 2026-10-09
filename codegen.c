@@ -1090,6 +1090,23 @@ static void gen_expr(Node *node) {
   }
   }
 
+  // The comparison shapes the emitter knows are `<` and `<=`; the
+  // faithful `>` / `>=` keeps its operands now (PLAN B1.1c), so the
+  // swap the shaping pass used to write into the tree is made here,
+  // on a node built for this one emission and thrown away. The
+  // operands are the same objects and the roles are the ones the swap
+  // gave them, so the evaluation order and the condition emitted are
+  // exactly the pre-B tree's - the signedness the integer path reads
+  // is the one of the operand the swap moves to the left, which is
+  // also how the evaluator reads the faithful pair.
+  if (node->kind == ND_GT || node->kind == ND_GE) {
+    Node *swapped = new_binary(node->kind == ND_GT ? ND_LT : ND_LE,
+                               node->rhs, node->lhs, node->tok);
+    swapped->ty = node->ty;
+    gen_expr(swapped);
+    return;
+  }
+
   switch (node->lhs->ty->kind) {
   case TY_FLOAT:
   case TY_DOUBLE: {
@@ -2116,20 +2133,6 @@ static void shape_node(Node *node) {
     node->ty = result->ty;
     return;
   }
-  case ND_GT:
-  case ND_GE:
-    // Downgrade the faithful `>` / `>=` back to `<` / `<=` with
-    // swapped operands, which is the only comparison form gen_expr
-    // understands. The conversions sema inserted face the same way on
-    // either side of the swap.
-    shape_children(node);
-    {
-      Node *lhs = node->lhs;
-      node->lhs = node->rhs;
-      node->rhs = lhs;
-      node->kind = node->kind == ND_GT ? ND_LT : ND_LE;
-    }
-    return;
   case ND_FUNCALL:
     // The caller's return buffer is a slot of the consumer (PLAN
     // A6.1): sema checked the callee, converted the arguments and

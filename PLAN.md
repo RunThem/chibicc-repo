@@ -418,11 +418,12 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
     `pointer_to(base->ty)`, 指令不变. 补测试: 前缀 `++p->x`/`--p->x`, `p->x -= v`,
     `p->arr[i] += 1`, 指针成员 `p->next += 1`, 位域 arrow op=(现有只有 `p->a += 2`/`p->a++`).
     预期 ndiff 空.
-  - [ ] **B1.1c ND_GT/ND_GE**: 删 case; 三条比较路径(float/double, long double, 整数)各加 GT/GE
+  - [x] **B1.1c ND_GT/ND_GE**: 删 case; 三条比较路径(float/double, long double, 整数)各加 GT/GE
     处理, 逐条镜像今日交换后的**物理求值顺序与指令文本**(整数与 float/double 先求值左操作数,
     long double 先求值右操作数; 条件助记符与符号性读数保持"交换后会到左边"的那个操作数的口径,
     与求值器 sema.c 的 `ND_GT` case 一致). 补 unsigned 与浮点探针. 预期 ndiff 空(本步最需要
-    逐字节证明 - 助记符在 .s 里可见).
+    逐字节证明 - 助记符在 .s 里可见). (实施偏差: 改为在二元发射尾部统一换序后进原比较路径 -
+    指令文本与求值顺序不变, 但不复制三份比较逻辑; 见 RESULT.md 的偏差记录.)
   - [ ] **B1.1e elvis 无槽发射**: 删 `shape_node` 的 `is_elvis` 分支; `gen_expr(ND_COND)` 加无槽
     分支(条件值留在 rax/xmm0; long double 先 `fld %st(0)` 预复制 - `cmp_zero` 的
     `fldz/fucomip/fstp` 会吃掉 x87 值; 两支各自按 `node->ty` 补 cast, 因为 sema 的 elvis 路径

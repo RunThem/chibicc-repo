@@ -130,6 +130,17 @@ int main() {
   ASSERT(-15, (char *)0xfffffffffffffff0 - (char *)0xffffffffffffffff);
   ASSERT(1, (void *)0xffffffffffffffff > (void *)0);
 
+  // PLAN B1.1c: `>`/`>=` keep their operands at the emission point, and
+  // the signedness they compare with is the one of the operand the old
+  // swap moved to the left - the values below are picked so that a
+  // signed comparison would answer the opposite.
+  ASSERT(1, ({ unsigned a = 0xffffffff; int b = 1; a > b; }));
+  ASSERT(0, ({ unsigned a = 0xffffffff; int b = 1; a < b; }));
+  ASSERT(1, ({ unsigned a = 0xffffffff; int b = 1; a >= b; }));
+  ASSERT(1, ({ int a = -1; unsigned b = 1; a > b; }));
+  ASSERT(1, ({ unsigned a = 0x80000000; unsigned b = 0x7fffffff; a > b; }));
+  ASSERT(0, ({ unsigned a = 1; int b = 2; a >= b; }));
+
   ASSERT(3, 3?:5);
   ASSERT(5, 0?:5);
   ASSERT(4, ({ int i = 3; ++i?:10; }));
@@ -138,6 +149,12 @@ int main() {
   ASSERT(5, (long double)3+2);
   ASSERT(6, (long double)3*2);
   ASSERT(5, (long double)3+2.0);
+
+  // PLAN B1.1c: the `>`/`>=` probes of the long double path.
+  ASSERT(1, (long double)3 > 2.5);
+  ASSERT(0, (long double)3 > 3.0);
+  ASSERT(1, (long double)3 >= 3.0);
+  ASSERT(0, (long double)2.5 >= 3.0);
 
   // PLAN A10.2: shapes the faithful pipeline brings together - a
   // pointer elvis, and a subscript under a compound assignment whose
