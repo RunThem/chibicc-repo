@@ -311,8 +311,8 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   由 codegen 的 shape_node(ND_DECL) 展开; 因指针到 VLA 可带初始化器, `lvar_init_comma` 依
   契约 2 临时导出(A8.1 撤). 维度表达式先显式整形(类型是它们唯一引用; 以 `ty->vla_size` 已设
   区分 typedef 共享类型的第二次声明). 实测: 语料差异**全部为栈偏移**(4 文件, 0 .loc 0 指令),
-  ndiff 空, 同提交重置 raw 基线; 指向 VLA 的指针(带/不带初始化器)、typedef 共享 VLA 类型、
-  sizeof(VLA)、维度里 sizeof 五组探针与 A9.1 基线逐字节一致, docker 运行时断言全过.
+  ndiff 空, 同提交重置 raw 基线; 指向 VLA 的指针(带/不带初始化器), typedef 共享 VLA 类型,
+  sizeof(VLA), 维度里 sizeof 五组探针与 A9.1 基线逐字节一致, docker 运行时断言全过.
 - [x] **A8.1 初始化器消费侧 + ND_DECL 展开**(本线最大一步, 三件事必须同提交, 契约 1): 
   (i) `ResolvedInit`/`InitDesg` 移入 `chibicc.h` 并命名归位(`InitTree`/`InitPath`), 
   `create_lvar_init`/`lvar_init_comma`/`init_desg_expr` 搬 codegen(`init_desg_expr` 直接建已降级
@@ -343,9 +343,9 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   `gvar_init_data` 留 sema 的标注遍, "初始化链 + 对象引用"的整形归 codegen(复用 A8.1 已搬的
   `lvar_init_comma`).
   (实测: 三项内容已在 A8.1 一并落地(A7.1 的临时导出把块域展开提前牵走), 本步为**验证提交**,
-  无代码改动: 语料 complit.c/initializer.c 覆盖设计符、括号后成员/下标、函数定义前中后的文件域块序;
-  新增探针覆盖块域(成员访问、函数实参、下标、`&(T){...}`、循环内新鲜对象)与文件域(数组、指针初始化、
-  指定初始化、`mid()` 定义前后)两组 + 六目录全探针, 与基线逐字节一致; docker 运行时断言全过
+  无代码改动: 语料 complit.c/initializer.c 覆盖设计符, 括号后成员/下标, 函数定义前中后的文件域块序;
+  新增探针覆盖块域(成员访问, 函数实参, 下标, `&(T){...}`, 循环内新鲜对象)与文件域(数组, 指针初始化,
+  指定初始化, `mid()` 定义前后)两组 + 六目录全探针, 与基线逐字节一致; docker 运行时断言全过
   ("complit-a83 ok"); 四闸门全绿(raw 全空). 两个预存在限制记录在案(基线同报错): 复合字面量直接跟
   `.`/`[...]`(无外层括号)在 parse 层报 "expected ','"; 块域 static 以复合字面量初始化报
   "not a compile-time constant".)
@@ -363,11 +363,11 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   `Type::vla_size`, 结论槽), sema.c/codegen.c 文件头注释重写(codegen 头要写清整形遍的六条不变量),
   库层"无整形"的 grep 佐证留档, AGENTS.md 的目标架构/现状段/硬性规则按终态更新(含 static 状态清单
   去掉 `decl_remove`).
-  (实测: chibicc.h 的 8 处归属标注(brk/cont 标签、pass_by_stack/ret_buffer、label/unique_label/
-  goto_next、case 链、is_elvis、ty_op、generic_sel、Type::vla_size 已在 A7.1 标注); sema.c 头部
+  (实测: chibicc.h 的 8 处归属标注(brk/cont 标签, pass_by_stack/ret_buffer, label/unique_label/
+  goto_next, case 链, is_elvis, ty_op, generic_sel, Type::vla_size 已在 A7.1 标注); sema.c 头部
   的"标注+降级"改为"纯标注遍(无形状改写)"并列出物化清单; codegen.c 新增文件头(整形遍定位 + 契约 3
   六条不变量 + 字段归属指引); AGENTS.md 的 static 清单(10 个, 去掉 brk_label/cont_label/
-  current_switch/decl_remove 等已迁出项)、目标架构第 4 条、现状段与代码地图按终态重写; 四闸门全绿,
+  current_switch/decl_remove 等已迁出项), 目标架构第 4 条, 现状段与代码地图按终态重写; 四闸门全绿,
   raw 全空(纯注释/文档).)
 - [x] **A10.2 针对性回归**: 补测试覆盖忠实形态的发射面, 以及本次分析新识别的薄弱面 -
   `a[i] += j++`(下标 + 复合赋值 + 后缀自增), `p ?: q`, 大结构体返回值缓冲, VLA 尺寸复用与
@@ -469,14 +469,14 @@ B1.3 收口后, 整形遍的唯一"只换发射方式"残留项是 `ND_ADD`/`ND_
 
 **唯一的障碍是判别**: 忠实节点与已降级节点的 kind 相同, 形状与类型也可能相同 - `p + n` 降级后是
 `ND_ADD(ptr, 转换后的 MUL(n, size))`, 而源码写的 `p + n*4` 可以长得一模一样(连 `usual_arith_conv`
-插的 cast 都在)。整形遍当年能就地改写, 是因为它先序下行、见到的一定是忠实节点; 发射点在二元
+插的 cast 都在). 整形遍当年能就地改写, 是因为它先序下行, 见到的一定是忠实节点; 发射点在二元
 发射的统一入口上会同时见到两类节点(例如 `gen_addr` 的 `x[y]` 现建的 `new_add` 产物紧接着就走
-`gen_expr`)。
+`gen_expr`).
 
 **设计(标记 codegen 自建的降级产物)**:
 - `Node` 增一个 codegen 侧字段 `bool is_lowered`(归属标注仿 A10.1): `new_add`/`new_sub`/`combine`
   的加减分支在返回前标记自己产出的 `ND_ADD`/`ND_SUB`(含 ptr-ptr 情形里 `DIV` 之下的那个裸
-  `SUB`)。parser 与 sema 从不写它, 于是**未标记的加减节点 = 忠实节点**。
+  `SUB`). parser 与 sema 从不写它, 于是**未标记的加减节点 = 忠实节点**.
 - `gen_expr` 顶部(`.loc` 之前): 未标记的 `ND_ADD`/`ND_SUB` 把**节点指针替换**成
   `new_add`/`new_sub` 的产物再往下发射. 替换而非递归调用: 递归会为同一个 tok 多发一条 `.loc`,
   替换则让调试行与求值顺序与整形遍就地改写逐字节一致(降级产物的 tok 就是原节点的 tok).
@@ -484,10 +484,10 @@ B1.3 收口后, 整形遍的唯一"只换发射方式"残留项是 `ND_ADD`/`ND_
   范围不变); 整形遍不再改写任何加减节点, 也不再为它们建任何东西.
 
 **为什么标记"已降级"而不是"忠实"**(两个方向都能做工: 若由整形遍给忠实节点打标记, 发射点读标记
-即可)。选前者的理由: 不标记的默认语义 = "来自源码", 而 codegen 自建加减节点的位置可以 grep
+即可). 选前者的理由: 不标记的默认语义 = "来自源码", 而 codegen 自建加减节点的位置可以 grep
 穷举(实测只有 `new_add`/`new_sub`/`combine` 三处, 全文件没有别的 `new_binary(ND_ADD`/
-`new_arith(ND_ADD` 调用点); 反方向则要求整形遍的遍历覆盖全部忠实节点, 漏一处是静默少缩放。
-两者踩中时的症状同类(静默错码), 但前者的检查面是一个函数集合, 后者是一棵树的遍历。
+`new_arith(ND_ADD` 调用点); 反方向则要求整形遍的遍历覆盖全部忠实节点, 漏一处是静默少缩放.
+两者踩中时的症状同类(静默错码), 但前者的检查面是一个函数集合, 后者是一棵树的遍历.
 
 **为什么需要标记而不是"从类型推断"**: 发射点无法只看类型区分 - `p + i` 与 `p + i*4` 的降级形态
 逐字段同形. 反证(本地一次性探针, 不入提交): 去掉 `combine` 的标记, `p += i` 的读改写值在发射点
@@ -553,7 +553,7 @@ sema.c 里三处描述 B1.1b/B1.1e 机制的陈旧注释订正(纯注释, 无逻
 ## 风险与对策
 
 1. **`add_type` 一分为二是大爆炸点**: 对策 = 按契约 1 的调用图逐批搬运, 每批"标注侧减法 + 整形侧
-   加法"同一提交、独立可绿; 每批都用 ndiff 校验"发射形态未变"; 搬过去的代码尽量保持文本原样(只把
+   加法"同一提交, 独立可绿; 每批都用 ndiff 校验"发射形态未变"; 搬过去的代码尽量保持文本原样(只把
    对 sema 内部函数的调用换成导出符号), 让 review 能按 diff 逐行对; 出现无法归因的差异时以
    `git worktree add /tmp/cbase <上一个绿提交>` 逐字节对照两个二进制的 .s(同路径, 见
    RESULT-faithful 的 A/B 规程).

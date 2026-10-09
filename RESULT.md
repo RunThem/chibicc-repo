@@ -268,21 +268,21 @@ void f(void) { char *t = "in f"; (void)t; }
 
 ### A1.1 求值器认忠实形态 (cd44d0b)
 
-- 改了什么: 编译器源只动 sema.c 的求值器四函数与一个新辅助。 (1) `eval2` 补忠实 case:
+- 改了什么: 编译器源只动 sema.c 的求值器四函数与一个新辅助. (1) `eval2` 补忠实 case:
   ND_GT/ND_GE 就地反比(带符号位取自交换后的左操作数, 与降级形态逐值一致), ND_STRING(读物化后
   `node->var`), ND_SIZEOF/ND_ALIGNOF(定长读 `val`, sizeof 的 VLA 操作数报非常量), ND_TYPES_COMPATIBLE
   /ND_REG_CLASS(读 `val`), ND_GENERIC(`eval2(generic_sel)`), ND_COND 的 is_elvis 守卫(落向函数末尾的
   非常量 error), ND_ADD/ND_SUB 的 ptr-ptr 除法支(两侧以 `label == NULL` 求, 复现降级 DIV 的提问
   方式)与 invalid-operands 镜像; 入口注释修正: **入口的 add_type 调用保留** - 它是标注来源(#if 的
-  常量表达式只有这一处定型), 离开的是其中的改写, switch 自此要认忠实 kind。 (2) `eval_rval` 补
+  常量表达式只有这一处定型), 离开的是其中的改写, switch 自此要认忠实 kind. (2) `eval_rval` 补
   ND_SUBSCRIPT 取址(基址 + 下标 x 元素尺寸, VLA 尺寸报非常量), ND_MEMBER 的 arrow(指针值 + 偏移),
-  ND_STRING。 (3) `is_const_expr` 补 GT/GE 二元表项, SIZEOF/ALIGNOF(定长 true, sizeof 的 VLA false),
-  两个 builtin true, GENERIC 递归 `generic_sel`, COND 的 is_elvis false。 (4) `eval_double` 补
-  GENERIC 与 is_elvis 守卫。 (5) 新辅助 `ty_beyond_convs`: 穿过 conv 插入的 cast 链读操作数原类型 -
-  忠实指针算术要知道哪一侧原本是指针。 (6) `test/vla.c` 补 sizeof(VLA) 作维度回归
-  (`ASSERT(80, ...)`, 期望值 clang 验证)。 行数: sema.c 3173 -> 3352, 其余零改动。
+  ND_STRING. (3) `is_const_expr` 补 GT/GE 二元表项, SIZEOF/ALIGNOF(定长 true, sizeof 的 VLA false),
+  两个 builtin true, GENERIC 递归 `generic_sel`, COND 的 is_elvis false. (4) `eval_double` 补
+  GENERIC 与 is_elvis 守卫. (5) 新辅助 `ty_beyond_convs`: 穿过 conv 插入的 cast 链读操作数原类型 -
+  忠实指针算术要知道哪一侧原本是指针. (6) `test/vla.c` 补 sizeof(VLA) 作维度回归
+  (`ASSERT(80, ...)`, 期望值 clang 验证). 行数: sema.c 3173 -> 3352, 其余零改动.
 - 为什么改: A2.1-A9.1 每搬走一个降级, 求值器就开始见到该 kind 的忠实形态, case 必须先就位 -
-  这是本线唯一"新逻辑"的铺设。 每个 case 的激活步与覆盖:
+  这是本线唯一"新逻辑"的铺设. 每个 case 的激活步与覆盖:
 
   | case | 激活步 | 探针 | 语料覆盖 |
   |---|---|---|---|
@@ -296,416 +296,416 @@ void f(void) { char *t = "in f"; (void)t; }
   | ptr-ptr 除法 | A4.1 | 8 组之一(负例错误逐字节) | 无负例语料; 计划已知不可逐字节锁 |
 
   值形下标**不设** eval2 case: 降级把 DEREF 写在同一节点(锚点不变), 忠实形态落函数末尾 error,
-  文案与锚点(下标节点自己的 tok)与 f06 锁定完全一致。
-- 测试结果: 四闸门全绿。 docker-test rc=0(两轮 55 例逐字节, 含 vla.c 新断言); 快照用混合基线
+  文案与锚点(下标节点自己的 tok)与 f06 锁定完全一致.
+- 测试结果: 四闸门全绿. docker-test rc=0(两轮 55 例逐字节, 含 vla.c 新断言); 快照用混合基线
   (HEAD 编译器 + 新 vla.c 生成对照): raw 与归一化 diff **均为空** - 求值器改动对语料逐字节中性;
-  基线已重置为新编译器 + 新语料并复验; tinycc rc=0。 本地 A/B(HEAD 二进制 vs 新二进制对全部
-  test/*.c 出 -S, atomic/tls 因系统头不可本机构建): 39 文件全部逐字节相同。 **非空转探针 8 组**:
+  基线已重置为新编译器 + 新语料并复验; tinycc rc=0. 本地 A/B(HEAD 二进制 vs 新二进制对全部
+  test/*.c 出 -S, atomic/tls 因系统头不可本机构建): 39 文件全部逐字节相同. **非空转探针 8 组**:
   探针树上逐项关掉对应降级(GT/GE 交换, 下标改写, arrow 的 DEREF 补插与 arrow_tok 清理, 两处
   STRING 的 kind 改写, 定长 sizeof 的折叠改写, 两个 builtin 与 GENERIC 的改写, elvis 降级,
   以及单独一组 ADD/SUB 的 A4.1 预览), 对应输入在探针二进制与主二进制下输出**逐字节相同**
-  (.s 与 stderr, 含错误路径) - 旧路径关闭后唯一能算出正确值的就是新 case, 相同即"命中"的证明。
-- 偏差说明: 四项。
-  1. **ADD/SUB 的缩放支与 num+ptr 认识移入 A4.1**(计划把它们列在本步)。 机制: 这两个 case 的
+  (.s 与 stderr, 含错误路径) - 旧路径关闭后唯一能算出正确值的就是新 case, 相同即"命中"的证明.
+- 偏差说明: 四项.
+  1. **ADD/SUB 的缩放支与 num+ptr 认识移入 A4.1**(计划把它们列在本步). 机制: 这两个 case 的
      槽位为两个时代共享 - 降级形态的 rhs 已是 `MUL(下标, 尺寸)` 乘积, 忠实缩放支无条件存在会对
      已缩放的树二次缩放; 首版实现即被闸门抓住(initializer.s 实测 `g11+8` -> `g11+64`, `g26+4` ->
      `g26+16`, 本地 A/B 定位), 且**无法用形状区分两种时代** - 降级产物 `MUL(2, 4)` 与源码写的
-     `p + 2*4` 同形, 任何启发式都会静默算错。 处置: 缩放支随降级的离开(A4.1)落地, 那时它成为唯一
-     缩放; ptr-ptr 支今日形状是 DIV(不同 kind), 休眠安全, 留在本步。 语料中常量上下文的指针算术
-     (initializer.c)已把降级侧的 `.quad` 值锁进快照, A4.1 搬运时即时核对。 PLAN.md 的 A1.1/A4.1
-     条目与账本行 50 已按此改。
+     `p + 2*4` 同形, 任何启发式都会静默算错. 处置: 缩放支随降级的离开(A4.1)落地, 那时它成为唯一
+     缩放; ptr-ptr 支今日形状是 DIV(不同 kind), 休眠安全, 留在本步. 语料中常量上下文的指针算术
+     (initializer.c)已把降级侧的 `.quad` 值锁进快照, A4.1 搬运时即时核对. PLAN.md 的 A1.1/A4.1
+     条目与账本行 50 已按此改.
   2. **elvis 守卫是计划未列的补充**: 计划只点名 INCDEC 与带 op 的 ASSIGN 为非常量, 但 elvis 的
      `then` 为 NULL - 忠实形态下不设守卫, eval2/eval_double 的 COND case 会 NULL 解引用,
-     is_const_expr 会 NULL 递归。 按今日行为(降级后 tmp lvar 报 "not a compile-time constant",
-     锚 elvis tok)保守处理为非常量, 探针证明错误路径逐字节一致。
+     is_const_expr 会 NULL 递归. 按今日行为(降级后 tmp lvar 报 "not a compile-time constant",
+     锚 elvis tok)保守处理为非常量, 探针证明错误路径逐字节一致.
   3. **新基线缺陷(记录不修, 与 `1 - p` 同族)**: `int g; int h; long d = &g - &h;` 段错误(空 stderr
-     退出 1)。 原因: 降级形态 `DIV(SUB(ADDR, ADDR), 4)` 求值时 `eval2(SUB, NULL)` 经 ND_ADDR ->
-     `eval_rval(VAR, NULL)`, 后者无 label 判空直接写 `*label`。 忠实 ptr-ptr 支走同一调用序列,
-     行为逐字节保持(含此缺陷)。 修复属用户拍板项。 经下标写法的 `&a[1] - &a[0]` 干净报错
-     ("not a compile-time constant"), 不触发。
+     退出 1). 原因: 降级形态 `DIV(SUB(ADDR, ADDR), 4)` 求值时 `eval2(SUB, NULL)` 经 ND_ADDR ->
+     `eval_rval(VAR, NULL)`, 后者无 label 判空直接写 `*label`. 忠实 ptr-ptr 支走同一调用序列,
+     行为逐字节保持(含此缺陷). 修复属用户拍板项. 经下标写法的 `&a[1] - &a[0]` 干净报错
+     ("not a compile-time constant"), 不触发.
   4. **is_const_expr(VLA) 支的探针只能覆盖定长支**: sizeof(VLA) 的完整形态要到 A9.1 才出现
      (VLA 折叠本步照旧), 其判定的真实闸门是 vla.c 新断言在 A9.1 激活时的锁定 - 若届时
-     is_const_expr(ND_SIZEOF) 答错, 该断言会让编译直接失败。
+     is_const_expr(ND_SIZEOF) 答错, 该断言会让编译直接失败.
 
 ### A2.1 标签与控制流归 codegen (49d7cac)
 
-- 改了什么: codegen.c 首次承接整形。 (1) 新增整形遍一节(~150 行, 置于 assign_lvar_offsets 之前):
+- 改了什么: codegen.c 首次承接整形. (1) 新增整形遍一节(~150 行, 置于 assign_lvar_offsets 之前):
   `shape/shape_node/shape_chain/shape_children` 是原 `analyze` 家家的搬运版 - 标签分配
   (`new_label`: `.L..%d`, 基址取 `unique_name_next()` 后自增序号), 循环/switch 标签栈的压入/弹出,
   ND_WHILE→ND_FOR, break/continue→ND_GOTO, case 的前序挂链与 default 指针, ND_LABEL 的名字与
-  收集; 检查全部不在(codegen 只对过了检查的树做功)。 (2) `resolve_label_refs`: 对每函数遍历
+  收集; 检查全部不在(codegen 只对过了检查的树做功). (2) `resolve_label_refs`: 对每函数遍历
   **Obj.label_gotos**(sema 交来的 goto/label-value 引用链), 与本函数下降收集的标签按名字串配对,
-  写 `unique_label` - 原 `resolve_labels` 的写入半。 (3) `codegen()` 入口变为
-  "取基址 → shape → assign_lvar_offsets → emit_data → emit_text"。 (4) sema.c: analyze 家家
+  写 `unique_label` - 原 `resolve_labels` 的写入半. (3) `codegen()` 入口变为
+  "取基址 → shape → assign_lvar_offsets → emit_data → emit_text". (4) sema.c: analyze 家家
   (brk/cont/current_switch 三个 static + `resolve_labels` + `analyze_node/chain/children/analyze`)
   替换为**纯检查**版本 - `check_node/chain/children` 只跟踪循环/switch 嵌套深度跑 stray 四检查
   并收集 goto/label(文案与锚点逐字不变), `check_labels` 按名字串配对报 "use of undeclared label"
-  不写名字; `analyze_function` 在检查后把 `gotos` 链存进 `fn->label_gotos` 并清空两链。
+  不写名字; `analyze_function` 在检查后把 `gotos` 链存进 `fn->label_gotos` 并清空两链.
   (5) `to_assign` 原子分支的两处预分配删除(守卫随预分配恒真, 一并删除); 计数器提为文件域
-  `unique_name_id` 并导出只读 `unique_name_next()`。 (6) chibicc.h: Obj 增 `label_gotos` 字段
-  (sema 写 / codegen 读一次), 导出 `unique_name_next`。 规模: codegen.c 1595 -> 1766,
-  sema.c 3352 -> 3332, chibicc.h 750 -> 756。
+  `unique_name_id` 并导出只读 `unique_name_next()`. (6) chibicc.h: Obj 增 `label_gotos` 字段
+  (sema 写 / codegen 读一次), 导出 `unique_name_next`. 规模: codegen.c 1595 -> 1766,
+  sema.c 3352 -> 3332, chibicc.h 750 -> 756.
 - 为什么改: 判据 1 的第 39-41 行 - 标签分配, while 降级, break/continue 改写全是"为发射服务的
-  整形", 归 codegen; 判据 2 的第 43/44 行 - stray 与配对检查留 sema。 账本行 29/39/40/41/43/44/53/55
+  整形", 归 codegen; 判据 2 的第 43/44 行 - stray 与配对检查留 sema. 账本行 29/39/40/41/43/44/53/55
   在本步落位: 库层不再分配任何标签(sema 的 `new_unique_name` 只剩 `new_anon_gvar` 一个调用者,
   匿名全局一族), `.L..` 名字空间一个来源(codegen 从库计数器停点续号), 原子环的 do-while 无标签
-  到达, 由整形遍统一分配。
-- 测试结果: 四闸门全绿。 docker-test rc=0(两轮 55 例逐字节, b01-b04/f05 锁定检查侧, control.c 的
-  `&&label` 块域 static 跳转表与 atomic.c 的 CAS 循环在运行期验证交接字段与守卫分配)。
-  **归一化 diff 空**(权威形状闸门, 依据即计划验收段的首现序列恒等论证)。 raw diff 非空 - 2008 行
+  到达, 由整形遍统一分配.
+- 测试结果: 四闸门全绿. docker-test rc=0(两轮 55 例逐字节, b01-b04/f05 锁定检查侧, control.c 的
+  `&&label` 块域 static 跳转表与 atomic.c 的 CAS 循环在运行期验证交接字段与守卫分配).
+  **归一化 diff 空**(权威形状闸门, 依据即计划验收段的首现序列恒等论证). raw diff 非空 - 2008 行
   **逐行核对全部为 `.L..` 编号变化, 0 行非标签**(本地 A/B 39 文件同口径: 1848 标签行 + 8 行
-  diff 对齐伪影的 `.data` 同文对), 本提交内重置 raw 基线并复验为空。 tinycc rc=0。 自检:
-  生成的 .s 无重复标号; 红线 grep - parse/preprocess/tokenize/type 零标签产物, sema 不调 codegen。
+  diff 对齐伪影的 `.data` 同文对), 本提交内重置 raw 基线并复验为空. tinycc rc=0. 自检:
+  生成的 .s 无重复标号; 红线 grep - parse/preprocess/tokenize/type 零标签产物, sema 不调 codegen.
   本步代码**完全在役**(非先埋后用), 语料即非空转证明 - 标签值重编号即新分配器的输出, `&&label`
-  的 .quad 解析即交接字段 + resolve_label_refs 的输出。
-- 偏差说明: 两项, 均为机制补充而非范围变化。
+  的 .quad 解析即交接字段 + resolve_label_refs 的输出.
+- 偏差说明: 两项, 均为机制补充而非范围变化.
   1. **Obj.label_gotos 交接字段是计划未写的机制**: 计划验收段假设"整形遍在最前面, 标签名定下即可"
      对 `&&label` 成立, 但初始化器里的 label-value 节点**只有 sema 的收集链可达**(`add_type` 的
-     ND_LABEL_VAL case - 它们不在语句树里, codegen 的下降走不到, ResolvedInit 又是 sema 私有)。
+     ND_LABEL_VAL case - 它们不在语句树里, codegen 的下降走不到, ResolvedInit 又是 sema 私有).
      契约 3(f)"初始化器不在自然路径上, 两侧都要显式走"落地为: sema 收集链存到 fn, codegen 用链
-     解析。 字段归属(sema 写/codegen 读一次)记入 A10.1 的逐字段账。
+     解析. 字段归属(sema 写/codegen 读一次)记入 A10.1 的逐字段账.
   2. **嵌套函数与标签编号的既有怪癖照旧**: 宿主函数里位于嵌套定义**之前**的 `&&label` 引用,
      今天会被嵌套函数的 `resolve_labels` 拿去与嵌套标签配对(而非宿主的); 新机制下同一节点进
      嵌套函数的 label_gotos 链, 由 codegen 对嵌套标签解析 - 行为逐点一致(含"配同名的嵌套标签
-     则解析成功"这一怪情况)。 该形状无语料无锁定, 双方均为对非法 C 的处置, 不构成回归。
+     则解析成功"这一怪情况). 该形状无语料无锁定, 双方均为对非法 C 的处置, 不构成回归.
 
 ### A3.1 成员与下标 (e300eb9)
 
-- 改了什么: 账本行 23/25/26/51 落位, sema 的 add_type 从此不再改写这三类表达式节点。
-  (1) `add_type` ND_SUBSCRIPT 只定型: 节点保持自身, `ty = base`(点类型)。operand-pair 的接受集
+- 改了什么: 账本行 23/25/26/51 落位, sema 的 add_type 从此不再改写这三类表达式节点.
+  (1) `add_type` ND_SUBSCRIPT 只定型: 节点保持自身, `ty = base`(点类型). operand-pair 的接受集
   逐分支镜像 new_add - 两侧 numeric, 或恰一侧带 base(不检 num 侧是否 integer, `p[s]` 这类垃圾
   形状照旧接受, 保零行为变化); 两 base 报 `invalid operands`, 无 base 报 `invalid pointer
   dereference`, base 为 void 报 `dereferencing a void pointer` - 全部锚 `node->tok`, 与今天经
-  new_add/DEREF 检查的锚点逐字节一致。`*(x+y)` 改写连同缩放搬 codegen 整形遍(经临时导出的
-  `new_add`, 契约 2; 加法侧的 f04 与 `1 - p` 的 f10/f11 检查仍在 new_add/new_sub, A4.1 搬)。
+  new_add/DEREF 检查的锚点逐字节一致. `*(x+y)` 改写连同缩放搬 codegen 整形遍(经临时导出的
+  `new_add`, 契约 2; 加法侧的 f04 与 `1 - p` 的 f10/f11 检查仍在 new_add/new_sub, A4.1 搬).
   (2) `add_type` ND_DEREF 的 `*foo` 消解(6.5.3.2p4)不再 `*node = *node->lhs`: 节点保留, 定型
   `ty = lhs->ty`(函数指示符类型); codegen 不重建该形状 - gen_expr 的既有 ND_DEREF case 对
-  TY_FUNC 的 load 是 no-op, `(*fp)(..)`(操作数为函数指针变量)今天树里本就有 DEREF, 无变化。
+  TY_FUNC 的 load 是 no-op, `(*fp)(..)`(操作数为函数指针变量)今天树里本就有 DEREF, 无变化.
   (3) `resolve_member` 展平与绑定照旧, 不再补插 DEREF: arrow_tok 留在最内层 link 上(展平发生
   时清外层节点的自己的标记, 单层时节点 dissolved 后自己就是最内层); codegen 整形遍对带标记的
-  MEMBER 补 DEREF(锚 node->tok, 与今天 resolve_member 用的 token 相同)后清标记。
+  MEMBER 补 DEREF(锚 node->tok, 与今天 resolve_member 用的 token 相同)后清标记.
   (4) `to_assign` 的 member 分支(仍是 sema 降级, A5.1 搬)适配忠实成员: 带 arrow_tok 时把操作数
   包回 DEREF 再取址 - 今天的分支读的 `node->lhs->lhs` 是降级形态的 DEREF; 匿名展平的内层 link
-  自带标记由 codegen 解析, 分支对它无需改(struct.c:48 既有用例锁住)。
+  自带标记由 codegen 解析, 分支对它无需改(struct.c:48 既有用例锁住).
   (5) `eval2` 补 ND_DEREF case(操作数为函数指示符时读过去, 其余落函数末尾的非常量错误)-
   A1.1 覆盖表没有 DEREF 行, 因为消解过的树到不了求值器; 本步起忠实形态到得了, 用例为
-  function.c 的全局 `int (*gfp)(int,int) = *add2;`(.quad add2, 快照锁)。
-  (6) 契约 2 临时导出面新增 `new_add`(去 static + chibicc.h 声明, 注明 A4.1 撤)。
+  function.c 的全局 `int (*gfp)(int,int) = *add2;`(.quad add2, 快照锁).
+  (6) 契约 2 临时导出面新增 `new_add`(去 static + chibicc.h 声明, 注明 A4.1 撤).
   测试: struct.c 补 1 层 arrow 的 `+=`/`++` 两例(既有 corpus 只有匿名展平的 `p->a += 2`),
-  function.c 补 `(*add2)(2,3)` 直呼、`(*fn)(2,5)` 指针解呼、`gfp(2,5)` 三断言与 gfp 全局初始化器。
-  行数: sema.c 3332 -> 3374, codegen.c 1766 -> 1794, chibicc.h 756 -> 766, parse.c 2148 零改动。
+  function.c 补 `(*add2)(2,3)` 直呼, `(*fn)(2,5)` 指针解呼, `gfp(2,5)` 三断言与 gfp 全局初始化器.
+  行数: sema.c 3332 -> 3374, codegen.c 1766 -> 1794, chibicc.h 756 -> 766, parse.c 2148 零改动.
 - 为什么改: 判据 1 的第 23/25/51 行(下标改写, arrow 补插, arrow_tok 清理全是发射便利)与第 26 行
-  (`*foo` 的结论是定型, 换节点是发射便利)。"codegen 必须经 new_add 而不是自己拼"由契约 2 的
+  (`*foo` 的结论是定型, 换节点是发射便利). "codegen 必须经 new_add 而不是自己拼"由契约 2 的
   陷阱保证: usual_arith_conv 对 ptr 算术两侧都插 cast, 手搓缩放和会丢节点与 .loc - 整形遍调用
-  导出的 new_add, 产出与今天逐字节相同的子树。eval2/eval_rval 的忠实 case(下标取址, 成员
-  arrow)自 A1.1 埋好, 本步按计划激活。
-- 测试结果: 四闸门全绿。docker-test rc=0(两轮 55 例诊断逐字节, f06 的下标锚点/ f08/f09 的
-  DEREF 检查/ f04/f10/f11 不受影响)。ndiff 空 - 因本步改了两个测试文件, 按 A1.1 先例先以
+  导出的 new_add, 产出与今天逐字节相同的子树. eval2/eval_rval 的忠实 case(下标取址, 成员
+  arrow)自 A1.1 埋好, 本步按计划激活.
+- 测试结果: 四闸门全绿. docker-test rc=0(两轮 55 例诊断逐字节, f06 的下标锚点/ f08/f09 的
+  DEREF 检查/ f04/f10/f11 不受影响). ndiff 空 - 因本步改了两个测试文件, 按 A1.1 先例先以
   **混合基线**(HEAD 编译器 + 新语料)复验, 归一化 diff 为空即编译器变化对语料发射中性; 随后
   raw diff 恰 **4 行全部为 `.loc` 增行**(function.c 的 `(*add2)` 1 行 + `(***add2)` 3 行, 每个
   保留的 DEREF 一行, struct.s 零差异), 即计划预告的偏差, 归一化第 1 类折叠吃掉; 同提交重置
-  raw 基线(41 文件)并复验。tinycc rc=0(日志中 11 处 "failed as expected" 是 tcc 自身的预期
-  失败用例, 非回归)。本地 A/B(worktree HEAD 二进制): 33 文件逐字节相同(attribute/offsetof/
-  stdhdr/varargs 的 `.file` 行为 worktree 路径伪影), 错误路径 18 例 16 同(见偏差 1)。自检:
+  raw 基线(41 文件)并复验. tinycc rc=0(日志中 11 处 "failed as expected" 是 tcc 自身的预期
+  失败用例, 非回归). 本地 A/B(worktree HEAD 二进制): 33 文件逐字节相同(attribute/offsetof/
+  stdhdr/varargs 的 `.file` 行为 worktree 路径伪影), 错误路径 18 例 16 同(见偏差 1). 自检:
   41 快照无重复标号; sema 的 new_unique_name 只剩 new_anon_gvar; 红线 grep - parse/preprocess/
-  tokenize/type 无整形, sema 不调 codegen。
-- 偏差说明: 五项。
+  tokenize/type 无整形, sema 不调 codegen.
+- 偏差说明: 五项.
   1. **两个崩溃形状转为干净诊断(计划未列, `1 - p` 同族)**: `int x; struct{int a;} s; x[s];` 与
      `int f(void); f[0];` 今天在 new_add→scale_rhs 里对无 base 的类型读 `->kind` 段错误(退出 1
      无 stderr); 新检查将其报为 `invalid operands`(锚 `[`) - 即 new_add 自己 fall-through 的
-     文案, 与 f10/f11 的 2026-09-29 拍板方向一致。这是 A3.1 语义上不可避免的: 新检查代码无处
-     保留崩溃。若审核要求严格保留崩溃语义需拆出该分支, 请拍板。另注: `f[0]` 是合法 C(GCC
-     接受, 函数指示符衰变后下标), chibicc 上游从未支持(一直崩溃), 新行为是报错而非支持。
+     文案, 与 f10/f11 的 2026-09-29 拍板方向一致. 这是 A3.1 语义上不可避免的: 新检查代码无处
+     保留崩溃. 若审核要求严格保留崩溃语义需拆出该分支, 请拍板. 另注: `f[0]` 是合法 C(GCC
+     接受, 函数指示符衰变后下标), chibicc 上游从未支持(一直崩溃), 新行为是报错而非支持.
   2. **to_assign member 分支的 DEREF 回插是计划未写的机制**: 契约 3(a) 预警过 "A5.1 的
      to_assign 读 node->lhs->lhs", 但中间态(本步落地而 A5.1 未动)下该分支读的是 resolve_member
-     今天补的 DEREF - 不适配则 `p->x += 1` 会把 `&p` 当成员地址(指针变量的地址而非其值)。处置
-     见"(4)"; A5.1 搬走该分支时回插随之离开库层, 不新增红线欠账。
+     今天补的 DEREF - 不适配则 `p->x += 1` 会把 `&p` 当成员地址(指针变量的地址而非其值). 处置
+     见"(4)"; A5.1 搬走该分支时回插随之离开库层, 不新增红线欠账.
   3. **eval_rval 的 arrow 分支不设守卫(A1.1 埋的形状实测确认是对的)**: `&p->x` 这类非量地址的
      错误路径经 `eval2(VAR p)` 报 "invalid initializer" 锚在指针操作数上, 与降级形态一致; 实施
      中途曾按 eval2 侧的守卫形状给 eval_rval 补守卫(锚移到成员名), 本地 A/B 抓到后回滚 -
-     eval2 与 eval_rval 的守卫差异今天就存在, 不是本线造成的。
+     eval2 与 eval_rval 的守卫差异今天就存在, 不是本线造成的.
   4. **`.loc` 偏差兑现但比预告窄**: 计划预期 "保留 ND_DEREF 会让 gen_expr 多打一条 .loc" - 实测
      语料中该形状仅 function.c 的 `(*add2)`/`(***add2)`(4 行); `(*fp)`(函数指针变量)今天就不
-     消解, 树里本有 DEREF, 零变化。
+     消解, 树里本有 DEREF, 零变化.
   5. **语料外角落(记录不修)**: `(*alloca)(n)` - 今天 callee 消解为 VAR 后命中 gen_expr 的
-     builtin_alloca 特判; 新形态 callee 是 DEREF, 落通用调用路径。 语料(test/ 与 tcc 源码)无此
-     形状, 闸门不可见; 若要保真可在整形遍消解该形状, 归 A10.2 或后续拍板。
+     builtin_alloca 特判; 新形态 callee 是 DEREF, 落通用调用路径. 语料(test/ 与 tcc 源码)无此
+     形状, 闸门不可见; 若要保真可在整形遍消解该形状, 归 A10.2 或后续拍板.
 
 ### A5.1 复合赋值与自增自减 (46a2b2a)
 
-- 改了什么: 账本行 4/6 落位, sema 的 add_type 从此不再改写这两类节点。
+- 改了什么: 账本行 4/6 落位, sema 的 add_type 从此不再改写这两类节点.
   (1) `to_assign`/`compound_op`/`combine`/`new_inc_dec` 四函数整体搬入 codegen 的整形遍区段
   (文本原样; 对 `new_add`/`new_sub` 的调用走契约 2 的临时导出, `new_sub` 本步去 static + 声明,
   A4.1 随其搬走撤除); `add_type` 的 ND_ASSIGN(op) 与 ND_INCDEC 两个 case 改为纯标注:
   `node->ty = node->lhs->ty` - 三种改写形态(普通 comma, 成员 comma, 原子语句表达式)的结论类型
-  都是左操作数类型。 (2) codegen 的 shape_node 新增 ND_ASSIGN/ND_INCDEC 两 case, 文本镜像 sema
+  都是左操作数类型. (2) codegen 的 shape_node 新增 ND_ASSIGN/ND_INCDEC 两 case, 文本镜像 sema
   原样: 先 shape_children(契约 3(a) 后序), 再改写, `*node = *result` 保留链上 next, 末尾
-  add_type 定型新树(契约 3(d) 只对全新节点; 旧子树已在后序中整形过且全部带标记, 不重入)。
+  add_type 定型新树(契约 3(d) 只对全新节点; 旧子树已在后序中整形过且全部带标记, 不重入).
   (3) 原子 op= 的 do-while 在整形遍内构建, 遍不会自然到达它 - 构建完成后直接
-  `shape_node(loop)`, 用与其它循环同一机制拿 brk/cont 标签(A2.1 已删预分配, 无撞名)。
+  `shape_node(loop)`, 用与其它循环同一机制拿 brk/cont 标签(A2.1 已删预分配, 无撞名).
   (4) 槽工厂: codegen 自建 `new_lvar`(calloc Obj + align + is_local + 前插
   `current_fn->locals`), 刻意**不**导出 sema 的 `new_var` - 它做 push_scope 与 resolve_type,
-  是语义层状态操作, 导出即让 codegen 触碰作用域表; `shape()` 每函数先设 `current_fn`。
+  是语义层状态操作, 导出即让 codegen 触碰作用域表; `shape()` 每函数先设 `current_fn`.
   (5) A3.1 的 to_assign member 分支适配(带 arrow_tok 时包回 DEREF)在新时序下成为死代码并删除:
   整形遍后序先对 lhs 补 DEREF 清标记, to_assign 读到的已是 `MEMBER(DEREF(p))`, 与今天改写产物
-  逐字节相同(含 DEREF 的 token 锚点 - 两者都锚成员 token)。 (6) 契约 3(b) 的原子环 do-while、
-  语句表达式、comma 均在标注相位之前成形, add_type 定型时经既有 case(含 plain assign 的
-  `not an lvalue` 检查 - `arr += 1` 经新树的 DEREF 左值到达, 锚点不变)。
+  逐字节相同(含 DEREF 的 token 锚点 - 两者都锚成员 token). (6) 契约 3(b) 的原子环 do-while,
+  语句表达式, comma 均在标注相位之前成形, add_type 定型时经既有 case(含 plain assign 的
+  `not an lvalue` 检查 - `arr += 1` 经新树的 DEREF 左值到达, 锚点不变).
   测试: 本地探针 40+ 形状的 .s 逐字节相同(全部 op= / 前后缀 ++-- / 指针与数组 / 多层 arrow /
   匿名展平的点号与 arrow 两种 / 位域 op= 与 ++ / 下标操作数 / 原子 op= 与 ++-- / 语句表达式
   操作数 / 表达式语境 / `s.self->a` 链); 5 个错误路径 stderr 逐字节相同(文件域初始化器与
   static 局部初始化器中的复合赋值报 "not a compile-time constant" 且锚 `+=` token - 降级形态经
   comma→assign 到达的也是同一 token, e1/e4; 数组操作数 "not an lvalue" e2; `p += p`
-  "invalid operands" e3; `++x = 2` e5)。 四闸门: docker-test rc=0(55 例诊断逐字节, 含
+  "invalid operands" e3; `++x = 2` e5). 四闸门: docker-test rc=0(55 例诊断逐字节, 含
   f01-f03/f04/f10/f11); ndiff 空; raw diff 1248 行全部为栈偏移类(1246 行 `%rbp` 偏移 + 1 对
   `sub $N, %rsp` 帧大小), 零指令/标签/`.loc` 变化 - 即契约 4 预告的"局部槽只影响栈偏移"
   (临时量从 sema 标注时的 mid-chain 插入变为整形遍时的链首前插), 同提交重置基线并复验空;
   tinycc rc=0(与 HEAD worktree 的 A/B 对比: 10 处 "failed as expected" + 6 处 "succeeded"
   完全一致 - RESULT A3.1 所记"11 处"是当时的计数口径差, 两份日志实质一致, 差异仅 docker 计时
-  噪声)。 自检: 搬走的四函数在 sema 零残留; sema 不调用 codegen; 探针 .s 无重复标号。
-  行数: sema.c 3374 -> 3170, codegen.c 1794 -> 2031, chibicc.h 766 -> 768, parse.c 2148 零改动。
-- 为什么改: 判据 1 的第 4 行(op= 读写回环)与第 6 行(++/-- 降级含后缀取值)全是发射便利。
+  噪声). 自检: 搬走的四函数在 sema 零残留; sema 不调用 codegen; 探针 .s 无重复标号.
+  行数: sema.c 3374 -> 3170, codegen.c 1794 -> 2031, chibicc.h 766 -> 768, parse.c 2148 零改动.
+- 为什么改: 判据 1 的第 4 行(op= 读写回环)与第 6 行(++/-- 降级含后缀取值)全是发射便利.
   "必须经 new_add/new_sub 而非手拼"由契约 2 的两个陷阱保证(ptr 算术的隐式 cast 与缩放,
-  手搓会丢节点与 .loc); combine 的非加减分支走 add_type(移位不做常规算术转换)随文本原样保留。
+  手搓会丢节点与 .loc); combine 的非加减分支走 add_type(移位不做常规算术转换)随文本原样保留.
   eval 侧无需改动: eval2/is_const_expr/eval_double 对带 op 的 ND_ASSIGN 与 ND_INCDEC 本就无
-  case, 落到末尾的统一错误/false, 与降级形态的到达路径相比文案与锚点相同(e1/e4 实测)。
-- 偏差说明: 三项。
-  1. **槽工厂的实现形态是计划未定的第一次落地**: 计划只说"用 codegen 自己的槽"(契约 3(c))。
-     实现为 codegen 内 4 行工厂, 不导出 sema 的 new_var(理由见上)。 临时量在 `fn->locals` 里的
-     位置相应改变, 只影响栈偏移, raw diff 的 1248 行全部为此类, ndiff 口径免疫。 A6.1 的
-     ret_buffer 槽复用同一工厂。
+  case, 落到末尾的统一错误/false, 与降级形态的到达路径相比文案与锚点相同(e1/e4 实测).
+- 偏差说明: 三项.
+  1. **槽工厂的实现形态是计划未定的第一次落地**: 计划只说"用 codegen 自己的槽"(契约 3(c)).
+     实现为 codegen 内 4 行工厂, 不导出 sema 的 new_var(理由见上). 临时量在 `fn->locals` 里的
+     位置相应改变, 只影响栈偏移, raw diff 的 1248 行全部为此类, ndiff 口径免疫. A6.1 的
+     ret_buffer 槽复用同一工厂.
   2. **原子 retry 环的标签走 shape_node(loop) 显式分配**: 契约 3(b) 相位序在"改写发生在整形遍
-     内部"这一新形态下的落地 - 新建循环不在语句链上, 遍的下降到不了它。 与今天(HEAD)的到达
-     路径相比标签的相对分配顺序不变(都在该语句位置、其 lhs/rhs 子树之后), 归一化第 2 类按
-     首现顺序重编号后无差异(ndiff 空实测)。
+     内部"这一新形态下的落地 - 新建循环不在语句链上, 遍的下降到不了它. 与今天(HEAD)的到达
+     路径相比标签的相对分配顺序不变(都在该语句位置, 其 lhs/rhs 子树之后), 归一化第 2 类按
+     首现顺序重编号后无差异(ndiff 空实测).
   3. **语料外角落(记录不修)**: VLA 维度里的复合赋值(如 `int a[n += 2]`)在 parse 层即被拒
      (维度只收 conditional, 报 "expected ']'"), 该形状不可达 - 账本行 6 的 A10.2 用例
-     `a[i] += j++` 不受影响; 亦无 eval 路径经此到达。
+     `a[i] += j++` 不受影响; 亦无 eval 路径经此到达.
 
 ### A4.1 算术与比较 (3cb17ba)
 
 - 改了什么: 账本行 1(指针缩放与 num+ptr 规范化)与行 7(/>/>= 交换)落位,sema 的 add_type 不再改写
-  这两类节点; 账本行 50(求值侧缩放)同步落位。
+  这两类节点; 账本行 50(求值侧缩放)同步落位.
   (1) `new_add`/`new_sub`/`scale_rhs` 搬 codegen 的整形遍区段(static; 文本原样, 含 2026-09-29
-  拍板的 VLA 守卫修复)。`new_arith`/`usual_arith_conv`/`get_common_type`/`new_cast` 留 sema 导出
+  拍板的 VLA 守卫修复). `new_arith`/`usual_arith_conv`/`get_common_type`/`new_cast` 留 sema 导出
   (契约 2 永久面), 整形遍的 new_add/new_sub/combine 经它们建树, 产出与降级时代逐字节相同(含两侧
-  隐式 cast 与其 `.loc`)。chibicc.h 的两处临时导出声明随之撤除。
+  隐式 cast 与其 `.loc`). chibicc.h 的两处临时导出声明随之撤除.
   (2) `add_type` 的 ND_ADD/ND_SUB 改为检查+定型: ADD 的 `ptr+ptr` 报 `invalid operands`(锚 `tok`,
   与原 new_add 相同), SUB 的 `ptr-ptr` 定型 ty_long(除法树在整形遍建), 其余定型
-  `get_common_type`。**不插 cast**: 隐式 cast 由整形遍的 new_arith 统一补(此处若也插, 树里会有
-  两套 cast; 且 new_arith 会做与降级完全一致的 `is_numeric`/base 判定, 语义结论不重写)。
+  `get_common_type`. **不插 cast**: 隐式 cast 由整形遍的 new_arith 统一补(此处若也插, 树里会有
+  两套 cast; 且 new_arith 会做与降级完全一致的 `is_numeric`/base 判定, 语义结论不重写).
   (3) `shape_node` 新增 ND_ADD/ND_SUB case: shape_children(契约 3(a))后经 new_add/new_sub 重建
-  并原位换形; 新增 ND_GT/ND_GE case: 交换操作数成 LT/LE。A1.1 埋的 eval2 忠实 case 本步激活。
+  并原位换形; 新增 ND_GT/ND_GE case: 交换操作数成 LT/LE. A1.1 埋的 eval2 忠实 case 本步激活.
   (4) `eval2` 的 ND_ADD/ND_SUB 是本步唯一的新逻辑(eval 侧缩放): 指针侧按操作数**自身** `ty`
   判定(忠实树没有可穿透的 conv cast; 显式 cast 必须保有目标类型 - `(int*)0+2` 作 VLA 维度实测
-  抓到过穿透读), 数字侧乘元素尺寸; `num + ptr` 按源码序接受、指针侧经 eval2 带 label 求值(保
+  抓到过穿透读), 数字侧乘元素尺寸; `num + ptr` 按源码序接受, 指针侧经 eval2 带 label 求值(保
   `2 + gp` 初始化器的 "invalid initializer" 锚点在指针操作数上); VLA 元素尺寸报非常量; ptr-ptr
-  除法支沿用 A1.1(两侧以 label==NULL 求值)。`ty_beyond_convs`(A1.1 为缩放埋的穿透工具)随用途
-  消失而删除。
+  除法支沿用 A1.1(两侧以 label==NULL 求值). `ty_beyond_convs`(A1.1 为缩放埋的穿透工具)随用途
+  消失而删除.
   测试: corpus 41 文件 A/B(与 A5.1 二进制): 37 逐字节相同; attribute/offsetof/stdhdr/varargs 的
-  `.file` 为 include 路径解析伪影(base 二进制在 /tmp,a 有差异, 非 .file 差异 0 行)。探针 17 组
-  (op=/自增自减全形状、指针与数组、位域与原子、elvis+自增、`(int*)0+2` 作 VLA 维度、5 个错误
-  路径)逐字节相同。
+  `.file` 为 include 路径解析伪影(base 二进制在 /tmp,a 有差异, 非 .file 差异 0 行). 探针 17 组
+  (op=/自增自减全形状, 指针与数组, 位域与原子, elvis+自增, `(int*)0+2` 作 VLA 维度, 5 个错误
+  路径)逐字节相同.
 - 为什么改: 判据 1 的第 1/7 行(缩放与换序都是发射便利); eval 侧缩放是行 50 的既定归属(eval 是
-  求值器, 常量折叠必须自己认忠实形态)。
+  求值器, 常量折叠必须自己认忠实形态).
 - 偏差说明: 三项, 前两项是**计划未列的整形遍重入缺陷**, 均由 raw 快照抓到并当步修复:
   1. **elvis 降级留下陈旧字段别名**(sema 修复): `a ?: b` 降级把 ND_COND 节点原地改成 ND_COMMA
-     时只设 kind/lhs/rhs, 原 COND 的 `cond`/`els` 字段仍指向 lhs/rhs 里同一批节点。整形遍的
+     时只设 kind/lhs/rhs, 原 COND 的 `cond`/`els` 字段仍指向 lhs/rhs 里同一批节点. 整形遍的
      shape_children 会沿陈旧字段再走一遍已整形的子树 - A5.1 前无害(那时表达式 case 只有下标与
      成员), A4.1 的 ND_ADD case 令其二次缩放/二次 cast(`ASSERT(4, ({int i=3; ++i?:10;}))` 实测
-     多 2 行 `.loc`)。修复: 降级处显式断开三字段(逗号形态只读 lhs/rhs, 别名断开无其它影响)。
-     这是契约 3(d)"不得重入"对树侧的要求 - 树应无别名, 而非要求遍自带 visited 集。
+     多 2 行 `.loc`). 修复: 降级处显式断开三字段(逗号形态只读 lhs/rhs, 别名断开无其它影响).
+     这是契约 3(d)"不得重入"对树侧的要求 - 树应无别名, 而非要求遍自带 visited 集.
   2. **原子 retry 环的 shape 下潜重入**(codegen 修复, A5.1 已引入): A5.1 为给 codegen 自建的
      do-while 拿标签调了 `shape_node(loop)`, 该下潜会进入环内 - 环体里的 combine ADD 属新树,
-     二次 new_add(实测 `(*x)++`/`*x += 5`/`x--` 各多 2 行 `.loc`)。修复: 直接分配
-     `brk_label`/`cont_label`(环内无循环/switch/break/label 可整形), 分配顺序与全树下潜一致。
+     二次 new_add(实测 `(*x)++`/`*x += 5`/`x--` 各多 2 行 `.loc`). 修复: 直接分配
+     `brk_label`/`cont_label`(环内无循环/switch/break/label 可整形), 分配顺序与全树下潜一致.
   3. **`.file` 伪影照旧**: base 二进制与 new 二进制的 include 搜索路径不同(dirname(argv0)),
-     四个含 chibicc 自带头的用例出现 `.file` 行差异, 非 .file 差异 0 行(A3.1 已记账同款)。
-  修复 1/2 后 raw diff **全空**: 本步不新建局部槽, 栈偏移、标签分配顺序、`.loc` 序列全部逐字节
-  一致, 基线无需重置(与 A5.1 的栈偏移类差异不同 - 那步移动了槽的创建时机, 本步没有)。
-  行数: sema.c 3170 -> 3131, codegen.c 2031 -> 2134, chibicc.h 768 -> 766, parse.c 2148 零改动。
+     四个含 chibicc 自带头的用例出现 `.file` 行差异, 非 .file 差异 0 行(A3.1 已记账同款).
+  修复 1/2 后 raw diff **全空**: 本步不新建局部槽, 栈偏移, 标签分配顺序, `.loc` 序列全部逐字节
+  一致, 基线无需重置(与 A5.1 的栈偏移类差异不同 - 那步移动了槽的创建时机, 本步没有).
+  行数: sema.c 3170 -> 3131, codegen.c 2031 -> 2134, chibicc.h 768 -> 766, parse.c 2148 零改动.
 
 ### A6.1 函数调用 (4b61819)
 
-- 改了什么: 账本行 11 落位。`lower_funcall`(sema)只留三件事: 被调用者检查(不是函数, 锚 callee
-  token)、实参逐个别名化转换(too many/too few 锚调用右括号; float 提升在变参尾)、返回类型结论
-  (node->func_ty 与 node->ty)。`ret_buffer` 的槽创建删除, 注释改为指向消费者。codegen 的
+- 改了什么: 账本行 11 落位. `lower_funcall`(sema)只留三件事: 被调用者检查(不是函数, 锚 callee
+  token), 实参逐个别名化转换(too many/too few 锚调用右括号; float 提升在变参尾), 返回类型结论
+  (node->func_ty 与 node->ty). `ret_buffer` 的槽创建删除, 注释改为指向消费者. codegen 的
   shape_node 新增 ND_FUNCALL case: shape_children(参数里的整形先做完, 契约 3(a))后, 返回类型是
-  struct/union 时经槽工厂建 `new_lvar("", node->ty)` - 与 A5.1 的临时量同一工厂、同一相位, 都在
-  assign_lvar_offsets 之前(契约 3(c))。
+  struct/union 时经槽工厂建 `new_lvar("", node->ty)` - 与 A5.1 的临时量同一工厂, 同一相位, 都在
+  assign_lvar_offsets 之前(契约 3(c)).
 - 为什么改: 判据 3 - 返回缓冲是"只为实现服务的槽"(调用者自己的内存), 不是语言规定存在的对象;
-  检查是真检查, 留 sema(判据 2)。
-- 闸门: 四闸门全绿。docker-test rc=0(55 例诊断逐字节, 覆盖 f 系列"不是函数/实参个数"所在用例);
+  检查是真检查, 留 sema(判据 2).
+- 闸门: 四闸门全绿. docker-test rc=0(55 例诊断逐字节, 覆盖 f 系列"不是函数/实参个数"所在用例);
   ndiff 空; **raw diff 全空** - 语料没有"同时含复合赋值临时量与结构体返回缓冲"的函数, 两处槽的
-  创建顺序在整形遍里与基线一致, 无需重置基线; tinycc rc=0(记账同前)。
-- 偏差: 一项, 补验证而非缺陷。sret 探针(5 个结构体返回调用混声明/初始化器/链式调用/结构体数组
+  创建顺序在整形遍里与基线一致, 无需重置基线; tinycc rc=0(记账同前).
+- 偏差: 一项, 补验证而非缺陷. sret 探针(5 个结构体返回调用混声明/初始化器/链式调用/结构体数组
   赋值)相对 A5.1 二进制有 66 行差异, 全部为栈偏移操作数(diff 对齐的 4 行 `shr` 为同文重配对) -
-  即账本行 11 预告的"偏移由归一化第 3 类吃掉"在本探针上的实例。语义在 docker(真 x86-64)内实测
-  正确: 初始化、复用缓冲的赋值、链式调用、结构体数组逐个赋值全部通过("sret ok")。该探针归
-  A10.2 的"大结构体返回缓冲"用例。
-  行数: sema.c 3131 -> 3132, codegen.c 2134 -> 2144, chibicc.h 766 零改动, parse.c 2148 零改动。
+  即账本行 11 预告的"偏移由归一化第 3 类吃掉"在本探针上的实例. 语义在 docker(真 x86-64)内实测
+  正确: 初始化, 复用缓冲的赋值, 链式调用, 结构体数组逐个赋值全部通过("sret ok"). 该探针归
+  A10.2 的"大结构体返回缓冲"用例.
+  行数: sema.c 3131 -> 3132, codegen.c 2134 -> 2144, chibicc.h 766 零改动, parse.c 2148 零改动.
 
 ### A9.1 结论类消费侧 (d415c53)
 
 - 改了什么: 账本行 14(物化保留)/15(STRING 形状改写取消)/17(SIZEOF 读结论)/18(两个 builtin)/
-  19(GENERIC)/20(elvis 降级搬走)落位, sema 的 add_type 只剩一处"结论非数"的保留(见下)。
+  19(GENERIC)/20(elvis 降级搬走)落位, sema 的 add_type 只剩一处"结论非数"的保留(见下).
   (1) ND_STRING: 物化(匿名全局, 含块域 static 场景的顺序)原地保留, `node->kind = ND_VAR` 改写取消;
   codegen 的 gen_addr/gen_expr 各加 `case ND_STRING:` 落进 ND_VAR 同一段代码(var 字段同源,
-  全局 lea/GOTPCREL、数组不 load 全部同路), 输出逐字节不变(plan 预期的 raw 等价实测成立)。
+  全局 lea/GOTPCREL, 数组不 load 全部同路), 输出逐字节不变(plan 预期的 raw 等价实测成立).
   (2) ND_SIZEOF/ND_ALIGNOF: 只写结论 `val`(size/align)与 `ty = ty_ulong`, 保留 kind 与操作数
-  (ty_op 或 lhs - eval 的 A1.1 case 要读操作数类型判 VLA); sizeof(VLA) 不写 val, 由消费方定型。
+  (ty_op 或 lhs - eval 的 A1.1 case 要读操作数类型判 VLA); sizeof(VLA) 不写 val, 由消费方定型.
   (3) ND_TYPES_COMPATIBLE/ND_REG_CLASS: 只写 `val` 与 `ty = ty_int`(旧路径经 `kind=ND_NUM;
-  add_type` 得 ty_int, 同值)。
+  add_type` 得 ty_int, 同值).
   (4) ND_GENERIC: select_generic 不再 `*node = *sel`, 改为 `add_type(sel); node->generic_sel = sel;
   node->ty = sel->ty;`(选中项在此定型 - 旧路径靠替换后的 add_type 补上); 消费方 gen_expr/gen_addr
   各加委托 case, 整形遍只 shape 选中项(控制表达式与未选中臂不产代码, 与基线的替换语义等价;
-  未选中臂的 `.loc`/槽消耗随之不出现)。add_type 入口的 GENERIC 特判保留(先于普通下降)。
+  未选中臂的 `.loc`/槽消耗随之不出现). add_type 入口的 GENERIC 特判保留(先于普通下降).
   (5) elvis: sema 只定型 - 结论 = 降级形内层 COND 的类型(cond->ty 或 els->ty 为 void 则 ty_void,
   否则 get_common_type(cond->ty, els->ty)); codegen 的整形遍新增 ND_COND case 原地降级为
   `tmp = a, tmp ? tmp : b`(文本镜像 sema 原版 + 槽工厂), **先清 `node->ty` 再 `add_type(node)`** -
-  sema 结论已在场, 不清则新树完全未定型(实测 gen_expr 崩在 store(NULL), `return 3 ?: 5;` 即触发)。
-  字段断连(cond/then/els=NULL)一并保留(A4.1 的别名教训)。
+  sema 结论已在场, 不清则新树完全未定型(实测 gen_expr 崩在 store(NULL), `return 3 ?: 5;` 即触发).
+  字段断连(cond/then/els=NULL)一并保留(A4.1 的别名教训).
   (6) sizeof(VLA): codegen 自建 `shape_compute_vla_size`/`shape_vla_size_expr`(镜像 sema 文本,
   唯一实质差异 = 用自己的 `new_lvar`), shape 的 ND_SIZEOF case 做 VLA 分支; 类型名操作数的维度
   表达式先经 `shape_node`(无语句树可达, 只在 vla_size 未设时 - 声明类型的维度在声明自己的链里,
-  由下降到达, 二者以 vla_size 是否已设区分)。**sema 的 vla_size_expr 删除**: 折叠取消后它成死码,
-  且实测它在 codegen 侧本不可用(见偏差 1), 契约 2 的临时导出列表提前清空。
+  由下降到达, 二者以 vla_size 是否已设区分). **sema 的 vla_size_expr 删除**: 折叠取消后它成死码,
+  且实测它在 codegen 侧本不可用(见偏差 1), 契约 2 的临时导出列表提前清空.
   测试: 严格电池(修好 rc/产物检查的脚本)覆盖 30+ 探针(全部 op=/自增自减/指针/位域/原子/elvis/
   sizeof 家族/builtin/generic/字符串/VLA 尺寸)与 41 文件语料, 全部 rc 一致; 差异分类: 4 个 `.file`
-  伪影、arith 686 行全栈偏移(elvis 临时槽相位)、generic 13 行全 `.loc`、vla 8 `.loc`+370 偏移+
-  9 行冗余重算删除(见偏差 3)。docker 实测: 四闸门中 docker-test rc=0(含自举与 vla.c 运行时断言),
-  tinycc rc=0; ndiff 残留恰为偏差 3(归因), 重置基线并复验两 diff 全空。
-- 偏差说明: 四项。
+  伪影, arith 686 行全栈偏移(elvis 临时槽相位), generic 13 行全 `.loc`, vla 8 `.loc`+370 偏移+
+  9 行冗余重算删除(见偏差 3). docker 实测: 四闸门中 docker-test rc=0(含自举与 vla.c 运行时断言),
+  tinycc rc=0; ndiff 残留恰为偏差 3(归因), 重置基线并复验两 diff 全空.
+- 偏差说明: 四项.
   1. **`vla_size_expr` 在 codegen 侧不可用(计划未预见, 快照抓出)**: 它调 compute_vla_size, 其中
      `ty->vla_size = new_lvar(...)` 是 **sema 的槽工厂** - codegen 调用时变量挂进 sema 的陈旧
      locals 链, 不属于任何 fn->locals, 偏移 0(`lea 0(%rbp)` 写 saved rbp; docker 测试侥幸通过但
-     栈帧已损)。修复: codegen 自建镜像 builder 用自己的工厂; sema 的 vla_size_expr 死码删除,
-     临时导出清单提前为零(原计划 A7.1 撤)。教训与 A5.1/A6.1 同款: **凡建槽者移入 codegen, 它的
-     被调用者也必须带过来或镜像**。
+     栈帧已损). 修复: codegen 自建镜像 builder 用自己的工厂; sema 的 vla_size_expr 死码删除,
+     临时导出清单提前为零(原计划 A7.1 撤). 教训与 A5.1/A6.1 同款: **凡建槽者移入 codegen, 它的
+     被调用者也必须带过来或镜像**.
   2. **elvis 降级前的 `node->ty` 必须清空**: sema 现在先写结论, 原地降级后的 `add_type(node)` 会
      因 ty 已在场立即返回, 新树未定型 -> store(NULL) 段错误(所有 elvis 形状; docker-test 首次
-     失败即此)。修后与 A6.1 逐字节一致(全部 elvis 探针)。
+     失败即此). 修后与 A6.1 逐字节一致(全部 elvis 探针).
   3. **基线在维度里冗余重算 VLA 尺寸, 本步不再重算(行为变化, 归因后接受)**: 基线的 resolve 期
      折叠使 `int y[sizeof(x)]` 的维度携带一份 x 尺寸的内联重算(声明处已算过一次, 且重算读的是
-     运行时当时的 n); 新形态的 sizeof(x) 读声明处算好的槽。docker 内三方实测(声明后改写 n:
+     运行时当时的 n); 新形态的 sizeof(x) 读声明处算好的槽. docker 内三方实测(声明后改写 n:
      `int n=5; int x[n]; n=7; int y[sizeof(x)];`): 基线 `sx=20 sy=112`(y 按 28 个元素分配 - 错),
      gcc `sx=20 sy=80`, 新构建 `sx=20 sy=80` - **新行为与 gcc 逐点一致, 基线是错的**(sizeof(x)
-     按 C 语义必须给 x 声明时的尺寸)。vla.s 的 ndiff 残留(13 行: 一段重算被读替代)即此项,
+     按 C 语义必须给 x 声明时的尺寸). vla.s 的 ndiff 残留(13 行: 一段重算被读替代)即此项,
      按 [就地] 口径逐条归因后同提交重置基线; 该角落记入 A10.2 的对照知识(新行为与 gcc 一致,
-     可直接作为回归期望)。
-  4. **generic 的委托多一条 `.loc`**(每节点一条, 归一化第 1 类折叠); gen_expr 不必拆特例。
+     可直接作为回归期望).
+  4. **generic 的委托多一条 `.loc`**(每节点一条, 归一化第 1 类折叠); gen_expr 不必拆特例.
   另: 本步暴露对比脚本缺陷 - 双端静默失败(rc=1 无产物)曾被计为"一致", p4_elvis 一度假通过;
-  电池脚本已加 rc 与产物存在性检查, 之前各步结论不受影响(那些步均无 rc 不一致)。
+  电池脚本已加 rc 与产物存在性检查, 之前各步结论不受影响(那些步均无 rc 不一致).
 
 ### A7.1 VLA (0c1ad27)
 
-- 改了什么: 账本行 49 落位。`compute_vla_size` 从 sema 删除, codegen 的同名函数(前一步的镜像
+- 改了什么: 账本行 49 落位. `compute_vla_size` 从 sema 删除, codegen 的同名函数(前一步的镜像
   转正)成为唯一实现; `vla_size_expr` 同理; `Type::vla_size` 的写入全部发生在整形遍(字段注释
-  改标消费方缓存)。sema 的 ND_DECL 对**持 VLA 的声明**(物体自身 `int x[n]`, 或指针基类型
+  改标消费方缓存). sema 的 ND_DECL 对**持 VLA 的声明**(物体自身 `int x[n]`, 或指针基类型
   `int (*p)[n]`)**保留记录不再展开**: 仍跑全部检查(VLA 不得初始化 / void / 不完整类型)与
-  块域 static 的序列化, 其余交给 codegen。codegen 的 shape_node 新增 ND_DECL case: 先对类型链
+  块域 static 的序列化, 其余交给 codegen. codegen 的 shape_node 新增 ND_DECL case: 先对类型链
   的 `vla_len` 逐个整形(以 `ty->vla_size` 未设区分首见类型 - typedef 共享类型的第二声明跳过,
-  避免同一维度节点二次整形), 再建尺寸链(自建槽工厂), 对 VLA 物体接 alloca 赋值、对带初始化器
+  避免同一维度节点二次整形), 再建尺寸链(自建槽工厂), 对 VLA 物体接 alloca 赋值, 对带初始化器
   的指针到 VLA 接 `lvar_init_comma`(契约 2 临时导出; 其建出的链含设计符表达式 - 只经
   init_resolved 引用, 从未过整形遍 - 在此显式 `shape_node(lowered)` 一次, 与尺寸链互不重叠),
-  最后合成 COMMA 并 `add_type`。`ResolvedInit` 的 tag 前向声明进 chibicc.h(A8.1 会把它整个
-  搬过去)。
-- 为什么改: 判据 3 - VLA 尺寸变量是"只为实现服务的槽"; 判据 1 - 尺寸链是发射便利的整形。
+  最后合成 COMMA 并 `add_type`. `ResolvedInit` 的 tag 前向声明进 chibicc.h(A8.1 会把它整个
+  搬过去).
+- 为什么改: 判据 3 - VLA 尺寸变量是"只为实现服务的槽"; 判据 1 - 尺寸链是发射便利的整形.
   sema 侧不再读 `ty->vla_size` 的核对: `scale_rhs`/`vla_size_expr`/eval 均已在消费侧或不读
-  (逐个 grep 确认, eval 的 sizeof(VLA) 按类型判非常量)。
-- 闸门: 四闸门全绿。docker-test rc=0(55 例诊断逐字节 + 全部运行时测试, 含 vla.c 断言);
+  (逐个 grep 确认, eval 的 sizeof(VLA) 按类型判非常量).
+- 闸门: 四闸门全绿. docker-test rc=0(55 例诊断逐字节 + 全部运行时测试, 含 vla.c 断言);
   **ndiff 空**; raw diff 4 文件(constexpr 12 / control 376 / typedef 28 / vla 104)**
-  全部为栈偏移操作数**, 0 条 .loc、0 条指令变化 - 尺寸变量自标注相位移入整形相位, 只动帧布局
-  (归一化第 3/4 类), 同提交重置基线并复验两 diff 全空; tinycc rc=0(记账同前)。
-- 探针: 五组与 A9.1 基线逐字节一致(指针到 VLA 带初始化器 `int (*p)[n] = &v;`、不带初始化器、
-  二维 VLA 指针、`typedef int T[n]; T a; T b;` 共享类型、`sizeof(int[n])` 与维度里 `sizeof(x)`);
-  docker 内运行时断言全过("vla-a71 ok"), 覆盖经指针写回 vla.c 第 37/39 行的两种形态。
-- 偏差说明: 两项。
+  全部为栈偏移操作数**, 0 条 .loc, 0 条指令变化 - 尺寸变量自标注相位移入整形相位, 只动帧布局
+  (归一化第 3/4 类), 同提交重置基线并复验两 diff 全空; tinycc rc=0(记账同前).
+- 探针: 五组与 A9.1 基线逐字节一致(指针到 VLA 带初始化器 `int (*p)[n] = &v;`, 不带初始化器,
+  二维 VLA 指针, `typedef int T[n]; T a; T b;` 共享类型, `sizeof(int[n])` 与维度里 `sizeof(x)`);
+  docker 内运行时断言全过("vla-a71 ok"), 覆盖经指针写回 vla.c 第 37/39 行的两种形态.
+- 偏差说明: 两项.
   1. **声明侧的搬法是计划未列的形态**: 计划只写了两个函数搬走, 但 sema 的 ND_DECL 是它们唯一的
      声明侧调用者, 而 ND_DECL 展开要到 A8.1; 故本步把"持 VLA 的声明记录"整体留给消费方展开
      (sema 保留全部检查与 static 序列化), `lvar_init_comma` 依契约 2 临时导出(带初始化器的
-     指针到 VLA; A8.1 撤声明并把它搬进 codegen)。这是契约 3(c)"槽在哪建, 链就在哪建"的直接
-     推论, 也是 A9.1 教训(建槽者必须带被调用者)的延伸。
+     指针到 VLA; A8.1 撤声明并把它搬进 codegen). 这是契约 3(c)"槽在哪建, 链就在哪建"的直接
+     推论, 也是 A9.1 教训(建槽者必须带被调用者)的延伸.
   2. **维度表达式的显式整形带条件守卫**: 同一类型对象被 typedef 共享时, 第二次声明不再整形
-     其 `vla_len`(首次已做过, 且节点可能在语句树里被下降整形过 - 二次整形会二次缩放)。守卫用
+     其 `vla_len`(首次已做过, 且节点可能在语句树里被下降整形过 - 二次整形会二次缩放). 守卫用
      `ty->vla_size` 是否已设; 该形状(`typedef int T[a[i]]; T x; T y;` 带下标维度)极端冷门,
-     现有语料与探针不含, 若日后发现再按需加标记位。
+     现有语料与探针不含, 若日后发现再按需加标记位.
   另记录一个**预存在的限制**(非本步引入, A6.1 实测同样报错): 范围指示符的表达式含下标时
   (`int x[2] = {[0 ... 1] = p[2]};`) 报 `invalid operands` - 范围展开的共享表达式节点经整形遍
-  多次到达时的形状问题, 归 A8.1(初始化器链搬走时)或后续排查。
-  行数: sema.c 3104 -> 3080, codegen.c 2284 -> 2332, chibicc.h 769 -> 772, parse.c 2148 零改动。
+  多次到达时的形状问题, 归 A8.1(初始化器链搬走时)或后续排查.
+  行数: sema.c 3104 -> 3080, codegen.c 2284 -> 2332, chibicc.h 769 -> 772, parse.c 2148 零改动.
 
 ### A8.1 初始化器消费侧 + ND_DECL 展开 (1a80f25)
 
-- 改了什么: 账本行 33/34/38/46/54 落位, 本线最大一步, 三件事同提交。
+- 改了什么: 账本行 33/34/38/46/54 落位, 本线最大一步, 三件事同提交.
   (i) `InitTree`/`InitPath`(更名自 `ResolvedInit`/`InitDesg`)进 chibicc.h; `init_desg_expr`/
-  `create_lvar_init`/`lvar_init_comma` 搬入 codegen(static; 契约 2 临时导出一并撤除, 清单提前为零)。
+  `create_lvar_init`/`lvar_init_comma` 搬入 codegen(static; 契约 2 临时导出一并撤除, 清单提前为零).
   `init_desg_expr` 的数组步直建降级形态 - `DEREF(new_add(base, NUM idx))` 且定型 - 不再产 ND_SUBSCRIPT
-  (契约 3(d)); `shape_init_exprs` 独立 walker 只对 init 表达式下潜(见偏差 2)。
-  (ii) sema 的 ND_DECL 只留: 块域 static 的数据镜像(gvar_init_data, 位置不变)、VLA 不得初始化
-  检查、void/不完整类型检查、**`annotate_init_exprs` 显式定型每个 init->expr**(契约 5, 本步唯一
-  新 sema 代码); 不再改写 kind, 不再设 `decl_remove`(静态变量连同 type_chain 的移除块一起删除)。
-  ND_COMPOUND_LITERAL: init expr 同样显式定型; 文件域仍序列化 + 改写成 ND_VAR, 块域留记录给消费方。
+  (契约 3(d)); `shape_init_exprs` 独立 walker 只对 init 表达式下潜(见偏差 2).
+  (ii) sema 的 ND_DECL 只留: 块域 static 的数据镜像(gvar_init_data, 位置不变), VLA 不得初始化
+  检查, void/不完整类型检查, **`annotate_init_exprs` 显式定型每个 init->expr**(契约 5, 本步唯一
+  新 sema 代码); 不再改写 kind, 不再设 `decl_remove`(静态变量连同 type_chain 的移除块一起删除).
+  ND_COMPOUND_LITERAL: init expr 同样显式定型; 文件域仍序列化 + 改写成 ND_VAR, 块域留记录给消费方.
   (iii) codegen 的整形遍: `shape_chain` 改为链编辑 walker(`Node **pp`), ND_DECL 经 `expand_decl`
   展开成 0..n 条语句 - 静态记录 0 条被摘除, 定长无初始化器 0 条, 带初始化器/持 VLA 各 1 条
   (COMMA(尺寸链, 下降链) 结构逐字节沿用), 块域复合字面量就地展开为 COMMA(初始化链, VAR); for-init
-  的 ND_BLOCK 包装从 sema 移入 FOR 的整形 case(多于一句才包, 构造与 token 不变)。
+  的 ND_BLOCK 包装从 sema 移入 FOR 的整形 case(多于一句才包, 构造与 token 不变).
 - 为什么改: 判据 3(槽归消费方) + 契约 3(c)"槽在哪建链在哪建" + 契约 5(初始化器表达式定型时机);
-  判据 1 的 33/38/46 行(声明展开/for-init 包装/局部初始化链全是发射便利)。
-- 闸门: 四闸门全绿。docker-test rc=0(55 例诊断逐字节, 含 e11 语句表达式锚点; 全部运行时测试,
+  判据 1 的 33/38/46 行(声明展开/for-init 包装/局部初始化链全是发射便利).
+- 闸门: 四闸门全绿. docker-test rc=0(55 例诊断逐字节, 含 e11 语句表达式锚点; 全部运行时测试,
   initializer.c 是本机制最大用户); ndiff **空**; raw diff 单文件 vla.s **14 行全为 .loc 的删除**
   (共享表达式二次整形曾产生的 no-op cast, 见偏差 2), 0 指令 0 偏移变化, 同提交重置基线并复验空;
-  tinycc rc=0(记账同前)。严格 A/B(与 0c1ad27): 语料 36/41 逐字节(4 个 `.file` 伪影 + vla.s 的 .loc),
-  六目录全部探针 rc/.s/stderr 一致。
-- 偏差说明: 三项。
+  tinycc rc=0(记账同前). 严格 A/B(与 0c1ad27): 语料 36/41 逐字节(4 个 `.file` 伪影 + vla.s 的 .loc),
+  六目录全部探针 rc/.s/stderr 一致.
+- 偏差说明: 三项.
   1. **语句表达式的值语义无需改动(计划误报为需重述)**: 计划 (iii) 预期需按忠实形状重述语义, 实测
-     旧捕获(`stmt_expr_value`)本就发生在降级之前、比较的就是忠实 kind - 记录不再被 sema 改写后,
-     "末语句是记录即无值"自动成立, 报错位置/文案/锚点逐字节不变(e11 锁定通过)。仅注释更新。
+     旧捕获(`stmt_expr_value`)本就发生在降级之前, 比较的就是忠实 kind - 记录不再被 sema 改写后,
+     "末语句是记录即无值"自动成立, 报错位置/文案/锚点逐字节不变(e11 锁定通过). 仅注释更新.
   2. **初始化器表达式必须独立 walker 定型/整形(计划未列)**: 初期实现对 sema 建出的链(旧)与
      codegen 建出的链整体下潜, 实测 `int x[3]={1,2,3}` 即报 invalid operands - 设计符目标由
      `init_desg_expr` 直建降级形态(操作数已被 new_add 转成指针), 整树下潜会把 ADD 再喂 ND_ADD
-     case 二次 new_add。改为两个小 walker(`annotate_init_exprs` 在 sema, `shape_init_exprs` 在
+     case 二次 new_add. 改为两个小 walker(`annotate_init_exprs` 在 sema, `shape_init_exprs` 在
      codegen)只走 init 表达式; 顺带消除 vla.s 中共享表达式经旧链多次到达产生的 no-op cast
-     (13 行 .loc 类差异的来源, 基线既有, 本步为副作用修复)。函数/initializer/unicode 三个测试
-     文件正是被此缺陷拦下(首次全量 A/B 的 RC 不一致), 修复后全绿。
+     (13 行 .loc 类差异的来源, 基线既有, 本步为副作用修复). 函数/initializer/unicode 三个测试
+     文件正是被此缺陷拦下(首次全量 A/B 的 RC 不一致), 修复后全绿.
   3. **复合字面量的块域展开随 lvar_init_comma 提前搬入 codegen**: A8.3 的清单据此收窄为
-     "文件域序列化留 sema" 的核对项。**预存在限制照旧**: 范围指示符 + 下标表达式
+     "文件域序列化留 sema" 的核对项. **预存在限制照旧**: 范围指示符 + 下标表达式
      (`{[0 ... 1] = p[2]}`)仍报 invalid operands(基线 A6.1 同样报错; 根因是范围展开让同一表达式
-     节点多次到达整形路径, 独立 walker 未改变这一点) - 归 A8.2/A8.3 之后收尾或专门处置。
-  行数: sema.c 3080 -> 2951, codegen.c 2332 -> 2512, chibicc.h 772 -> 807, parse.c 2148 零改动。
+     节点多次到达整形路径, 独立 walker 未改变这一点) - 归 A8.2/A8.3 之后收尾或专门处置.
+  行数: sema.c 3080 -> 2951, codegen.c 2332 -> 2512, chibicc.h 772 -> 807, parse.c 2148 零改动.
 
 ### A8.2 其余记录出链 (9e3a5c9)
 
-- 改了什么: 账本行 37/52 落位。sema 的 `type_chain` 不再从链上摘除记录, 降为纯遍历(`Node *` 签名,
+- 改了什么: 账本行 37/52 落位. sema 的 `type_chain` 不再从链上摘除记录, 降为纯遍历(`Node *` 签名,
   去掉 `Node **pp` 链编辑): ND_TYPEDEF/ND_ENUM_CONST 直接跳过(resolve 遍已完成其工作),
   ND_GVAR_DECL 的 `serialize_gvar` 与 ND_FUNCDEF 的 `analyze_function` 调用**留在原位**(契约 4:
-  数据镜像与嵌套体标注的位置即语义顺序)。codegen 的链编辑 walker 扩展: 四类记录一律摘除 -
+  数据镜像与嵌套体标注的位置即语义顺序). codegen 的链编辑 walker 扩展: 四类记录一律摘除 -
   ND_FUNCDEF **不下潜其 body**(契约 3(e): 嵌套体挂在宿主函数体内也挂在 `prog` 上, 整形遍只从
-  `prog` 进一次; 宿主链上只摘记录)。
-- 为什么改: 判据 1(出链是发射便利); 记录保留是"直连"的应有之义 - 库消费者可见源码结构。
-- 闸门: 四闸门全绿。docker-test rc=0(55 例诊断逐字节); ndiff 空; **raw diff 全空** - 本步不改任何
-  发射(记录此前也不发射, 只是由 sema 摘除), 无需重置基线; tinycc rc=0(记账同前)。
+  `prog` 进一次; 宿主链上只摘记录).
+- 为什么改: 判据 1(出链是发射便利); 记录保留是"直连"的应有之义 - 库消费者可见源码结构.
+- 闸门: 四闸门全绿. docker-test rc=0(55 例诊断逐字节); ndiff 空; **raw diff 全空** - 本步不改任何
+  发射(记录此前也不发射, 只是由 sema 摘除), 无需重置基线; tinycc rc=0(记账同前).
 - 验证: 语料 41 文件 37 逐字节 + 4 个 `.file` 伪影(A8.1 重置后的 vla.s 已自然对齐); 六目录全部探针
   一致; 新增两组探针: 函数体内 typedef/enum/extern + 嵌套函数定义(返回嵌套调用结果)与 for-init
-  的 `enum {...} e = B` + 循环体 typedef - 逐字节一致即嵌套体只被整形一次、位置正确的实证。
-- 偏差: 无。行数: sema.c 2951 -> 2946, codegen.c 2512 -> 2524, chibicc.h 807 零改动, parse.c 零改动。
+  的 `enum {...} e = B` + 循环体 typedef - 逐字节一致即嵌套体只被整形一次, 位置正确的实证.
+- 偏差: 无. 行数: sema.c 2951 -> 2946, codegen.c 2512 -> 2524, chibicc.h 807 零改动, parse.c 零改动.
 
 ### A8.3 复合字面量 (5812e79, 验证)
 
-- 改了什么: **无代码改动**。计划中 A8.3 的三项内容(无名字对象创建留 resolve 遍 / gvar_init_data
+- 改了什么: **无代码改动**. 计划中 A8.3 的三项内容(无名字对象创建留 resolve 遍 / gvar_init_data
   留 sema 标注遍 / "初始化链 + 对象引用"整形归 codegen)已在 A8.1 落地 - A7.1 让 lvar_init_comma
   临时导出时, 块域复合字面量的展开(其唯一消费者)随之提前搬入 codegen, 计划未预见此牵连(见 A8.1
-  偏差 3)。本步按计划执行顺序补齐验收: 针对性探针 + 语义实测 + 闸门复核, 并记档。
+  偏差 3). 本步按计划执行顺序补齐验收: 针对性探针 + 语义实测 + 闸门复核, 并记档.
 - 验证: (1) 语料自身覆盖 complit.c(文件域字面量, 含函数定义前/中/后的 `.data` 块序 - resolve 遍
   降入函数体后再回文件域的路径)与 initializer.c 的设计符/括号后成员与下标形状; (2) 新增两组探针:
-  块域(成员访问 `((struct S){1,2}).a`、函数实参、`((int[]){5,6,7})[1]`、`((int[3]){[1]=9})[1]`、
-  `&(struct S){10,20}`、循环体内新鲜对象)与文件域(`int *before = (int[]){1,2};` 与 `mid()` 定义
-  前后、`&(struct S){.b=7,.a=6}` 指定初始化), 与基线二进制逐字节一致; (3) docker 真 x86-64 运行时
-  断言全过("complit-a83 ok"); 四闸门全绿(docker-test 55 例逐字节, ndiff 空, raw 全空, tinycc rc=0)。
+  块域(成员访问 `((struct S){1,2}).a`, 函数实参, `((int[]){5,6,7})[1]`, `((int[3]){[1]=9})[1]`,
+  `&(struct S){10,20}`, 循环体内新鲜对象)与文件域(`int *before = (int[]){1,2};` 与 `mid()` 定义
+  前后, `&(struct S){.b=7,.a=6}` 指定初始化), 与基线二进制逐字节一致; (3) docker 真 x86-64 运行时
+  断言全过("complit-a83 ok"); 四闸门全绿(docker-test 55 例逐字节, ndiff 空, raw 全空, tinycc rc=0).
 - 预存在限制(基线同报错, 非本步引入): 复合字面量后直接跟 `.`/`[...]`(不带外层括号,
   如 `(struct S){1,2}.a`)在 parse 层报 "expected ','"; 块域 static 用复合字面量初始化报
-  "not a compile-time constant"。两者均记入 A10.2 的对照知识, 后续处置归属待定。
-  行数: 四文件零改动。
+  "not a compile-time constant". 两者均记入 A10.2 的对照知识, 后续处置归属待定.
+  行数: 四文件零改动.
 
 ### A9.2 add_type 收尾核对 (5245cc3)
 
@@ -718,52 +718,52 @@ void f(void) { char *t = "in f"; (void)t; }
   builtin(结论+ty)/ND_GENERIC(select_generic: 结论, 不改写)/ND_COND(elvis 只定型; 普通 conv+ty)/
   ND_RETURN(cast)/ND_STMT_EXPR(值捕获+ty 或报错)/ND_LABEL_VAL(收集+ty)/ND_STRING(物化+var+ty, 不改
   kind)/ND_DECL(检查+static 序列化+init 表达式定型)/ND_COMPOUND_LITERAL(定型+序列化) - **全部无形状
-  改写**。
+  改写**.
 - 本步唯一代码改动(审计发现): 文件域复合字面量原在 add_type 里改写 `node->kind = ND_VAR`(eval 侧
   便利), 使 add_type 不完全纯; 现保留 kind 与 `node->var`, eval2/eval_rval 新增 ND_COMPOUND_LITERAL
   case 直接读对象(A1.1 的字符串模式), 块域情形按非常量报错(文案锚点与旧路径一致 - 旧路径经改写后的
-  VAR 走的是 `is_local -> not a compile-time constant`)。文件域字面量只经 write_gvar_data 序列化,
-  不落 codegen, 故无需 gen 侧 case。
-- 契约 2 临时导出面: 已为空(chibicc.h 仅存说明注释; A8.1 撤 lvar_init_comma 后清零)。
+  VAR 走的是 `is_local -> not a compile-time constant`). 文件域字面量只经 write_gvar_data 序列化,
+  不落 codegen, 故无需 gen 侧 case.
+- 契约 2 临时导出面: 已为空(chibicc.h 仅存说明注释; A8.1 撤 lvar_init_comma 后清零).
 - 红线 grep 佐证(库层 parse.c/sema.c/type.c/preprocess.c/tokenize.c):
   缩放(new_add/new_sub/scale_rhs) 0 处; 读写回环(to_assign/compound_op/new_inc_dec/is_atomic) 0 处;
   标签分配(new_unique_name 调用者) 仅 new_anon_gvar(语言规定对象); 语句重排(降级 analyze/标签字段
   写入) 0 处(sema 的 analyze_function 只是逐函数标注驱动 + 检查); 建槽(sema new_lvar) 6 处全为语言/
-  ABI 对象(参数、大结构体返回参数、`__va_area__`、`__alloca_size__`、声明对象、复合字面量隐藏对象);
-  调用 codegen 0 处(仅注释提及)。
+  ABI 对象(参数, 大结构体返回参数, `__va_area__`, `__alloca_size__`, 声明对象, 复合字面量隐藏对象);
+  调用 codegen 0 处(仅注释提及).
 - 闸门: 四闸门全绿; raw diff 全空(本步改动发射中性, complit.c 的序列化路径不变); 语料 37/41 逐字节
-  (4 `.file` 伪影), 七目录全探针一致。行数: sema.c 2946 -> 2960, codegen.c 2524 零改动, chibicc.h
-  807 零改动, parse.c 2148 零改动。
+  (4 `.file` 伪影), 七目录全探针一致. 行数: sema.c 2946 -> 2960, codegen.c 2524 零改动, chibicc.h
+  807 零改动, parse.c 2148 零改动.
 
 ### A10.2 针对性回归测试 (4aa1615)
 
-- 改了什么: 计划清单逐项落测试(八文件), 另修复嵌套函数项触出的两个预存在缺陷。
+- 改了什么: 计划清单逐项落测试(八文件), 另修复嵌套函数项触出的两个预存在缺陷.
   (1) **补测**(每项断言值经 docker 运行时验证): arith.c 增 `*(p ?: &a)` 与 `a[i] += j++`(下标 +
   复合赋值 + 后缀自增的组合, 两断言锁 i 与 j); struct.c 增 RetBuf(十 int 结构体)的初始化/赋值/
-  链式调用; vla.c 增 typedef 共享 VLA 类型两次声明、`sizeof(VLA)` 复用与 `n` 改写角落(`sizeof(x)`
+  链式调用; vla.c 增 typedef 共享 VLA 类型两次声明, `sizeof(VLA)` 复用与 `n` 改写角落(`sizeof(x)`
   给声明时值 20, `sizeof(int[n])` 给当前值 28 - 与 gcc 逐点一致, 即 A9.1 修正的语义锁);
   generic.c 增初始化器中的选中结果; bitfield.c 增位域 op=; atomic.c 增原子 op= 族(含 `>>=`);
   initializer.c 增契约 5 探针(`c ? "a" : "b"` 的物化)与全局缩放探针(`int *gpp = gsel + 2;`
   地址关系断言, `int *gqp = &gpair.b + 1;` 同理; `.quad` 值随快照锁定); function.c 增先声明后定义
-  的两函数各带 `__func__` 字符串, 与嵌套函数(循环 + `&&label` 跳表)。
+  的两函数各带 `__func__` 字符串, 与嵌套函数(循环 + `&&label` 跳表).
   (2) **预存在缺陷修复(嵌套函数)**: 补测的嵌套函数项在基线与当前构建上同样失败(死循环/段错误),
-  语料从未运行过嵌套函数。根因两处, 同属上下文未跨嵌套保存: `resolve_function` 的嵌套调用经
+  语料从未运行过嵌套函数. 根因两处, 同属上下文未跨嵌套保存: `resolve_function` 的嵌套调用经
   `begin_function` 把外层正在积累的 `locals` 链冲掉(外层帧辅助对象 `__alloca_size__` 等未进
   `fn->locals`, 偏移 0, 写出 saved rbp - m5 死循环/m4 段错误的机制), 且 `sema_fn` 不恢复使外层
-  注解读内层返回类型。修复: resolve_function 与 analyze_function 各保存/恢复 `locals` 与 `sema_fn`。
+  注解读内层返回类型. 修复: resolve_function 与 analyze_function 各保存/恢复 `locals` 与 `sema_fn`.
   验证: m4/m5/标签跳表 nl.c 与完整 function.c 在 docker 内全部通过("OK"); A5.1/A6.1/A8.1 基线
-  复验缺陷同样存在(非本线引入)。**仍存的原有未支持限制**: 嵌套函数读外层变量(静态链)给出静默
-  错值(m6), 与 upstream 的既有边界一致, 记录不移。
+  复验缺陷同样存在(非本线引入). **仍存的原有未支持限制**: 嵌套函数读外层变量(静态链)给出静默
+  错值(m6), 与 upstream 的既有边界一致, 记录不移.
 - 为什么改: 计划 A10.2 明列这些薄弱面为回归对象; 嵌套函数项不修复则无法成立, 属"补测暴露并
-  当步修复"的范畴(先例: A4.1 的重入缺陷)。
-- 闸门: 四闸门全绿。docker-test rc=0(55 例诊断逐字节 + 全部运行时断言, 含新八项); ndiff 空;
+  当步修复"的范畴(先例: A4.1 的重入缺陷).
+- 闸门: 四闸门全绿. docker-test rc=0(55 例诊断逐字节 + 全部运行时断言, 含新八项); ndiff 空;
   raw 全空(快照随语料重置 - 新断言字符串进 `.data`, 属语料维度; 编译器维度由本地 A/B 证明中性:
   与 A8.1 基线对同一新语料 36/41 逐字节 + function.c 的差异恰为修复的帧偏移 + 4 个 `.file` 伪影);
-  tinycc rc=0(记账同前)。
-- 偏差: 两项。1) 嵌套函数调用族在基线即坏被发现(上述); 外层变量捕获的静默错值为其残留限制,
-  未修。2) 我的初版 `initializer.c` 断言期望值写错(`c=1` 选 "a" 而断言 'b'), 由 docker-test 抓出
-  改正 - 闸门有效性的正面证据。行数: sema.c 2968 -> 2991(修复 23 行净增), codegen.c 2556 零改动,
-  chibicc.h 821 零改动, parse.c 2148 零改动; 测试八文件净增约 65 行(含注释)。
+  tinycc rc=0(记账同前).
+- 偏差: 两项. 1) 嵌套函数调用族在基线即坏被发现(上述); 外层变量捕获的静默错值为其残留限制,
+  未修. 2) 我的初版 `initializer.c` 断言期望值写错(`c=1` 选 "a" 而断言 'b'), 由 docker-test 抓出
+  改正 - 闸门有效性的正面证据. 行数: sema.c 2968 -> 2991(修复 23 行净增), codegen.c 2556 零改动,
+  chibicc.h 821 零改动, parse.c 2148 零改动; 测试八文件净增约 65 行(含注释).
 
 ## 阶段 B 详情
 
@@ -776,7 +776,7 @@ void f(void) { char *t = "in f"; (void)t; }
 - 改了什么: `PLAN.md` 阶段 B 段由草稿改写为可执行计划(B1.1a/B1.1b/B1.1c/B1.1e, B1.2a/B1.2b,
   B1.3, 各带落点与预期 ndiff; 时序约束一节; 五处偏差说明), 头部加阶段 B 开工注记, 闸门口径各加
   一条收紧口径; 本文件加阶段 B 口径与本节.
-- 为什么: 用户 2026-10-08 拍板做阶段 B; 草稿的 B1.1/B1.2/B1.3 是提纲, 缺"每项落到哪一行、预期
+- 为什么: 用户 2026-10-08 拍板做阶段 B; 草稿的 B1.1/B1.2/B1.3 是提纲, 缺"每项落到哪一行, 预期
   什么 diff"这一层, 而 B 改的是发射形态, 阶段 A 那种"逐字节不变"的自证需要显式写进口径.
 - 闸门: 纯文档提交, 不跑 docker 四闸门(无代码变化); 提交后推送 origin/main.
 - 偏差: 五处, 逐条记在 `PLAN.md` 的阶段 B 段末.
@@ -831,7 +831,7 @@ void f(void) { char *t = "in f"; (void)t; }
 ### B1.1c ND_GT/ND_GE (b6bdc9f)
 
 - 改了什么: `shape_node` 的 `ND_GT`/`ND_GE` case 删除(交换操作数 + kind 降级为 LT/LE);
-  `gen_expr` 的二元发射尾部在类型分派之前接住这两个 kind: 用一个**当次发射才建、随即丢弃**的
+  `gen_expr` 的二元发射尾部在类型分派之前接住这两个 kind: 用一个**当次发射才建, 随即丢弃**的
   `ND_LT`/`ND_LE` 节点(`new_binary(kind, node->rhs, node->lhs, tok)`, ty 拷贝)走原比较路径.
   parse/sema/type/chibicc.h 零改动.
 - 为什么: 忠实 `>`/`>=` 保留操作数与 kind, 交换从树改写变成发射点的一次构造. 与计划原稿的偏差
@@ -857,7 +857,7 @@ void f(void) { char *t = "in f"; (void)t; }
 
 ### B1.2a ND_WHILE + ND_BREAK/ND_CONTINUE (66fd542)
 
-- 改了什么: 整形遍删掉 `while` 到 `for` 的 kind 重写、`ND_BREAK`/`ND_CONTINUE` 两个 case(它们把
+- 改了什么: 整形遍删掉 `while` 到 `for` 的 kind 重写, `ND_BREAK`/`ND_CONTINUE` 两个 case(它们把
   标签绑进 `unique_label` 并把 kind 改成 `ND_GOTO`), 以及 `brk_label`/`cont_label` 两个环境
   static 与循环/switch case 里的存取; **标签分配仍在整形遍**(前序位置不变, `.L..N` 编号不变,
   `emit_data` 之前的时序不变). 发射侧: `gen_stmt` 新增 `ND_WHILE` case(无 init/inc 的循环形, 与
@@ -873,8 +873,8 @@ void f(void) { char *t = "in f"; (void)t; }
   tinycc rc=0; 形状断言 17 段(新增 3 段: while 的循环形与标签落位 / break 与 continue 各跳本循环
   的 brk=`.L..2` 与 cont=`.L..3` / switch 里 continue 越出到循环 cont 而 break 落在 switch 自己的
   brk); ndiff 见偏差 - 语料维度重置后**空**.
-- 覆盖: `test/control.c` 补两条(switch 里的 continue 到循环、switch 里的 break 留在 switch);
-  statement expression 里的 break/continue 与嵌套 switch 原有 110-111、105-106 覆盖.
+- 覆盖: `test/control.c` 补两条(switch 里的 continue 到循环, switch 里的 break 留在 switch);
+  statement expression 里的 break/continue 与嵌套 switch 原有 110-111, 105-106 覆盖.
 - 偏差: 无编译器偏差. 快照基线随语料重置(同 B1.1b/B1.1c 先例): ndiff 唯一变化文件是 `control.s`
   (改动的语料文件), 逐行归一化后**基线侧没有任何形状消失**, 新增侧只有数据指令; **编译器维度
   中性另有本地 A/B 直证** - 十个探针(while / 带 break / 带 continue / do-while / for /
@@ -898,7 +898,7 @@ void f(void) { char *t = "in f"; (void)t; }
   long double 形里 `fld %st(0)` 预复制且不再有 `fstpt` 写槽); ndiff 见偏差 - 归因后重置基线,
   重置后**空**.
 - 覆盖: `test/arith.c` 补九条(double 真假两向, long double 真假两向, unsigned, int/unsigned
-  混合真假两向, short/char 提升), 原有 4 条(int 常量、尾自增、指针)保留.
+  混合真假两向, short/char 提升), 原有 4 条(int 常量, 尾自增, 指针)保留.
 - 偏差: 无编译器偏差(去槽是本步的目的). 两处**实测的形态细节**记档: (1) 真值支的 cast 会替代
   旧形"重载 + cast"里的那次冗余 cast(旧形有一次多余的 movsxd, 新形一次); (2) 值语义不变 -
   唯一可观察差异是 struct elvis 的结果从"临时槽的地址"变为"原对象地址"(内容相同, 地址语义本
@@ -938,7 +938,7 @@ void f(void) { char *t = "in f"; (void)t; }
 - 改了什么: `test/shape.sh` 收口为 23 段断言(每段一个片段 + 1..3 条断言), 覆盖阶段 B 的全部
   发射面: b11a 下标 5 段 / b11b 成员 4 段 / b11c 比较 5 段 / b11d(A9.1 已直读的字符串 / sizeof /
   泛型) 3 段 / b11e elvis 2 段 / b12a 控制流 3 段 / b12b 声明 1 段; 文件头的覆盖清单与口径说明
-  补全. 三个断言原语: `want`(助记符按序出现, 只看行首词)、`wantline`(整行正则)、`absent`(整行
+  补全. 三个断言原语: `want`(助记符按序出现, 只看行首词), `wantline`(整行正则), `absent`(整行
   正则不得出现); 片段经 `$chibicc -S -o <tmp>.s -xc -` 汇编, 不进仓库工作区.
 - 为什么: [就地] 口径要求每步带形状断言, B1.3 是它们的收口与清点. 断言的定位是**指令形回归锁**:
   锁"直接发射仍产出该形态"(含"不得退化成的形态", 如 `setg`/`fstpt`/间接存), 不证明"旧树形消失" -
@@ -963,8 +963,8 @@ docker 闸门, 结论引用最近一次代码提交(B1.2b/B1.3)的闸门记录.
 - **闸门**: [完成] B 的八步各自四闸门全绿记录见上; 容器内 `shape lock` 由 stage1 与 stage2 各跑
   一轮(23 段); 四次语料维度重置(B1.1b/B1.1c/B1.2a/B1.1e)都附"同一份新语料, 新旧编译器输出逐字节
   一致"的本地 A/B 中性证明; tinycc 每步 rc=0; B1.1a/B1.2b 两步 ndiff 为空无需重置.
-- **测试面**: [完成] 语料补 42 条断言(arith 无符号与长双精度比较、float 的 `>`/`>=`、struct 的
-  成员 op=/inc-dec 各形态、arith 的 elvis 类型覆盖、control 的 switch 内 continue); 新增
+- **测试面**: [完成] 语料补 42 条断言(arith 无符号与长双精度比较, float 的 `>`/`>=`, struct 的
+  成员 op=/inc-dec 各形态, arith 的 elvis 类型覆盖, control 的 switch 内 continue); 新增
   `test/shape.sh` 268 行 23 段形状断言, 挂进两个 test 目标.
 - **对比锚点(实测)**: parse.c 2148 / sema.c 2991 / chibicc.h 821 / codegen.c 2649
   (阶段 A 终态是 2148 / 2991 / 821 / 2556); 阶段 B 的整线 diff 为 9 文件 +818/-140.
@@ -998,8 +998,8 @@ docker 闸门, 结论引用最近一次代码提交(B1.2b/B1.3)的闸门记录.
   裸 `SUB`)/`combine` 的加减分支各自标记产出的节点; `gen_expr` 顶部(`.loc` 之前)把未标记的
   `ND_ADD`/`ND_SUB` **替换**成 `new_add`/`new_sub` 的产物(`new_sub` 补前向声明, 因为 `gen_expr`
   在它的定义之前); `shape_node` 的 `ND_ADD`/`ND_SUB` case 删除(该 kind 落到 default 的
-  `shape_children`, 下潜范围不变); 文件头(新增一段"加法是发射点自己做的唯一降级")、`shape_chain`
-  的残留清单(去掉"the additive scaling")、`gen_addr` 的下标注释、`new_add` 的注释同步更新.
+  `shape_children`, 下潜范围不变); 文件头(新增一段"加法是发射点自己做的唯一降级"), `shape_chain`
+  的残留清单(去掉"the additive scaling"), `gen_addr` 的下标注释, `new_add` 的注释同步更新.
   parse.c / sema.c / type.c 零改动.
 - 为什么: B1.3 之后整形遍唯一"只换发射方式"的残留项就是它; 判别见 `PLAN.md` 阶段 B2 段 - 忠实与
   降级同形, 所以标记 codegen 自建的降级产物, 未标记者即忠实节点. 替换而不是递归(递归会多一条
@@ -1051,7 +1051,7 @@ docker 闸门, 结论引用最近一次代码提交(B1.2b/B1.3)的闸门记录.
 - 为什么: 本线最后一项收口. 那三处注释描述的是本线自己已经作废的机制, 且都是字段归属账本上的
   条目(审查者读它来判断字段由谁写) - 与 B2 新增字段同处一文件, 一并订正并记录, 免得下一轮把它
   当成现状.
-- 闸门: 逻辑零改动的复核 - 本机重建后 25 探针 A/B **空**、shape lock 33 段全过; 容器里
+- 闸门: 逻辑零改动的复核 - 本机重建后 25 探针 A/B **空**, shape lock 33 段全过; 容器里
   `make docker-test` rc=0(自举; 诊断 55 例逐字节 ×2; shape lock 33 段 ×2)与
   `make docker-snapshot-ndiff` **空**(注释不进发射, 快照自 B2.1 重置后保持一致). 未跑
   tinycc: 本提交无逻辑改动, 沿用 B2.1 的 rc=0.
@@ -1061,7 +1061,7 @@ docker 闸门, 结论引用最近一次代码提交(B1.2b/B1.3)的闸门记录.
 ## 给审核者的提示
 
 - 审核重心: sema 的 `add_type`(每次提交都应少掉若干"改写树形状"的 case, 且剩下的 case 只填
-  `ty`/写结论/做检查), codegen 新增的整形遍(是否忠实搬运、是否自带槽与标签分配、是否遵守契约 3
+  `ty`/写结论/做检查), codegen 新增的整形遍(是否忠实搬运, 是否自带槽与标签分配, 是否遵守契约 3
   的六条不变量), 以及 `test/diagnostic.sh` 的 55 例是否逐字节不变.
 - B2 单独的审核重心: `chibicc.h` 的 `is_lowered` 三处写入点是否穷尽(codegen 自建的加减节点只有
   `new_add`/`new_sub`/`combine` 三个产地, 含 ptr-ptr 情形里 `DIV` 之下的裸 `SUB`), `gen_expr` 顶部

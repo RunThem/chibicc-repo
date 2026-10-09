@@ -45,7 +45,7 @@
 
 - [x] **1.3 复合赋值(拆两个提交)**: `Node` 加 `NodeKind op` 字段(0 表示纯 `=`); `assign()`(2145-2183) 的 10 个 `op=` 分支改发 `ND_ASSIGN{op}`(不再经 `new_add/new_sub`, 缩放交给 sema); 第一个提交切 `+= -=`(原走 new_add/new_sub, 改动最大), 第二个提交切其余 8 个; `to_assign`(2033-2140) 搬 sema, 三个分支(member/atomic/plain)原样保留, 由 `node->op` 驱动.(前缀 ++/-- 与 new_inc_dec 已随第一提交切到 ND_ASSIGN{op} 形状以保持 to_assign 契约统一, 1.4 再换 ND_INCDEC)
 
-- [x] **1.4 ND_INCDEC**: 新 kind + `is_post`/addend 字段; 前缀(`unary()` 2523-2528)与后缀(`postfix()` 2857-2867)改发; `new_inc_dec`(2790-2795) 搬 sema 作降级.(parse 侧在构造现场立即 add_type 触发降级, 使临时 lvar 创建时机与旧代码一致 — elvis 同步加固)
+- [x] **1.4 ND_INCDEC**: 新 kind + `is_post`/addend 字段; 前缀(`unary()` 2523-2528)与后缀(`postfix()` 2857-2867)改发; `new_inc_dec`(2790-2795) 搬 sema 作降级.(parse 侧在构造现场立即 add_type 触发降级, 使临时 lvar 创建时机与旧代码一致 - elvis 同步加固)
 
 - [x] **1.5 ND_SUBSCRIPT**: `postfix()`(2834-2841) 改发; `init_desg_expr`(1316-1329) 的数组分支同步; sema 降回 `DEREF(ADD)`(含指针缩放).
 
