@@ -64,6 +64,13 @@ int main() {
   ASSERT(6, ({ _Atomic int x=3; x *= 2; x; }));
   ASSERT(0, ({ _Atomic int x=3; x >>= 2; x; }));
 
+  // PLAN B2: an atomic pointer. The retry loop's addition combines the
+  // old value with the operand already carrying the element scaling,
+  // so one unit advances by one element and the scaling must not run a
+  // second time - that would leave `p` at `a + 8` / `a - 6` here.
+  ASSERT(1, ({ int a[5]; _Atomic(int *) p = a; p += 2; p == a + 2; }));
+  ASSERT(1, ({ int a[5]; int *q = a + 4; _Atomic(int *) p = q; p -= 2; p == a + 2; }));
+
   printf("OK\n");
   return 0;
 }

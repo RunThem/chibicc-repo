@@ -21,6 +21,13 @@ int main() {
 
   ASSERT(10, ({ int n=5; sizeof(char[2][n]); }));
 
+  // PLAN B2: a nested dimension expression is lowered like a top-level
+  // one. The element count of `q - p` is scaled down by the element
+  // size before it becomes the length; before B2 the nested form was
+  // left unlowered and the byte difference - four times the count
+  // here - was used instead, so sizeof was 64, not 16.
+  ASSERT(16, ({ int a[4]; int *p=a, *q=a+2; int x[2][q-p]; sizeof(x); }));
+
   // A sizeof of a VLA as an array dimension: the operand's size is a
   // runtime value, so y is a VLA too (20 elements of int). Guards
   // is_const_expr's faithful sizeof case, which has to answer false

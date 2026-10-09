@@ -388,6 +388,15 @@ struct Node {
   // 0 means a plain "=".
   NodeKind op;
 
+  // ND_ADD/ND_SUB: true when one of codegen's own lowering helpers
+  // built the node (new_add, new_sub, combine). Its operands already
+  // carry the element-size scaling, or the `ptr - ptr` element count,
+  // and new_arith has applied the conversions, so gen_expr emits it as
+  // plain machine arithmetic. A node the parser built never carries
+  // the mark - the emitter lowers such a node itself, at emission
+  // (PLAN B2), and the mark is what tells the two apart.
+  bool is_lowered;
+
   // Increment/decrement for ND_INCDEC: postfix (`i++`) or prefix
   // (`++i`), with an addend of +1 or -1. sema lowers the node to a
   // compound assignment.

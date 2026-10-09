@@ -6,7 +6,7 @@
 # 该形态", 不是"旧树形消失"的证明 - .s 里看不见 DEREF/FOR 这类树形, 树形的消失
 # 由源码层核对证明(整形遍不再含对应 case, 见 PLAN.md 阶段 B 段与 RESULT.md 各步).
 #
-# 断言按步增量添加, 覆盖清单(共 23 段):
+# 断言按步增量添加, 覆盖清单(共 33 段):
 #   b11a 下标(读/写/交换写法/VLA/多级)      - PLAN B1.1a
 #   b11b 箭头成员/点成员/展平匿名链/复合赋值 - PLAN B1.1b
 #   b11c 整数/无符号/浮点/长双精度 的 > 与 >= - PLAN B1.1c
@@ -14,6 +14,8 @@
 #   b11e elvis 无槽(int 形 / long double 形) - PLAN B1.1e
 #   b12a while 循环形 / break 与 continue / switch 只占 break - PLAN B1.2a
 #   b12b 声明的初始化链                      - PLAN B1.2b
+#   b2   加法缩放的十种落点(读/交换写法/减/ptr-ptr 除法/纯整数负例/混合转换/
+#        VLA 基址/复合赋值/自增自减/指示符初始化) - PLAN B2
 #
 # 用法: test/shape.sh ./chibicc (由 make test 与 make test-stage2 调用)
 
@@ -223,6 +225,76 @@ int f(void) { int a[3] = {1, 2, 3}; return a[2]; }
 SNIP
 wantline b12b_decl_init '^  rep stosb$'
 want b12b_decl_init rep mov
+
+# ---- B2 加法的缩放: 忠实 `+`/`-` 在发射点降级 -------------------------------
+# 降级由 new_add/new_sub 现做(元素大小缩放 = imul, 规范化 = 交换操作数),
+# 指令序列与旧的整形遍就地改写逐字节相同; 节点带 is_lowered 标记的降级形态
+# (下标, 复合赋值, 指示符)不得被二次缩放 - 十段落点各锁一处.
+# 指针 + 整数: 缩放(imul)在加(add)之前; 不出现辅助调用.
+snippet b2_add_scale <<'SNIP'
+int *f(int *p, long i) { return p + i; }
+SNIP
+want b2_add_scale imul add
+absent b2_add_scale '^  call'
+
+# 整数 + 指针: 归一到 `p + i` 后形态相同(语义由 test/pointer.c 的运行断言锁).
+snippet b2_add_swapped <<'SNIP'
+int *f(int *p, long i) { return i + p; }
+SNIP
+want b2_add_swapped imul add
+
+# 指针 - 整数: 缩放后在减(sub)之前.
+snippet b2_sub_scale <<'SNIP'
+int *f(int *p, long i) { return p - i; }
+SNIP
+want b2_sub_scale imul sub
+
+# 指针 - 指针: 差的元素数经 cqo/idiv 缩放 - 元素大小是除数, 所以不得出现乘法形.
+snippet b2_ptr_diff <<'SNIP'
+long f(int *p, int *q) { return p - q; }
+SNIP
+want b2_ptr_diff sub cqo idiv
+wantline b2_ptr_diff '^  idiv %rdi$'
+absent b2_ptr_diff '^  imul'
+
+# 纯整数 + 的负例: 不缩放(锁住"不把普通加法当指针算术").
+snippet b2_int_add <<'SNIP'
+int f(int a, int b) { return a + b; }
+SNIP
+want b2_int_add movsxd add
+absent b2_int_add 'imul'
+
+# 混合宽度的 +: 发射点降级仍走 new_arith 的常规算术转换(int 提升到 long).
+snippet b2_mixed_conv <<'SNIP'
+long f(int a, long b) { return a + b; }
+SNIP
+wantline b2_mixed_conv '^  movsxd %eax, %rax$'
+want b2_mixed_conv add
+
+# 指针到 VLA 的加法: 缩放因子是运行时的尺寸变量(读 vla_size 槽 + imul).
+snippet b2_vla_ptr <<'SNIP'
+int f(int n, long i) { int (*p)[n] = 0; return (*(p + i))[0]; }
+SNIP
+want b2_vla_ptr imul add
+
+# 复合赋值: 缩放只做一次(在 combine 的读改写值里), 指令形与旧降级相同.
+snippet b2_compound_ptr <<'SNIP'
+void f(int *p, long i) { p += i; }
+SNIP
+want b2_compound_ptr imul add
+
+# 后缀自增: `(p += 1) + (-1)` - 前后两次缩放各一次(两个 imul: 先 -4, 后 +4),
+# 差值以负数形式最后相加(外层是 ADD 而不是 SUB).
+snippet b2_post_inc_ptr <<'SNIP'
+int *f(int *p) { return p++; }
+SNIP
+want b2_post_inc_ptr imul imul add add
+
+# 指示符初始化: 初始化链里的下标地址同样由 new_add 现建, 只缩放一次.
+snippet b2_designator <<'SNIP'
+int f(void) { int a[4] = {[2] = 7}; return a[2]; }
+SNIP
+want b2_designator imul add
 
 # ---- 汇总 ----------------------------------------------------------------
 fail=""

@@ -22,6 +22,14 @@
 //      trees are walked explicitly (shape_init_exprs), never by
 //      descending a node's fields.
 //
+// The additive operators are the one lowering the emitter runs itself:
+// a faithful `+`/`-` arrives unscaled, and gen_expr replaces the node
+// with new_add/new_sub's product right before it emits it (PLAN B2).
+// The nodes those constructors build carry the `is_lowered` mark,
+// which is how the emitter tells an already lowered node - the
+// `x[y]` address gen_addr builds, a compound assignment's scaled
+// operand - from a faithful one.
+//
 // The pass also owns the label namespace and the temporary slots
 // (Obj.ret_buffer, Type::vla_size and friends); the fields it writes
 // are marked as such in chibicc.h. Everything below is the emitter:
@@ -51,6 +59,7 @@ static char *cur_cont_label;
 static void gen_expr(Node *node);
 static void gen_stmt(Node *node);
 static Node *new_add(Node *lhs, Node *rhs, Token *tok);
+static Node *new_sub(Node *lhs, Node *rhs, Token *tok);
 static Node *lvar_init_comma(Obj *var, InitTree *init, Token *tok);
 
 __attribute__((format(printf, 1, 2)))
@@ -206,7 +215,9 @@ static void gen_addr(Node *node) {
     // built here, at the point the address is needed, and emitted
     // right away. new_add types it and applies the element-size
     // scaling exactly as the pass did, so the instructions are the
-    // ones the old `*(x+y)` form produced.
+    // ones the old `*(x+y)` form produced. It carries the lowered
+    // mark, so the emitter's own additive lowering (PLAN B2) leaves
+    // it alone.
     Node *add = new_add(node->lhs, node->rhs, node->tok);
     gen_expr(add);
     return;
@@ -758,6 +769,19 @@ static void builtin_alloca(void) {
 
 // Generate code for a given node.
 static void gen_expr(Node *node) {
+  // A faithful `+`/`-` still carries its source shape (PLAN B2): the
+  // element-size scaling, the `num + ptr` canonicalization and the
+  // conversions new_arith applies are made here, at emission, by the
+  // same new_add/new_sub the shaping pass used to call ahead of time.
+  // The node is replaced rather than recursed into: the product
+  // carries the original node's token, so the debug lines and the
+  // evaluation order are the pre-B2 ones. Additive nodes codegen
+  // built itself carry the mark and fall through to the plain
+  // machine-arithmetic emission below.
+  if ((node->kind == ND_ADD || node->kind == ND_SUB) && !node->is_lowered)
+    node = node->kind == ND_ADD ? new_add(node->lhs, node->rhs, node->tok)
+                                : new_sub(node->lhs, node->rhs, node->tok);
+
   println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
 
   switch (node->kind) {
@@ -1605,7 +1629,8 @@ static void shape_chain(Node **head) {
         // The record stays; this walk is what still reaches the
         // residue kinds a resolved initializer may hold (op=, an
         // inc/dec, a VLA sizeof, a compound literal, a
-        // struct-returning call, the additive scaling).
+        // struct-returning call - the additive scaling is no longer
+        // one of them, it is lowered at emission, PLAN B2).
         shape_init_exprs(n->init_resolved);
       pp = &(*pp)->next;
       continue;
@@ -1658,18 +1683,32 @@ static Node *scale_rhs(Type *ptr_ty, Node *rhs, Token *tok) {
   return new_binary(ND_MUL, rhs, new_long(ptr_ty->base->size, tok), tok);
 }
 
+// Marks an additive node one of the lowering helpers below built. Its
+// operands carry the byte offsets as they are to be added (or the
+// element count the `ptr - ptr` division scales down), so the emitter
+// must emit it as plain machine arithmetic - gen_expr lower a faithful
+// `+`/`-` itself and would scale this one a second time (PLAN B2).
+static Node *mark_lowered(Node *node) {
+  node->is_lowered = true;
+  return node;
+}
+
 // In C, `+` operator is overloaded to perform the pointer arithmetic.
 // If p is a pointer, p+n adds not n but sizeof(*p)*n to the value of p,
 // so that p+n points to the location n elements (not bytes) ahead of p.
 // In other words, we need to scale an integer value before adding to a
 // pointer value. This function takes care of the scaling.
+//
+// It is both the helper codegen's own builders call and the definition
+// of the faithful lowering the emitter runs at emission (PLAN B2); its
+// product carries the mark either way.
 static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   add_type(lhs);
   add_type(rhs);
 
   // num + num
   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
-    return new_arith(ND_ADD, lhs, rhs, tok);
+    return mark_lowered(new_arith(ND_ADD, lhs, rhs, tok));
 
   if (lhs->ty->base && rhs->ty->base)
     error_tok(tok, "invalid operands");
@@ -1682,7 +1721,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   }
 
   // ptr + num; a pointer to a VLA scales by its runtime size
-  return new_arith(ND_ADD, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
+  return mark_lowered(new_arith(ND_ADD, lhs, scale_rhs(lhs->ty, rhs, tok), tok));
 }
 
 // Like `+`, `-` is overloaded for the pointer type.
@@ -1692,21 +1731,24 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
 
   // num - num
   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
-    return new_arith(ND_SUB, lhs, rhs, tok);
+    return mark_lowered(new_arith(ND_SUB, lhs, rhs, tok));
 
   // pointer to a VLA - num
   if (lhs->ty->base && lhs->ty->base->kind == TY_VLA)
-    return new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
+    return mark_lowered(new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok));
 
   // ptr - num
   if (lhs->ty->base && is_integer(rhs->ty))
-    return new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok);
+    return mark_lowered(new_arith(ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok));
 
   // ptr - ptr, which returns how many elements are between the two. The
   // difference itself is an element count, so it is typed long and left
-  // alone; only the division that follows it is converted.
+  // alone; only the division that follows it is converted. The
+  // subtraction is marked too - it is the raw byte difference and goes
+  // through the emitter under the `DIV` just like a built `ptr + num`
+  // does.
   if (lhs->ty->base && rhs->ty->base) {
-    Node *node = new_binary(ND_SUB, lhs, rhs, tok);
+    Node *node = mark_lowered(new_binary(ND_SUB, lhs, rhs, tok));
     node->ty = ty_long;
     return new_arith(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
   }
@@ -1935,8 +1977,11 @@ static bool expand_decl(Node *node) {
 // which converts the multiplicative and bitwise ones and leaves the
 // shifts alone.
 static Node *combine(NodeKind op, Node *lhs, Node *rhs, Token *tok) {
+  // The additive case takes operands that already went through
+  // new_add/new_sub (this combines a read-modify-write value with its
+  // scaled operand), so it is a plain machine arithmetic node too.
   if (op == ND_ADD || op == ND_SUB)
-    return new_arith(op, lhs, rhs, tok);
+    return mark_lowered(new_arith(op, lhs, rhs, tok));
 
   Node *node = new_binary(op, lhs, rhs, tok);
   add_type(node);
@@ -2228,23 +2273,6 @@ static void shape_node(Node *node) {
     *node = *result;
     node->next = nxt;
     add_type(node);
-    return;
-  }
-  case ND_ADD:
-  case ND_SUB: {
-    // The additive lowerings sema's annotation pass used to run:
-    // the pointer scaling, the `num + ptr` canonicalization and the
-    // ptr-ptr element count all live inside new_add/new_sub, which
-    // rebuild the node fully typed exactly as they did when sema
-    // called them - the operand acceptance and the result type were
-    // already checked and recorded by sema's annotation case.
-    shape_children(node);
-    Node *result = node->kind == ND_ADD ? new_add(node->lhs, node->rhs, node->tok)
-                                        : new_sub(node->lhs, node->rhs, node->tok);
-    node->kind = result->kind;
-    node->lhs = result->lhs;
-    node->rhs = result->rhs;
-    node->ty = result->ty;
     return;
   }
   case ND_FUNCALL:
