@@ -187,6 +187,15 @@ SNIP
 want b11e_elvis_ldouble fldt fldz fucomip fstp
 absent b11e_elvis_ldouble 'fstpt'
 
+# ---- B1.2b ND_DECL: 声明在发射点摊成初始化链 ------------------------------
+# 定长聚合的初始化 = 先整体清零(`rep stosb`)再逐元素赋值, 形状与旧降级相同;
+# 语句仍发在声明所在的位置.
+snippet b12b_decl_init <<'SNIP'
+int f(void) { int a[3] = {1, 2, 3}; return a[2]; }
+SNIP
+wantline b12b_decl_init '^  rep stosb$'
+want b12b_decl_init rep mov
+
 # ---- 汇总 ----------------------------------------------------------------
 fail=""
 count=0

@@ -895,6 +895,30 @@ void f(void) { char *t = "in f"; (void)t; }
   long double/unsigned/int→long/指针/char/short)的差异全部为槽机器与偏移重排. 行数:
   codegen.c 2611 -> 2612, `test/shape.sh` 213 -> 231, `test/arith.c` +15.
 
+### B1.2b ND_DECL (本提交; 计划里的可裁项, 评估后做)
+
+- 改了什么: 声明记录的展开拆成两半. 整形遍只保留"类型里含 VLA"的记录(`decl_needs_vla_size`:
+  运行时尺寸槽必须先于 `assign_lvar_offsets`, 也覆盖"指向 VLA 的指针 + 初始化器"这类记录),
+  其余记录留在链里交给发射器; `gen_stmt` 新增 `ND_DECL` case: static(数据镜像已由 sema 序列化)
+  与无初始化器者不发码, 有初始化器者就地建 `lvar_init_comma` + `add_type` + `gen_expr`(与旧
+  EXPR_STMT 的发射等价). `shape_chain` 对留下的记录仍显式走 `shape_init_exprs` - 它的职责从
+  "降级"改为"到达"(初始器里可能藏残留项: op=/自增自减/VLA sizeof/复合字面量/返回缓冲/加减法
+  缩放). `shape_node` 的表达式位置 `ND_DECL` 分支删除(见下). parse/sema/type/chibicc.h 零改动.
+- 为什么: B1.2 的后半; 声明记录不再被整形遍提前展开成语句, 语句链保持"记录 + 语句"的忠实混排
+  直到发射.
+- 表达式位置分支的处置(计划要求先探针): 该分支把记录原地改成 `ND_EXPR_STMT`, 而 `gen_expr` 没有
+  `ND_EXPR_STMT` 的落点 - 记录真出现在表达式槽时它今天就发不出正确代码, 属死代码; 结构上记录只
+  进语句/实参链(parser 只往链里 push), 本地对 39 个可编译语料文件的探针 0 命中; 删除后若该位置
+  真出现记录, 会以发射器的硬错误/崩溃暴露而非静默错码. 自举源码一维由 docker-test 的自举覆盖
+  (新代码要能编译编译器自身全部源码).
+- 闸门: 四闸门全绿. docker-test rc=0(诊断 55 例逐字节 ×2; 全部运行时测试与自举 - 初始化链改在
+  发射点构造, 语料里 26 个文件含初始化器); tinycc rc=0; 形状断言 20 段(新增 1 段: 定长数组初始化
+  = `rep stosb` 清零 + 逐元素赋值); **ndiff 空** - 本步不动语料而编译器维度逐字节中性, 41 文件
+  全绿, 无需重置基线(本地 A/B 同证: 39 个可编译语料文件的 .s 与改动前一致).
+- 偏差: 无. 一次构建返工: 首版把 `lvar_init_comma`/`shape_init_exprs` 的前向声明加在使用点之后
+  (报 implicit declaration), 修正后重建; 首轮 A/B 又跑在构建失败留下的旧二进制上, 按 B1.2a 的
+  教训改为先断言构建成功. 行数: codegen.c 2612 -> 2649 (+56/-19), `test/shape.sh` 231 -> 241.
+
 ## 给审核者的提示
 
 - 审核重心: sema 的 `add_type`(每次提交都应少掉若干"改写树形状"的 case, 且剩下的 case 只填

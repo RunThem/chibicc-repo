@@ -51,6 +51,7 @@ static char *cur_cont_label;
 static void gen_expr(Node *node);
 static void gen_stmt(Node *node);
 static Node *new_add(Node *lhs, Node *rhs, Token *tok);
+static Node *lvar_init_comma(Obj *var, InitTree *init, Token *tok);
 
 __attribute__((format(printf, 1, 2)))
 static void println(char *fmt, ...) {
@@ -1460,6 +1461,24 @@ static void gen_stmt(Node *node) {
     for (Node *n = node->body; n; n = n->next)
       gen_stmt(n);
     return;
+  case ND_DECL: {
+    // A declaration record reaching the emitter (PLAN B1.2b): a
+    // block-scope static (sema's serializer already wrote its data
+    // image) and a fixed-size object without an initializer produce
+    // no code; an initialized one becomes the comma chain the
+    // expansion used to build in the pass - the zeroing, then the
+    // per-element assignments - emitted here.
+    if (node->attr.is_static || !node->init_resolved)
+      return;
+
+    Node *chain = lvar_init_comma(node->var, node->init_resolved,
+                                  node->decl_init->tok);
+    node->decl_init = NULL;
+    node->init_resolved = NULL;
+    add_type(chain);
+    gen_expr(chain);
+    return;
+  }
   case ND_BREAK:
     // Resolved against the innermost loop or switch at emission time
     // (PLAN B1.2a); sema's check already rejected a stray one.
@@ -1546,14 +1565,28 @@ static char *new_label(void) {
 
 static void shape_node(Node *node);
 static bool expand_decl(Node *node);
+static void shape_init_exprs(InitTree *init);
 
-// Walks a statement chain, editing it in place: a declaration record
-// expands to its statements or is removed entirely (PLAN A8.1), and
-// the other records - typedefs, enum constants, extern declarations
-// and [GNU] nested function definitions - produce no statement at all
-// and are unhooked here (PLAN A8.2). A nested function's body is not
-// entered from here: the program list is its home and this pass walks
-// it from there exactly once (contract 3(e)).
+// Whether a declaration's type involves a VLA anywhere: its runtime
+// size slot has to exist before assign_lvar_offsets runs, so such a
+// record is still expanded in the pass. Every other declaration keeps
+// its place and reaches the emitter, which builds its initializer
+// chain at emission time (PLAN B1.2b).
+static bool decl_needs_vla_size(Node *node) {
+  for (Type *t = node->var->ty; t; t = t->base)
+    if (t->kind == TY_VLA)
+      return true;
+  return false;
+}
+
+// Walks a statement chain, editing it in place: a VLA declaration
+// record expands to its statements (PLAN A8.1), the declarations that
+// stay keep their place for the emitter (PLAN B1.2b), and the other
+// records - typedefs, enum constants, extern declarations and [GNU]
+// nested function definitions - produce no statement at all and are
+// unhooked here (PLAN A8.2). A nested function's body is not entered
+// from here: the program list is its home and this pass walks it from
+// there exactly once (contract 3(e)).
 static void shape_chain(Node **head) {
   for (Node **pp = head; *pp;) {
     Node *n = *pp;
@@ -1566,10 +1599,14 @@ static void shape_chain(Node **head) {
       *pp = n->next;
       continue;
     case ND_DECL:
-      if (!expand_decl(n)) {
-        *pp = n->next;
-        continue;
-      }
+      if (decl_needs_vla_size(n))
+        expand_decl(n);
+      else
+        // The record stays; this walk is what still reaches the
+        // residue kinds a resolved initializer may hold (op=, an
+        // inc/dec, a VLA sizeof, a compound literal, a
+        // struct-returning call, the additive scaling).
+        shape_init_exprs(n->init_resolved);
       pp = &(*pp)->next;
       continue;
     default:
@@ -1824,11 +1861,14 @@ static void shape_init_exprs(InitTree *init) {
     shape_init_exprs(init->children[mem->idx]);
 }
 
-// Expands one declaration record into the statement it stands for -
-// none, one, or (for nothing today, but the shape is 0..n) - and says
-// whether the chain position it sat at keeps a statement. The record
-// arrives exactly as the parser wrote it: sema ran the checks, left
-// the initializer record resolved, and the block-scope static's data
+// Expands a declaration record whose type involves a VLA into the
+// statement it stands for, and says whether the chain position it sat
+// at keeps a statement. A declaration that involves no VLA is left in
+// the chain for the emitter to expand at emission time (PLAN B1.2b) -
+// only the runtime size slot has to exist before the frame layout is
+// assigned, and that is what this half produces. The record arrives
+// exactly as the parser wrote it: sema ran the checks, left the
+// initializer record resolved, and the block-scope static's data
 // image is already in .data. Moved from sema at A8.1; the VLA half
 // came over at A7.1, when the size slots did.
 static bool expand_decl(Node *node) {
@@ -2257,9 +2297,6 @@ static void shape_node(Node *node) {
     // emission; the controlling expression and the unselected arms
     // are typed but produce no code, so only the selection is shaped.
     shape_node(node->generic_sel);
-    return;
-  case ND_DECL:
-    expand_decl(node);
     return;
   case ND_COMPOUND_LITERAL:
     // A block-scope compound literal: the initializer comma and the

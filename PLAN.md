@@ -441,7 +441,7 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
     FOR 无 init/inc 的发射逐字节相同)与 `ND_BREAK`/`ND_CONTINUE` case + 发射侧环境 static(循环
     保存/恢复两者, switch 只保存 break - 镜像"switch 是 break 目标不是 continue 目标").
     补测试: switch 里的 continue, statement expression 里的 break. 预期 ndiff 空.
-  - [ ] **B1.2b ND_DECL(可裁, 排在最后)**: 拆分 - 整形遍保留 VLA 声明的展开(尺寸槽必须先于
+  - [x] **B1.2b ND_DECL(可裁, 排在最后)**: 拆分 - 整形遍保留 VLA 声明的展开(尺寸槽必须先于
     `assign_lvar_offsets`)与 init 树的残留行走; `gen_stmt` 处理其余(static 跳过, 无初始化跳过,
     有初始化就地建 `lvar_init_comma` 并 `add_type` + `gen_expr`). 先探针 `shape_node` 的表达式
     位置 ND_DECL 分支是否可达. 预期 ndiff 空; 若拆分比预期绕或出现非空差异则跳过并记录理由
