@@ -198,7 +198,21 @@ void f(void) { char *t = "in f"; (void)t; }
 | 5812e79 | A8.3 | 复合字面量(验证提交, 无代码改动): 内容已在 A8.1 落地; 补两组块域/文件域探针 + docker 运行时断言("complit-a83 ok") + 全探针 A/B 逐字节, 四闸门全绿 raw 全空; 记录两个预存在限制(裸后缀 `.`/`[` 与 static 初始化) |
 | 5245cc3 | A9.2 | add_type 收尾核对: 34 case 逐项审计全为纯标注; 最后一处形状改写(文件域复合字面量→ND_VAR)修为保留 kind + eval 侧读 var; 契约 2 临时导出面为空; 红线 grep 全 0; raw 全空 |
 | fade478 | A10.1 | 归属清扫与文档: chibicc.h 8 处字段归属标注, sema.c/codegen.c 文件头重写(codegen 新增整形遍六不变量头注释), 库层无整形 grep 留档(A9.2 节), AGENTS.md static 清单/目标架构/现状段按终态更新; 纯文档, 闸门全绿 |
-| (本提交) | A10.2 | 针对性回归测试: 八文件补测(下标+op=+后缀自增 / 指针 elvis / 大结构体返回缓冲 / VLA 尺寸复用与 sizeof / generic / 位域与原子 op= / 全局初始化器缩放 / 声明后定义字符串 / 嵌套函数循环与 &&label); docker 运行时断言全过; 嵌套函数项触出并修复两个预存在缺陷(resolve/analyze 的 locals 与 sema_fn 未跨嵌套保存); 快照随语料重置, 编译器维度 A/B 中性 |
+| 4aa1615 | A10.2 | 针对性回归测试: 八文件补测(下标+op=+后缀自增 / 指针 elvis / 大结构体返回缓冲 / VLA 尺寸复用与 sizeof / generic / 位域与原子 op= / 全局初始化器缩放 / 声明后定义字符串 / 嵌套函数循环与 &&label); docker 运行时断言全过; 嵌套函数项触出并修复两个预存在缺陷(resolve/analyze 的 locals 与 sema_fn 未跨嵌套保存); 快照随语料重置, 编译器维度 A/B 中性 |
+
+| a350311 | A 终态验收 | `PLAN.md` 的终态验收段按阶段 A 终态实测填写(库层 / codegen / 闸门 / 对比锚点四节); 纯文档, 不跑 docker 闸门 |
+| cc93a23 | B0 | `PLAN.md` 阶段 B 段由草稿改写为可执行计划(B1.1a/b/c/e 与 B1.2a/b/B1.3 各带落点与预期 ndiff, 时序约束一节, 五处偏差), 闸门口径加"逐字节不变为默认"的收紧条; 纯文档 |
+| 5f52ef9 | B1.1a | 下标搬发射点: 删 `shape_node` 的 ND_SUBSCRIPT case, `gen_addr`/`gen_expr` 经 `new_add` 现建现发; 新建 `test/shape.sh`(109 行)并挂进 Makefile 的两个 test 目标; ndiff 空 |
+| 4e933d4 | B1.1b | 箭头成员搬发射点: `gen_addr` 按 `arrow_tok` 分流, `to_assign` 的成员分支按同一条标记取承载对象; struct.c 补九条; 语料维度重置(附本地 A/B 中性证明) |
+| b6bdc9f | B1.1c | `>`/`>=` 搬发射点: 二元发射尾部统一换序后进原比较路径(不复制三份比较逻辑); arith/float 补 22 处比较用例; 语料维度重置(附本地 A/B 中性证明) |
+| 66fd542 | B1.2a | while 与 break/continue 搬发射点: 删 kind 重写与两个 case, 发射侧环境标签栈(switch 只保存 break); control.c 补两条; 语料维度重置(附 A/B 中性证明) |
+| 4a7be6c | B1.1e | elvis 无槽发射: 删整形遍 `is_elvis` 分支, `gen_expr(ND_COND)` 无槽分支(long double 用 `fld %st(0)` 预复制); B 里唯一预期指令序列变化, 归因后同提交重置基线 |
+| 916f4b9 | B1.2b | 声明展开搬发射点(计划里的可裁项, 评估后做): 整形遍只留含 VLA 的记录, 其余由 `gen_stmt(ND_DECL)` 就地摊; 表达式位置分支经探针 0 命中证实为死码后删除; ndiff 空 |
+| 2892160 | B1.3 | 形状断言收口: `test/shape.sh` 23 段(want / wantline / absent 三原语), 覆盖 B 的全部发射面, 挂进两个 test 目标(自举两轮各跑一遍) |
+| b3fc224 | B 终态验收 | `PLAN.md` 终态段按阶段 B 终态填写, 本文件加"终态验收"节; 含"B 的八次提交对库层零改动"的 diff 实测; 纯文档 |
+| 87d6e73 | B2.0 | `PLAN.md` 增"阶段 B2"段(标记判别设计, 两方向选择的理由, 两个坏变体的反证, 逐字节要求, 无时序约束, B2.1/B2.2 落点与测试清单); 风险与对策增第 8 条; 纯文档 |
+| a8a97ae | B2.1 | 加法缩放进发射点: Node 的 `is_lowered` + `mark_lowered` 三工厂穷举标记, `gen_expr` 顶部替换式降级, 删 `shape_node` 的两个 case; 原子指针 op= 与嵌套 VLA 维度断言; 语料维度重置(ndiff 逐条归因后空) |
+| 60bdf89 | B2.2 | 终态验收: `PLAN.md`/`AGENTS.md` 按 B2 终态更新(残留清单去掉加法, 锚点与 shape.sh 33 段), 三处陈旧注释订正(arrow_tok / is_elvis / resolve_member); 逻辑零改动重跑闸门 |
 
 ## 各步详情
 
@@ -721,7 +735,7 @@ void f(void) { char *t = "in f"; (void)t; }
   (4 `.file` 伪影), 七目录全探针一致。行数: sema.c 2946 -> 2960, codegen.c 2524 零改动, chibicc.h
   807 零改动, parse.c 2148 零改动。
 
-### A10.2 针对性回归测试 (本提交)
+### A10.2 针对性回归测试 (4aa1615)
 
 - 改了什么: 计划清单逐项落测试(八文件), 另修复嵌套函数项触出的两个预存在缺陷。
   (1) **补测**(每项断言值经 docker 运行时验证): arith.c 增 `*(p ?: &a)` 与 `a[i] += j++`(下标 +
@@ -757,7 +771,7 @@ void f(void) { char *t = "in f"; (void)t; }
 末条. B 的核心设计决策: 每项 = 删整形遍的改写分支 + 发射点就地读忠实形状, **生成的指令序列
 逐字节保持**, 唯一预期变化是 elvis 的临时槽移除.
 
-### B0 计划细化 (本提交)
+### B0 计划细化 (cc93a23)
 
 - 改了什么: `PLAN.md` 阶段 B 段由草稿改写为可执行计划(B1.1a/B1.1b/B1.1c/B1.1e, B1.2a/B1.2b,
   B1.3, 各带落点与预期 ndiff; 时序约束一节; 五处偏差说明), 头部加阶段 B 开工注记, 闸门口径各加
@@ -767,7 +781,7 @@ void f(void) { char *t = "in f"; (void)t; }
 - 闸门: 纯文档提交, 不跑 docker 四闸门(无代码变化); 提交后推送 origin/main.
 - 偏差: 五处, 逐条记在 `PLAN.md` 的阶段 B 段末.
 
-### B1.1a ND_SUBSCRIPT (本提交)
+### B1.1a ND_SUBSCRIPT (5f52ef9)
 
 - 改了什么: `shape_node` 的 `ND_SUBSCRIPT` case(经 `new_add` 把 `x[y]` 改写成 `*(x+y)` 的
   12 行)删除; `gen_addr` 新增 `ND_SUBSCRIPT` case(经 `new_add` 建已定型节点后立即 `gen_expr`),
@@ -788,7 +802,7 @@ void f(void) { char *t = "in f"; (void)t; }
   `imul imul add add`, 已改正; 属断言笔误, 非编译器偏差.) 行数: codegen.c 2556 -> 2563
   (+19/-12), `test/shape.sh` 新增 109 行, Makefile +2 行.
 
-### B1.1b ND_MEMBER(arrow) (本提交)
+### B1.1b ND_MEMBER(arrow) (4e933d4)
 
 - 改了什么: `shape_node` 的 `ND_MEMBER` case 删除(它往最内层 link 补 DEREF 并清 `arrow_tok`);
   `gen_addr` 的 `ND_MEMBER` 按 `arrow_tok` 选落点(箭头: `gen_expr`(指针值); 点: `gen_addr`);
@@ -814,7 +828,7 @@ void f(void) { char *t = "in f"; (void)t; }
   `(*p).x`)上做了同样对照. 行数: codegen.c 2563 -> 2566, `test/shape.sh` 109 -> 141,
   `test/struct.c` +14.
 
-### B1.1c ND_GT/ND_GE (本提交)
+### B1.1c ND_GT/ND_GE (b6bdc9f)
 
 - 改了什么: `shape_node` 的 `ND_GT`/`ND_GE` case 删除(交换操作数 + kind 降级为 LT/LE);
   `gen_expr` 的二元发射尾部在类型分派之前接住这两个 kind: 用一个**当次发射才建、随即丢弃**的
@@ -841,7 +855,7 @@ void f(void) { char *t = "in f"; (void)t; }
   编译器输出逐字节一致. 行数: codegen.c 2566 -> 2569, `test/shape.sh` 141 -> 175,
   `test/arith.c` +17, `test/float.c` +12.
 
-### B1.2a ND_WHILE + ND_BREAK/ND_CONTINUE (本提交)
+### B1.2a ND_WHILE + ND_BREAK/ND_CONTINUE (66fd542)
 
 - 改了什么: 整形遍删掉 `while` 到 `for` 的 kind 重写、`ND_BREAK`/`ND_CONTINUE` 两个 case(它们把
   标签绑进 `unique_label` 并把 kind 改成 `ND_GOTO`), 以及 `brk_label`/`cont_label` 两个环境
@@ -868,7 +882,7 @@ void f(void) { char *t = "in f"; (void)t; }
   嵌套 switch)在改动前后两个编译器上输出逐字节一致, 且同一份新 `test/control.c` 亦然. 行数:
   codegen.c 2569 -> 2611, `test/shape.sh` 175 -> 213, `test/control.c` +6.
 
-### B1.1e elvis 无槽发射 (本提交)
+### B1.1e elvis 无槽发射 (4a7be6c)
 
 - 改了什么: 整形遍删掉 `ND_COND` 的 `is_elvis` 分支(建临时槽 + 改写成
   `tmp = a, tmp ? tmp : b` + 摘字段防重入的 34 行); `gen_expr(ND_COND)` 新增 `is_elvis` 分支:
@@ -895,7 +909,7 @@ void f(void) { char *t = "in f"; (void)t; }
   long double/unsigned/int→long/指针/char/short)的差异全部为槽机器与偏移重排. 行数:
   codegen.c 2611 -> 2612, `test/shape.sh` 213 -> 231, `test/arith.c` +15.
 
-### B1.2b ND_DECL (本提交; 计划里的可裁项, 评估后做)
+### B1.2b ND_DECL (916f4b9; 计划里的可裁项, 评估后做)
 
 - 改了什么: 声明记录的展开拆成两半. 整形遍只保留"类型里含 VLA"的记录(`decl_needs_vla_size`:
   运行时尺寸槽必须先于 `assign_lvar_offsets`, 也覆盖"指向 VLA 的指针 + 初始化器"这类记录),
@@ -919,7 +933,7 @@ void f(void) { char *t = "in f"; (void)t; }
   (报 implicit declaration), 修正后重建; 首轮 A/B 又跑在构建失败留下的旧二进制上, 按 B1.2a 的
   教训改为先断言构建成功. 行数: codegen.c 2612 -> 2649 (+56/-19), `test/shape.sh` 231 -> 241.
 
-### B1.3 形状断言收口 (本提交)
+### B1.3 形状断言收口 (2892160)
 
 - 改了什么: `test/shape.sh` 收口为 23 段断言(每段一个片段 + 1..3 条断言), 覆盖阶段 B 的全部
   发射面: b11a 下标 5 段 / b11b 成员 4 段 / b11c 比较 5 段 / b11d(A9.1 已直读的字符串 / sizeof /
@@ -934,7 +948,7 @@ void f(void) { char *t = "in f"; (void)t; }
   的结论(同一 codegen.c: ndiff 空 / tinycc rc=0), 未复跑. 行数: `test/shape.sh` 241 -> 268.
 - 偏差: 无.
 
-### 终态验收 (本提交)
+### 终态验收 (b3fc224)
 
 阶段 A + 阶段 B 完成后的逐项实测; 本提交是文档提交(只动 `PLAN.md` / `AGENTS.md` / 本文件), 不跑
 docker 闸门, 结论引用最近一次代码提交(B1.2b/B1.3)的闸门记录.
@@ -964,7 +978,7 @@ docker 闸门, 结论引用最近一次代码提交(B1.2b/B1.3)的闸门记录.
 `gen_expr` 顶部把未标记的加减节点替换成 `new_add`/`new_sub` 的产物现建现发; 指令序列与 `.loc`
 布局逐字节不变.
 
-### B2.0 计划细化 (本提交)
+### B2.0 计划细化 (87d6e73)
 
 - 改了什么: `PLAN.md` 增"阶段 B2"段(目标, 判别障碍, 标记字段设计, 两方向选择的理由, 逐字节要求,
   无时序约束, B2.1/B2.2 的落点与测试清单, 不做项), 头部注记本线的最后一项已拍板并完成, 开放决策
@@ -977,7 +991,7 @@ docker 闸门, 结论引用最近一次代码提交(B1.2b/B1.3)的闸门记录.
   实测后回填的; 实施与闸门记录见 B2.1/B2.2.
 - 偏差: 无.
 
-### B2.1 加法的缩放进发射点 (本提交)
+### B2.1 加法的缩放进发射点 (a8a97ae)
 
 - 改了什么: `chibicc.h` 的 Node 增字段 `bool is_lowered`(归属: 三个降级工厂写, 发射点读); `codegen.c`
   增 `mark_lowered` 助手, `new_add`(两个返回点)/`new_sub`(三个返回点与 ptr-ptr 情形里 `DIV` 之下的
@@ -1020,7 +1034,7 @@ docker 闸门, 结论引用最近一次代码提交(B1.2b/B1.3)的闸门记录.
   codegen.c 2649 -> 2677(+55/-27), chibicc.h 821 -> 830(+9), `test/shape.sh` 268 -> 340,
   `test/atomic.c` +7, `test/vla.c` +7, `PLAN.md` +11(偏差条).
 
-### B2.2 终态验收 (本提交)
+### B2.2 终态验收 (60bdf89)
 
 本线(B2 之后)的最后一项收口; 本提交是文档与注释提交, 编译器逻辑零改动, 闸门重跑记录如下.
 

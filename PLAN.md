@@ -409,7 +409,7 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
 分配继续留整形遍, 编号不变; 初始化器表达式与 VLA 维度不在自然路径上, 整形遍仍须显式到达(它们
 可能含残留项), `shape_init_exprs` 保留但职责从"降级"改为"到达".
 
-- [ ] **B1.1 发射点直读(表达式层)**
+- [x] **B1.1 发射点直读(表达式层)**
   - [x] **B1.1a ND_SUBSCRIPT**: 删 `shape_node` 的 case; `gen_addr` 加 case(经 `new_add` 建
     已定型节点后立即 `gen_expr` 它); `gen_expr` 加 case(`gen_addr` + `load`). 补测试:
     `p[i] += 1`(op= 经 `ADDR(SUBSCRIPT)` 走新落点)与 VLA 下标. 预期 ndiff 空.
@@ -436,7 +436,7 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
     ND_GENERIC(`gen_expr` 读 `generic_sel`; 整形遍的 case 是往选中子树里的遍历, 保留).
   - **不做**(写明理由, 归 B2 候选): ND_ADD/ND_SUB 的缩放 - faithful 与降级后的 kind 相同, 发射点
     无法区分"待降级"与"已降级", 需要标记字段或重构二元发射路径, 且零 .s 收益.
-- [ ] **B1.2 发射点直读(语句层)**
+- [x] **B1.2 发射点直读(语句层)**
   - [x] **B1.2a ND_WHILE + ND_BREAK/ND_CONTINUE**: 删 `kind = ND_FOR` 的重写与 break/continue 两个
     case, 删整形遍的 `brk_label`/`cont_label` 环境 static; `gen_stmt` 加 `ND_WHILE` case(与今日
     FOR 无 init/inc 的发射逐字节相同)与 `ND_BREAK`/`ND_CONTINUE` case + 发射侧环境 static(循环
@@ -607,7 +607,7 @@ sema.c 里三处描述 B1.1b/B1.1e 机制的陈旧注释订正(纯注释, 无逻
   (编译器维度由本地 A/B 证明中性: B2.1 是 41 文件里 40 个逐字节一致, vla.s 的 24 行差异逐条归因),
   B1.1a/B1.2b 两步 ndiff 为空无需重置; 形状断言 `test/shape.sh` 33 段挂进
   `make test`/`test-stage2`, 随各步增量添加(B1.3 建, B2.1 补十段).
-- **对比锚点(实测)**: parse.c 2148 / sema.c 2991 / chibicc.h 830 / codegen.c 2677
-  (起始 2148 / 3145 / 704 / 1595; sema 净 -154, codegen 净 +1082, chibicc.h +126
+- **对比锚点(实测)**: parse.c 2148 / sema.c 2992 / chibicc.h 832 / codegen.c 2677
+  (起始 2148 / 3145 / 704 / 1595; sema 净 -153, codegen 净 +1082, chibicc.h +128
   - 阶段 A 的账目见 RESULT.md 各步, 阶段 B 与 B2 的账目见各自各步), 另新增 `test/shape.sh` 340 行,
   测试语料净增约 80 行(B 与 B2 各步).
