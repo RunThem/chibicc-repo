@@ -34,7 +34,7 @@
 
 语法语义拆分线(阶段 3 + 4)已细化为 22 步可勾选执行清单并**全部完成**(终态: parse.c 2531 行纯语法 + sema.c 1552 行, codegen.c 零改动; 计划与执行记录已归档为 `PLAN-split.md` / `RESULT-split.md`). 其后的忠实层收尾线(阀门口径放宽)同样**已全部完成** - 解除字节冻结造成的忠实层偏差后, parse.c 的表达式层达到"无类型标注, 无名字绑定, 无常量求值"的第 3 层形态(终态: parse.c 2148 行 + sema.c 3145 行 + chibicc.h 704 行; codegen.c 相对 5f53ed0 零改动; 计划与执行记录已归档为 `PLAN-faithful.md` / `RESULT-faithful.md`).
 
-**现行线: codegen 直连 sema 产物(取消 sema 降级)** - **阶段 A 已全部完成**(A0.1-A10.2, 计划 `PLAN.md`, 执行记录 `RESULT.md`): codegen 直接消费第 4 层的标注树, sema 不再做任何"为发射服务的整形", `add_type` 经 A9.2 逐 case 审计为纯标注遍; 第 4 层的边界按"语义结论归库层, 发射便利与临时槽归消费者"重划(判据见 `PLAN.md`), 上面第 1-5 条即终态。阶段 B(把"只需换发射方式"的整形项从整形遍搬进发射点, B1.1-B1.3)待用户拍板; 其后的 CST/trivia(阶段 1-2)与库化(阶段 5)的先后亦待拍板.
+**现行线: codegen 直连 sema 产物(取消 sema 降级)** - **阶段 A 与阶段 B 均已全部完成**(A0.1-A10.2 与 B0-B1.3, 计划 `PLAN.md`, 执行记录 `RESULT.md`): codegen 直接消费第 4 层的标注树, sema 不再做任何"为发射服务的整形", `add_type` 经 A9.2 逐 case 审计为纯标注遍; 第 4 层的边界按"语义结论归库层, 发射便利与临时槽归消费者"重划(判据见 `PLAN.md`), 上面第 1-5 条即终态. 阶段 B 把"只需换发射方式"的整形项(下标, 箭头成员, `>`/`>=`, elvis, `while`, break/continue, 声明展开)从整形遍搬进了发射点, 且除 elvis 的临时槽移除外指令序列逐字节不变; 整形遍的残留 = 需要槽/语句/标签的项(op= 与自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配, 记录摘除, ND_ADD/ND_SUB 的缩放). 其后:B2 候选(ND_ADD/ND_SUB, 见 `PLAN.md` 阶段 B 段)与 CST/trivia(阶段 1-2)、库化(阶段 5)的先后待用户拍板.
 
 每个阶段完成时三道闸门必须全绿: `make docker-test`(含自举), 汇编等价性 diff(阶段 0 建立), 该阶段新增的针对性测试. 阶段内行为不允许变化, 变化只发生在阶段边界并单独提交.
 
@@ -55,7 +55,7 @@
 ## 构建与测试
 
 - `make` - 构建 `chibicc` 二进制(纯 C11, 无外部依赖; CFLAGS 定义在 Makefile 中).
-- `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 最后运行 `test/driver.sh ./chibicc`(命令行选项检查).
+- `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 最后依次运行 `test/driver.sh ./chibicc`(命令行选项检查)、`test/diagnostic.sh ./chibicc`(诊断锁定 55 例逐字节)与 `test/shape.sh ./chibicc`(发射形状回归锁 23 段).
 - `make test-stage2` - 自举检查: 用 chibicc 编译它自己, 再重跑全部测试.
 - `make test-all` - 以上两项合计. `make clean` 用于清理.
 - 单独运行某个特性测试: `make test/sizeof.exe && ./test/sizeof.exe`(模式规则会自动处理).
@@ -77,7 +77,7 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 
 ## 现状与代码地图
 
-现状: 语法语义拆分线、忠实层收尾线与 codegen 直连线(阶段 A)均已完成 - 第 3 层(忠实语法 AST)与第 4 层(sema 产物)在 parse.c / sema.c 之间分开; sema.c 持有名字解析(作用域表)、类型检查、常量求值、结构体布局与结论记录, **不做任何降级**(A9.2 审计: add_type 34 个 case 全部纯标注, 无形状改写); 全部后端整形(下标/成员/算术缩放/复合赋值/自增自减/调用/字符串与 VLA 尺寸/声明与初始化器展开/标签与语句重排)在 codegen.c 的整形遍(契约 3 的六条不变量, 见该文件头注释); parse.c 只建忠实语法形状(表达式无类型, 名字不绑定, 常量不求值), 保留文法分类 oracle(typedef 名 / tag)与判定表 A 的 15 处文法可判诊断. 改动前先了解现状:
+现状: 语法语义拆分线、忠实层收尾线与 codegen 直连线(阶段 A + 阶段 B)均已完成 - 第 3 层(忠实语法 AST)与第 4 层(sema 产物)在 parse.c / sema.c 之间分开; sema.c 持有名字解析(作用域表)、类型检查、常量求值、结构体布局与结论记录, **不做任何降级**(A9.2 审计: add_type 34 个 case 全部纯标注, 无形状改写); codegen 直接消费标注树 - 需要后端整形的项分两处落地: 只需换发射方式的(`x[y]`, `p->x`, `>`/`>=`, elvis, `while`, break/continue, 声明初始化链)在**发射点就地处理**, 需要槽/语句/标签的(op=, 自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配)留在整形遍(契约 3 的六条不变量, 见该文件头注释); parse.c 只建忠实语法形状(表达式无类型, 名字不绑定, 常量不求值), 保留文法分类 oracle(typedef 名 / tag)与判定表 A 的 15 处文法可判诊断. 改动前先了解现状:
 
 - `chibicc.h` - 所有共享类型(`Token`, `Obj`, `Node`, `Type`, `Member`, `VarAttr`)与跨文件声明; 未来在此拆分公共头与内部头.
 - `tokenize.c` - 词法; 当前丢弃注释与空白(阶段 1 的改造对象).
@@ -85,7 +85,7 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 - `parse.c` - 递归下降解析器(2148 行), 只做语法分析与忠实建树: 声明产出记录节点(ND_DECL / ND_GVAR_DECL / ND_FUNCDEF / ND_TYPEDEF / ND_ENUM_CONST)交 sema 消费, 待补全的类型记录(数组维度 / typeof 操作数 / 对齐 / 位宽)挂在类型或节点上留给 sema. 唯一的语义反馈是文法必需的 typedef/tag 分类 oracle(本文件唯一的文件域 static). 诊断只剩 RESULT-split.md 判定表 A 的 15 处文法可判项(B/C/D 已清空, 见 RESULT.md 的 R4.2); parse 不在构造现场调用任何降级(旧的时序原则已废止).
 - `sema.c` - 语义分析(2968 行), 每个函数体两趟(见文件头注释): resolve 遍历重建作用域并绑名、声明对象、补全类型(维度 / typeof / 对齐 / 位宽 / case 值)与布局; 标注遍历(`add_type`/`type_chain`)定型、插隐式 cast、跑检查、写结论(物化字符串/复合字面量/块域 static 数据镜像), 不改写树形状. 控制流四检查与 goto/label 配对检查随后跑(纯检查, 不分配名字); 标签与唯一名分配在 codegen. 常量求值(`eval`/`eval2`/`eval_double`/`is_const_expr`/`const_expr`)与全局初始化器序列化(`write_gvar_data`)也在这一侧, 预处理器 `#if` 经 `const_expr` 调用. 全部语义 static 状态在此.
 - `type.c` - 类型构造器与类型谓词(`is_compatible`/`is_integer` 等).
-- `codegen.c` - 整形遍 + AST 翻译成 x86-64 汇编文本, 无优化 pass. 整形遍在 `codegen()` 入口先于一切赋值与发射运行(契约 3 的六条不变量见文件头注释): 控制流标签分配与 while/break/continue 形状, 声明记录展开(0..n 条语句)与初始化器链, 全部表达式改写(下标/成员/复合赋值/自增自减/算术缩放/比较/调用返回缓冲/字符串地址/结论类/泛型/elvis/VLA 尺寸), 以及自建的临时槽(帧布局在整形遍之后分配). 该线的每一步与验证见 `PLAN.md` / `RESULT.md`.
+- `codegen.c` - 整形遍(残留) + 发射点就地降级 + AST 翻译成 x86-64 汇编文本, 无优化 pass. 整形遍在 `codegen()` 入口先于一切赋值与发射运行(契约 3 的六条不变量见文件头注释), 只剩需要槽/语句/标签的项: 控制流标签分配(case 链与 goto/label 配对), **VLA 声明**的展开(运行时尺寸槽必须先于帧布局)与其余记录的**残留项到达**(`shape_init_exprs` 只走不再改), 复合赋值与自增自减, `ND_ADD`/`ND_SUB` 的缩放, 调用返回缓冲, 复合字面量; 发射点就地处理的是下标(`gen_addr`/`gen_expr` 经 `new_add` 现建现发), 箭头成员(`gen_addr` 按 `arrow_tok`), `>`/`>=`(二元尾部换序), elvis(`gen_expr(ND_COND)` 无槽), `while` 与 break/continue(`gen_stmt` + 发射侧环境标签栈), 声明初始化链(`gen_stmt(ND_DECL)` 就地摊). 该线(阶段 A + B)的每一步与验证见 `PLAN.md` / `RESULT.md`.
 - `main.c` - 驱动器; `hashmap.c`(字符串驻留哈希表), `unicode.c`(UTF 编码表), `strings.c`(字符串辅助)为基础设施.
 
 本节的代码地图描述"codegen 直连 sema 产物"线开工前的现状(sema 侧仍含降级); 该线终态时重写.
@@ -101,4 +101,5 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 
 - 每个特性对应一个 `test/<feature>.c`; 测试使用 `test/test.h` 中的 `ASSERT(expected, expr)`(打印表达式与结果, 失败即退出), 并链接 `test/common` 以获得 `assert()` 辅助函数与共享符号. 新测试加到对应的特性文件里; 仅在必要时才扩展 `test/test.h`/`test/common`.
 - 库化新增的测试形态: CST 用逐字节 round-trip 测试; 忠实 AST 用打印/结构断言; 阶段改造期间用汇编快照 diff 防行为回归.
+- `test/diagnostic.sh` 逐字节锁定诊断文案与插入符锚点(55 例); `test/shape.sh` 锁定发射形状(23 段: 每个片段用 `$chibicc -S` 汇编后断言助记符序列 `want` / 整行正则 `wantline` / 不得出现的形 `absent`). 两者都由 `make test` 与 `make test-stage2` 调用, 即自举出的编译器也要过一遍; 改 codegen 的发射形时必须同步更新 shape.sh 的对应片段.
 - `test/thirdparty/*.sh` 用 chibicc 构建真实项目(git, sqlite, libpng, cpython, tinycc) - 很慢, 仅限 Linux, 不属于 `make test`.

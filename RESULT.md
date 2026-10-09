@@ -934,6 +934,29 @@ void f(void) { char *t = "in f"; (void)t; }
   的结论(同一 codegen.c: ndiff 空 / tinycc rc=0), 未复跑. 行数: `test/shape.sh` 241 -> 268.
 - 偏差: 无.
 
+### 终态验收 (本提交)
+
+阶段 A + 阶段 B 完成后的逐项实测; 本提交是文档提交(只动 `PLAN.md` / `AGENTS.md` / 本文件), 不跑
+docker 闸门, 结论引用最近一次代码提交(B1.2b/B1.3)的闸门记录.
+
+- **库层**: [完成] `git diff a350311..HEAD -- parse.c sema.c type.c chibicc.h` **为空** - B 的八次
+  提交对库层零改动; `add_type` 仍是 A9.2 审计过的纯标注遍.
+- **codegen**: [完成] 整形遍的残留 = 需要槽/语句/标签的项(op= 与自增自减, VLA 声明展开与
+  sizeof-VLA, 返回缓冲, 复合字面量, case 链与标签分配, 记录摘除, `ND_ADD`/`ND_SUB` 缩放)加一个
+  只到达不改写的行走器(`shape_init_exprs`); 发射点就地处理: 下标, 箭头成员, `>`/`>=`, elvis,
+  `while`, break/continue, 声明初始化链. 除 elvis 的临时槽移除外, 全部 B 项的指令序列逐字节不变.
+  代价账目: codegen.c 净 +220/-127(注释与结构重排占多数), 库层 0.
+- **闸门**: [完成] B 的八步各自四闸门全绿记录见上; 容器内 `shape lock` 由 stage1 与 stage2 各跑
+  一轮(23 段); 四次语料维度重置(B1.1b/B1.1c/B1.2a/B1.1e)都附"同一份新语料, 新旧编译器输出逐字节
+  一致"的本地 A/B 中性证明; tinycc 每步 rc=0; B1.1a/B1.2b 两步 ndiff 为空无需重置.
+- **测试面**: [完成] 语料补 42 条断言(arith 无符号与长双精度比较、float 的 `>`/`>=`、struct 的
+  成员 op=/inc-dec 各形态、arith 的 elvis 类型覆盖、control 的 switch 内 continue); 新增
+  `test/shape.sh` 268 行 23 段形状断言, 挂进两个 test 目标.
+- **对比锚点(实测)**: parse.c 2148 / sema.c 2991 / chibicc.h 821 / codegen.c 2649
+  (阶段 A 终态是 2148 / 2991 / 821 / 2556); 阶段 B 的整线 diff 为 9 文件 +818/-140.
+- **未做与候选**: B2 候选 ND_ADD/ND_SUB 的缩放(理由见 `PLAN.md` 阶段 B 段); CST/trivia(阶段 1-2)
+  与库化(阶段 5)的先后待用户拍板.
+
 ## 给审核者的提示
 
 - 审核重心: sema 的 `add_type`(每次提交都应少掉若干"改写树形状"的 case, 且剩下的 case 只填
