@@ -841,6 +841,33 @@ void f(void) { char *t = "in f"; (void)t; }
   编译器输出逐字节一致. 行数: codegen.c 2566 -> 2569, `test/shape.sh` 141 -> 175,
   `test/arith.c` +17, `test/float.c` +12.
 
+### B1.2a ND_WHILE + ND_BREAK/ND_CONTINUE (本提交)
+
+- 改了什么: 整形遍删掉 `while` 到 `for` 的 kind 重写、`ND_BREAK`/`ND_CONTINUE` 两个 case(它们把
+  标签绑进 `unique_label` 并把 kind 改成 `ND_GOTO`), 以及 `brk_label`/`cont_label` 两个环境
+  static 与循环/switch case 里的存取; **标签分配仍在整形遍**(前序位置不变, `.L..N` 编号不变,
+  `emit_data` 之前的时序不变). 发射侧: `gen_stmt` 新增 `ND_WHILE` case(无 init/inc 的循环形, 与
+  旧降级逐字节相同)与 `ND_BREAK`/`ND_CONTINUE` case, 并新增发射侧环境 static
+  `cur_brk_label`/`cur_cont_label`, 在 `ND_WHILE`/`ND_FOR`/`ND_DO` 保存/恢复两者, `ND_SWITCH`
+  **只保存 break**(镜像"switch 是 break 目标, 不是 continue 目标"). parse/sema/type/chibicc.h
+  零改动.
+- 为什么: break/continue 的绑定从"整形遍按前序把标签写进节点"改为"发射时按环境栈解析", 循环体里
+  的语句与表达式都不再被改写. 与 step 内的一次返工: 首版给 `ND_SWITCH` case 加了 `{` 却没加闭合
+  `}`, 构建报错; 且当时的 A/B 命令在构建失败后仍跑在旧二进制上给出"一致"(假通过) - 修好后重跑
+  才作数, 记此以免后续步骤重蹈(教训: 闸门命令必须先断言构建成功).
+- 闸门: 四闸门全绿. docker-test rc=0(诊断 55 例逐字节 ×2, 含自举; 新增 control.c 两条全过);
+  tinycc rc=0; 形状断言 17 段(新增 3 段: while 的循环形与标签落位 / break 与 continue 各跳本循环
+  的 brk=`.L..2` 与 cont=`.L..3` / switch 里 continue 越出到循环 cont 而 break 落在 switch 自己的
+  brk); ndiff 见偏差 - 语料维度重置后**空**.
+- 覆盖: `test/control.c` 补两条(switch 里的 continue 到循环、switch 里的 break 留在 switch);
+  statement expression 里的 break/continue 与嵌套 switch 原有 110-111、105-106 覆盖.
+- 偏差: 无编译器偏差. 快照基线随语料重置(同 B1.1b/B1.1c 先例): ndiff 唯一变化文件是 `control.s`
+  (改动的语料文件), 逐行归一化后**基线侧没有任何形状消失**, 新增侧只有数据指令; **编译器维度
+  中性另有本地 A/B 直证** - 十个探针(while / 带 break / 带 continue / do-while / for /
+  switch 里的 break 与 continue / statement expression 里的 break / 嵌套循环 / 带标签的循环 /
+  嵌套 switch)在改动前后两个编译器上输出逐字节一致, 且同一份新 `test/control.c` 亦然. 行数:
+  codegen.c 2569 -> 2611, `test/shape.sh` 175 -> 213, `test/control.c` +6.
+
 ## 给审核者的提示
 
 - 审核重心: sema 的 `add_type`(每次提交都应少掉若干"改写树形状"的 case, 且剩下的 case 只填

@@ -40,6 +40,14 @@ static char *argreg32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
 static char *argreg64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
 static Obj *current_fn;
 
+// The innermost enclosing loop's break and continue labels while a
+// body is being emitted (PLAN B1.2a): a break or a continue resolves
+// against them here, where the shaping pass used to bind the label
+// into the node. A switch saves the break label only - it is a break
+// target but not a continue target.
+static char *cur_brk_label;
+static char *cur_cont_label;
+
 static void gen_expr(Node *node);
 static void gen_stmt(Node *node);
 static Node *new_add(Node *lhs, Node *rhs, Token *tok);
@@ -1307,8 +1315,37 @@ static void gen_stmt(Node *node) {
     println(".L.end.%d:", c);
     return;
   }
+  case ND_WHILE: {
+    // The faithful loop (PLAN B1.2a): the emission is the one the old
+    // `while`-to-`for` rewrite produced - no init, no increment, so
+    // the continue label sits on the closing jump - with this loop's
+    // labels in force for the body.
+    int c = count();
+    char *brk = cur_brk_label;
+    char *cont = cur_cont_label;
+    cur_brk_label = node->brk_label;
+    cur_cont_label = node->cont_label;
+
+    println(".L.begin.%d:", c);
+    gen_expr(node->cond);
+    cmp_zero(node->cond->ty);
+    println("  je %s", node->brk_label);
+    gen_stmt(node->then);
+    println("%s:", node->cont_label);
+    println("  jmp .L.begin.%d", c);
+    println("%s:", node->brk_label);
+
+    cur_brk_label = brk;
+    cur_cont_label = cont;
+    return;
+  }
   case ND_FOR: {
     int c = count();
+    char *brk = cur_brk_label;
+    char *cont = cur_cont_label;
+    cur_brk_label = node->brk_label;
+    cur_cont_label = node->cont_label;
+
     if (node->init)
       gen_stmt(node->init);
     println(".L.begin.%d:", c);
@@ -1323,10 +1360,18 @@ static void gen_stmt(Node *node) {
       gen_expr(node->inc);
     println("  jmp .L.begin.%d", c);
     println("%s:", node->brk_label);
+
+    cur_brk_label = brk;
+    cur_cont_label = cont;
     return;
   }
   case ND_DO: {
     int c = count();
+    char *brk = cur_brk_label;
+    char *cont = cur_cont_label;
+    cur_brk_label = node->brk_label;
+    cur_cont_label = node->cont_label;
+
     println(".L.begin.%d:", c);
     gen_stmt(node->then);
     println("%s:", node->cont_label);
@@ -1334,9 +1379,18 @@ static void gen_stmt(Node *node) {
     cmp_zero(node->cond->ty);
     println("  jne .L.begin.%d", c);
     println("%s:", node->brk_label);
+
+    cur_brk_label = brk;
+    cur_cont_label = cont;
     return;
   }
-  case ND_SWITCH:
+  case ND_SWITCH: {
+    // A switch owns a break target but not a continue target (PLAN
+    // B1.2a): the continue label of an enclosing loop stays in force
+    // in the body.
+    char *brk = cur_brk_label;
+    cur_brk_label = node->brk_label;
+
     gen_expr(node->cond);
 
     for (Node *n = node->case_next; n; n = n->case_next) {
@@ -1362,7 +1416,10 @@ static void gen_stmt(Node *node) {
     println("  jmp %s", node->brk_label);
     gen_stmt(node->then);
     println("%s:", node->brk_label);
+
+    cur_brk_label = brk;
     return;
+  }
   case ND_CASE:
     println("%s:", node->label);
     gen_stmt(node->lhs);
@@ -1370,6 +1427,15 @@ static void gen_stmt(Node *node) {
   case ND_BLOCK:
     for (Node *n = node->body; n; n = n->next)
       gen_stmt(n);
+    return;
+  case ND_BREAK:
+    // Resolved against the innermost loop or switch at emission time
+    // (PLAN B1.2a); sema's check already rejected a stray one.
+    println("  jmp %s", cur_brk_label);
+    return;
+  case ND_CONTINUE:
+    // The innermost loop, whatever switch may lie in between.
+    println("  jmp %s", cur_cont_label);
     return;
   case ND_GOTO:
     println("  jmp %s", node->unique_label);
@@ -1439,8 +1505,6 @@ static void gen_stmt(Node *node) {
 static int label_base;  // the counter's stopping point, taken once
 static int label_seq;   // labels handed out since then
 
-static char *brk_label;
-static char *cont_label;
 static Node *current_switch;
 static Node *cg_labels;  // the labels of the function being shaped
 
@@ -1985,8 +2049,10 @@ static Node *new_inc_dec(Node *node, Token *tok, int addend) {
 }
 
 // The descent is pre-order: a loop or a switch owns its labels before
-// its body is visited, which is what binds a break in that body to the
-// innermost enclosing one.
+// its body is visited. The labels are stored on the node and the
+// emitter resolves a break or a continue against the innermost one at
+// emission time (PLAN B1.2a); the descent here only makes sure every
+// loop has them.
 static void shape_node(Node *node) {
   if (!node)
     return;
@@ -1998,18 +2064,7 @@ static void shape_node(Node *node) {
     node->brk_label = new_label();
     node->cont_label = new_label();
 
-    char *brk = brk_label;
-    char *cont = cont_label;
-    brk_label = node->brk_label;
-    cont_label = node->cont_label;
     shape_children(node);
-    brk_label = brk;
-    cont_label = cont;
-
-    // Lower the faithful `while` to the ND_FOR shape gen_stmt
-    // understands: no init/inc, so cont_label jumps to the loop top.
-    if (node->kind == ND_WHILE)
-      node->kind = ND_FOR;
 
     // gen_stmt's `for` has a single-statement init slot, so an init
     // chain the expansion left with more than one statement - or none
@@ -2028,15 +2083,10 @@ static void shape_node(Node *node) {
   case ND_SWITCH: {
     node->brk_label = new_label();
 
-    // A switch is a break target but not a continue target, so the
-    // continue label of an enclosing loop stays in force in the body.
     Node *sw = current_switch;
-    char *brk = brk_label;
     current_switch = node;
-    brk_label = node->brk_label;
     shape_children(node);
     current_switch = sw;
-    brk_label = brk;
     return;
   }
   case ND_CASE:
@@ -2053,14 +2103,6 @@ static void shape_node(Node *node) {
       node->case_next = current_switch->case_next;
       current_switch->case_next = node;
     }
-    return;
-  case ND_BREAK:
-    node->unique_label = brk_label;
-    node->kind = ND_GOTO;
-    return;
-  case ND_CONTINUE:
-    node->unique_label = cont_label;
-    node->kind = ND_GOTO;
     return;
   case ND_GOTO:
     // Resolved with the function's collected references below, not

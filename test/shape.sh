@@ -37,6 +37,13 @@ absent() {
     echo "$name A $1" >> "$tmp/checks"
 }
 
+# wantline <name> <regex>: 断言 .s 里有一行匹配该正则(用于标号与跳转目标这类
+# 不在行首的信息).
+wantline() {
+    name=$1; shift
+    echo "$name L $1" >> "$tmp/checks"
+}
+
 # ---- B1.1a ND_SUBSCRIPT: `x[y]` 在发射点建缩放和, 不经中间树形 ----------------
 # 读: 下标先按元素大小缩放(imul), 再加到基址(add); 无辅助调用.
 snippet b11a_subscript_read <<'SNIP'
@@ -136,6 +143,32 @@ int f(long double a, long double b) { return a > b; }
 SNIP
 want b11c_gt_ldouble fcomip seta
 
+# ---- B1.2a ND_WHILE + ND_BREAK/ND_CONTINUE: 循环形与标签绑定在发射点 -------
+# while 的形: begin 标号 + 条件 je 到 brk + 结尾 jmp 回 begin, cont 标号落在
+# 收尾跳转之前 - 与旧的 `while` 降级成 `for` 的发射逐字节相同.
+snippet b12a_while <<'SNIP'
+int f(int n) { int s = 0; while (n) { s += n; n--; } return s; }
+SNIP
+want b12a_while je jmp
+wantline b12a_while '^  je \.L\.\.2$'
+wantline b12a_while '^  jmp \.L\.begin\.1$'
+wantline b12a_while '^\.L\.\.3:$'
+
+# break 与 continue 各自跳到本循环的两个标号(该形里 2 = brk, 3 = cont).
+snippet b12a_break_continue <<'SNIP'
+int f(int n) { while (n) { if (n == 3) break; n--; if (n > 5) continue; } return n; }
+SNIP
+wantline b12a_break_continue '^  jmp \.L\.\.2$'
+wantline b12a_break_continue '^  jmp \.L\.\.3$'
+
+# switch 只占 break 目标: 它里面的 continue 跳到循环的 cont(3), 它里面的
+# break 跳到 switch 自己的 brk(4).
+snippet b12a_switch_continue <<'SNIP'
+int f(int n) { while (n) { switch (n) { case 2: continue; case 3: break; } n--; } return n; }
+SNIP
+wantline b12a_switch_continue '^  jmp \.L\.\.3$'
+wantline b12a_switch_continue '^  jmp \.L\.\.4$'
+
 # ---- 汇总 ----------------------------------------------------------------
 fail=""
 count=0
@@ -158,9 +191,14 @@ for n in $names; do
                 echo "shape $n ... FAILED (missing sequence: $arg)"
                 ok="n"
             fi
-        else
+        elif [ "$kind" = "A" ]; then
             if grep -qE "$arg" "$tmp/$n.s"; then
                 echo "shape $n ... FAILED (unexpected: $arg)"
+                ok="n"
+            fi
+        else
+            if ! grep -qE "$arg" "$tmp/$n.s"; then
+                echo "shape $n ... FAILED (missing line: $arg)"
                 ok="n"
             fi
         fi

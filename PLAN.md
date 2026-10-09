@@ -436,7 +436,7 @@ A8.1 -> A8.2 -> A8.3 -> A9.2 -> A10.1 -> A10.2.
   - **不做**(写明理由, 归 B2 候选): ND_ADD/ND_SUB 的缩放 - faithful 与降级后的 kind 相同, 发射点
     无法区分"待降级"与"已降级", 需要标记字段或重构二元发射路径, 且零 .s 收益.
 - [ ] **B1.2 发射点直读(语句层)**
-  - [ ] **B1.2a ND_WHILE + ND_BREAK/ND_CONTINUE**: 删 `kind = ND_FOR` 的重写与 break/continue 两个
+  - [x] **B1.2a ND_WHILE + ND_BREAK/ND_CONTINUE**: 删 `kind = ND_FOR` 的重写与 break/continue 两个
     case, 删整形遍的 `brk_label`/`cont_label` 环境 static; `gen_stmt` 加 `ND_WHILE` case(与今日
     FOR 无 init/inc 的发射逐字节相同)与 `ND_BREAK`/`ND_CONTINUE` case + 发射侧环境 static(循环
     保存/恢复两者, switch 只保存 break - 镜像"switch 是 break 目标不是 continue 目标").

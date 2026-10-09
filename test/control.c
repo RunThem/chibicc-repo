@@ -110,6 +110,12 @@ int main() {
   ASSERT(3, ({ int i=0; for(;i<10;i++) { ({ if (i==3) break; 0; }); } i; }));
   ASSERT(6, ({ int i=0; int j=0; for(;i<10;i++) { ({ if (i>5) continue; 0; }); j++; } j; }));
 
+  // A continue inside a switch inside a loop reaches the loop (the
+  // switch owns only the break target), and a break inside that switch
+  // leaves the switch, not the loop (PLAN B1.2a).
+  ASSERT(4, ({ int i=0; int s=0; while (i<5) { i++; switch (i) { case 3: continue; default: s++; } } s; }));
+  ASSERT(5, ({ int i=0; int s=0; while (i<3) { i++; switch (i) { case 2: break; default: s++; } s++; } s; }));
+
   // A goto leaving a statement expression for a label outside it.
   ASSERT(1, ({ int i=0; ({ goto out; i++; }); out: i++; i; }));
 
