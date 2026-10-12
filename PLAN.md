@@ -146,13 +146,15 @@ T1 之后通道成立, 但缓冲仍是"被五个 pass 改写过的文本"; T2 �
 
 ## 阶段 T3: 收口(测试与文档)
 
-- [ ] **T3.1 trivia 测试收口**: trivia.sh 三段齐全(dump 断言 / 全量 round-trip == 原文件 /
-  -E 与诊断锚点的锁定样本), 边界样本目录全覆盖(CRLF, 孤立 CR, BOM, 无末行换行, 空文件, 只含
-  注释, 续行落在字符串/注释/指令中, 续行 + \u, 深层混合), 例外清单清空或列明不可覆盖项与
-  理由.
-- [ ] **T3.2 文档与终态**: AGENTS.md 的目标架构第 1 条, 代码地图(tokenize.c 条目), 测试段与
-  构建段按终态更新; 本文件勾选与 `RESULT.md` 的终态实测(对比锚点: tokenize.c / chibicc.h /
-  main.c / preprocess.c 行数, trivia.sh 行数).
+- [x] **T3.1 trivia 测试收口**: trivia.sh 三段齐全(-E 锁定 7 样本 / -dump-tokens 23 样本 /
+  -reconstruct 全量 round-trip 48 文件 + 12 边界样本 + 4 行号锚点, 共 94 项断言), 边界样本
+  目录全覆盖: CRLF, 孤立 CR, BOM, 无末行换行, 空文件, 只含注释, 续行落在标识符 / pp-number /
+  字符串 / 字符 / 行注释 / 块注释 / 指令行中, 续行 + \u, 深层混合(BOM + 注释内跨 CRLF 续行 +
+  CRLF + 词间续行 + 行注释 + 无末行换行). 例外清单已清空(全量成立, 无 skip).
+- [x] **T3.2 文档与终态**: AGENTS.md 的目标架构第 1 条(trivia 保留已实现), 路线图段(现行线
+  完成), 测试段(`make test` 链条加入 trivia.sh)与前端验证手段段(`-dump-tokens` /
+  `-reconstruct`), 代码地图(`chibicc.h` 与 `tokenize.c` 条目按终态重写)均已更新; 本文件勾选
+  完成; `RESULT.md` 的终态实测与对比锚点见该文件末尾两节.
 
 ## 开放决策(实施时由用户拍板)
 
@@ -187,10 +189,15 @@ T1 之后通道成立, 但缓冲仍是"被五个 pass 改写过的文本"; T2 �
 
 ## 终态验收(本线完成时逐项实测填写)
 
-- **通道**: 四个丢弃点全部转为 trivia; "前置切片 + 拼写"覆盖文件每个字节; 重建合同在
-  `test/*.c` + `include/*.h` + 边界样本上成立, 例外清空(或按 T2.2 的裁决列明).
-- **行为**: 诊断 55 例, 形状 33 段, -E 锁定样本, `.s` 快照逐字节不变(计划内偏差逐条记录).
-- **闸门**: `make docker-test`(含自举) + `docker-snapshot-diff` 空 + `tinycc`(终态跑一次) +
-  trivia.sh 挂进两个测试目标.
-- **对比锚点**: tokenize.c 805 / chibicc.h 832 / main.c 791 / preprocess.c 1208 -> 实测填入;
-  新增 test/trivia.sh 行数.
+- **通道**(实测): 四个丢弃点全部转为 trivia; "前置切片 + 拼写"覆盖文件每个字节; 重建合同在
+  `test/*.c` + `include/*.h`(48 个文件)与 12 个边界样本上成立, **例外清零**; 五处置换写中
+  canonicalize / remove / convert 的文字效果进扫描缓冲、BOM 与合成末行换行由 raw 坐标自然
+  表达、行号由 lines 表复现(设计偏离见 `RESULT.md` T2.1 一节; T2.2 被吸收, 无遗留).
+- **行为**(实测): 诊断 55 例, 形状 33 段, -E 锁定 7 样本, `.s` 快照逐字节不变
+  (`snapshot diff: empty`), 本地 A/B 对归档提交 e8c8608 二进制 -E 46/46、-S 39/39 逐字节一致.
+- **闸门**(实测): `make docker-test`(含自举)EXIT=0 + `docker-snapshot-diff` 为空 +
+  trivia.sh 挂进两个测试目标(94 项断言在两阶段各跑一遍); tinycc: 计数待终态运行回填
+  (见 `RESULT.md` 终态一节).
+- **对比锚点**(实测): tokenize.c 805 -> 924, chibicc.h 832 -> 864, main.c 791 -> 959,
+  preprocess.c 1208 -> 1208(零改动); parse.c 2148 / sema.c 2992 / codegen.c 2677 全部零改动
+  (红线守住); 新增 test/trivia.sh 275 行.

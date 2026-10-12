@@ -161,6 +161,14 @@ exp_dump cont_bc 'a /* x\\\ny */ b\n' \
 exp_dump cont_directive '#def\\\nine M 1\nint x = M;\n' \
 'T 1 0 punct #\nT 1 1 ident def\\\\\\nine\nR 1 9 ws \\x20\nT 1 10 ident M\nR 1 11 ws \\x20\nT 1 12 pp-num 1\nR 1 13 nl \\n\nT 3 14 ident int\nR 3 17 ws \\x20\nT 3 18 ident x\nR 3 19 ws \\x20\nT 3 20 punct =\nR 3 21 ws \\x20\nT 3 22 ident M\nT 3 23 punct ;\nR 3 24 nl \\n\nT 4 25 eof\n'
 
+# 续行 + universal chars 在同一标识符里: 拼写含 `\`+换行和 \u00e9 原样.
+exp_dump cont_unicode 'int caf\\\n\\u00e9 = 1;\n' \
+'T 1 0 ident int\nR 1 3 ws \\x20\nT 1 4 ident caf\\\\\\n\\\\u00e9\nR 1 15 ws \\x20\nT 1 16 punct =\nR 1 17 ws \\x20\nT 1 18 pp-num 1\nT 1 19 punct ;\nR 1 20 nl \\n\nT 3 21 eof\n'
+
+# 深层混合: BOM + 块注释内续行(跨 CRLF) + CRLF + 词间续行 + 行注释, 且无末行换行.
+exp_dump mixed_deep '\xef\xbb\xbf/* a \\\r\n b */ int x\r\n = 1 +\\\n2 ;  // tail' \
+'R 1 0 bom \\xef\\xbb\\xbf\nR 1 3 bc /*\\x20a\\x20\\\\\\r\\n\\x20b\\x20*/\nR 1 16 ws \\x20\nT 1 17 ident int\nR 1 20 ws \\x20\nT 1 21 ident x\nR 1 22 nl \\r\\n\nR 3 24 ws \\x20\nT 3 25 punct =\nR 3 26 ws \\x20\nT 3 27 pp-num 1\nR 3 28 ws \\x20\nT 3 29 punct +\nR 3 30 cont \\\\\\n\nT 3 32 pp-num 2\nR 3 33 ws \\x20\nT 3 34 punct ;\nR 3 35 ws \\x20\\x20\nR 3 37 lc //\\x20tail\nT 5 44 eof\n'
+
 # ---- T1.2/T2.1: -reconstruct 的重建合同(重建 == 原文件) ------------------------
 
 # 全量: test/*.c 与 include/*.h 的每个文件重建后与原文件逐字节相同. T1.2 的例外
@@ -212,8 +220,15 @@ exp_rec cont_string 'char *s = "ab\\\ncd";\n' 'char *s = "ab\\\ncd";\n'
 # universal chars 保原拼写(raw 保留转义, 扫描缓冲里才是 UTF-8).
 exp_rec universal_chars 'char *s = "\\u00e9";\n' 'char *s = "\\u00e9";\n'
 
+# 续行 + universal chars 在同一标识符里.
+exp_rec cont_unicode 'int caf\\\n\\u00e9 = 1;\n' 'int caf\\\n\\u00e9 = 1;\n'
+
 # CRLF + 续行 + 末尾无换行.
 exp_rec mixed 'a\r\nb\\\r\nc' 'a\r\nb\\\r\nc'
+
+# 深层混合: BOM + 块注释内续行(跨 CRLF) + CRLF + 词间续行 + 行注释, 且无末行换行.
+exp_rec mixed_deep '\xef\xbb\xbf/* a \\\r\n b */ int x\r\n = 1 +\\\n2 ;  // tail' \
+'\xef\xbb\xbf/* a \\\r\n b */ int x\r\n = 1 +\\\n2 ;  // tail'
 
 # 空文件.
 exp_rec empty '' ''

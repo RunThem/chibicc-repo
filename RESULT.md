@@ -162,11 +162,43 @@
 | 9312b10 | T0.1 基线 | 复验三道闸门并留档(见上); A/B worktree `/tmp/cbase` 建立; `test/trivia.sh` 立项(首段 7 条 -E 归一化样本, 对两二进制通过)并挂进 `make test` / `make test-stage2` |
 | c911de9 | T1.1 | `Token` 增 trivia 切片(四个跳过点未动); `-dump-tokens` 与 T/R 行 dump; trivia.sh 第二段 10 样本; docker-test + snapshot-diff 全绿; 本地 A/B -E 46/46 与 -S 39/39 逐字节一致 |
 | 2ddbf76 | T1.2 | `-reconstruct` 与全量 round-trip; trivia.sh 第三段(44 文件 + 6 边界样本); 语料实测: 例外恰为计划列的四文件 |
-| (本提交) | T2.1 | 双缓冲 + raw 坐标(设计偏离, 见 T2.1 一节): File 增 raw/map/lines, Token 坐标换 raw, make_scan_buffer 取代三个 pass; 全量 48 文件 round-trip 零例外; -E/-S/诊断/锚点逐字节不变; trivia.sh 扩到 21 dump + 10 边界转正 + 4 锚点 |
+| fd54766 | T2.1 | 双缓冲 + raw 坐标(设计偏离, 见 T2.1 一节): File 增 raw/map/lines, Token 坐标换 raw, make_scan_buffer 取代三个 pass; 全量 48 文件 round-trip 零例外; -E/-S/诊断/锚点逐字节不变; trivia.sh 扩到 21 dump + 10 边界转正 + 4 锚点 |
+| (本提交) | T3.1/T3.2 | 测试收口(23 dump + 12 边界 + 4 锚点, 94 项断言); AGENTS.md 终态(目标架构/路线图/测试段/代码地图); PLAN.md 勾选与终态验收实测; tinycc 终态 EXIT=0 |
+
+## T3.1/T3.2 测试收口与文档(已提交)
+
+- T3.1: trivia.sh 扩到 23 个 dump 样本、12 个边界样本、4 个行号/插入符锚点(-E 7 个), 共 94 项
+  断言; 新增"续行 + \u 在同一标识符"与"深层混合(BOM + 块注释内跨 CRLF 续行 + CRLF + 词间
+  续行 + 行注释 + 无末行换行)"两个样本后, 边界目录覆盖计划所列全部形状; 例外清单保持清零.
+- T3.2: AGENTS.md 的第一条目标架构(trivia 保留已实现), 现行线段(阶段 1 完成及落地形态),
+  `make test` 测试链(加入 trivia.sh)与前端验证手段(`-dump-tokens` / `-reconstruct`), 代码地图
+  (`chibicc.h` / `tokenize.c` 条目)均按终态更新; PLAN.md 的 T1-T3 全部勾选.
+- 闸门: `make docker-test` EXIT=0(94 项断言在 ./chibicc 与 ./stage2/chibicc 上各过一遍);
+  `make docker-snapshot-diff` 空; tinycc(`make docker-test-thirdparty THIRDPARTY=tinycc`)
+  EXIT=0(10 处 "failed as expected" 为 tcc 自身预期失败记账).
+
+## 终态验收(本线完成时逐项实测)
+
+- **通道**: 四个丢弃点全部转为 trivia(实现落在 token 产生点, 跳过点未动); "前置切片 + 拼写"
+  以 raw 坐标覆盖文件每个字节; 重建合同在 `test/*.c` + `include/*.h`(48 个文件)与 12 个边界
+  样本上成立, **例外清零**; 五处破坏性前置换写的文字效果保留在扫描缓冲(行 5-9 的账本规范),
+  其可观察量(行号)由 `lines` 表逐字节复现. 设计偏离(双缓冲取代"缓冲即原文件", T2.2 被吸收)
+  记录在 T2.1 一节.
+- **行为**: 诊断 55 例逐字节, 形状 33 段, -E 锁定 7 样本, `.s` 快照逐字节不变
+  (`snapshot diff: empty`), 本地 A/B 对归档提交 e8c8608 二进制 -E 46/46 与 -S 39/39 逐字节
+  一致(macro.c 用快照的固定时间宏); 行号锚点 p2b/p2/p3/p2c 在 trivia.sh 钉住.
+- **闸门**: `make docker-test`(含自举)EXIT=0; `docker-snapshot-diff` 空; tinycc 终态 EXIT=0;
+  trivia.sh 挂进两个测试目标.
+- **对比锚点**(实测): tokenize.c 805 -> 924, chibicc.h 832 -> 864, main.c 791 -> 959,
+  preprocess.c 1208 -> 1208(零改动); parse.c 2148 / sema.c 2992 / codegen.c 2677 全部零改动
+  (红线守住); 新增 test/trivia.sh 275 行.
 
 ## 给审核者的提示
 
-- 审核重心: `new_token` 之外不得出现 trivia 的赋值点(合成 token 走 `copy_token` 全字段拷贝);
-  tokenize 四个丢弃点的 `at_bol` / `has_space` 置位逐字节照旧; trivia.sh 的 round-trip 例外
-  清单只能缩小.
-- 本线不改 parse.c / sema.c / type.c / codegen.c; 任何 preprocess.c 的改动都必须能归入账本表.
+- 审核重心: token 的 trivia / raw 坐标只在 `new_token` 一处赋值(T1.1-T2.1 后合成 token 走
+  `copy_token` 全字段拷贝或按源 token 继承); tokenize 四个跳过点的 `at_bol` / `has_space`
+  置位逐字节照旧; trivia.sh 的 round-trip 例外清单保持清零.
+- 本线不改 parse.c / sema.c / type.c / codegen.c(锚点行数证实零改动); preprocess.c 同样是
+  零改动; 全部改动落在 chibicc.h / tokenize.c / main.c / Makefile / test/trivia.sh / 文档.
+- 设计偏离(双缓冲 + raw 坐标取代"缓冲即原文件 + 词法透明化")的理由与边界在 T2.1 一节;
+  若审核不认可该偏离, 计划原路线(词法透明化 + File 事实字段)的代价评估也在那一节.
