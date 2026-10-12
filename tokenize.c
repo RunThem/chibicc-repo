@@ -12,6 +12,55 @@ static bool at_bol;
 // True if the current position follows a space character
 static bool has_space;
 
+// The raw offset of a position in the scan buffer (PLAN T2.1): the two
+// texts differ where a continuation, a '\r' or a universal character
+// name was rewritten. They coincide for synthetic buffers.
+static int raw_off(File *file, char *p) {
+  return file->map[p - file->contents];
+}
+
+// The raw offset just after a token's spelling: the bytes skipped in
+// front of the next token start there.
+static int raw_end(Token *tok) {
+  return tok->raw_loc - tok->file->raw + tok->raw_len;
+}
+
+static int from_hex(char c) {
+  if ('0' <= c && c <= '9')
+    return c - '0';
+  if ('a' <= c && c <= 'f')
+    return c - 'a' + 10;
+  return c - 'A' + 10;
+}
+
+static uint32_t read_universal_char(char *p, int len) {
+  uint32_t c = 0;
+  for (int i = 0; i < len; i++) {
+    if (!isxdigit(p[i]))
+      return 0;
+    c = (c << 4) | from_hex(p[i]);
+  }
+  return c;
+}
+
+// The raw offset just after the bytes that scan offset `off` was produced
+// from: a line break and a universal character name stand for more than
+// one raw byte, everything else for one.
+static int raw_end_of(File *file, int off) {
+  int lo = file->map[off];
+  char *p = file->raw + lo;
+
+  if (is_line_break(p))
+    return lo + line_break_len(p);
+
+  if (p[0] == '\\' && (p[1] == 'u' || p[1] == 'U')) {
+    int digs = p[1] == 'u' ? 4 : 8;
+    if (read_universal_char(p + 2, digs))
+      return lo + digs + 2;
+  }
+  return lo + 1;
+}
+
 // Reports an error and exit.
 void error(char *fmt, ...) {
   va_list ap;
@@ -50,10 +99,7 @@ static void verror_at(char *filename, char *input, int line_no,
 }
 
 void error_at(char *loc, char *fmt, ...) {
-  int line_no = 1;
-  for (char *p = current_file->contents; p < loc; p++)
-    if (*p == '\n')
-      line_no++;
+  int line_no = current_file->lines[raw_off(current_file, loc)];
 
   va_list ap;
   va_start(ap, fmt);
@@ -96,15 +142,21 @@ bool consume(Token **rest, Token *tok, char *str) {
   return false;
 }
 
-// Create a new token. `trivia` is where the skipped bytes in front of
-// this token start (see Token.trivia).
-static Token *new_token(TokenKind kind, char *start, char *end, char *trivia) {
+// Create a new token. `raw_trivia` is the raw offset where the bytes
+// skipped in front of this token start (see Token.trivia).
+static Token *new_token(TokenKind kind, char *start, char *end, int raw_trivia) {
   Token *tok = calloc(1, sizeof(Token));
   tok->kind = kind;
   tok->loc = start;
   tok->len = end - start;
-  tok->trivia = trivia;
-  tok->trivia_len = start - trivia;
+
+  int raw_start = raw_off(current_file, start);
+  tok->trivia = current_file->raw + raw_trivia;
+  tok->trivia_len = raw_start - raw_trivia;
+  tok->raw_loc = current_file->raw + raw_start;
+  tok->raw_len = start == end ? 0 :
+    raw_end_of(current_file, end - current_file->contents - 1) - raw_start;
+
   tok->file = current_file;
   tok->filename = current_file->display_name;
   tok->at_bol = at_bol;
@@ -133,14 +185,6 @@ static int read_ident(char *start) {
       return p - start;
     p = q;
   }
-}
-
-static int from_hex(char c) {
-  if ('0' <= c && c <= '9')
-    return c - '0';
-  if ('a' <= c && c <= 'f')
-    return c - 'a' + 10;
-  return c - 'A' + 10;
 }
 
 // Read a punctuator token from p and returns its length.
@@ -245,7 +289,7 @@ static char *string_literal_end(char *p) {
   return p;
 }
 
-static Token *read_string_literal(char *start, char *quote, char *trivia) {
+static Token *read_string_literal(char *start, char *quote, int raw_trivia) {
   char *end = string_literal_end(quote + 1);
   char *buf = calloc(1, end - quote);
   int len = 0;
@@ -257,7 +301,7 @@ static Token *read_string_literal(char *start, char *quote, char *trivia) {
       buf[len++] = *p++;
   }
 
-  Token *tok = new_token(TK_STR, start, end + 1, trivia);
+  Token *tok = new_token(TK_STR, start, end + 1, raw_trivia);
   tok->ty = array_of(ty_char, len + 1);
   tok->str = buf;
   return tok;
@@ -270,7 +314,7 @@ static Token *read_string_literal(char *start, char *quote, char *trivia) {
 // equal to or larger than that are encoded in 4 bytes. Each 2 bytes
 // in the 4 byte sequence is called "surrogate", and a 4 byte sequence
 // is called a "surrogate pair".
-static Token *read_utf16_string_literal(char *start, char *quote, char *trivia) {
+static Token *read_utf16_string_literal(char *start, char *quote, int raw_trivia) {
   char *end = string_literal_end(quote + 1);
   uint16_t *buf = calloc(2, end - start);
   int len = 0;
@@ -293,7 +337,7 @@ static Token *read_utf16_string_literal(char *start, char *quote, char *trivia) 
     }
   }
 
-  Token *tok = new_token(TK_STR, start, end + 1, trivia);
+  Token *tok = new_token(TK_STR, start, end + 1, raw_trivia);
   tok->ty = array_of(ty_ushort, len + 1);
   tok->str = (char *)buf;
   return tok;
@@ -303,7 +347,7 @@ static Token *read_utf16_string_literal(char *start, char *quote, char *trivia) 
 //
 // UTF-32 is a fixed-width encoding for Unicode. Each code point is
 // encoded in 4 bytes.
-static Token *read_utf32_string_literal(char *start, char *quote, Type *ty, char *trivia) {
+static Token *read_utf32_string_literal(char *start, char *quote, Type *ty, int raw_trivia) {
   char *end = string_literal_end(quote + 1);
   uint32_t *buf = calloc(4, end - quote);
   int len = 0;
@@ -315,13 +359,13 @@ static Token *read_utf32_string_literal(char *start, char *quote, Type *ty, char
       buf[len++] = decode_utf8(&p, p);
   }
 
-  Token *tok = new_token(TK_STR, start, end + 1, trivia);
+  Token *tok = new_token(TK_STR, start, end + 1, raw_trivia);
   tok->ty = array_of(ty, len + 1);
   tok->str = (char *)buf;
   return tok;
 }
 
-static Token *read_char_literal(char *start, char *quote, Type *ty, char *trivia) {
+static Token *read_char_literal(char *start, char *quote, Type *ty, int raw_trivia) {
   char *p = quote + 1;
   if (*p == '\0')
     error_at(start, "unclosed char literal");
@@ -336,7 +380,7 @@ static Token *read_char_literal(char *start, char *quote, Type *ty, char *trivia
   if (!end)
     error_at(p, "unclosed char literal");
 
-  Token *tok = new_token(TK_NUM, start, end + 1, trivia);
+  Token *tok = new_token(TK_NUM, start, end + 1, raw_trivia);
   tok->val = c;
   tok->ty = ty;
   return tok;
@@ -466,25 +510,29 @@ void convert_pp_tokens(Token *tok) {
 
 // Initialize line info for all tokens.
 static void add_line_numbers(Token *tok) {
-  char *p = current_file->contents;
-  int n = 1;
-
-  do {
-    if (p == tok->loc) {
-      tok->line_no = n;
-      tok = tok->next;
-    }
-    if (*p == '\n')
-      n++;
-  } while (*p++);
+  for (; tok; tok = tok->next)
+    tok->line_no = tok->file->lines[raw_off(tok->file, tok->loc)];
 }
 
 Token *tokenize_string_literal(Token *tok, Type *basety) {
+  // The re-scan needs the raw coordinates of the token it replaces, so
+  // scan against the file that token belongs to (the running
+  // `current_file` is whichever file was tokenized last). The `file` and
+  // `filename` fields are restored afterwards: they used to be the stale
+  // ones, and that pre-existing behavior is kept for now.
+  File *save = current_file;
+  current_file = tok->file;
+
   Token *t;
   if (basety->size == 2)
-    t = read_utf16_string_literal(tok->loc, tok->loc, tok->trivia);
+    t = read_utf16_string_literal(tok->loc, tok->loc, tok->trivia - tok->file->raw);
   else
-    t = read_utf32_string_literal(tok->loc, tok->loc, basety, tok->trivia);
+    t = read_utf32_string_literal(tok->loc, tok->loc, basety,
+                                  tok->trivia - tok->file->raw);
+
+  current_file = save;
+  t->file = save;
+  t->filename = save->display_name;
   t->next = tok->next;
   return t;
 }
@@ -495,10 +543,10 @@ Token *tokenize(File *file) {
 
   char *p = file->contents;
 
-  // Where the bytes skipped in front of the next token start. The four
-  // skip loops below only advance `p`; the bytes they pass over are
-  // recorded as the slice [trivia, token->loc) of the next token.
-  char *trivia = p;
+  // The raw offset where the bytes skipped in front of the next token
+  // start. The four skip loops below only advance `p`; the bytes they
+  // pass over are recorded as the trivia slice of the next token.
+  int raw_trivia = 0;
 
   Token head = {};
   Token *cur = &head;
@@ -552,100 +600,100 @@ Token *tokenize(File *file) {
         else
           break;
       }
-      cur = cur->next = new_token(TK_PP_NUM, q, p, trivia);
-      trivia = p;
+      cur = cur->next = new_token(TK_PP_NUM, q, p, raw_trivia);
+      raw_trivia = raw_end(cur);
       continue;
     }
 
     // String literal
     if (*p == '"') {
-      cur = cur->next = read_string_literal(p, p, trivia);
+      cur = cur->next = read_string_literal(p, p, raw_trivia);
       p += cur->len;
-      trivia = p;
+      raw_trivia = raw_end(cur);
       continue;
     }
 
     // UTF-8 string literal
     if (startswith(p, "u8\"")) {
-      cur = cur->next = read_string_literal(p, p + 2, trivia);
+      cur = cur->next = read_string_literal(p, p + 2, raw_trivia);
       p += cur->len;
-      trivia = p;
+      raw_trivia = raw_end(cur);
       continue;
     }
 
     // UTF-16 string literal
     if (startswith(p, "u\"")) {
-      cur = cur->next = read_utf16_string_literal(p, p + 1, trivia);
+      cur = cur->next = read_utf16_string_literal(p, p + 1, raw_trivia);
       p += cur->len;
-      trivia = p;
+      raw_trivia = raw_end(cur);
       continue;
     }
 
     // Wide string literal
     if (startswith(p, "L\"")) {
-      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_int, trivia);
+      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_int, raw_trivia);
       p += cur->len;
-      trivia = p;
+      raw_trivia = raw_end(cur);
       continue;
     }
 
     // UTF-32 string literal
     if (startswith(p, "U\"")) {
-      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_uint, trivia);
+      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_uint, raw_trivia);
       p += cur->len;
-      trivia = p;
+      raw_trivia = raw_end(cur);
       continue;
     }
 
     // Character literal
     if (*p == '\'') {
-      cur = cur->next = read_char_literal(p, p, ty_int, trivia);
+      cur = cur->next = read_char_literal(p, p, ty_int, raw_trivia);
       cur->val = (char)cur->val;
       p += cur->len;
-      trivia = p;
+      raw_trivia = raw_end(cur);
       continue;
     }
 
     // UTF-16 character literal
     if (startswith(p, "u'")) {
-      cur = cur->next = read_char_literal(p, p + 1, ty_ushort, trivia);
+      cur = cur->next = read_char_literal(p, p + 1, ty_ushort, raw_trivia);
       cur->val &= 0xffff;
       p += cur->len;
-      trivia = p;
+      raw_trivia = raw_end(cur);
       continue;
     }
 
     // Wide character literal
     if (startswith(p, "L'")) {
-      cur = cur->next = read_char_literal(p, p + 1, ty_int, trivia);
+      cur = cur->next = read_char_literal(p, p + 1, ty_int, raw_trivia);
       p += cur->len;
-      trivia = p;
+      raw_trivia = raw_end(cur);
       continue;
     }
 
     // UTF-32 character literal
     if (startswith(p, "U'")) {
-      cur = cur->next = read_char_literal(p, p + 1, ty_uint, trivia);
+      cur = cur->next = read_char_literal(p, p + 1, ty_uint, raw_trivia);
       p += cur->len;
-      trivia = p;
+      raw_trivia = raw_end(cur);
       continue;
     }
 
     // Identifier or keyword
     int ident_len = read_ident(p);
     if (ident_len) {
-      cur = cur->next = new_token(TK_IDENT, p, p + ident_len, trivia);
+      cur = cur->next = new_token(TK_IDENT, p, p + ident_len, raw_trivia);
       p += cur->len;
-      trivia = p;
+      raw_trivia = raw_end(cur);
       continue;
     }
 
     // Punctuators
     int punct_len = read_punct(p);
     if (punct_len) {
-      cur = cur->next = new_token(TK_PUNCT, p, p + punct_len, trivia);
+      cur = cur->next = new_token(TK_PUNCT, p, p + punct_len, raw_trivia);
       p += cur->len;
-      trivia = p;
+      raw_trivia = raw_end(cur);
       continue;
     }
 
@@ -653,13 +701,16 @@ Token *tokenize(File *file) {
   }
 
   // The trailing trivia of the file belongs to the EOF token.
-  cur = cur->next = new_token(TK_EOF, p, p, trivia);
+  cur = cur->next = new_token(TK_EOF, p, p, raw_trivia);
   add_line_numbers(head.next);
   return head.next;
 }
 
-// Returns the contents of a given file.
-static char *read_file(char *path) {
+// Returns the contents of a given file, and its length in *len. The
+// text is returned exactly as it is on disk: the rewrites that used to
+// happen here (a synthesized final newline, the BOM skip) moved into
+// make_scan_buffer, which can remember them in raw coordinates.
+static char *read_file(char *path, int *len) {
   FILE *fp;
 
   if (strcmp(path, "-") == 0) {
@@ -687,10 +738,8 @@ static char *read_file(char *path) {
   if (fp != stdin)
     fclose(fp);
 
-  // Make sure that the last line is properly terminated with '\n'.
   fflush(out);
-  if (buflen == 0 || buf[buflen - 1] != '\n')
-    fputc('\n', out);
+  *len = buflen;
   fputc('\0', out);
   fclose(out);
   return buf;
@@ -706,116 +755,164 @@ File *new_file(char *name, int file_no, char *contents) {
   file->display_name = name;
   file->file_no = file_no;
   file->contents = contents;
+
+  // A synthetic buffer is scanned as it is: it is its own raw text, the
+  // map is the identity and the line numbers are the plain newline
+  // count. (tokenize_file replaces these tables with the ones
+  // make_scan_buffer builds.)
+  file->raw = contents;
+  int len = strlen(contents);
+  file->map = calloc(len + 2, sizeof(int));
+  file->lines = calloc(len + 2, sizeof(int));
+
+  int line = 1;
+  for (int i = 0; i <= len; i++) {
+    file->map[i] = i;
+    file->lines[i] = line;
+    if (i < len && contents[i] == '\n')
+      line++;
+  }
   return file;
 }
 
-// Replaces \r or \r\n with \n.
-static void canonicalize_newline(char *p) {
-  int i = 0, j = 0;
+// True if p starts a line break: '\n', '\r\n' or '\r'.
+bool is_line_break(char *p) {
+  return *p == '\n' || *p == '\r';
+}
 
-  while (p[i]) {
-    if (p[i] == '\r' && p[i + 1] == '\n') {
-      i += 2;
-      p[j++] = '\n';
-    } else if (p[i] == '\r') {
-      i++;
-      p[j++] = '\n';
-    } else {
-      p[j++] = p[i++];
+// The length of the line break at p.
+int line_break_len(char *p) {
+  return (*p == '\r' && p[1] == '\n') ? 2 : 1;
+}
+
+// Build the buffer the lexer scans for a real file, out of the raw text
+// (PLAN T2.1). The scan text is the one the three former pre-passes
+// produced - line breaks canonicalized to '\n', a backslash before a
+// line break removed together with it, universal character names
+// rewritten to UTF-8, a leading BOM skipped and a final newline
+// guaranteed - so every consumer still sees the text it always saw. The
+// `map` records, for every scan offset, the raw offset it came from, and
+// `lines` the line number of every raw offset: the two together keep the
+// raw coordinates reachable from the token stream. The line numbers are
+// the one observable of those passes and are reproduced exactly - a
+// break inside a continuation counts at the next real break (the removed
+// pass moved those newlines down) and the synthesized final newline
+// counts at the end.
+static char *make_scan_buffer(char *raw, int len, int **map_out, int **lines_out) {
+  int *map = calloc(len + 2, sizeof(int));
+  int *lines = calloc(len + 2, sizeof(int));
+  char *buf = calloc(1, len + 2);
+
+  // The text the pre-passes used to see: the raw text plus the final
+  // newline for a text that does not end in one.
+  char *text = calloc(1, len + 2);
+  memcpy(text, raw, len);
+  if (len == 0 || raw[len - 1] != '\n')
+    text[len] = '\n';
+  int n = strlen(text);
+
+  int i = 0;        // position in `text`
+  int j = 0;        // position in `buf`
+  int mark = 0;     // first raw offset without a line number
+  int line = 1;     // the line number at `i`
+  int pending = 0;  // continuation breaks not credited yet
+
+  // A BOM at the very start is skipped and becomes part of the leading
+  // trivia of the first token.
+  if (!strncmp(text, "\xef\xbb\xbf", 3))
+    i = 3;
+  map[0] = i;
+
+  while (i < n) {
+    // Every raw offset the walk passes gets the line number of its
+    // position; the offsets inside a continuation belong to the line
+    // they are on.
+    for (; mark <= i && mark <= len; mark++)
+      lines[mark] = line;
+
+    // A backslash before a line break joins the lines: both bytes are
+    // dropped, and the break is not a break for the lexer.
+    if (text[i] == '\\' && i + 1 < n && is_line_break(text + i + 1)) {
+      pending++;
+      i += 1 + line_break_len(text + i + 1);
+      continue;
     }
-  }
 
-  p[j] = '\0';
-}
-
-// Removes backslashes followed by a newline.
-static void remove_backslash_newline(char *p) {
-  int i = 0, j = 0;
-
-  // We want to keep the number of newline characters so that
-  // the logical line number matches the physical one.
-  // This counter maintain the number of newlines we have removed.
-  int n = 0;
-
-  while (p[i]) {
-    if (p[i] == '\\' && p[i + 1] == '\n') {
-      i += 2;
-      n++;
-    } else if (p[i] == '\n') {
-      p[j++] = p[i++];
-      for (; n > 0; n--)
-        p[j++] = '\n';
-    } else {
-      p[j++] = p[i++];
+    // A line break becomes a single '\n'.
+    if (is_line_break(text + i)) {
+      map[j] = i;
+      buf[j++] = '\n';
+      i += line_break_len(text + i);
+      line += 1 + pending;
+      pending = 0;
+      continue;
     }
-  }
 
-  for (; n > 0; n--)
-    p[j++] = '\n';
-  p[j] = '\0';
-}
-
-static uint32_t read_universal_char(char *p, int len) {
-  uint32_t c = 0;
-  for (int i = 0; i < len; i++) {
-    if (!isxdigit(p[i]))
-      return 0;
-    c = (c << 4) | from_hex(p[i]);
-  }
-  return c;
-}
-
-// Replace \u or \U escape sequences with corresponding UTF-8 bytes.
-static void convert_universal_chars(char *p) {
-  char *q = p;
-
-  while (*p) {
-    if (startswith(p, "\\u")) {
-      uint32_t c = read_universal_char(p + 2, 4);
+    // A universal character name becomes UTF-8; `raw` keeps the escape.
+    if (text[i] == '\\' && (text[i + 1] == 'u' || text[i + 1] == 'U')) {
+      int digs = text[i + 1] == 'u' ? 4 : 8;
+      uint32_t c = read_universal_char(text + i + 2, digs);
       if (c) {
-        p += 6;
-        q += encode_utf8(q, c);
-      } else {
-        *q++ = *p++;
+        int k = encode_utf8(buf + j, c);
+        for (int e = 0; e < k; e++)
+          map[j + e] = i;
+        j += k;
+        i += digs + 2;
+        continue;
       }
-    } else if (startswith(p, "\\U")) {
-      uint32_t c = read_universal_char(p + 2, 8);
-      if (c) {
-        p += 10;
-        q += encode_utf8(q, c);
-      } else {
-        *q++ = *p++;
-      }
-    } else if (p[0] == '\\') {
-      *q++ = *p++;
-      *q++ = *p++;
-    } else {
-      *q++ = *p++;
     }
+
+    // Any other backslash is copied together with the byte after it, so
+    // that the "u" of an escaped "\\u" is not taken for an escape.
+    if (text[i] == '\\' && i + 1 < len) {
+      map[j] = i;
+      buf[j++] = text[i++];
+    }
+
+    map[j] = i;
+    buf[j++] = text[i++];
   }
 
-  *q = '\0';
+  // The lexer needs the buffer to end in a newline: a line comment runs
+  // to the next one. The old passes kept the synthesized newline when a
+  // trailing continuation swallowed it, by materializing the pending
+  // breaks at the end.
+  if (j == 0 || buf[j - 1] != '\n') {
+    map[j] = len;
+    buf[j++] = '\n';
+  }
+
+  // Credit the continuation breaks that never saw a real break after
+  // them, and give the file end (where the EOF token sits) the final
+  // number.
+  line += pending;
+  for (; mark <= len; mark++)
+    lines[mark] = line;
+  lines[len] = line;
+
+  map[j] = len;
+  *map_out = map;
+  *lines_out = lines;
+  return buf;
 }
 
 Token *tokenize_file(char *path) {
-  char *p = read_file(path);
-  if (!p)
+  int raw_len;
+  char *raw = read_file(path, &raw_len);
+  if (!raw)
     return NULL;
 
-  // UTF-8 texts may start with a 3-byte "BOM" marker sequence.
-  // If exists, just skip them because they are useless bytes.
-  // (It is actually not recommended to add BOM markers to UTF-8
-  // texts, but it's not uncommon particularly on Windows.)
-  if (!memcmp(p, "\xef\xbb\xbf", 3))
-    p += 3;
-
-  canonicalize_newline(p);
-  remove_backslash_newline(p);
-  convert_universal_chars(p);
+  int *map, *lines;
+  char *contents = make_scan_buffer(raw, raw_len, &map, &lines);
 
   // Save the filename for assembler .file directive.
   static int file_no;
-  File *file = new_file(path, file_no + 1, p);
+  File *file = new_file(path, file_no + 1, contents);
+
+  // The scan buffer replaces the identity tables new_file built.
+  file->raw = raw;
+  file->map = map;
+  file->lines = lines;
 
   // Save the filename for assembler .file directive.
   input_files = realloc(input_files, sizeof(char *) * (file_no + 2));

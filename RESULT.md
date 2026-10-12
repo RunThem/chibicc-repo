@@ -46,13 +46,16 @@
 | 2 | `tokenize()` 510-518 块注释 | 跳过(未闭合在 514 走 `error_at`), `has_space = true` | trivia | 前置切片(块注释) | T1.1 ✓ |
 | 3 | `tokenize()` 520-526 换行 | 跳过, `at_bol = true`, `has_space = false` | trivia | 前置切片(换行, 置位语义不动) | T1.1 ✓ |
 | 4 | `tokenize()` 528-533 空白 | 跳过, `has_space = true` | trivia | 前置切片(空白串) | T1.1 ✓ |
-| 5 | `read_file` 670-672 补末行 `\n` | 没有末行换行的文件被加一字节 | File 级事实 | `File` 标记(合成换行) | T2.1 |
-| 6 | `tokenize_file` 787-788 BOM | `p += 3`, `contents` 不含 | File 级事实 | `File` 标记(BOM) | T2.1 |
-| 7 | `canonicalize_newline` 691-707 | `\r\n` / `\r` 就地改写为 `\n` | trivia + 语义 | `\r` / `\r\n` 归 trivia, 词法按 `\n` 计行 | T2.1 |
-| 8 | `remove_backslash_newline` 710-734 | 就地删除 `\`+换行, 换行挪到下一个真实换行后 | trivia + 语义 | `\`+换行归 trivia, 词法透明; 行号语义照旧 | T2.1 |
-| 9 | `convert_universal_chars` 747-776 | 全缓冲就地改写 `\uXXXX` / `\UXXXXXXXX` | trivia + 语义 | 标识符/字面量内联转换, 其余保原拼写 | T2.2(可裁) |
+| 5 | `read_file` 补末行 `\n` | 没有末行换行的文件被加一字节 | 扫描缓冲 | 只进扫描缓冲; raw 里不存在, 故重建不补 | T2.1 ✓ |
+| 6 | `tokenize_file` BOM 跳过 | `p += 3`, `contents` 不含 | trivia | 首 token 的前置 trivia(raw 坐标), 重建含 BOM | T2.1 ✓ |
+| 7 | `canonicalize_newline` 691-707 | `\r\n` / `\r` 就地改写为 `\n` | trivia + 语义 | 扫描缓冲保改写; raw 保 `\r` / `\r\n` 进 trivia, 行号用 lines 表 | T2.1 ✓ |
+| 8 | `remove_backslash_newline` 710-734 | 就地删除 `\`+换行, 换行挪到下一个真实换行后 | trivia + 语义 | 扫描缓冲保删除; raw 保续行进 trivia/拼写; 行号按"挪换行"语义复现 | T2.1 ✓ |
+| 9 | `convert_universal_chars` 747-776 | 全缓冲就地改写 `\uXXXX` / `\UXXXXXXXX` | 扫描缓冲 | 扫描缓冲保改写; raw 保原拼写(重建原样, -E 与显示不变) - T2.2 因此不再必要 | T2.1 ✓ |
 
 行 1-4 的"四个跳过点只字未动"是 T1.1 的实现方式: 字节的认领落在 token 产生点(见下).
+行 5-9 在 T2.1 的落点是 `make_scan_buffer`: 扫描缓冲的文字效果逐字节保留(行 5-9 的"现状行为"
+一栏就是它的规范), 同时产出 `map` / `lines` 两张 raw 坐标的表; raw 文本原样留给重建与 dump.
+计划里的"File 标记"字段没有采用 - BOM 与末行换行分别由前置 trivia 与 raw 缺省自然表达.
 
 ## T1.1 trivia 通道与 -dump-tokens(已提交)
 
@@ -99,6 +102,44 @@
   (本步只加驱动旗标, 既有路径零改动).
 - 偏差: 无既有可观察行为变化.
 
+## T2.1 CRLF 与续行归 trivia: 设计变更与实施(已提交)
+
+- **与计划的设计偏离(重要, 审核重点)**: 计划设想"让缓冲就是原文件 + 词法各扫描点把 `\`+换行当
+  透明 + File 级事实字段". 实施时的分析表明该路线会波及 token 恒等与显示路径: token 的拼写
+  (`loc`/`len`)一旦覆盖续行, `equal()` / `is_keyword`(哈希) / `read_punct` / `print_tokens`(-E)
+  以及诊断的拼接行显示与插入符列宽都会失真 - 而这些路径由红线(parse.c 零改动, 诊断逐字节,
+  -E 归一化)保护. 因此改用**双缓冲 + 偏移映射**:
+  - `File` 增 `raw`(文件原样字节)与 `map`(scan 偏移 -> raw 偏移)与 `lines`(raw 偏移 -> 行号);
+    `contents` 仍是今天的扫描缓冲 - **三个破坏性 pass 的文字效果逐字节保留**(canonicalize 的
+    CRLF/CR 归一、remove 的删除、\u 改写、BOM 跳过、末行补 `\n`), 只是由 `make_scan_buffer`
+    一遍完成并同时填两张表. 一切既有消费者(-E, 解析, sema, codegen, 诊断显示)看到的字节
+    与今天完全相同.
+  - token 的 trivia/拼写坐标换到 **raw**: `Token.trivia` / `trivia_len`(前置被跳过字节)与
+    `raw_loc` / `raw_len`(拼写)都是 raw 坐标; `reconstruct` / `-dump-tokens` 因此按原始文本
+    重建与展示. 计划里的"File 级事实字段"不需要了: BOM 成为首 token 的前置 trivia, 合成末行
+    换行在 raw 里不存在.
+  - 唯一需要复现的旧可观察量是**行号**: `lines` 表按被退役的"挪换行"语义填充(续行内的换行
+    推迟到下一个真实换行(或文件尾)才计入), `add_line_numbers` 与 `error_at` 改用它; 扫描
+    缓冲不变, 所以 `verror_at` 的拼接行显示与插入符列宽天然保持.
+- 改了什么: `chibicc.h`(File 3 字段 + Token 2 字段 + `is_line_break`/`line_break_len` 导出);
+  `tokenize.c`(求 raw 坐标的 `raw_off`/`raw_end`/`raw_end_of`, `make_scan_buffer` 取代三个
+  pass, `read_file` 返回原样文本+长度, `new_file` 对合成缓冲建恒等表, `add_line_numbers` /
+  `error_at` 用 lines 表; `tokenize_string_literal` 扫描时临时切到 `tok->file` 并恢复旧字段值,
+  保持它既有的(有瑕疵的)file/filename 行为逐字节不变); `main.c`(dump 改 raw 坐标, trivia
+  分片加 `cont` / `bom`, `nl` 覆盖 `\n` / `\r\n` / `\r`, R 行行号取 lines 表; `reconstruct`
+  用 raw 拼写).
+- 闸门: `make docker-test` EXIT=0(自举完成; trivia.sh 89 例 = 7 -E + 21 dump + 48 文件 round-trip
+  + 10 边界样本 + 4 锚点, 在 ./chibicc 与 ./stage2/chibicc 上各过一遍, 日志 4112/4199 行;
+  诊断 55 例与形状 33 段照旧双跑全绿); `make docker-snapshot-diff` = `snapshot diff: empty`
+  (扫描缓冲的文字效果逐字节保留的直接证据). 本地: 全语料 48 文件 round-trip 零例外; A/B 对
+  e8c8608 二进制 -E 46/46、-S 39/39 逐字节相同(macro.c 用快照的固定时间宏后亦相同); 诊断
+  55 例与形状 33 段全过; 锚点(p2b/p2/p3 诊断, p2c 的 .loc)逐字节一致并进 trivia.sh 锁定.
+- trivia.sh: 21 个 dump 样本(新增 CRLF / 孤立 CR / BOM / 七类扫描点的续行), 全量 round-trip
+  48 文件(例外清单清零), 10 个边界样本全部转正(期望 == 输入), 4 个行号/插入符锚点.
+- 计划内的行为变化: 无. T2.2(universal chars 保原拼写)随之**不再必要**: raw 坐标已让
+  \u 原样重建, 扫描缓冲保留改写使得 -E 与诊断显示维持原样(用户若要 -E/CST 层面看到 \u 原
+  拼写, 是后续线的事, 与第 1 层合同无关). 该开放决策已由用户路线图吸收, 见 PLAN.md 注记.
+
 ## 关键结论(开工前分析, 供审核者速览)
 
 - 判据 1 的落点: 既有字段零改动; 新通道 = 每个 token 的前置切片 + `File` 级两个事实;
@@ -120,7 +161,8 @@
 | (已归档) | 线间归档 | codegen 直连线归档为 `PLAN-codegen-direct.md` / `RESULT-codegen-direct.md`, 新建本线与账本 |
 | 9312b10 | T0.1 基线 | 复验三道闸门并留档(见上); A/B worktree `/tmp/cbase` 建立; `test/trivia.sh` 立项(首段 7 条 -E 归一化样本, 对两二进制通过)并挂进 `make test` / `make test-stage2` |
 | c911de9 | T1.1 | `Token` 增 trivia 切片(四个跳过点未动); `-dump-tokens` 与 T/R 行 dump; trivia.sh 第二段 10 样本; docker-test + snapshot-diff 全绿; 本地 A/B -E 46/46 与 -S 39/39 逐字节一致 |
-| (本提交) | T1.2 | `-reconstruct` 与全量 round-trip; trivia.sh 第三段(44 文件 + 6 边界样本); 语料实测: 例外恰为计划列的四文件 |
+| 2ddbf76 | T1.2 | `-reconstruct` 与全量 round-trip; trivia.sh 第三段(44 文件 + 6 边界样本); 语料实测: 例外恰为计划列的四文件 |
+| (本提交) | T2.1 | 双缓冲 + raw 坐标(设计偏离, 见 T2.1 一节): File 增 raw/map/lines, Token 坐标换 raw, make_scan_buffer 取代三个 pass; 全量 48 文件 round-trip 零例外; -E/-S/诊断/锚点逐字节不变; trivia.sh 扩到 21 dump + 10 边界转正 + 4 锚点 |
 
 ## 给审核者的提示
 

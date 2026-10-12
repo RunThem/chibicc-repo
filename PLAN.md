@@ -126,19 +126,23 @@ trivia 一律以指向缓冲的切片表示(不复制文本, 不逐项建对象)
 T1 之后通道成立, 但缓冲仍是"被五个 pass 改写过的文本"; T2 把破坏性改写退役, 让缓冲就是原文
 件, 重建例外清零. T2.1 是主体; T2.2 是否做由用户拍板.
 
-- [ ] **T2.1 CRLF 与反斜杠换行归 trivia**: `canonicalize_newline` 与
-  `remove_backslash_newline` 退役(不再就地改写): `\r`(或 `\r\n`)与 `\`+换行都成为 trivia,
-  词法各扫描点(标识符, pp-number, 字符串, 字符, 行注释, 块注释, 预处理指令行)把 `\`+换行当
-  透明; 行号语义按现状锚点逐字节保持(以 p2 / p2b / p2c 样本在 trivia.sh 中钉住); `read_file`
-  的末行补 `\n` 与 BOM 跳过改为 `File` 的文本事实字段, 重建与 dump 消费; round-trip 例外
-  缩小到 `test/unicode.c` 与 \u 样本, CRLF / 孤立 CR / BOM / 无末行换行样本转正.
-- [ ] **T2.2 universal chars 保真(可裁)**: `convert_universal_chars` 退役: `\uXXXX` /
-  `\UXXXXXXXX` 在标识符与字符串/字符字面量的读取点内联转换(语义与现状一致); 注释与空白内的
-  \u 保持原拼写 - 这是本线唯一计划内的可观察行为变化(仅"含 \u 的注释且该行有诊断"的文件会
-  看到显示文本与插入符列宽差异; 语料无此组合, 实测样本 p4 留档), 以 trivia.sh 的锁定样本 +
-  RESULT.md 偏差记录落地.
-- 若 T2.2 被裁: `test/unicode.c` 的 round-trip 例外保留到 CST 阶段(那时以原始文本建树, 不依
-  赖 tokenize), 在 RESULT.md 与 AGENTS.md 明示.
+- [x] **T2.1 CRLF 与反斜杠换行归 trivia**: 实施时改为**双缓冲 + 偏移映射**(设计与计划不同, 理由与
+  全貌见 `RESULT.md` 的 T2.1 一节): 扫描缓冲的文字效果逐字节保留(词法各扫描点无需透明化,
+  token 恒等与显示路径零改动), 新增的是 raw 文本与两张表 - `File.raw`(原样字节),
+  `File.map`(scan 偏移 -> raw 偏移), `File.lines`(raw 偏移 -> 行号, 按被退役 pass 的"挪换行"
+  语义填充); `make_scan_buffer` 一遍产出扫描缓冲 + 两表并取代 `canonicalize_newline` /
+  `remove_backslash_newline` / `convert_universal_chars`; `read_file` 返回原样文本(BOM 跳过与
+  末行补 `\n` 折进扫描缓冲, BOM 成为首 token 的前置 trivia, 合成换行在 raw 里不存在);
+  token 的 trivia/拼写坐标换到 raw(`Token.trivia` / `trivia_len` / `raw_loc` / `raw_len`);
+  `-dump-tokens` 按 raw 展示(trivia 分片加 `cont` / `bom`, `nl` 覆盖三型换行), `-reconstruct`
+  按 raw 拼接. 行号语义按现状锚点逐字节保持(p2 / p2b / p2c / p3 样本已在 trivia.sh 钉住,
+  另见全语料 A/B). round-trip 例外清零(含 CRLF / 孤立 CR / BOM / 无末行换行 / 三处续行文件 /
+  `test/unicode.c` - 48 个文件全量成立).
+- [x] **T2.2 universal chars 保真(已由 T2.1 的设计吸收, 无需单独实施)**: raw 坐标让 `\uXXXX` /
+  `\UXXXXXXXX` 原样重建(重建 == 输入, `test/unicode.c` 无例外); 扫描缓冲保留就地改写, 因此
+  -E 与诊断显示维持原样, 计划里"唯一的计划内可观察行为变化"不再发生. 用户若要 -E / CST 层面
+  看到 \u 原拼写, 属第 2 层(CST 建在 raw 文本上)的自由, 与本层合同无关. 若用户裁决仍需在
+  本层做, 可在此重开: 代价与步骤同原计划(扫描点内联转换 + 一处显示变化).
 
 ## 阶段 T3: 收口(测试与文档)
 

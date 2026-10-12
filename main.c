@@ -504,68 +504,100 @@ static char *token_kind_name(TokenKind kind) {
   unreachable();
 }
 
+// The raw position after any backslash-continuations starting at p (a
+// no-op when there is none).
+static char *skip_conts(char *p, char *end) {
+  while (p + 1 < end && p[0] == '\\' && is_line_break(p + 1))
+    p += 1 + line_break_len(p + 1);
+  return p;
+}
+
 // Print the raw token stream with the bytes that were skipped between
 // the tokens (plain spaces are dumped as \x20, so the texts stay one
 // column each). "T" lines are tokens, "R" lines are the runs in front of
-// a token: a line comment (lc), a block comment (bc), a newline (nl) or a
-// run of whitespace (ws). The kinds are derived from the bytes, and the
-// runs of one token come before its "T" line. Used by test/trivia.sh.
+// a token, split into the pieces the lexer passed over: a line comment
+// (lc), a block comment (bc), a line break (nl), a run of whitespace
+// (ws), a backslash-continuation (cont) or the leading BOM (bom). All of
+// a token's pieces come before its "T" line. Both are in raw
+// coordinates, so the dumped bytes tile the file. Used by test/trivia.sh.
 static void print_token_dump(Token *tok) {
   FILE *out = open_file(opt_o ? opt_o : "-");
-  int line = 1;
 
   for (; tok; tok = tok->next) {
+    char *raw = tok->file->raw;
     char *p = tok->trivia;
     char *end = p + tok->trivia_len;
 
     while (p < end) {
-      char *q = p;
+      char *q;
       char *kind;
 
-      if (p[0] == '/' && p[1] == '/') {
-        while (q < end && *q != '\n')
-          q++;
-        kind = "lc";
-      } else if (p[0] == '/' && p[1] == '*') {
-        // The comment is closed: tokenize() errors on an unclosed one.
-        q = strstr(p + 2, "*/") + 2;
-        kind = "bc";
-      } else if (*p == '\n') {
-        q++;
+      if (p[0] == '\\' && p + 1 < end && is_line_break(p + 1)) {
+        q = p + 1 + line_break_len(p + 1);
+        kind = "cont";
+      } else if (is_line_break(p)) {
+        q = p + line_break_len(p);
         kind = "nl";
+      } else if (p[0] == '/' && p + 1 < end && p[1] == '/') {
+        // The comment runs to the next break that a continuation does
+        // not join over.
+        for (q = p + 2; q < end;) {
+          q = skip_conts(q, end);
+          if (q >= end)
+            break;
+          if (is_line_break(q))
+            break;
+          q++;
+        }
+        kind = "lc";
+      } else if (p[0] == '/' && p + 1 < end && p[1] == '*') {
+        // The comment is closed (tokenize() rejects an unclosed one).
+        q = p + 2;
+        for (;;) {
+          q = skip_conts(q, end);
+          if (q >= end)
+            break;
+          if (q[0] == '*') {
+            char *s = skip_conts(q + 1, end);
+            if (s < end && s[0] == '/') {
+              q = s + 1;
+              break;
+            }
+          }
+          q++;
+        }
+        kind = "bc";
+      } else if (p == raw && !strncmp(p, "\xef\xbb\xbf", 3)) {
+        q = p + 3;
+        kind = "bom";
       } else {
         assert(isspace(*p));
-        while (q < end && *q != '\n' && isspace(*q))
-          q++;
+        for (q = p; q < end && !is_line_break(q) && q[0] != '\\' && isspace(q[0]); q++)
+          ;
         kind = "ws";
       }
 
-      print_dump_line(out, "R", line, p - tok->file->contents, kind, p, q - p);
-
-      for (char *r = p; r < q; r++)
-        if (*r == '\n')
-          line++;
+      print_dump_line(out, "R", tok->file->lines[p - raw], p - raw, kind, p, q - p);
       p = q;
     }
 
-    print_dump_line(out, "T", tok->line_no, tok->loc - tok->file->contents,
-                    token_kind_name(tok->kind), tok->loc, tok->len);
+    print_dump_line(out, "T", tok->line_no, tok->raw_loc - raw,
+                    token_kind_name(tok->kind), tok->raw_loc, tok->raw_len);
   }
 }
 
 // Print the bytes the token stream was tokenized from: the trivia in
-// front of every token plus the token spellings (the trailing trivia
-// rides on EOF). Before preprocessing the two cover the file buffer byte
-// for byte, so this rebuilds the input text - except for the rewrites
-// tokenize_file still applies before tokenizing (PLAN.md 账本 rows 5-9:
-// a synthesized final newline, a dropped BOM, CRLF and backslash-newline
-// folding, universal-character rewriting).
+// front of every token plus the token spellings, in raw coordinates (the
+// trailing trivia rides on EOF). On tokenize()'s direct output the two
+// cover the file's raw text byte for byte, so this rebuilds the input
+// text - with no exceptions: the rewrites that used to be pre-passes
+// live in the scan buffer and the map now, not in the coordinates.
 static void reconstruct(Token *tok) {
   FILE *out = open_file(opt_o ? opt_o : "-");
 
   for (; tok; tok = tok->next) {
     fwrite(tok->trivia, 1, tok->trivia_len, out);
-    fwrite(tok->loc, 1, tok->len, out);
+    fwrite(tok->raw_loc, 1, tok->raw_len, out);
   }
 }
 

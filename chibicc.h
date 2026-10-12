@@ -62,7 +62,21 @@ typedef enum {
 typedef struct {
   char *name;
   int file_no;
+
+  // `raw` is the text as read. `contents` is the buffer the lexer scans:
+  // a derivative of `raw` with line breaks canonicalized to '\n', a
+  // backslash before a line break removed together with it, universal
+  // character names rewritten, a leading BOM skipped and a final newline
+  // guaranteed (the rewrites of the T1-era pre-passes, kept so that every
+  // consumer sees the text it always saw). `map` translates a scan offset
+  // to an offset into `raw`, `lines` gives the line number of a raw
+  // offset; both have one entry per byte plus a final one. For synthetic
+  // buffers (paste, string tokens) the two texts coincide: `map` is the
+  // identity and `lines` counts the newlines.
   char *contents;
+  char *raw;
+  int *map;
+  int *lines;
 
   // For #line directive
   char *display_name;
@@ -76,17 +90,23 @@ struct Token {
   Token *next;      // Next token
   int64_t val;      // If kind is TK_NUM, its value
   long double fval; // If kind is TK_NUM, its value
-  char *loc;        // Token location
+  char *loc;        // Token location (in the file's scan buffer)
   int len;          // Token length
 
   // The bytes between the previous token and this one that the lexer
-  // skipped instead of tokenizing (whitespace, newlines, comments). The
-  // slice is [trivia, loc), so the spellings and the trivia of a token
-  // stream cover the source buffer byte for byte. Tokens created outside
-  // tokenize()'s skip loop (paste, tokenize_string_literal) carry the
-  // trivia of the token they are derived from.
+  // skipped instead of tokenizing (whitespace, newlines, comments,
+  // backslash-continuations) and the token's own spelling, both in raw
+  // file coordinates: the trivia of the tokens plus their spellings cover
+  // the raw text byte for byte, so the stream rebuilds the file (the
+  // leading trivia of the first token includes the BOM, if any; the
+  // final newline read_file synthesizes is not part of the file and does
+  // not appear here). Tokens created outside tokenize()'s skip loop
+  // (paste, tokenize_string_literal) carry the coordinates of the token
+  // they are derived from.
   char *trivia;     // Start of the skipped bytes before this token
   int trivia_len;   // Number of skipped bytes before this token
+  char *raw_loc;    // Start of the token's spelling in the raw text
+  int raw_len;      // Length of the token's spelling in the raw text
 
   Type *ty;         // Used if TK_NUM or TK_STR
   char *str;        // String literal contents including terminating '\0'
@@ -111,6 +131,8 @@ bool consume(Token **rest, Token *tok, char *str);
 void convert_pp_tokens(Token *tok);
 File **get_input_files(void);
 File *new_file(char *name, int file_no, char *contents);
+bool is_line_break(char *p);
+int line_break_len(char *p);
 Token *tokenize_string_literal(Token *tok, Type *basety);
 Token *tokenize(File *file);
 Token *tokenize_file(char *filename);

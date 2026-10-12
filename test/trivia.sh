@@ -102,34 +102,74 @@ exp_dump mixed 'a /* c */ // d\nb\n' \
 exp_dump bol_trivia '  \n\n  int x;\n' \
 'R 1 0 ws \\x20\\x20\nR 1 2 nl \\n\nR 2 3 nl \\n\nR 3 4 ws \\x20\\x20\nT 3 6 ident int\nR 3 9 ws \\x20\nT 3 10 ident x\nT 3 11 punct ;\nR 3 12 nl \\n\nT 4 13 eof\n'
 
-# 无末行换行: read_file 补出的 \n 在流里可见(T1.2 的 round-trip 例外由此而来).
+# 无末行换行: read_file 补出的 \n 不属于 raw 文本, 所以 dump 里没有它(EOF 行号仍是 2).
 exp_dump no_final_newline 'int x;' \
-'T 1 0 ident int\nR 1 3 ws \\x20\nT 1 4 ident x\nT 1 5 punct ;\nR 1 6 nl \\n\nT 2 7 eof\n'
+'T 1 0 ident int\nR 1 3 ws \\x20\nT 1 4 ident x\nT 1 5 punct ;\nT 2 6 eof\n'
 
 # 字符串字面量: token 文本里的 \ 与 t 是源码的两个字节, 转义后成 \\t.
 exp_dump string_escape 'x = "a\\tb";\n' \
 'T 1 0 ident x\nR 1 1 ws \\x20\nT 1 2 punct =\nR 1 3 ws \\x20\nT 1 4 str "a\\\\tb"\nT 1 10 punct ;\nR 1 11 nl \\n\nT 2 12 eof\n'
 
-# 空文件: 只有补出的换行与 EOF.
+# 空文件: raw 里没有任何字节, 只剩 EOF(行号 2 来自补出的 \n).
 exp_dump empty '' \
-'R 1 0 nl \\n\nT 2 1 eof\n'
+'T 2 0 eof\n'
 
 # 只含注释的文件.
 exp_dump comment_only '/* only */\n' \
 'R 1 0 bc /*\\x20only\\x20*/\nR 1 10 nl \\n\nT 2 11 eof\n'
 
-# ---- T1.2: -reconstruct 的重建合同(重建 == 原文件) ------------------------------
+# ---- T2.1: 原始文本的 trivia(CRLF / 孤立 CR / BOM / 续行) ----------------------
+# 坐标从"扫描缓冲"换成"原始文本"后, 这四类字节以原样出现在 R/T 行里.
 
-# 全量: test/*.c 与 include/*.h 的每个文件重建后与原文件逐字节相同. 例外清单
-# (计划内的破坏性前置换写, 括号里是退役步骤):
-#   test/literal.c, include/stdarg.h, include/stdatomic.h - 反斜杠续行 (T2.1)
-#   test/unicode.c - universal chars (T2.2)
-# 例外只许缩小, 缩小步骤: 先删对应的 skip, 再把下面的边界样本改成"重建 == 输入".
+# CRLF 是一个 nl piece, 文本保留 \r\n.
+exp_dump crlf 'a\r\nb\r\n' \
+'T 1 0 ident a\nR 1 1 nl \\r\\n\nT 2 3 ident b\nR 2 4 nl \\r\\n\nT 3 6 eof\n'
+
+# 孤立 CR 也是一个换行(与 canonicalize 的旧行为一致).
+exp_dump lone_cr 'a\rb\n' \
+'T 1 0 ident a\nR 1 1 nl \\r\nT 2 2 ident b\nR 2 3 nl \\n\nT 3 4 eof\n'
+
+# BOM 成为首 token 的前置 trivia, 原样可见.
+exp_dump bom '\xef\xbb\xbfint x;\n' \
+'R 1 0 bom \\xef\\xbb\\xbf\nT 1 3 ident int\nR 1 6 ws \\x20\nT 1 7 ident x\nT 1 8 punct ;\nR 1 9 nl \\n\nT 2 10 eof\n'
+
+# 两 token 之间的续行是 cont piece(行号不因它改变).
+exp_dump cont_between '1 +\\\n2\n' \
+'T 1 0 pp-num 1\nR 1 1 ws \\x20\nT 1 2 punct +\nR 1 3 cont \\\\\\n\nT 1 5 pp-num 2\nR 1 6 nl \\n\nT 3 7 eof\n'
+
+# 七类扫描点里的续行: 标识符 / pp-number / 字符串 / 字符 里的是拼写的一部分.
+exp_dump cont_ident 'in\\\nt x;\n' \
+'T 1 0 ident in\\\\\\nt\nR 1 5 ws \\x20\nT 1 6 ident x\nT 1 7 punct ;\nR 1 8 nl \\n\nT 3 9 eof\n'
+
+exp_dump cont_ppnum '12\\\n3\n' \
+'T 1 0 pp-num 12\\\\\\n3\nR 1 5 nl \\n\nT 3 6 eof\n'
+
+exp_dump cont_string 'char *s = "ab\\\ncd";\n' \
+'T 1 0 ident char\nR 1 4 ws \\x20\nT 1 5 punct *\nT 1 6 ident s\nR 1 7 ws \\x20\nT 1 8 punct =\nR 1 9 ws \\x20\nT 1 10 str "ab\\\\\\ncd"\nT 1 18 punct ;\nR 1 19 nl \\n\nT 3 20 eof\n'
+
+exp_dump cont_char "char c = '\\\\\nx';\n" \
+'T 1 0 ident char\nR 1 4 ws \\x20\nT 1 5 ident c\nR 1 6 ws \\x20\nT 1 7 punct =\nR 1 8 ws \\x20\nT 1 9 num \x27\\\\\\nx\x27\nT 1 14 punct ;\nR 1 15 nl \\n\nT 3 16 eof\n'
+
+# 行注释与块注释里的续行把注释延续到下一行(lc 到下一个真实换行, bc 到闭合).
+exp_dump cont_lc '// c1 \\\nstill\nint x;\n' \
+'R 1 0 lc //\\x20c1\\x20\\\\\\nstill\nR 1 13 nl \\n\nT 3 14 ident int\nR 3 17 ws \\x20\nT 3 18 ident x\nT 3 19 punct ;\nR 3 20 nl \\n\nT 4 21 eof\n'
+
+exp_dump cont_bc 'a /* x\\\ny */ b\n' \
+'T 1 0 ident a\nR 1 1 ws \\x20\nR 1 2 bc /*\\x20x\\\\\\ny\\x20*/\nR 1 12 ws \\x20\nT 1 13 ident b\nR 1 14 nl \\n\nT 3 15 eof\n'
+
+# 预处理指令行里的续行: 指令名被拼成一个标识符, 展开照旧.
+exp_dump cont_directive '#def\\\nine M 1\nint x = M;\n' \
+'T 1 0 punct #\nT 1 1 ident def\\\\\\nine\nR 1 9 ws \\x20\nT 1 10 ident M\nR 1 11 ws \\x20\nT 1 12 pp-num 1\nR 1 13 nl \\n\nT 3 14 ident int\nR 3 17 ws \\x20\nT 3 18 ident x\nR 3 19 ws \\x20\nT 3 20 punct =\nR 3 21 ws \\x20\nT 3 22 ident M\nT 3 23 punct ;\nR 3 24 nl \\n\nT 4 25 eof\n'
+
+# ---- T1.2/T2.1: -reconstruct 的重建合同(重建 == 原文件) ------------------------
+
+# 全量: test/*.c 与 include/*.h 的每个文件重建后与原文件逐字节相同. T1.2 的例外
+# 清单(三处续行文件与 test/unicode.c)随 T2.1 清零: 坐标换到原始文本后, CRLF /
+# 孤立 CR / BOM / 末行换行 / 续行 / universal chars 都按原样重建, 这里不再有 skip;
+# 若将来出现例外, 必须与 PLAN.md 的账本对账.
 n_rt=0
-exc="test/literal.c include/stdarg.h include/stdatomic.h test/unicode.c"
 
 for f in test/*.c include/*.h; do
-    case " $exc " in *" $f "*) continue;; esac
     $chibicc -xc -reconstruct "$f" > "$tmp/rec.out"
     cmp -s "$tmp/rec.out" "$f"
     n_rt=$((n_rt + 1))
@@ -138,8 +178,8 @@ done
 
 n_rb=0
 
-# exp_rec <name> <input-printf> <expected-printf>: 边界样本, 期望锁的是当前已知的
-# 偏差(T2.1/T2.2 退役对应 pass 后, 这些期望改成等于输入).
+# exp_rec <name> <input-printf> <expected-printf>: 边界样本. T2.1 之后期望一律
+# 等于输入(这些正是 T1.2 锁过、当时期望小于输入的偏差样本, 现在全部转正).
 exp_rec() {
     name=$1; shift
     n_rb=$((n_rb + 1))
@@ -150,22 +190,71 @@ exp_rec() {
     check "-reconstruct/$name"
 }
 
-# CRLF 被折成 \n (canonicalize_newline; T2.1 退役).
-exp_rec crlf 'a\r\nb\r\n' 'a\nb\n'
+# CRLF 保原样.
+exp_rec crlf 'a\r\nb\r\n' 'a\r\nb\r\n'
 
-# 孤立 CR 被折成 \n (同上).
-exp_rec lone_cr 'a\rb\n' 'a\nb\n'
+# 孤立 CR 保原样.
+exp_rec lone_cr 'a\rb\n' 'a\rb\n'
 
-# 无末行换行被补出 (read_file; T2.1 改为 File 级事实后不再出现在重建里).
-exp_rec no_final_newline 'int x;' 'int x;\n'
+# 无末行换行保原样(不再补出).
+exp_rec no_final_newline 'int x;' 'int x;'
 
-# BOM 被丢掉 (tokenize_file; T2.1 同上).
-exp_rec bom '\xef\xbb\xbfint x;\n' 'int x;\n'
+# BOM 保原样(成为首 token 的前置 trivia).
+exp_rec bom '\xef\xbb\xbfint x;\n' '\xef\xbb\xbfint x;\n'
 
-# 反斜杠续行被删, 换行数挪到下一个真实换行之后 (remove_backslash_newline; T2.1 归 trivia).
-exp_rec continuation '1 +\\\n2\n' '1 +2\n\n'
+# 续行保原样(含反斜杠与换行).
+exp_rec continuation '1 +\\\n2\n' '1 +\\\n2\n'
 
-# universal chars 被就地改写成 UTF-8 (convert_universal_chars; T2.2 后保原拼写).
-exp_rec universal_chars 'char *s = "\\u00e9";\n' 'char *s = "\xc3\xa9";\n'
+# 续行落在标识符与字符串里(拼写的一部分).
+exp_rec cont_ident 'in\\\nt x;\n' 'in\\\nt x;\n'
+exp_rec cont_string 'char *s = "ab\\\ncd";\n' 'char *s = "ab\\\ncd";\n'
 
-echo "trivia lock: $n_e -E samples, $n_d dump samples, $n_rt round-trip files, $n_rb boundary samples"
+# universal chars 保原拼写(raw 保留转义, 扫描缓冲里才是 UTF-8).
+exp_rec universal_chars 'char *s = "\\u00e9";\n' 'char *s = "\\u00e9";\n'
+
+# CRLF + 续行 + 末尾无换行.
+exp_rec mixed 'a\r\nb\\\r\nc' 'a\r\nb\\\r\nc'
+
+# 空文件.
+exp_rec empty '' ''
+
+# ---- T2.1: 行号与插入符锚点(旧行为逐字节保持) ---------------------------------
+# 续行的行号语义来自被退役的 remove_backslash_newline 的"挪换行"技巧, 由
+# make_scan_buffer 的 lines 表复现: 续行内的 token 报逻辑行起始的物理行号且插入
+# 符行显示拼接后的文本, 续行之后的 token 报物理行号. 期望是在 T1.2 二进制(与归档
+# 提交 e8c8608 行为逐字节相同)上实测并逐字节对照过的.
+
+n_dg=0
+
+# exp_diag <name> <input-printf> <expected-stderr-printf>: 在 $tmp 里以相对文件
+# 名跑 -S(诊断里出现稳定文件名), 与期望 stderr 逐字节比对.
+exp_diag() {
+    name=$1; shift
+    n_dg=$((n_dg + 1))
+    printf "$1" > "$tmp/$name.c"
+    printf "$2" > "$tmp/$name.expected"
+    (cd "$tmp" && "$chibicc" -S -o /dev/null "$name.c" > /dev/null 2> "$name.out")
+    cmp -s "$tmp/$name.out" "$tmp/$name.expected"
+    check "diag/$name"
+}
+
+# 续行内的 token 报逻辑行起始的物理行号, 插入符行显示拼接后的文本.
+exp_diag p2b 'int y;\nint x = 1 +\\\n@;\n' \
+'p2b.c:2: int x = 1 +@;\n                    ^ expected an expression\n'
+
+# 续行之后的 token 报物理行号.
+exp_diag p2 'int y;\nint x = 1 +\\\n2;\n@\n' \
+'p2.c:4: @\n        ^ variable name omitted\n'
+
+# CRLF 的行号与显示(\r 不进入打印行).
+exp_diag p3 'int x = ;\r\nint y;\r\n' \
+'p3.c:1: int x = ;\n                ^ expected an expression\n'
+
+# .loc 同源: 续行合并处的全部 .loc 落在逻辑行起始号(1).
+n_dg=$((n_dg + 1))
+printf 'int f(void) { int x = 1 +\\\n2; return x; }\n' > "$tmp/p2c.c"
+p2c_loc=$(cd "$tmp" && "$chibicc" -S -o - p2c.c | grep '^  \.loc ' | sort -u)
+[ "$p2c_loc" = "  .loc 1 1" ]
+check "diag/p2c_loc"
+
+echo "trivia lock: $n_e -E samples, $n_d dump samples, $n_rt round-trip files, $n_rb boundary samples, $n_dg anchor cases"
