@@ -34,7 +34,9 @@
 
 语法语义拆分线(阶段 3 + 4)已细化为 22 步可勾选执行清单并**全部完成**(终态: parse.c 2531 行纯语法 + sema.c 1552 行, codegen.c 零改动; 计划与执行记录已归档为 `PLAN-split.md` / `RESULT-split.md`). 其后的忠实层收尾线(阀门口径放宽)同样**已全部完成** - 解除字节冻结造成的忠实层偏差后, parse.c 的表达式层达到"无类型标注, 无名字绑定, 无常量求值"的第 3 层形态(终态: parse.c 2148 行 + sema.c 3145 行 + chibicc.h 704 行; codegen.c 相对 5f53ed0 零改动; 计划与执行记录已归档为 `PLAN-faithful.md` / `RESULT-faithful.md`).
 
-**现行线: codegen 直连 sema 产物(取消 sema 降级)** - **阶段 A, 阶段 B 与 B2 均已全部完成**(A0.1-A10.2, B0-B1.3 与 B2.0-B2.2, 计划 `PLAN.md`, 执行记录 `RESULT.md`): codegen 直接消费第 4 层的标注树, sema 不再做任何"为发射服务的整形", `add_type` 经 A9.2 逐 case 审计为纯标注遍; 第 4 层的边界按"语义结论归库层, 发射便利与临时槽归消费者"重划(判据见 `PLAN.md`), 上面第 1-5 条即终态. 阶段 B 与 B2 把"只需换发射方式"的整形项(下标, 箭头成员, `>`/`>=`, elvis, `while`, break/continue, 声明展开, 加减法的指针缩放)从整形遍搬进了发射点, 且除 elvis 的临时槽移除与 B2 的嵌套 VLA 维度修正外指令序列逐字节不变; 整形遍的残留 = 需要槽/语句/标签的项(op= 与自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配, 记录摘除). 其后:CST/trivia(阶段 1-2)与库化(阶段 5)的先后待用户拍板.
+**codegen 直连 sema 产物线(取消 sema 降级)已完成并归档** - **阶段 A, 阶段 B 与 B2 均已全部完成**(A0.1-A10.2, B0-B1.3 与 B2.0-B2.2, 计划与执行记录已归档为 `PLAN-codegen-direct.md` / `RESULT-codegen-direct.md`): codegen 直接消费第 4 层的标注树, sema 不再做任何"为发射服务的整形", `add_type` 经 A9.2 逐 case 审计为纯标注遍; 第 4 层的边界按"语义结论归库层, 发射便利与临时槽归消费者"重划(判据见 `PLAN.md`), 上面第 1-5 条即终态. 阶段 B 与 B2 把"只需换发射方式"的整形项(下标, 箭头成员, `>`/`>=`, elvis, `while`, break/continue, 声明展开, 加减法的指针缩放)从整形遍搬进了发射点, 且除 elvis 的临时槽移除与 B2 的嵌套 VLA 维度修正外指令序列逐字节不变; 整形遍的残留 = 需要槽/语句/标签的项(op= 与自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配, 记录摘除).
+
+**现行线: trivia 保留(路线图阶段 1)** - 用户 2026-10-12 拍板开工: tokenize 保留空白/注释/换行等 trivia, 文本级信息完整; 目标是预处理前的 token 流可逐字节重建输入文件, 且一切既有消费者的可观察行为逐字节不变(计划见 `PLAN.md`, 执行记录见 `RESULT.md`, 状态: 计划已就位, 待执行). CST(阶段 2)与库化(阶段 5)在其后, 先后待用户拍板.
 
 每个阶段完成时三道闸门必须全绿: `make docker-test`(含自举), 汇编等价性 diff(阶段 0 建立), 该阶段新增的针对性测试. 阶段内行为不允许变化, 变化只发生在阶段边界并单独提交.
 
@@ -77,18 +79,18 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 
 ## 现状与代码地图
 
-现状: 语法语义拆分线, 忠实层收尾线与 codegen 直连线(阶段 A + 阶段 B + B2)均已完成 - 第 3 层(忠实语法 AST)与第 4 层(sema 产物)在 parse.c / sema.c 之间分开; sema.c 持有名字解析(作用域表), 类型检查, 常量求值, 结构体布局与结论记录, **不做任何降级**(A9.2 审计: add_type 34 个 case 全部纯标注, 无形状改写); codegen 直接消费标注树 - 需要后端整形的项分两处落地: 只需换发射方式的(`x[y]`, `p->x`, `>`/`>=`, elvis, `while`, break/continue, 声明初始化链, 加减法的指针缩放)在**发射点就地处理**, 需要槽/语句/标签的(op=, 自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配)留在整形遍(契约 3 的六条不变量, 见该文件头注释); parse.c 只建忠实语法形状(表达式无类型, 名字不绑定, 常量不求值), 保留文法分类 oracle(typedef 名 / tag)与判定表 A 的 15 处文法可判诊断. 改动前先了解现状:
+现状: 语法语义拆分线, 忠实层收尾线与 codegen 直连线(阶段 A + 阶段 B + B2)均已完成(现行线为 trivia 保留, 见"路线图") - 第 3 层(忠实语法 AST)与第 4 层(sema 产物)在 parse.c / sema.c 之间分开; sema.c 持有名字解析(作用域表), 类型检查, 常量求值, 结构体布局与结论记录, **不做任何降级**(A9.2 审计: add_type 34 个 case 全部纯标注, 无形状改写); codegen 直接消费标注树 - 需要后端整形的项分两处落地: 只需换发射方式的(`x[y]`, `p->x`, `>`/`>=`, elvis, `while`, break/continue, 声明初始化链, 加减法的指针缩放)在**发射点就地处理**, 需要槽/语句/标签的(op=, 自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配)留在整形遍(契约 3 的六条不变量, 见该文件头注释); parse.c 只建忠实语法形状(表达式无类型, 名字不绑定, 常量不求值), 保留文法分类 oracle(typedef 名 / tag)与判定表 A 的 15 处文法可判诊断. 改动前先了解现状:
 
 - `chibicc.h` - 所有共享类型(`Token`, `Obj`, `Node`, `Type`, `Member`, `VarAttr`)与跨文件声明; 未来在此拆分公共头与内部头.
-- `tokenize.c` - 词法; 当前丢弃注释与空白(阶段 1 的改造对象).
+- `tokenize.c` - 词法; 当前丢弃注释与空白(阶段 1 的改造对象, 现行 trivia 线).
 - `preprocess.c` - 宏展开与预处理指令, 输入输出都是 token 列表.
 - `parse.c` - 递归下降解析器(2148 行), 只做语法分析与忠实建树: 声明产出记录节点(ND_DECL / ND_GVAR_DECL / ND_FUNCDEF / ND_TYPEDEF / ND_ENUM_CONST)交 sema 消费, 待补全的类型记录(数组维度 / typeof 操作数 / 对齐 / 位宽)挂在类型或节点上留给 sema. 唯一的语义反馈是文法必需的 typedef/tag 分类 oracle(本文件唯一的文件域 static). 诊断只剩 RESULT-split.md 判定表 A 的 15 处文法可判项(B/C/D 已清空, 见 RESULT.md 的 R4.2); parse 不在构造现场调用任何降级(旧的时序原则已废止).
 - `sema.c` - 语义分析(2992 行), 每个函数体两趟(见文件头注释): resolve 遍历重建作用域并绑名, 声明对象, 补全类型(维度 / typeof / 对齐 / 位宽 / case 值)与布局; 标注遍历(`add_type`/`type_chain`)定型, 插隐式 cast, 跑检查, 写结论(物化字符串/复合字面量/块域 static 数据镜像), 不改写树形状. 控制流四检查与 goto/label 配对检查随后跑(纯检查, 不分配名字); 标签与唯一名分配在 codegen. 常量求值(`eval`/`eval2`/`eval_double`/`is_const_expr`/`const_expr`)与全局初始化器序列化(`write_gvar_data`)也在这一侧, 预处理器 `#if` 经 `const_expr` 调用. 全部语义 static 状态在此.
 - `type.c` - 类型构造器与类型谓词(`is_compatible`/`is_integer` 等).
-- `codegen.c` - 整形遍(残留) + 发射点就地降级 + AST 翻译成 x86-64 汇编文本, 无优化 pass. 整形遍在 `codegen()` 入口先于一切赋值与发射运行(契约 3 的六条不变量见文件头注释), 只剩需要槽/语句/标签的项: 控制流标签分配(case 链与 goto/label 配对), **VLA 声明**的展开(运行时尺寸槽必须先于帧布局)与其余记录的**残留项到达**(`shape_init_exprs` 只走不再改), 复合赋值与自增自减, 调用返回缓冲, 复合字面量; 发射点就地处理的是下标(`gen_addr`/`gen_expr` 经 `new_add` 现建现发), 箭头成员(`gen_addr` 按 `arrow_tok`), `>`/`>=`(二元尾部换序), elvis(`gen_expr(ND_COND)` 无槽), `while` 与 break/continue(`gen_stmt` + 发射侧环境标签栈), 声明初始化链(`gen_stmt(ND_DECL)` 就地摊), 加减法的缩放与 `num+ptr` 规范化(`gen_expr` 顶部把未标记的 `ND_ADD`/`ND_SUB` 替换成 `new_add`/`new_sub` 的产物 - 三个降级工厂把自己产出的节点打上 `is_lowered` 标记, 发射点只降级没标记的, 即忠实节点). 该线(阶段 A + B + B2)的每一步与验证见 `PLAN.md` / `RESULT.md`.
+- `codegen.c` - 整形遍(残留) + 发射点就地降级 + AST 翻译成 x86-64 汇编文本, 无优化 pass. 整形遍在 `codegen()` 入口先于一切赋值与发射运行(契约 3 的六条不变量见文件头注释), 只剩需要槽/语句/标签的项: 控制流标签分配(case 链与 goto/label 配对), **VLA 声明**的展开(运行时尺寸槽必须先于帧布局)与其余记录的**残留项到达**(`shape_init_exprs` 只走不再改), 复合赋值与自增自减, 调用返回缓冲, 复合字面量; 发射点就地处理的是下标(`gen_addr`/`gen_expr` 经 `new_add` 现建现发), 箭头成员(`gen_addr` 按 `arrow_tok`), `>`/`>=`(二元尾部换序), elvis(`gen_expr(ND_COND)` 无槽), `while` 与 break/continue(`gen_stmt` + 发射侧环境标签栈), 声明初始化链(`gen_stmt(ND_DECL)` 就地摊), 加减法的缩放与 `num+ptr` 规范化(`gen_expr` 顶部把未标记的 `ND_ADD`/`ND_SUB` 替换成 `new_add`/`new_sub` 的产物 - 三个降级工厂把自己产出的节点打上 `is_lowered` 标记, 发射点只降级没标记的, 即忠实节点). 该线(阶段 A + B + B2)的每一步与验证见 `PLAN-codegen-direct.md` / `RESULT-codegen-direct.md`.
 - `main.c` - 驱动器; `hashmap.c`(字符串驻留哈希表), `unicode.c`(UTF 编码表), `strings.c`(字符串辅助)为基础设施.
 
-本节的代码地图已按"codegen 直连 sema 产物"线的终态重写(阶段 A + 阶段 B + B2 完成后); CST/trivia(阶段 1-2)与库化(阶段 5)开工时再随其改造更新.
+本节的代码地图已按"codegen 直连 sema 产物"线的终态重写(阶段 A + 阶段 B + B2 完成后); CST/trivia(阶段 1-2)与库化(阶段 5)开工时再随其改造更新 - 现行 trivia 保留线(阶段 1)的改造落地时随改本节(tokenize.c 条目与测试段).
 
 ## 设计原则
 
