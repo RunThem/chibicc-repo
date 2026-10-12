@@ -42,15 +42,42 @@
 
 | # | 站点 | 现状行为 | 归属 | 目标形态 | 步 |
 |---|---|---|---|---|---|
-| 1 | `tokenize()` 501-508 行注释 | 跳过, `has_space = true` | trivia | 前置切片(行注释) | T1.1 |
-| 2 | `tokenize()` 510-518 块注释 | 跳过(未闭合在 514 走 `error_at`), `has_space = true` | trivia | 前置切片(块注释) | T1.1 |
-| 3 | `tokenize()` 520-526 换行 | 跳过, `at_bol = true`, `has_space = false` | trivia | 前置切片(换行, 置位语义不动) | T1.1 |
-| 4 | `tokenize()` 528-533 空白 | 跳过, `has_space = true` | trivia | 前置切片(空白串) | T1.1 |
+| 1 | `tokenize()` 501-508 行注释 | 跳过, `has_space = true` | trivia | 前置切片(行注释) | T1.1 ✓ |
+| 2 | `tokenize()` 510-518 块注释 | 跳过(未闭合在 514 走 `error_at`), `has_space = true` | trivia | 前置切片(块注释) | T1.1 ✓ |
+| 3 | `tokenize()` 520-526 换行 | 跳过, `at_bol = true`, `has_space = false` | trivia | 前置切片(换行, 置位语义不动) | T1.1 ✓ |
+| 4 | `tokenize()` 528-533 空白 | 跳过, `has_space = true` | trivia | 前置切片(空白串) | T1.1 ✓ |
 | 5 | `read_file` 670-672 补末行 `\n` | 没有末行换行的文件被加一字节 | File 级事实 | `File` 标记(合成换行) | T2.1 |
 | 6 | `tokenize_file` 787-788 BOM | `p += 3`, `contents` 不含 | File 级事实 | `File` 标记(BOM) | T2.1 |
 | 7 | `canonicalize_newline` 691-707 | `\r\n` / `\r` 就地改写为 `\n` | trivia + 语义 | `\r` / `\r\n` 归 trivia, 词法按 `\n` 计行 | T2.1 |
 | 8 | `remove_backslash_newline` 710-734 | 就地删除 `\`+换行, 换行挪到下一个真实换行后 | trivia + 语义 | `\`+换行归 trivia, 词法透明; 行号语义照旧 | T2.1 |
 | 9 | `convert_universal_chars` 747-776 | 全缓冲就地改写 `\uXXXX` / `\UXXXXXXXX` | trivia + 语义 | 标识符/字面量内联转换, 其余保原拼写 | T2.2(可裁) |
+
+行 1-4 的"四个跳过点只字未动"是 T1.1 的实现方式: 字节的认领落在 token 产生点(见下).
+
+## T1.1 trivia 通道与 -dump-tokens(已提交)
+
+- 改了什么:
+  - `chibicc.h`: `Token` 增 `trivia` / `trivia_len` - 前置被跳过字节的切片, 判据 4 的表示
+    (指向缓冲的 (start, len), 不复制文本; 种类不存, 由 dump 从字节再派生).
+  - `tokenize.c`: `new_token` 增 `trivia` 参数并算 `trivia_len = start - trivia`; 10 个 token
+    产生点(4 个字面量辅助 + pp-num/ident/punct/EOF)带上前置切片, 消费后把起点推进到 `p`;
+    四个跳过点只字未动 - 字节从"丢弃"变为"被下一个 token 认领", `at_bol` / `has_space` 的
+    置位语义逐字未变; EOF 收尾部 trivia; `tokenize_string_literal` 的新 token 继承源 token
+    的切片(同 loc 同 buffer, 经 `*t = *` 回到流里).
+  - `main.c`: 新旗标 `-dump-tokens`(仿 `-hashmap-test`, 只读): cc1 里对 base_file 的
+    `tokenize` 直接输出后返回(判据 3: 预处理之前, 不跑预处理器), 驱动侧与 `-E` 同批透传
+    且不汇编. 输出每 token 一行 `T <line> <offset> <kind> <text>`, 每条 trivia 一行
+    `R <line> <offset> <kind> <text>`(lc/bc/nl/ws 从字节派生, 排在所属 token 之前);
+    文本转义 \n \t \r \\ 与非可见字节 \xHH.
+- 计划外的一个格式决定: 空格也转义为 \x20. 理由: 文本列只有一格, 空格原样输出则"空文本"与
+  "一个空格"不可分辨, 且行尾空白会被编辑工具剥除, 破坏逐字节锁定的稳定性. 影响面仅
+  -dump-tokens 这一新增只读输出, 无既有消费者.
+- 闸门: `make docker-test` EXIT=0(自举完成; trivia.sh 17 例 = 7 -E + 10 dump 在 ./chibicc 与
+  ./stage2/chibicc 上各过一遍, 日志 3999/4052 行; 诊断 55 例与形状 33 段照旧双跑全绿);
+  `make docker-snapshot-diff` = `snapshot diff: empty`. 本地 A/B(/tmp/cbase 的 e8c8608 二进制
+  vs 本步二进制): `-E` 46 个语料文件逐字节相同(2 个文件本地无系统头不可预处理 - atomic.c /
+  tls.c, 两个二进制的失败 stderr 逐字节相同); `-S` 39 个 test/*.c 逐字节相同(同样跳过 2 个).
+- 偏差: 无既有可观察行为变化; 唯一计划外项 = dump 的空格转义(见上).
 
 ## 关键结论(开工前分析, 供审核者速览)
 
@@ -71,7 +98,8 @@
 | 提交 | 步骤 | 内容 |
 |---|---|---|
 | (已归档) | 线间归档 | codegen 直连线归档为 `PLAN-codegen-direct.md` / `RESULT-codegen-direct.md`, 新建本线与账本 |
-| (本提交) | T0.1 基线 | 复验三道闸门并留档(见上); A/B worktree `/tmp/cbase` 建立; `test/trivia.sh` 立项(首段 7 条 -E 归一化样本, 对两二进制通过)并挂进 `make test` / `make test-stage2` |
+| 9312b10 | T0.1 基线 | 复验三道闸门并留档(见上); A/B worktree `/tmp/cbase` 建立; `test/trivia.sh` 立项(首段 7 条 -E 归一化样本, 对两二进制通过)并挂进 `make test` / `make test-stage2` |
+| (本提交) | T1.1 | `Token` 增 trivia 切片(四个跳过点未动); `-dump-tokens` 与 T/R 行 dump; trivia.sh 第二段 10 样本; docker-test + snapshot-diff 全绿; 本地 A/B -E 46/46 与 -S 39/39 逐字节一致 |
 
 ## 给审核者的提示
 

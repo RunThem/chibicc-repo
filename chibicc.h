@@ -78,6 +78,16 @@ struct Token {
   long double fval; // If kind is TK_NUM, its value
   char *loc;        // Token location
   int len;          // Token length
+
+  // The bytes between the previous token and this one that the lexer
+  // skipped instead of tokenizing (whitespace, newlines, comments). The
+  // slice is [trivia, loc), so the spellings and the trivia of a token
+  // stream cover the source buffer byte for byte. Tokens created outside
+  // tokenize()'s skip loop (paste, tokenize_string_literal) carry the
+  // trivia of the token they are derived from.
+  char *trivia;     // Start of the skipped bytes before this token
+  int trivia_len;   // Number of skipped bytes before this token
+
   Type *ty;         // Used if TK_NUM or TK_STR
   char *str;        // String literal contents including terminating '\0'
 

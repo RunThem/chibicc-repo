@@ -19,6 +19,7 @@ static bool opt_S;
 static bool opt_c;
 static bool opt_cc1;
 static bool opt_hash_hash_hash;
+static bool opt_dump_tokens;
 static bool opt_static;
 static bool opt_shared;
 static char *opt_MF;
@@ -167,6 +168,11 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-E")) {
       opt_E = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-dump-tokens")) {
+      opt_dump_tokens = true;
       continue;
     }
 
@@ -445,6 +451,102 @@ static void print_tokens(Token *tok) {
   fprintf(out, "\n");
 }
 
+// Print bytes in C literal style: the escapes \n, \t, \r and \\, and
+// \xHH for everything invisible (including the space, so that a dump
+// line never ends in whitespace that tools could strip).
+static void print_escaped(FILE *out, char *p, int len) {
+  for (int i = 0; i < len; i++) {
+    unsigned char c = p[i];
+
+    switch (c) {
+    case '\n': fprintf(out, "\\n"); break;
+    case '\t': fprintf(out, "\\t"); break;
+    case '\r': fprintf(out, "\\r"); break;
+    case '\\': fprintf(out, "\\\\"); break;
+    default:
+      if (c < 0x20 || c >= 0x7f || c == ' ')
+        fprintf(out, "\\x%02x", c);
+      else
+        fputc(c, out);
+    }
+  }
+}
+
+// Print one line of the token dump: a tag, the line number, the byte
+// offset into the file, the kind, and the text (omitted for a token
+// without a spelling, i.e. EOF).
+static void print_dump_line(FILE *out, char *tag, int line, int offset,
+                            char *kind, char *text, int len) {
+  fprintf(out, "%s %d %d %s", tag, line, offset, kind);
+  if (len) {
+    fputc(' ', out);
+    print_escaped(out, text, len);
+  }
+  fputc('\n', out);
+}
+
+static char *token_kind_name(TokenKind kind) {
+  switch (kind) {
+  case TK_IDENT:   return "ident";
+  case TK_PUNCT:   return "punct";
+  case TK_KEYWORD: return "keyword";
+  case TK_STR:     return "str";
+  case TK_NUM:     return "num";
+  case TK_PP_NUM:  return "pp-num";
+  case TK_EOF:     return "eof";
+  }
+  unreachable();
+}
+
+// Print the raw token stream with the bytes that were skipped between
+// the tokens (plain spaces are dumped as \x20, so the texts stay one
+// column each). "T" lines are tokens, "R" lines are the runs in front of
+// a token: a line comment (lc), a block comment (bc), a newline (nl) or a
+// run of whitespace (ws). The kinds are derived from the bytes, and the
+// runs of one token come before its "T" line. Used by test/trivia.sh.
+static void print_token_dump(Token *tok) {
+  FILE *out = open_file(opt_o ? opt_o : "-");
+  int line = 1;
+
+  for (; tok; tok = tok->next) {
+    char *p = tok->trivia;
+    char *end = p + tok->trivia_len;
+
+    while (p < end) {
+      char *q = p;
+      char *kind;
+
+      if (p[0] == '/' && p[1] == '/') {
+        while (q < end && *q != '\n')
+          q++;
+        kind = "lc";
+      } else if (p[0] == '/' && p[1] == '*') {
+        // The comment is closed: tokenize() errors on an unclosed one.
+        q = strstr(p + 2, "*/") + 2;
+        kind = "bc";
+      } else if (*p == '\n') {
+        q++;
+        kind = "nl";
+      } else {
+        assert(isspace(*p));
+        while (q < end && *q != '\n' && isspace(*q))
+          q++;
+        kind = "ws";
+      }
+
+      print_dump_line(out, "R", line, p - tok->file->contents, kind, p, q - p);
+
+      for (char *r = p; r < q; r++)
+        if (*r == '\n')
+          line++;
+      p = q;
+    }
+
+    print_dump_line(out, "T", tok->line_no, tok->loc - tok->file->contents,
+                    token_kind_name(tok->kind), tok->loc, tok->len);
+  }
+}
+
 static bool in_std_include_path(char *path) {
   for (int i = 0; i < std_include_paths.len; i++) {
     char *dir = std_include_paths.data[i];
@@ -513,6 +615,14 @@ static Token *append_tokens(Token *tok1, Token *tok2) {
 }
 
 static void cc1(void) {
+  // -dump-tokens works on the raw stream of the base file: the trivia
+  // contract covers tokenize()'s direct output, before preprocessing
+  // (PLAN.md 判据 3).
+  if (opt_dump_tokens) {
+    print_token_dump(must_tokenize_file(base_file));
+    return;
+  }
+
   Token *tok = NULL;
 
   // Process -include option
@@ -756,8 +866,8 @@ int main(int argc, char **argv) {
 
     assert(type == FILE_C);
 
-    // Just preprocess
-    if (opt_E || opt_M) {
+    // Just preprocess (or dump the raw token stream)
+    if (opt_E || opt_M || opt_dump_tokens) {
       run_cc1(argc, argv, input, NULL);
       continue;
     }

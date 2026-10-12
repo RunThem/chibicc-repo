@@ -103,13 +103,16 @@ trivia 一律以指向缓冲的切片表示(不复制文本, 不逐项建对象)
   两个测试目标, 首段锁定 -E 的归一化样本 7 条(由现状锚点的实测样本转正: 注释与空白折叠,
   续行拼接, 行注释吞续行, 无末行换行补出, BOM 丢弃, 空文件, 空行群). 完成记录见
   `RESULT.md` 的"基线记录".
-- [ ] **T1.1 trivia 通道(四个丢弃点)**: `Token` 增前置被跳过字节的切片(判据 4), `new_token`
-  从跳过循环接收区间; 四个丢弃点改为"记录 + 前移", `at_bol` / `has_space` 的置位语义原样
-  保留; EOF token 携带尾部 trivia; 驱动器增旗标 `-dump-tokens`(仿 `-hashmap-test`, 只读) -
-  每个 token 一行 `T <line> <offset> <kind> <text>`, 每条 trivia 一行 `R <line> <offset>
-  <kind> <text>`, 文本按 C 字面量式转义(`\n` `\t` `\r` `\\` 与不可见字节 `\xHH`), 保证一
+- [x] **T1.1 trivia 通道(四个丢弃点)**: `Token` 增前置被跳过字节的切片(判据 4), `new_token`
+  从跳过循环接收区间; 四个丢弃点改为"记录 + 前移"(实现落在 token 产生点: 跳过点的字节由
+  下一个 token 认领, 四个跳过点本身与 `at_bol` / `has_space` 置位逐字未动), `has_space` 的
+  置位语义原样保留; EOF token 携带尾部 trivia; 驱动器增旗标 `-dump-tokens`(仿
+  `-hashmap-test`, 只读) - 每个 token 一行 `T <line> <offset> <kind> <text>`, 每条 trivia
+  一行 `R <line> <offset> <kind> <text>`, 文本按 C 字面量式转义(`\n` `\t` `\r` `\\` 与
+  不可见字节 `\xHH`, 实现时空格也转义为 `\x20` 以锁行尾, 见 `RESULT.md` 偏差记录), 保证一
   token 一行, 可逐字节锁定. trivia.sh 第二段: 对 snippet 断言 dump(单行注释, 跨行块注释,
-  空白与制表符, 空行群, 注释与空白混合, 行首/行尾 trivia, 文件尾 trivia).
+  空白与制表符, 空行群, 注释与空白混合, 行首/行尾 trivia, 文件尾 trivia 共 10 样本).
+  完成记录见 `RESULT.md` 的 T1.1 一节.
 - [ ] **T1.2 重建与 round-trip(平凡子集)**: 重建函数(按流序拼接 前置切片 + 拼写; 驱动器增
   旗标 `-reconstruct`, 输出原始字节)与 trivia.sh 第三段: 对 `test/*.c` 与 `include/*.h`
   全量断言"重建 == 原文件"; 例外以显式清单跳过并注明消除步骤 - 本步例外 = 三处续行文件

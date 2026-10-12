@@ -96,12 +96,15 @@ bool consume(Token **rest, Token *tok, char *str) {
   return false;
 }
 
-// Create a new token.
-static Token *new_token(TokenKind kind, char *start, char *end) {
+// Create a new token. `trivia` is where the skipped bytes in front of
+// this token start (see Token.trivia).
+static Token *new_token(TokenKind kind, char *start, char *end, char *trivia) {
   Token *tok = calloc(1, sizeof(Token));
   tok->kind = kind;
   tok->loc = start;
   tok->len = end - start;
+  tok->trivia = trivia;
+  tok->trivia_len = start - trivia;
   tok->file = current_file;
   tok->filename = current_file->display_name;
   tok->at_bol = at_bol;
@@ -242,7 +245,7 @@ static char *string_literal_end(char *p) {
   return p;
 }
 
-static Token *read_string_literal(char *start, char *quote) {
+static Token *read_string_literal(char *start, char *quote, char *trivia) {
   char *end = string_literal_end(quote + 1);
   char *buf = calloc(1, end - quote);
   int len = 0;
@@ -254,7 +257,7 @@ static Token *read_string_literal(char *start, char *quote) {
       buf[len++] = *p++;
   }
 
-  Token *tok = new_token(TK_STR, start, end + 1);
+  Token *tok = new_token(TK_STR, start, end + 1, trivia);
   tok->ty = array_of(ty_char, len + 1);
   tok->str = buf;
   return tok;
@@ -267,7 +270,7 @@ static Token *read_string_literal(char *start, char *quote) {
 // equal to or larger than that are encoded in 4 bytes. Each 2 bytes
 // in the 4 byte sequence is called "surrogate", and a 4 byte sequence
 // is called a "surrogate pair".
-static Token *read_utf16_string_literal(char *start, char *quote) {
+static Token *read_utf16_string_literal(char *start, char *quote, char *trivia) {
   char *end = string_literal_end(quote + 1);
   uint16_t *buf = calloc(2, end - start);
   int len = 0;
@@ -290,7 +293,7 @@ static Token *read_utf16_string_literal(char *start, char *quote) {
     }
   }
 
-  Token *tok = new_token(TK_STR, start, end + 1);
+  Token *tok = new_token(TK_STR, start, end + 1, trivia);
   tok->ty = array_of(ty_ushort, len + 1);
   tok->str = (char *)buf;
   return tok;
@@ -300,7 +303,7 @@ static Token *read_utf16_string_literal(char *start, char *quote) {
 //
 // UTF-32 is a fixed-width encoding for Unicode. Each code point is
 // encoded in 4 bytes.
-static Token *read_utf32_string_literal(char *start, char *quote, Type *ty) {
+static Token *read_utf32_string_literal(char *start, char *quote, Type *ty, char *trivia) {
   char *end = string_literal_end(quote + 1);
   uint32_t *buf = calloc(4, end - quote);
   int len = 0;
@@ -312,13 +315,13 @@ static Token *read_utf32_string_literal(char *start, char *quote, Type *ty) {
       buf[len++] = decode_utf8(&p, p);
   }
 
-  Token *tok = new_token(TK_STR, start, end + 1);
+  Token *tok = new_token(TK_STR, start, end + 1, trivia);
   tok->ty = array_of(ty, len + 1);
   tok->str = (char *)buf;
   return tok;
 }
 
-static Token *read_char_literal(char *start, char *quote, Type *ty) {
+static Token *read_char_literal(char *start, char *quote, Type *ty, char *trivia) {
   char *p = quote + 1;
   if (*p == '\0')
     error_at(start, "unclosed char literal");
@@ -333,7 +336,7 @@ static Token *read_char_literal(char *start, char *quote, Type *ty) {
   if (!end)
     error_at(p, "unclosed char literal");
 
-  Token *tok = new_token(TK_NUM, start, end + 1);
+  Token *tok = new_token(TK_NUM, start, end + 1, trivia);
   tok->val = c;
   tok->ty = ty;
   return tok;
@@ -479,9 +482,9 @@ static void add_line_numbers(Token *tok) {
 Token *tokenize_string_literal(Token *tok, Type *basety) {
   Token *t;
   if (basety->size == 2)
-    t = read_utf16_string_literal(tok->loc, tok->loc);
+    t = read_utf16_string_literal(tok->loc, tok->loc, tok->trivia);
   else
-    t = read_utf32_string_literal(tok->loc, tok->loc, basety);
+    t = read_utf32_string_literal(tok->loc, tok->loc, basety, tok->trivia);
   t->next = tok->next;
   return t;
 }
@@ -491,6 +494,12 @@ Token *tokenize(File *file) {
   current_file = file;
 
   char *p = file->contents;
+
+  // Where the bytes skipped in front of the next token start. The four
+  // skip loops below only advance `p`; the bytes they pass over are
+  // recorded as the slice [trivia, token->loc) of the next token.
+  char *trivia = p;
+
   Token head = {};
   Token *cur = &head;
 
@@ -543,95 +552,108 @@ Token *tokenize(File *file) {
         else
           break;
       }
-      cur = cur->next = new_token(TK_PP_NUM, q, p);
+      cur = cur->next = new_token(TK_PP_NUM, q, p, trivia);
+      trivia = p;
       continue;
     }
 
     // String literal
     if (*p == '"') {
-      cur = cur->next = read_string_literal(p, p);
+      cur = cur->next = read_string_literal(p, p, trivia);
       p += cur->len;
+      trivia = p;
       continue;
     }
 
     // UTF-8 string literal
     if (startswith(p, "u8\"")) {
-      cur = cur->next = read_string_literal(p, p + 2);
+      cur = cur->next = read_string_literal(p, p + 2, trivia);
       p += cur->len;
+      trivia = p;
       continue;
     }
 
     // UTF-16 string literal
     if (startswith(p, "u\"")) {
-      cur = cur->next = read_utf16_string_literal(p, p + 1);
+      cur = cur->next = read_utf16_string_literal(p, p + 1, trivia);
       p += cur->len;
+      trivia = p;
       continue;
     }
 
     // Wide string literal
     if (startswith(p, "L\"")) {
-      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_int);
+      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_int, trivia);
       p += cur->len;
+      trivia = p;
       continue;
     }
 
     // UTF-32 string literal
     if (startswith(p, "U\"")) {
-      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_uint);
+      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_uint, trivia);
       p += cur->len;
+      trivia = p;
       continue;
     }
 
     // Character literal
     if (*p == '\'') {
-      cur = cur->next = read_char_literal(p, p, ty_int);
+      cur = cur->next = read_char_literal(p, p, ty_int, trivia);
       cur->val = (char)cur->val;
       p += cur->len;
+      trivia = p;
       continue;
     }
 
     // UTF-16 character literal
     if (startswith(p, "u'")) {
-      cur = cur->next = read_char_literal(p, p + 1, ty_ushort);
+      cur = cur->next = read_char_literal(p, p + 1, ty_ushort, trivia);
       cur->val &= 0xffff;
       p += cur->len;
+      trivia = p;
       continue;
     }
 
     // Wide character literal
     if (startswith(p, "L'")) {
-      cur = cur->next = read_char_literal(p, p + 1, ty_int);
+      cur = cur->next = read_char_literal(p, p + 1, ty_int, trivia);
       p += cur->len;
+      trivia = p;
       continue;
     }
 
     // UTF-32 character literal
     if (startswith(p, "U'")) {
-      cur = cur->next = read_char_literal(p, p + 1, ty_uint);
+      cur = cur->next = read_char_literal(p, p + 1, ty_uint, trivia);
       p += cur->len;
+      trivia = p;
       continue;
     }
 
     // Identifier or keyword
     int ident_len = read_ident(p);
     if (ident_len) {
-      cur = cur->next = new_token(TK_IDENT, p, p + ident_len);
+      cur = cur->next = new_token(TK_IDENT, p, p + ident_len, trivia);
       p += cur->len;
+      trivia = p;
       continue;
     }
 
     // Punctuators
     int punct_len = read_punct(p);
     if (punct_len) {
-      cur = cur->next = new_token(TK_PUNCT, p, p + punct_len);
+      cur = cur->next = new_token(TK_PUNCT, p, p + punct_len, trivia);
       p += cur->len;
+      trivia = p;
       continue;
     }
 
     error_at(p, "invalid token");
   }
 
-  cur = cur->next = new_token(TK_EOF, p, p);
+  // The trailing trivia of the file belongs to the EOF token.
+  cur = cur->next = new_token(TK_EOF, p, p, trivia);
   add_line_numbers(head.next);
   return head.next;
 }
