@@ -96,12 +96,13 @@ trivia 一律以指向缓冲的切片表示(不复制文本, 不逐项建对象)
 
 ## 阶段 T1: trivia 通道(行为不变)
 
-- [ ] **T0.1 账本与基线**: `RESULT.md` 建"trivia 丢弃点清单表"(逐项: 站点 / 现状行为 / 归属 /
-  目标形态 / 验收口径; 初版已随本文件提交), 复验闸门(docker-test / snapshot-diff / tinycc)
-  并留档为本线基线; 建立本地 A/B 规程(`git worktree add /tmp/cbase <上一个绿提交>`, 逐字节
-  对照 .s 与 -E / dump 输出, 同旧例); `test/trivia.sh` 立项并挂进 Makefile 两个测试目标,
-  首段锁定 -E 的归一化样本(由现状锚点的实测样本转正: 注释与空白折叠, 续行拼接, 行注释吞
-  续行, 无末行换行补出, BOM 丢弃).
+- [x] **T0.1 账本与基线**: `RESULT.md` 建"trivia 丢弃点清单表"(逐项: 站点 / 现状行为 / 归属 /
+  目标形态 / 验收口径; 初版已随本文件提交, 9 行在 T0.1 逐行核对), 复验闸门(docker-test /
+  snapshot-diff / tinycc)并留档为本线基线; 建立本地 A/B 规程(`git worktree add /tmp/cbase
+  e8c8608`, 逐字节对照 .s 与 -E / dump 输出, 同旧例); `test/trivia.sh` 立项并挂进 Makefile
+  两个测试目标, 首段锁定 -E 的归一化样本 7 条(由现状锚点的实测样本转正: 注释与空白折叠,
+  续行拼接, 行注释吞续行, 无末行换行补出, BOM 丢弃, 空文件, 空行群). 完成记录见
+  `RESULT.md` 的"基线记录".
 - [ ] **T1.1 trivia 通道(四个丢弃点)**: `Token` 增前置被跳过字节的切片(判据 4), `new_token`
   从跳过循环接收区间; 四个丢弃点改为"记录 + 前移", `at_bol` / `has_space` 的置位语义原样
   保留; EOF token 携带尾部 trivia; 驱动器增旗标 `-dump-tokens`(仿 `-hashmap-test`, 只读) -

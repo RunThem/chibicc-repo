@@ -22,6 +22,7 @@ test: $(TESTS)
 	test/driver.sh ./chibicc
 	test/diagnostic.sh ./chibicc
 	test/shape.sh ./chibicc
+	test/trivia.sh ./chibicc
 
 test-all: test test-stage2
 
@@ -44,6 +45,7 @@ test-stage2: $(TESTS:test/%=stage2/test/%)
 	test/driver.sh ./stage2/chibicc
 	test/diagnostic.sh ./stage2/chibicc
 	test/shape.sh ./stage2/chibicc
+	test/trivia.sh ./stage2/chibicc
 
 # Misc.
 

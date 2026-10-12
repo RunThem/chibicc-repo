@@ -14,14 +14,29 @@
 - 本地 A/B 规程(出现无法归因的差异时): `git worktree add /tmp/cbase <上一个绿提交>`, 两份
   二进制对同一输入逐字节对照 .s 与 -E / dump 输出.
 
-## 基线记录(T0.1 完成后填写)
+## 基线记录(T0.1, 复验于 e8c8608)
 
-- 起始状态: HEAD = 归档提交(其父 5f2af8a, codegen 直连终态), tokenize.c 805 行,
+- 起始状态: HEAD = e8c8608(线间归档提交; 代码与其父 5f2af8a 相同, 只动文档), tokenize.c 805 行,
   chibicc.h 832 行, main.c 791 行, preprocess.c 1208 行.
-- docker-test: (待填)
-- snapshot-diff: (待填)
-- tinycc(`make test-thirdparty THIRDPARTY=tinycc`): (待填)
-- -E 锁定样本: (待填, 由现状锚点的实测样本转正进 test/trivia.sh)
+- docker-test(`make docker-test`): EXIT=0. 40 个 test/*.c 特性测试在 stage1/stage2 两遍全过,
+  driver.sh / diagnostic.sh(55 例逐字节, 阶段锁定行 3888/3988) / shape.sh(33 段, 3967/4023) /
+  trivia.sh(7 样本, 3983/4032)在 ./chibicc 与 ./stage2/chibicc 上各跑一遍, 自举完成.
+  首次复验(挂 trivia.sh 前)同为 EXIT=0.
+- snapshot-diff(`make docker-snapshot-diff`): `snapshot diff: empty`(raw 逐字节, 41 文件,
+  0 条 diff). 基线 .cache/snapshot 为 B2 终态提交内重置的快照, 本线预期全程不重置.
+- tinycc(`make docker-test-thirdparty THIRDPARTY=tinycc`): EXIT=0, tests2 的 86 个用例跑完
+  (最后一例 111_conversion; Rosetta shim 跳过 106_pthread/112_backtrace/113_btdll),
+  日志 10 处 "failed as expected" 是 tcc 自身的预期失败记账.
+- -E 锁定样本: 7 条进 test/trivia.sh 首段(丢注释 + 折空白, 续行拼接, 行注释吞续行, 补末行换行,
+  丢 BOM, 空文件, 空行群). 脚本生成的输入与实测探针逐字节一致(7/7 cmp 相等); 对 ./chibicc 与
+  A/B 基线 /tmp/cbase/chibicc 两个二进制均通过.
+- A/B 规程: `git worktree add /tmp/cbase e8c8608` 已建并本机构建(该二进制可跑 -E 与后续 dump);
+  前端输出以两二进制逐字节对照. .s 侧等价性由快照链保证: 基线的 .s = .cache/snapshot(B2 终态
+  重置), HEAD 的 .s == .cache/snapshot(本次 diff 为空), 故 HEAD 与基线在 .s 上逐字节相等.
+- 账本核对: 丢弃点清单表 9 行逐行核对无误 - 四个丢弃点在 tokenize() 501-508 / 510-518 /
+  520-526 / 528-533, 五个前置换写在 read_file 670-672, tokenize_file 787-788,
+  canonicalize_newline 691-707, remove_backslash_newline 710-734, convert_universal_chars
+  747-776.
 
 ## trivia 丢弃点清单表(账本初版, T0.1 核对, 实施时逐项打勾)
 
@@ -55,7 +70,8 @@
 
 | 提交 | 步骤 | 内容 |
 |---|---|---|
-| (本提交) | 线间归档 | codegen 直连线归档为 `PLAN-codegen-direct.md` / `RESULT-codegen-direct.md`, 新建本线与账本 |
+| (已归档) | 线间归档 | codegen 直连线归档为 `PLAN-codegen-direct.md` / `RESULT-codegen-direct.md`, 新建本线与账本 |
+| (本提交) | T0.1 基线 | 复验三道闸门并留档(见上); A/B worktree `/tmp/cbase` 建立; `test/trivia.sh` 立项(首段 7 条 -E 归一化样本, 对两二进制通过)并挂进 `make test` / `make test-stage2` |
 
 ## 给审核者的提示
 
