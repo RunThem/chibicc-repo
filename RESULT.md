@@ -79,6 +79,26 @@
   tls.c, 两个二进制的失败 stderr 逐字节相同); `-S` 39 个 test/*.c 逐字节相同(同样跳过 2 个).
 - 偏差: 无既有可观察行为变化; 唯一计划外项 = dump 的空格转义(见上).
 
+## T1.2 重建与 round-trip(已提交)
+
+- 改了什么: `main.c` 增只读旗标 `-reconstruct`(与 `-dump-tokens` 同一 cc1 早退口, 同一份
+  `must_tokenize_file`)- 按流序输出每个 token 的前置切片与拼写(EOF 的尾部 trivia 随其切片
+  输出, 即"重建输入文本"); 驱动侧同 `-E` 透传, 不汇编.
+- 重建合同(判据 3): 只覆盖 `tokenize(file)` 的直接输出(预处理之前, 单文件). 全量断言覆盖
+  `test/*.c` 与 `include/*.h`(44 个文件; `.h` 走 `-xc`, 否则驱动的扩展名分派会拒绝),
+  例外四条与计划一致:
+  - `test/literal.c`, `include/stdarg.h`, `include/stdatomic.h` - 反斜杠续行(T2.1 退役)
+  - `test/unicode.c` - universal chars(T2.2 退役)
+- 边界样本 6 条锁"当前已知偏差"(T2.1/T2.2 退役对应 pass 时改成等于输入): CRLF 折 \n;
+  孤立 CR 折 \n; 补末行换行; 丢 BOM; 续行删除且换行数挪到下一个真实换行之后
+  (`1 +\` NL `2\n` -> `1 +2\n\n`); `\u00e9` 就地改写为 UTF-8 两字节. 语料实测: 例外恰为
+  上列四文件(全语料无 CR/BOM, 除锚点外无续行/\u), 无第五条.
+- 闸门: `make docker-test` EXIT=0(自举完成; trivia.sh 67 例 = 7 -E + 10 dump + 44 文件
+  round-trip + 6 边界样本, 在 ./chibicc 与 ./stage2/chibicc 上各过一遍, 日志 4076/4152 行)
+  `make docker-snapshot-diff` = `snapshot diff: empty`. 本地 A/B: `-S` 39/39 逐字节一致
+  (本步只加驱动旗标, 既有路径零改动).
+- 偏差: 无既有可观察行为变化.
+
 ## 关键结论(开工前分析, 供审核者速览)
 
 - 判据 1 的落点: 既有字段零改动; 新通道 = 每个 token 的前置切片 + `File` 级两个事实;
@@ -99,7 +119,8 @@
 |---|---|---|
 | (已归档) | 线间归档 | codegen 直连线归档为 `PLAN-codegen-direct.md` / `RESULT-codegen-direct.md`, 新建本线与账本 |
 | 9312b10 | T0.1 基线 | 复验三道闸门并留档(见上); A/B worktree `/tmp/cbase` 建立; `test/trivia.sh` 立项(首段 7 条 -E 归一化样本, 对两二进制通过)并挂进 `make test` / `make test-stage2` |
-| (本提交) | T1.1 | `Token` 增 trivia 切片(四个跳过点未动); `-dump-tokens` 与 T/R 行 dump; trivia.sh 第二段 10 样本; docker-test + snapshot-diff 全绿; 本地 A/B -E 46/46 与 -S 39/39 逐字节一致 |
+| c911de9 | T1.1 | `Token` 增 trivia 切片(四个跳过点未动); `-dump-tokens` 与 T/R 行 dump; trivia.sh 第二段 10 样本; docker-test + snapshot-diff 全绿; 本地 A/B -E 46/46 与 -S 39/39 逐字节一致 |
+| (本提交) | T1.2 | `-reconstruct` 与全量 round-trip; trivia.sh 第三段(44 文件 + 6 边界样本); 语料实测: 例外恰为计划列的四文件 |
 
 ## 给审核者的提示
 

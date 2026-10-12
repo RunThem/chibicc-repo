@@ -8,7 +8,7 @@
 # 空文本的 token - 只有 EOF - 省略文本字段). 后续段落随各步增量添加:
 #   首段   (T0.1) - -E 的归一化锁定样本(实测于归档提交 e8c8608)
 #   第二段 (T1.1) - -dump-tokens 的 token/trivia 流断言
-#   第三段 (T1.2) - -reconstruct 的全量 round-trip(重建 == 原文件)
+#   第三段 (T1.2) - -reconstruct 的全量 round-trip(重建 == 原文件)与边界样本
 #
 # 用法: test/trivia.sh ./chibicc (由 make test 与 make test-stage2 调用)
 
@@ -118,4 +118,54 @@ exp_dump empty '' \
 exp_dump comment_only '/* only */\n' \
 'R 1 0 bc /*\\x20only\\x20*/\nR 1 10 nl \\n\nT 2 11 eof\n'
 
-echo "trivia lock: $n_e -E samples, $n_d dump samples"
+# ---- T1.2: -reconstruct 的重建合同(重建 == 原文件) ------------------------------
+
+# 全量: test/*.c 与 include/*.h 的每个文件重建后与原文件逐字节相同. 例外清单
+# (计划内的破坏性前置换写, 括号里是退役步骤):
+#   test/literal.c, include/stdarg.h, include/stdatomic.h - 反斜杠续行 (T2.1)
+#   test/unicode.c - universal chars (T2.2)
+# 例外只许缩小, 缩小步骤: 先删对应的 skip, 再把下面的边界样本改成"重建 == 输入".
+n_rt=0
+exc="test/literal.c include/stdarg.h include/stdatomic.h test/unicode.c"
+
+for f in test/*.c include/*.h; do
+    case " $exc " in *" $f "*) continue;; esac
+    $chibicc -xc -reconstruct "$f" > "$tmp/rec.out"
+    cmp -s "$tmp/rec.out" "$f"
+    n_rt=$((n_rt + 1))
+    check "-reconstruct/$f"
+done
+
+n_rb=0
+
+# exp_rec <name> <input-printf> <expected-printf>: 边界样本, 期望锁的是当前已知的
+# 偏差(T2.1/T2.2 退役对应 pass 后, 这些期望改成等于输入).
+exp_rec() {
+    name=$1; shift
+    n_rb=$((n_rb + 1))
+    printf "$1" > "$tmp/r-$name.c"
+    printf "$2" > "$tmp/r-$name.expected"
+    $chibicc -reconstruct "$tmp/r-$name.c" > "$tmp/r-$name.out"
+    cmp -s "$tmp/r-$name.out" "$tmp/r-$name.expected"
+    check "-reconstruct/$name"
+}
+
+# CRLF 被折成 \n (canonicalize_newline; T2.1 退役).
+exp_rec crlf 'a\r\nb\r\n' 'a\nb\n'
+
+# 孤立 CR 被折成 \n (同上).
+exp_rec lone_cr 'a\rb\n' 'a\nb\n'
+
+# 无末行换行被补出 (read_file; T2.1 改为 File 级事实后不再出现在重建里).
+exp_rec no_final_newline 'int x;' 'int x;\n'
+
+# BOM 被丢掉 (tokenize_file; T2.1 同上).
+exp_rec bom '\xef\xbb\xbfint x;\n' 'int x;\n'
+
+# 反斜杠续行被删, 换行数挪到下一个真实换行之后 (remove_backslash_newline; T2.1 归 trivia).
+exp_rec continuation '1 +\\\n2\n' '1 +2\n\n'
+
+# universal chars 被就地改写成 UTF-8 (convert_universal_chars; T2.2 后保原拼写).
+exp_rec universal_chars 'char *s = "\\u00e9";\n' 'char *s = "\xc3\xa9";\n'
+
+echo "trivia lock: $n_e -E samples, $n_d dump samples, $n_rt round-trip files, $n_rb boundary samples"

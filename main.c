@@ -20,6 +20,7 @@ static bool opt_c;
 static bool opt_cc1;
 static bool opt_hash_hash_hash;
 static bool opt_dump_tokens;
+static bool opt_reconstruct;
 static bool opt_static;
 static bool opt_shared;
 static char *opt_MF;
@@ -173,6 +174,11 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-dump-tokens")) {
       opt_dump_tokens = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-reconstruct")) {
+      opt_reconstruct = true;
       continue;
     }
 
@@ -547,6 +553,22 @@ static void print_token_dump(Token *tok) {
   }
 }
 
+// Print the bytes the token stream was tokenized from: the trivia in
+// front of every token plus the token spellings (the trailing trivia
+// rides on EOF). Before preprocessing the two cover the file buffer byte
+// for byte, so this rebuilds the input text - except for the rewrites
+// tokenize_file still applies before tokenizing (PLAN.md 账本 rows 5-9:
+// a synthesized final newline, a dropped BOM, CRLF and backslash-newline
+// folding, universal-character rewriting).
+static void reconstruct(Token *tok) {
+  FILE *out = open_file(opt_o ? opt_o : "-");
+
+  for (; tok; tok = tok->next) {
+    fwrite(tok->trivia, 1, tok->trivia_len, out);
+    fwrite(tok->loc, 1, tok->len, out);
+  }
+}
+
 static bool in_std_include_path(char *path) {
   for (int i = 0; i < std_include_paths.len; i++) {
     char *dir = std_include_paths.data[i];
@@ -615,11 +637,15 @@ static Token *append_tokens(Token *tok1, Token *tok2) {
 }
 
 static void cc1(void) {
-  // -dump-tokens works on the raw stream of the base file: the trivia
-  // contract covers tokenize()'s direct output, before preprocessing
-  // (PLAN.md 判据 3).
-  if (opt_dump_tokens) {
-    print_token_dump(must_tokenize_file(base_file));
+  // -dump-tokens and -reconstruct work on the raw stream of the base
+  // file: the trivia contract covers tokenize()'s direct output, before
+  // preprocessing (PLAN.md 判据 3).
+  if (opt_dump_tokens || opt_reconstruct) {
+    Token *tok = must_tokenize_file(base_file);
+    if (opt_dump_tokens)
+      print_token_dump(tok);
+    if (opt_reconstruct)
+      reconstruct(tok);
     return;
   }
 
@@ -866,8 +892,8 @@ int main(int argc, char **argv) {
 
     assert(type == FILE_C);
 
-    // Just preprocess (or dump the raw token stream)
-    if (opt_E || opt_M || opt_dump_tokens) {
+    // Just preprocess (or dump/reconstruct the raw token stream)
+    if (opt_E || opt_M || opt_dump_tokens || opt_reconstruct) {
       run_cc1(argc, argv, input, NULL);
       continue;
     }

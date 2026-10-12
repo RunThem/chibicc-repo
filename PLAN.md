@@ -113,11 +113,13 @@ trivia 一律以指向缓冲的切片表示(不复制文本, 不逐项建对象)
   token 一行, 可逐字节锁定. trivia.sh 第二段: 对 snippet 断言 dump(单行注释, 跨行块注释,
   空白与制表符, 空行群, 注释与空白混合, 行首/行尾 trivia, 文件尾 trivia 共 10 样本).
   完成记录见 `RESULT.md` 的 T1.1 一节.
-- [ ] **T1.2 重建与 round-trip(平凡子集)**: 重建函数(按流序拼接 前置切片 + 拼写; 驱动器增
-  旗标 `-reconstruct`, 输出原始字节)与 trivia.sh 第三段: 对 `test/*.c` 与 `include/*.h`
-  全量断言"重建 == 原文件"; 例外以显式清单跳过并注明消除步骤 - 本步例外 = 三处续行文件
-  (`test/literal.c`, `include/stdarg.h`, `include/stdatomic.h`), `test/unicode.c`(\u),
-  以及 CRLF / BOM / 无末行换行样本(由 T2.1 转正).
+- [x] **T1.2 重建与 round-trip(平凡子集)**: 重建函数(按流序拼接 前置切片 + 拼写; 驱动器增
+  旗标 `-reconstruct`, 输出原始字节, 与 `-dump-tokens` 共用同一 cc1 早退口)与 trivia.sh 第三段:
+  对 `test/*.c` 与 `include/*.h` 全量断言"重建 == 原文件"(44 个文件, `.h` 用 `-xc` 进 C 路径);
+  例外以显式清单跳过并注明消除步骤 - 本步例外 = 计划列的四文件(三处续行: `test/literal.c`,
+  `include/stdarg.h`, `include/stdatomic.h`; `test/unicode.c` 的 \u), 语料实测无第五条;
+  CRLF / 孤立 CR / BOM / 无末行换行 / 续行 / \u 六个边界样本以"当前已知偏差"锁定(T2.1/T2.2
+  退役对应 pass 时改为等于输入). 完成记录见 `RESULT.md` 的 T1.2 一节.
 
 ## 阶段 T2: 原始文本保真(逐字节重建), 可裁
 
