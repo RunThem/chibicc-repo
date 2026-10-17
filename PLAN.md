@@ -186,7 +186,7 @@ trivia 终态(443b4c2: tokenize.c 924 行 + chibicc.h 864 行 + main.c 959 行 +
   `struct` / `union` / `enum` / `typeof` / `_Atomic` 开头时按 cast, 否则按括号表达式;
   解析失败回退 `CST_UNPARSED`. 不查名字, 不算类型, 不折叠常量. `test/cst.sh` 第三段:
   优先级与结合性, 括号显式保留, 调用 / 下标 / 成员, 条件表达式与赋值链的 dump.
-- [ ] **C2.2 声明与语句结构**: `CST_DECL` / `CST_DECL_SPECS` / `CST_DECLARATOR` /
+- [x] **C2.2 声明与语句结构**: `CST_DECL` / `CST_DECL_SPECS` / `CST_DECLARATOR` /
   `CST_INIT_DECLARATOR` / `CST_FUNC_DEF` / `CST_PARAM_LIST` / `CST_TYPE_NAME` /
   初始化器(含指派与嵌套花括号); 语句 `CST_IF` / `CST_SWITCH` / `CST_WHILE` / `CST_DO` /
   `CST_FOR` / `CST_CASE` / `CST_DEFAULT` / `CST_LABEL` / `CST_GOTO` / `CST_BREAK` /

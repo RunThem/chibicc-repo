@@ -1,19 +1,22 @@
 #include "chibicc.h"
 
 // Lossless concrete syntax tree over the raw token stream (PLAN.md stage
-// C1/C2.1). Every token of the input becomes one leaf, in order; the
+// C1/C2). Every token of the input becomes one leaf, in order; the
 // leaves' trivia and spellings rebuild the input file byte for byte.
 //
-// The skeleton groups delimiters and splits statements. At statement
-// level (the top level and inside a block) an item is a ';'-terminated
-// statement, a lone ';' (CST_NULL_STMT), or a '{...}' body (CST_BLOCK).
-// An expression statement whose whole span parses is a CST_EXPR_STMT;
-// anything the expression grammar cannot cover becomes CST_UNPARSED,
-// holding the raw skeleton children (tokens up to ';' with nested
-// delimiters grouped, semicolons in a for-header left as leaves). A
-// group or block without its closing token, and a closer that has no
-// opener at this level, are CST_UNPARSED too; the tokens they already
-// hold stay in the tree.
+// The tree groups delimiters, splits statements and builds declarations.
+// A declaration is CST_DECL (specs + init-declarators + ';') or
+// CST_FUNC_DEF (specs + declarator + body block); a parameter is a
+// CST_PARAM inside CST_PARAM_LIST; a type name (cast, sizeof, compound
+// literal) is CST_TYPE_NAME. Statements cover the C statement forms with
+// every keyword, parenthesis, bracket and ';' explicit. An expression
+// statement is CST_EXPR_STMT.
+//
+// Anything the grammars cannot cover becomes CST_UNPARSED, holding the
+// raw skeleton children (tokens up to ';' with nested delimiters
+// grouped). A group or block without its closing token, and a closer
+// that has no opener at this level, are CST_UNPARSED too; the tokens
+// they already hold stay in the tree.
 //
 // The expression grammar is the C precedence chain up to and including
 // the comma operator. Every operator, parenthesis and bracket is an
@@ -145,6 +148,15 @@ static bool cst_is_keyword(Token *tok) {
   return cst_in_list(tok, kw);
 }
 
+static bool cst_is_typedef_name(CstContext *ctx, Token *tok) {
+  if (!tok || tok->kind != TK_IDENT)
+    return false;
+  for (int i = 0; i < ctx->typedefs.len; i++)
+    if (equal(tok, ctx->typedefs.data[i]))
+      return true;
+  return false;
+}
+
 // True if `tok` can start a type name in a cast or sizeof: a type
 // specifier / qualifier keyword, or a file-local typedef name.
 static bool cst_is_type_start(Token *tok, CstContext *ctx) {
@@ -156,13 +168,23 @@ static bool cst_is_type_start(Token *tok, CstContext *ctx) {
     "__restrict", "__restrict__",
     NULL,
   };
-  if (cst_in_list(tok, kw))
-    return true;
+  return cst_in_list(tok, kw) || cst_is_typedef_name(ctx, tok);
+}
 
-  for (int i = 0; i < ctx->typedefs.len; i++)
-    if (equal(tok, ctx->typedefs.data[i]))
-      return true;
-  return false;
+// True if `tok` can start a declaration. Storage classes and the
+// declaration-only keywords are included; statement keywords are not.
+static bool cst_is_decl_start(Token *tok, CstContext *ctx) {
+  char *kw[] = {
+    "typedef", "static", "extern", "auto", "register", "inline",
+    "_Thread_local", "__thread", "_Noreturn", "_Alignas", "const",
+    "volatile", "restrict", "__restrict", "__restrict__", "__attribute__",
+    "__extension__", "struct", "union", "enum", "typeof", "__typeof__",
+    "__typeof", "_Atomic", "void", "_Bool", "char", "short", "int",
+    "long", "float", "double", "signed", "unsigned", "_Complex",
+    "_Imaginary", "__signed__", "__const__", "__volatile__",
+    NULL,
+  };
+  return cst_in_list(tok, kw) || cst_is_typedef_name(ctx, tok);
 }
 
 static void cst_add_typedef(CstContext *ctx, Token *tok) {
@@ -222,6 +244,9 @@ static CstNode *cst_parse_postfix_tail(CstParser *p, CstNode *node);
 static CstNode *cst_parse_primary(CstParser *p);
 static CstNode *cst_parse_arg_list(CstParser *p);
 static CstNode *cst_parse_init_list(CstParser *p);
+static CstNode *cst_parse_type_name(CstParser *p);
+static CstNode *cst_parse_declarator(CstParser *p, bool allow_abstract);
+static CstNode *cst_parse_decl(CstParser *p);
 
 // Consume one balanced group in raw mode, for a type name in a cast or
 // sizeof. An unclosed group fails the expression: the statement falls
@@ -314,9 +339,76 @@ static CstNode *cst_parse_arg_list(CstParser *p) {
   return args;
 }
 
-// init-list = "{" (initializer ("," initializer)* ","?)? "}"
-// Designators are C2.2's; here an element is an assignment expression or
-// a nested list.
+// designator = "[" conditional ("..." conditional)? "]" | "." ident
+static CstNode *cst_parse_designator(CstParser *p) {
+  CstNode *desig = new_cst_node(CST_DESIGNATOR);
+
+  if (cst_at(p, "[")) {
+    cst_add_leaf(desig, p->tok); // '['
+    p->tok = p->tok->next;
+
+    CstNode *begin = cst_parse_conditional(p);
+    if (!p->ok)
+      return NULL;
+    cst_add_child(desig, begin);
+
+    if (cst_at(p, "...")) {
+      cst_add_leaf(desig, p->tok);
+      p->tok = p->tok->next;
+      CstNode *end = cst_parse_conditional(p);
+      if (!p->ok)
+        return NULL;
+      cst_add_child(desig, end);
+    }
+
+    if (!cst_at(p, "]")) {
+      cst_fail(p);
+      return NULL;
+    }
+    cst_add_leaf(desig, p->tok);
+    p->tok = p->tok->next;
+    return desig;
+  }
+
+  if (cst_at(p, ".")) {
+    Token *name = p->tok->next;
+    if (!name || name->kind != TK_IDENT) {
+      cst_fail(p);
+      return NULL;
+    }
+    cst_add_leaf(desig, p->tok);
+    cst_add_leaf(desig, name);
+    p->tok = name->next;
+    return desig;
+  }
+
+  cst_fail(p);
+  return NULL;
+}
+
+// initializer = brace-list | string+ | assign
+static CstNode *cst_parse_initializer(CstParser *p) {
+  if (cst_at(p, "{"))
+    return cst_parse_init_list(p);
+
+  if (p->tok && p->tok->kind == TK_STR) {
+    CstNode *node = new_cst_node(CST_PRIMARY);
+    while (p->tok && p->tok->kind == TK_STR) {
+      cst_add_leaf(node, p->tok);
+      p->tok = p->tok->next;
+    }
+    return node;
+  }
+
+  return cst_parse_assign(p);
+}
+
+// init-list = "{" (init-item ("," init-item)* ","?)? "}"
+// init-item = designator* "="? initializer
+//
+// The written shape is kept: designators are explicit nodes, a braced
+// sublist is a nested CST_INIT_LIST, and no target-type decision is made
+// here (brace elision belongs to a later consumer).
 static CstNode *cst_parse_init_list(CstParser *p) {
   CstNode *list = new_cst_node(CST_INIT_LIST);
   cst_add_leaf(list, p->tok); // '{'
@@ -329,11 +421,25 @@ static CstNode *cst_parse_init_list(CstParser *p) {
   }
 
   for (;;) {
-    CstNode *elem = cst_at(p, "{") ? cst_parse_init_list(p)
-                                   : cst_parse_assign(p);
+    CstNode *item = new_cst_node(CST_INITIALIZER);
+
+    while (cst_at(p, "[") || cst_at(p, ".")) {
+      CstNode *desig = cst_parse_designator(p);
+      if (!p->ok)
+        return NULL;
+      cst_add_child(item, desig);
+    }
+
+    if (cst_at(p, "=")) {
+      cst_add_leaf(item, p->tok);
+      p->tok = p->tok->next;
+    }
+
+    CstNode *value = cst_parse_initializer(p);
     if (!p->ok)
       return NULL;
-    cst_add_child(list, elem);
+    cst_add_child(item, value);
+    cst_add_child(list, item);
 
     if (!cst_at(p, ","))
       break;
@@ -444,7 +550,7 @@ static CstNode *cst_parse_unary(CstParser *p) {
 
     CstNode *operand = (cst_at(p, "(") && p->tok->next &&
                         cst_is_type_start(p->tok->next, p->ctx))
-                         ? cst_parse_raw_group(p)
+                         ? cst_parse_type_name(p)
                          : cst_parse_unary(p);
     if (!p->ok)
       return NULL;
@@ -473,7 +579,7 @@ static CstNode *cst_parse_unary(CstParser *p) {
 
   if (cst_at(p, "(") && p->tok->next &&
       cst_is_type_start(p->tok->next, p->ctx)) {
-    CstNode *type = cst_parse_raw_group(p);
+    CstNode *type = cst_parse_type_name(p);
     if (!p->ok)
       return NULL;
 
@@ -757,6 +863,467 @@ static CstNode *cst_parse_comma(CstParser *p) {
 }
 
 //
+// Declaration layer (C2.2)
+//
+
+static void cst_parse_compound(CstParser *p, CstNode *block);
+static CstNode *cst_parse_param_list(CstParser *p);
+
+// Consume one balanced group in raw mode from `start`, resetting the
+// parser on failure. Used where a structured attempt did not fit and the
+// tokens must still stay in the tree (K&R parameter lists, array
+// dimensions, attributes).
+static CstNode *cst_parse_raw_group_at(CstParser *p, Token *start) {
+  p->tok = start;
+  p->ok = true;
+
+  Token *rest = NULL;
+  CstNode *group = cst_parse_group(&rest, start);
+  if (group->kind == CST_UNPARSED) {
+    cst_fail(p);
+    return NULL;
+  }
+  p->tok = rest;
+  return group;
+}
+
+// decl-specs = (storage-class | qualifier | type-specifier | ...)+
+//
+// Shapes only: `struct` / `union` / `enum` bodies, typeof operands,
+// _Atomic / _Alignas arguments and attributes stay raw groups. A
+// user-defined type name is a specifier only while no other specifier
+// has been seen, so `T T;` leaves the second T to the declarator.
+static CstNode *cst_parse_decl_specs(CstParser *p) {
+  CstNode *specs = new_cst_node(CST_DECL_SPECS);
+  bool has_type = false;
+
+  for (;;) {
+    Token *tok = p->tok;
+    if (!p->ok || !tok || tok->kind == TK_EOF)
+      break;
+
+    char *plain[] = {
+      "typedef", "static", "extern", "auto", "register", "inline",
+      "_Thread_local", "__thread", "_Noreturn", "const", "volatile",
+      "restrict", "__restrict", "__restrict__",
+      NULL,
+    };
+    if (cst_in_list(tok, plain)) {
+      cst_add_leaf(specs, tok);
+      p->tok = tok->next;
+      continue;
+    }
+
+    char *builtin[] = {
+      "void", "_Bool", "char", "short", "int", "long", "float", "double",
+      "signed", "unsigned", "_Complex", "_Imaginary",
+      "__signed__", "__const__", "__volatile__",
+      NULL,
+    };
+    if (cst_in_list(tok, builtin)) {
+      cst_add_leaf(specs, tok);
+      p->tok = tok->next;
+      has_type = true;
+      continue;
+    }
+
+    if (equal(tok, "struct") || equal(tok, "union")) {
+      if (has_type)
+        break;
+      cst_add_leaf(specs, tok);
+      p->tok = tok->next;
+      if (p->tok && p->tok->kind == TK_IDENT && !cst_is_keyword(p->tok)) {
+        cst_add_leaf(specs, p->tok);
+        p->tok = p->tok->next;
+      }
+      if (cst_at(p, "{")) {
+        Token *rest = NULL;
+        CstNode *body = cst_parse_group(&rest, p->tok);
+        if (body->kind == CST_UNPARSED) {
+          cst_fail(p);
+          return NULL;
+        }
+        p->tok = rest;
+        cst_add_child(specs, body);
+      }
+      has_type = true;
+      continue;
+    }
+
+    if (equal(tok, "enum")) {
+      if (has_type)
+        break;
+      cst_add_leaf(specs, tok);
+      p->tok = tok->next;
+      if (p->tok && p->tok->kind == TK_IDENT && !cst_is_keyword(p->tok)) {
+        cst_add_leaf(specs, p->tok);
+        p->tok = p->tok->next;
+      }
+      if (cst_at(p, "{")) {
+        Token *rest = NULL;
+        CstNode *body = cst_parse_group(&rest, p->tok);
+        if (body->kind == CST_UNPARSED) {
+          cst_fail(p);
+          return NULL;
+        }
+        p->tok = rest;
+        cst_add_child(specs, body);
+      }
+      has_type = true;
+      continue;
+    }
+
+    if (equal(tok, "typeof") || equal(tok, "__typeof__") ||
+        equal(tok, "__typeof")) {
+      if (has_type)
+        break;
+      cst_add_leaf(specs, tok);
+      p->tok = tok->next;
+      if (cst_at(p, "(")) {
+        CstNode *operand = cst_parse_raw_group(p);
+        if (!p->ok)
+          return NULL;
+        cst_add_child(specs, operand);
+      }
+      has_type = true;
+      continue;
+    }
+
+    if (equal(tok, "_Atomic")) {
+      cst_add_leaf(specs, tok);
+      p->tok = tok->next;
+      if (cst_at(p, "(")) {
+        CstNode *operand = cst_parse_raw_group(p);
+        if (!p->ok)
+          return NULL;
+        cst_add_child(specs, operand);
+        has_type = true;
+      }
+      continue;
+    }
+
+    if (equal(tok, "_Alignas")) {
+      cst_add_leaf(specs, tok);
+      p->tok = tok->next;
+      if (cst_at(p, "(")) {
+        CstNode *operand = cst_parse_raw_group(p);
+        if (!p->ok)
+          return NULL;
+        cst_add_child(specs, operand);
+      }
+      continue;
+    }
+
+    if (equal(tok, "__attribute__") || equal(tok, "__extension__")) {
+      bool attr = equal(tok, "__attribute__");
+      cst_add_leaf(specs, tok);
+      p->tok = tok->next;
+      if (attr && cst_at(p, "(")) {
+        CstNode *group = cst_parse_raw_group(p);
+        if (!p->ok)
+          return NULL;
+        cst_add_child(specs, group);
+      }
+      continue;
+    }
+
+    if (cst_is_typedef_name(p->ctx, tok)) {
+      if (has_type)
+        break;
+      cst_add_leaf(specs, tok);
+      p->tok = tok->next;
+      has_type = true;
+      continue;
+    }
+
+    break;
+  }
+
+  if (specs->child_count == 0) {
+    cst_fail(p);
+    return NULL;
+  }
+  return specs;
+}
+
+// Consume `__attribute__((...))` pairs after a declarator, keeping them
+// on the declarator node.
+static bool cst_parse_attributes(CstParser *p, CstNode *node) {
+  while (cst_at(p, "__attribute__")) {
+    cst_add_leaf(node, p->tok);
+    p->tok = p->tok->next;
+    if (cst_at(p, "(")) {
+      CstNode *group = cst_parse_raw_group(p);
+      if (!p->ok)
+        return false;
+      cst_add_child(node, group);
+    }
+  }
+  return true;
+}
+
+// array-dimension = "[" ("static" | "restrict" | "*")* expr? "]"
+// The expression is parsed when it fits; otherwise the bracket keeps its
+// raw tokens.
+static CstNode *cst_parse_dimension(CstParser *p) {
+  Token *start = p->tok;
+  CstNode *bracket = new_cst_node(CST_GROUP_BRACKET);
+  cst_add_leaf(bracket, p->tok); // '['
+  p->tok = p->tok->next;
+
+  while (cst_at(p, "static") || cst_at(p, "restrict") ||
+         cst_at(p, "const") || cst_at(p, "volatile")) {
+    cst_add_leaf(bracket, p->tok);
+    p->tok = p->tok->next;
+  }
+
+  if (cst_at(p, "]")) {
+    cst_add_leaf(bracket, p->tok);
+    p->tok = p->tok->next;
+    return bracket;
+  }
+
+  if (cst_at(p, "*")) {
+    cst_add_leaf(bracket, p->tok);
+    p->tok = p->tok->next;
+  } else {
+    CstNode *expr = cst_parse_assign(p);
+    if (!p->ok)
+      return cst_parse_raw_group_at(p, start);
+    cst_add_child(bracket, expr);
+  }
+
+  if (!cst_at(p, "]"))
+    return cst_parse_raw_group_at(p, start);
+  cst_add_leaf(bracket, p->tok);
+  p->tok = p->tok->next;
+  return bracket;
+}
+
+// declarator = "*"* ("(" declarator ")" | ident)? ("(" params ")" | "[" dim "]")*
+//
+// The written grouping is kept: pointer stars, an inner declarator in a
+// GROUP_PAREN, the name, and the suffixes in source order. No type is
+// built and no name is bound.
+static CstNode *cst_parse_declarator(CstParser *p, bool allow_abstract) {
+  CstNode *decl = new_cst_node(CST_DECLARATOR);
+
+  while (cst_at(p, "*")) {
+    cst_add_leaf(decl, p->tok);
+    p->tok = p->tok->next;
+    while (cst_at(p, "const") || cst_at(p, "volatile") ||
+           cst_at(p, "restrict") || cst_at(p, "__restrict") ||
+           cst_at(p, "__restrict__")) {
+      cst_add_leaf(decl, p->tok);
+      p->tok = p->tok->next;
+    }
+  }
+
+  if (cst_at(p, "(")) {
+    Token *open = p->tok;
+    p->tok = open->next;
+
+    CstNode *inner = cst_parse_declarator(p, allow_abstract);
+    if (!p->ok || !cst_at(p, ")")) {
+      cst_fail(p);
+      return NULL;
+    }
+
+    CstNode *group = new_cst_node(CST_GROUP_PAREN);
+    cst_add_leaf(group, open);
+    cst_add_child(group, inner);
+    cst_add_leaf(group, p->tok);
+    p->tok = p->tok->next;
+    cst_add_child(decl, group);
+  } else if (p->tok && p->tok->kind == TK_IDENT && !cst_is_keyword(p->tok)) {
+    cst_add_leaf(decl, p->tok);
+    p->tok = p->tok->next;
+  } else if (!allow_abstract) {
+    cst_fail(p);
+    return NULL;
+  }
+
+  for (;;) {
+    if (cst_at(p, "(")) {
+      CstNode *params = cst_parse_param_list(p);
+      if (!p->ok)
+        return NULL;
+      cst_add_child(decl, params);
+      continue;
+    }
+    if (cst_at(p, "[")) {
+      CstNode *dim = cst_parse_dimension(p);
+      if (!p->ok)
+        return NULL;
+      cst_add_child(decl, dim);
+      continue;
+    }
+    break;
+  }
+
+  if (!cst_parse_attributes(p, decl))
+    return NULL;
+  return decl;
+}
+
+// parameter = decl-specs declarator?
+static CstNode *cst_parse_param(CstParser *p) {
+  CstNode *specs = cst_parse_decl_specs(p);
+  if (!p->ok)
+    return NULL;
+
+  CstNode *decl = cst_parse_declarator(p, true);
+  if (!p->ok)
+    return NULL;
+
+  CstNode *param = new_cst_node(CST_PARAM);
+  cst_add_child(param, specs);
+  if (decl->child_count)
+    cst_add_child(param, decl);
+  return param;
+}
+
+// param-list = "(" (param ("," param)* | "..." | raw)? ")"
+// A parameter list the declaration grammar cannot explain keeps its raw
+// tokens in a GROUP_PAREN (K&R identifier lists are the common case).
+static CstNode *cst_parse_param_list(CstParser *p) {
+  Token *start = p->tok;
+  CstNode *list = new_cst_node(CST_PARAM_LIST);
+  cst_add_leaf(list, p->tok); // '('
+  p->tok = p->tok->next;
+
+  if (cst_at(p, ")")) {
+    cst_add_leaf(list, p->tok);
+    p->tok = p->tok->next;
+    return list;
+  }
+
+  if (cst_at(p, "...")) {
+    cst_add_leaf(list, p->tok);
+    p->tok = p->tok->next;
+  } else {
+    for (;;) {
+      CstNode *param = cst_parse_param(p);
+      if (!param)
+        return cst_parse_raw_group_at(p, start);
+      cst_add_child(list, param);
+
+      if (!cst_at(p, ","))
+        break;
+      cst_add_leaf(list, p->tok);
+      p->tok = p->tok->next;
+    }
+  }
+
+  if (!cst_at(p, ")"))
+    return cst_parse_raw_group_at(p, start);
+  cst_add_leaf(list, p->tok);
+  p->tok = p->tok->next;
+  return list;
+}
+
+// type-name = "(" decl-specs abstract-declarator? ")"
+static CstNode *cst_parse_type_name(CstParser *p) {
+  Token *open = p->tok;
+  CstNode *node = new_cst_node(CST_TYPE_NAME);
+  cst_add_leaf(node, open); // '('
+  p->tok = open->next;
+
+  CstNode *specs = cst_parse_decl_specs(p);
+  if (!p->ok)
+    return NULL;
+  cst_add_child(node, specs);
+
+  CstNode *decl = cst_parse_declarator(p, true);
+  if (!p->ok)
+    return NULL;
+  if (decl->child_count)
+    cst_add_child(node, decl);
+
+  if (!cst_at(p, ")")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+  return node;
+}
+
+// declaration = decl-specs init-declarator ("," init-declarator)* ";"
+//             | decl-specs ";"
+// function-definition = decl-specs declarator compound-stmt
+static CstNode *cst_parse_decl(CstParser *p) {
+  CstNode *specs = cst_parse_decl_specs(p);
+  if (!p->ok)
+    return NULL;
+
+  // A tag or specifier with no declarator: `struct S {...};`, `int;`.
+  if (cst_at(p, ";")) {
+    CstNode *decl = new_cst_node(CST_DECL);
+    cst_add_child(decl, specs);
+    cst_add_leaf(decl, p->tok);
+    p->tok = p->tok->next;
+    return decl;
+  }
+
+  CstNode *declr = cst_parse_declarator(p, false);
+  if (!p->ok)
+    return NULL;
+
+  // `declarator {` is a function definition. GNU nested functions are
+  // allowed too; nothing here checks the scope.
+  if (cst_at(p, "{")) {
+    CstNode *body = new_cst_node(CST_BLOCK);
+    cst_parse_compound(p, body);
+    if (!p->ok)
+      return NULL;
+
+    CstNode *fn = new_cst_node(CST_FUNC_DEF);
+    cst_add_child(fn, specs);
+    cst_add_child(fn, declr);
+    cst_add_child(fn, body);
+    return fn;
+  }
+
+  CstNode *decl = new_cst_node(CST_DECL);
+  cst_add_child(decl, specs);
+
+  for (;;) {
+    if (cst_at(p, "=")) {
+      CstNode *init_decl = new_cst_node(CST_INIT_DECLARATOR);
+      cst_add_child(init_decl, declr);
+      cst_add_leaf(init_decl, p->tok); // '='
+      p->tok = p->tok->next;
+
+      CstNode *init = cst_parse_initializer(p);
+      if (!p->ok)
+        return NULL;
+      cst_add_child(init_decl, init);
+      cst_add_child(decl, init_decl);
+    } else {
+      cst_add_child(decl, declr);
+    }
+
+    if (!cst_at(p, ","))
+      break;
+    cst_add_leaf(decl, p->tok);
+    p->tok = p->tok->next;
+
+    declr = cst_parse_declarator(p, false);
+    if (!p->ok)
+      return NULL;
+  }
+
+  if (!cst_at(p, ";")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(decl, p->tok);
+  p->tok = p->tok->next;
+  return decl;
+}
+
+//
 // Statement layer
 //
 
@@ -807,83 +1374,514 @@ static CstNode *cst_try_expr_stmt(Token **rest, Token *tok, CstContext *ctx) {
   return stmt;
 }
 
-static CstNode *cst_parse_statement(Token **rest, Token *tok, CstContext *ctx) {
-  CstNode *stmt = cst_try_expr_stmt(rest, tok, ctx);
-  if (stmt)
-    return stmt;
-  return cst_parse_fallback_statement(rest, tok);
+static CstNode *cst_parse_statement(CstParser *p);
+
+// statement = "return" expr? ";"
+//           | "if" "(" expr ")" statement ("else" statement)?
+//           | "switch" "(" expr ")" statement
+//           | "while" "(" expr ")" statement
+//           | "do" statement "while" "(" expr ")" ";"
+//           | "for" "(" (decl | expr)? ";" expr? ";" expr? ")" statement
+//           | "case" conditional ("..." conditional)? ":" statement
+//           | "default" ":" statement
+//           | "goto" (ident | "*" expr) ";"
+//           | "break" ";" | "continue" ";"
+//           | "asm" qualifiers* "(" raw ")" ";"
+//           | ident ":" statement
+//           | compound-stmt | declaration | expr-stmt
+static CstNode *cst_parse_simple_stmt(CstParser *p, CstKind kind) {
+  CstNode *node = new_cst_node(kind);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  if (!cst_at(p, ";")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+  return node;
 }
 
-static CstNode *cst_parse_block(Token **rest, Token *tok, CstContext *ctx) {
-  CstNode *block = new_cst_node(CST_BLOCK);
-  cst_add_leaf(block, tok); // '{'
+static CstNode *cst_parse_return(CstParser *p) {
+  CstNode *node = new_cst_node(CST_RETURN);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
 
-  Token *p = tok->next;
-  for (;;) {
-    if (!p || p->kind == TK_EOF)
-      break;
-    if (equal(p, "}"))
-      break;
-    if (cst_is_close(p)) {
-      // A closer of another delimiter at this level has no opener here.
-      CstNode *unparsed = new_cst_node(CST_UNPARSED);
-      cst_add_leaf(unparsed, p);
-      cst_add_child(block, unparsed);
-      p = p->next;
-      continue;
-    }
-    if (equal(p, ";")) {
-      CstNode *null = new_cst_node(CST_NULL_STMT);
-      cst_add_leaf(null, p);
-      cst_add_child(block, null);
-      p = p->next;
-      continue;
-    }
-    if (equal(p, "{")) {
-      cst_add_child(block, cst_parse_block(&p, p, ctx));
-      continue;
-    }
-    cst_add_child(block, cst_parse_statement(&p, p, ctx));
+  if (!cst_at(p, ";")) {
+    CstNode *expr = cst_parse_comma(p);
+    if (!p->ok)
+      return NULL;
+    cst_add_child(node, expr);
   }
 
-  if (p && p->kind != TK_EOF && equal(p, "}")) {
-    cst_add_leaf(block, p);
-    p = p->next;
+  if (!cst_at(p, ";")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+  return node;
+}
+
+static CstNode *cst_parse_if(CstParser *p) {
+  CstNode *node = new_cst_node(CST_IF);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  if (!cst_at(p, "(")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *cond = cst_parse_comma(p);
+  if (!p->ok || !cst_at(p, ")")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_child(node, cond);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *then = cst_parse_statement(p);
+  if (!then)
+    return NULL;
+  cst_add_child(node, then);
+
+  if (cst_at(p, "else")) {
+    cst_add_leaf(node, p->tok);
+    p->tok = p->tok->next;
+
+    CstNode *els = cst_parse_statement(p);
+    if (!els)
+      return NULL;
+    cst_add_child(node, els);
+  }
+  return node;
+}
+
+static CstNode *cst_parse_switch(CstParser *p) {
+  CstNode *node = new_cst_node(CST_SWITCH);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  if (!cst_at(p, "(")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *cond = cst_parse_comma(p);
+  if (!p->ok || !cst_at(p, ")")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_child(node, cond);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *body = cst_parse_statement(p);
+  if (!body)
+    return NULL;
+  cst_add_child(node, body);
+  return node;
+}
+
+static CstNode *cst_parse_while(CstParser *p) {
+  CstNode *node = new_cst_node(CST_WHILE);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  if (!cst_at(p, "(")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *cond = cst_parse_comma(p);
+  if (!p->ok || !cst_at(p, ")")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_child(node, cond);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *body = cst_parse_statement(p);
+  if (!body)
+    return NULL;
+  cst_add_child(node, body);
+  return node;
+}
+
+static CstNode *cst_parse_do(CstParser *p) {
+  CstNode *node = new_cst_node(CST_DO);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *body = cst_parse_statement(p);
+  if (!body)
+    return NULL;
+  cst_add_child(node, body);
+
+  if (!cst_at(p, "while")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  if (!cst_at(p, "(")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *cond = cst_parse_comma(p);
+  if (!p->ok || !cst_at(p, ")")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_child(node, cond);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  if (!cst_at(p, ";")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+  return node;
+}
+
+static CstNode *cst_parse_for(CstParser *p) {
+  CstNode *node = new_cst_node(CST_FOR);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  if (!cst_at(p, "(")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  // Init: a declaration owns its terminating ';', an expression does not.
+  if (cst_at(p, ";")) {
+    cst_add_leaf(node, p->tok);
+    p->tok = p->tok->next;
+  } else if (cst_is_decl_start(p->tok, p->ctx)) {
+    CstNode *decl = cst_parse_decl(p);
+    if (!decl)
+      return NULL;
+    cst_add_child(node, decl);
+  } else {
+    CstNode *init = cst_parse_comma(p);
+    if (!p->ok || !cst_at(p, ";")) {
+      cst_fail(p);
+      return NULL;
+    }
+    cst_add_child(node, init);
+    cst_add_leaf(node, p->tok);
+    p->tok = p->tok->next;
+  }
+
+  if (!cst_at(p, ";")) {
+    CstNode *cond = cst_parse_comma(p);
+    if (!p->ok)
+      return NULL;
+    cst_add_child(node, cond);
+  }
+  if (!cst_at(p, ";")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  if (!cst_at(p, ")")) {
+    CstNode *inc = cst_parse_comma(p);
+    if (!p->ok)
+      return NULL;
+    cst_add_child(node, inc);
+  }
+  if (!cst_at(p, ")")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *body = cst_parse_statement(p);
+  if (!body)
+    return NULL;
+  cst_add_child(node, body);
+  return node;
+}
+
+static CstNode *cst_parse_case(CstParser *p) {
+  CstNode *node = new_cst_node(CST_CASE);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *begin = cst_parse_conditional(p);
+  if (!p->ok)
+    return NULL;
+  cst_add_child(node, begin);
+
+  if (cst_at(p, "...")) {
+    cst_add_leaf(node, p->tok);
+    p->tok = p->tok->next;
+
+    CstNode *end = cst_parse_conditional(p);
+    if (!p->ok)
+      return NULL;
+    cst_add_child(node, end);
+  }
+
+  if (!cst_at(p, ":")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *body = cst_parse_statement(p);
+  if (!body)
+    return NULL;
+  cst_add_child(node, body);
+  return node;
+}
+
+static CstNode *cst_parse_default(CstParser *p) {
+  CstNode *node = new_cst_node(CST_DEFAULT);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  if (!cst_at(p, ":")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  CstNode *body = cst_parse_statement(p);
+  if (!body)
+    return NULL;
+  cst_add_child(node, body);
+  return node;
+}
+
+static CstNode *cst_parse_label(CstParser *p) {
+  CstNode *node = new_cst_node(CST_LABEL);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  cst_add_leaf(node, p->tok); // ':'
+  p->tok = p->tok->next;
+
+  CstNode *body = cst_parse_statement(p);
+  if (!body)
+    return NULL;
+  cst_add_child(node, body);
+  return node;
+}
+
+static CstNode *cst_parse_goto(CstParser *p) {
+  CstNode *node = new_cst_node(CST_GOTO);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  if (cst_at(p, "*")) {
+    cst_add_leaf(node, p->tok);
+    p->tok = p->tok->next;
+
+    CstNode *expr = cst_parse_comma(p);
+    if (!p->ok)
+      return NULL;
+    cst_add_child(node, expr);
+  } else {
+    if (!p->tok || p->tok->kind != TK_IDENT) {
+      cst_fail(p);
+      return NULL;
+    }
+    cst_add_leaf(node, p->tok);
+    p->tok = p->tok->next;
+  }
+
+  if (!cst_at(p, ";")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+  return node;
+}
+
+static CstNode *cst_parse_asm(CstParser *p) {
+  CstNode *node = new_cst_node(CST_ASM);
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+
+  while (cst_at(p, "volatile") || cst_at(p, "inline")) {
+    cst_add_leaf(node, p->tok);
+    p->tok = p->tok->next;
+  }
+
+  if (!cst_at(p, "(")) {
+    cst_fail(p);
+    return NULL;
+  }
+  CstNode *operand = cst_parse_raw_group(p);
+  if (!p->ok)
+    return NULL;
+  cst_add_child(node, operand);
+
+  if (!cst_at(p, ";")) {
+    cst_fail(p);
+    return NULL;
+  }
+  cst_add_leaf(node, p->tok);
+  p->tok = p->tok->next;
+  return node;
+}
+
+static CstNode *cst_parse_statement(CstParser *p) {
+  if (!p->ok || !p->tok || p->tok->kind == TK_EOF)
+    return NULL;
+
+  Token *tok = p->tok;
+
+  if (equal(tok, "return"))
+    return cst_parse_return(p);
+  if (equal(tok, "if"))
+    return cst_parse_if(p);
+  if (equal(tok, "switch"))
+    return cst_parse_switch(p);
+  if (equal(tok, "while"))
+    return cst_parse_while(p);
+  if (equal(tok, "do"))
+    return cst_parse_do(p);
+  if (equal(tok, "for"))
+    return cst_parse_for(p);
+  if (equal(tok, "case"))
+    return cst_parse_case(p);
+  if (equal(tok, "default"))
+    return cst_parse_default(p);
+  if (equal(tok, "goto"))
+    return cst_parse_goto(p);
+  if (equal(tok, "break"))
+    return cst_parse_simple_stmt(p, CST_BREAK);
+  if (equal(tok, "continue"))
+    return cst_parse_simple_stmt(p, CST_CONTINUE);
+  if (equal(tok, "asm") || equal(tok, "__asm__"))
+    return cst_parse_asm(p);
+
+  if (tok->kind == TK_IDENT && equal(tok->next, ":"))
+    return cst_parse_label(p);
+
+  if (equal(tok, "{")) {
+    CstNode *block = new_cst_node(CST_BLOCK);
+    cst_parse_compound(p, block);
+    return p->ok ? block : NULL;
+  }
+
+  if (equal(tok, ";")) {
+    CstNode *null = new_cst_node(CST_NULL_STMT);
+    cst_add_leaf(null, tok);
+    p->tok = tok->next;
+    return null;
+  }
+
+  // A declaration is tried only when the first token can start one; an
+  // unknown type (`size_t x;`) therefore fails the expression path and
+  // becomes UNPARSED instead of being guessed.
+  if (cst_is_decl_start(tok, p->ctx)) {
+    CstNode *decl = cst_parse_decl(p);
+    if (decl)
+      return decl;
+    cst_fail(p);
+    return NULL;
+  }
+
+  Token *next = NULL;
+  CstNode *stmt = cst_try_expr_stmt(&next, tok, p->ctx);
+  if (stmt) {
+    p->tok = next;
+    return stmt;
+  }
+
+  cst_fail(p);
+  return NULL;
+}
+
+// compound-stmt = "{" (declaration | statement)* "}"
+//
+// A failed item is rebuilt from its first token with the raw fallback, so
+// one malformed construct does not cost the rest of the block. A missing
+// '}' turns the block itself into UNPARSED; parsing continues at EOF.
+static void cst_parse_compound(CstParser *p, CstNode *block) {
+  cst_add_leaf(block, p->tok); // '{'
+  p->tok = p->tok->next;
+
+  while (p->ok && p->tok && p->tok->kind != TK_EOF && !equal(p->tok, "}")) {
+    if (cst_is_close(p->tok)) {
+      CstNode *unparsed = new_cst_node(CST_UNPARSED);
+      cst_add_leaf(unparsed, p->tok);
+      cst_add_child(block, unparsed);
+      p->tok = p->tok->next;
+      continue;
+    }
+
+    Token *start = p->tok;
+    CstNode *item = cst_parse_statement(p);
+    if (!item) {
+      p->tok = start;
+      p->ok = true;
+      Token *next = NULL;
+      item = cst_parse_fallback_statement(&next, start);
+      p->tok = next;
+    }
+    cst_add_child(block, item);
+  }
+
+  if (p->ok && p->tok && p->tok->kind != TK_EOF && equal(p->tok, "}")) {
+    cst_add_leaf(block, p->tok);
+    p->tok = p->tok->next;
   } else {
     block->kind = CST_UNPARSED;
   }
-  *rest = p;
-  return block;
 }
 
 // Split the top level into items. The EOF token is left for cst_parse so
 // that it stays the tree's last leaf whatever the items do.
-static void cst_parse_items(CstNode *parent, Token **rest, CstContext *ctx) {
-  Token *p = *rest;
-  for (;;) {
-    if (!p || p->kind == TK_EOF)
-      break;
-    if (cst_is_close(p)) {
+static void cst_parse_items(CstNode *parent, CstParser *p) {
+  while (p->ok && p->tok && p->tok->kind != TK_EOF) {
+    if (cst_is_close(p->tok)) {
       CstNode *unparsed = new_cst_node(CST_UNPARSED);
-      cst_add_leaf(unparsed, p);
+      cst_add_leaf(unparsed, p->tok);
       cst_add_child(parent, unparsed);
-      p = p->next;
+      p->tok = p->tok->next;
       continue;
     }
-    if (equal(p, ";")) {
-      CstNode *null = new_cst_node(CST_NULL_STMT);
-      cst_add_leaf(null, p);
-      cst_add_child(parent, null);
-      p = p->next;
-      continue;
+
+    Token *start = p->tok;
+    CstNode *item = cst_parse_statement(p);
+    if (!item) {
+      p->tok = start;
+      p->ok = true;
+      Token *next = NULL;
+      item = cst_parse_fallback_statement(&next, start);
+      p->tok = next;
     }
-    if (equal(p, "{")) {
-      cst_add_child(parent, cst_parse_block(&p, p, ctx));
-      continue;
-    }
-    cst_add_child(parent, cst_parse_statement(&p, p, ctx));
+    cst_add_child(parent, item);
   }
-  *rest = p;
 }
 
 // Build the CST for tokenize_file()'s output. The EOF marker has its own
@@ -892,12 +1890,12 @@ CstNode *cst_parse(Token *tok) {
   CstContext ctx = {};
   cst_collect_typedefs(&ctx, tok);
 
+  CstParser p = {tok, true, &ctx};
   CstNode *root = new_cst_node(CST_TRANSLATION_UNIT);
-  Token *p = tok;
-  cst_parse_items(root, &p, &ctx);
+  cst_parse_items(root, &p);
 
-  if (p && p->kind == TK_EOF)
-    cst_add_leaf(root, p);
+  if (p.tok && p.tok->kind == TK_EOF)
+    cst_add_leaf(root, p.tok);
   return root;
 }
 
@@ -943,6 +1941,29 @@ static char *cst_kind_name(CstKind kind) {
   case CST_ARG_LIST:         return "ARG_LIST";
   case CST_INIT_LIST:        return "INIT_LIST";
   case CST_COMPOUND_LITERAL: return "COMPOUND_LITERAL";
+  case CST_DECL:             return "DECL";
+  case CST_DECL_SPECS:       return "DECL_SPECS";
+  case CST_DECLARATOR:       return "DECLARATOR";
+  case CST_INIT_DECLARATOR:  return "INIT_DECLARATOR";
+  case CST_FUNC_DEF:         return "FUNC_DEF";
+  case CST_PARAM_LIST:       return "PARAM_LIST";
+  case CST_PARAM:            return "PARAM";
+  case CST_TYPE_NAME:        return "TYPE_NAME";
+  case CST_INITIALIZER:      return "INITIALIZER";
+  case CST_DESIGNATOR:       return "DESIGNATOR";
+  case CST_IF:               return "IF";
+  case CST_SWITCH:           return "SWITCH";
+  case CST_WHILE:            return "WHILE";
+  case CST_DO:               return "DO";
+  case CST_FOR:              return "FOR";
+  case CST_CASE:             return "CASE";
+  case CST_DEFAULT:          return "DEFAULT";
+  case CST_LABEL:            return "LABEL";
+  case CST_GOTO:             return "GOTO";
+  case CST_BREAK:            return "BREAK";
+  case CST_CONTINUE:         return "CONTINUE";
+  case CST_RETURN:           return "RETURN";
+  case CST_ASM:              return "ASM";
   }
   unreachable();
 }

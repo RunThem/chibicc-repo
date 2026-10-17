@@ -255,6 +255,47 @@ TU
   解析已经产生成功的语句形态, 让裸回退与成功形态分开是 C2.1 的自然结果. 其余节点
   按计划 C2.1 的清单落地; 指派初始化器按计划留到 C2.2.
 
+## C2.2 声明与语句结构(已提交)
+
+- 改了什么:
+  - `chibicc.h`: `CstKind` 增 `CST_DECL` / `CST_DECL_SPECS` / `CST_DECLARATOR` /
+    `CST_INIT_DECLARATOR` / `CST_FUNC_DEF` / `CST_PARAM_LIST` / `CST_PARAM` /
+    `CST_TYPE_NAME` / `CST_INITIALIZER` / `CST_DESIGNATOR` 与 12 个语句种类
+    (`CST_IF` / `CST_SWITCH` / `CST_WHILE` / `CST_DO` / `CST_FOR` / `CST_CASE` /
+    `CST_DEFAULT` / `CST_LABEL` / `CST_GOTO` / `CST_BREAK` / `CST_CONTINUE` /
+    `CST_RETURN` / `CST_ASM`).
+  - `cst.c`(2037 行): 声明层 - decl-specs(存储类 / 限定符 / 内建类型 / struct /
+    union / enum / typeof / _Atomic / _Alignas / 属性), declarator(指针与限定符,
+    括号内层声明符, 名字, 参数表, 数组维度, 属性), 参数(CST_PARAM), type-name
+    (cast / sizeof / 复合字面量), 声明列表与函数定义; 初始化器带指派(`[expr]`,
+    `[a ... b]`, `.name`)与嵌套花括号, 每个元素是 CST_INITIALIZER. 语句层 - 上述
+    12 种语句 + 表达式语句 + 块; 语句关键字, 括号, 分号都是显式叶子.
+  - 歧义判据: 首个 token 是声明起始(存储类 / 限定符 / 内建类型 / struct / union /
+    enum / typeof / _Atomic / _Alignas / 文件内 typedef 名)时才尝试声明, 否则按
+    表达式; 两个方向都失败才回退 `UNPARSED`. `T *x;` 在 typedef 已知时是声明, 未知
+    时是乘法; `T(x);` 已知时是声明, 未知时是调用. `size_t x;`(include 来的未知
+    类型)不猜, 整条 `UNPARSED`.
+  - `test/cst.sh`: 第四段 19 个 dump(标量 / 初始化 / 多声明符 / 函数指针 / 数组 /
+    结构体 / 指派与嵌套初始化 / 字段指派 / 函数定义 / if / while-do / for / switch /
+    标签与 goto / asm / 四个歧义样本)与相应重建; C1.1 / C1.2 / C2.1 中受结构升级
+    影响的期望同步更新(裸声明 -> DECL, cast 的类型部分 -> TYPE_NAME, 初始化列表
+    -> INITIALIZER). 全脚本 260 项断言, 48 个 dump 样本.
+- 为什么: 声明与语句是 C 前端消费者(formatter / C→C)的主要结构面; 这一层把
+  文法可判的部分全部定位, 把歧义留给 `UNPARSED`, 不引入名字绑定与类型结论.
+- 口径与限制: struct / union / enum 的成员体、typeof / _Atomic / _Alignas 的
+  参数、asm 操作数保持原始组(成员声明的细分留给后续消费者或线); K&R 标识符参数表
+  回退原始组; include 来的类型不猜; 函数体里的 typedef 名遮蔽参数名属于语义问题,
+  CST 不做绑定(判据 6 的 best-effort).
+- 开发中校验: 未提交前用 ASan 构建跑遍 48 个语料的重建 / 校验 / dump 与全部
+  cst.sh, 无 AddressSanitizer 报告(`intercept_memcmp=0`, 原因同 C2.1).
+- 闸门: `make docker-test` EXIT=0(日志 `.cache/C2.2-docker-test.log`; cst lock
+  260 项在 ./chibicc 与 ./stage2/chibicc 各一遍); `make docker-snapshot-diff`:
+  `snapshot diff: empty`(日志 `.cache/C2.2-snapdiff.log`).
+- 偏差: `CST_PARAM` 是计划清单之外新增的种类 - 参数需要把 specs 与 declarator
+  成组, 否则 PARAM_LIST 只有一串扁平孩子; `CST_STMT` 已在 C2.1 并入 `UNPARSED`.
+  计划里的 `CST_TYPE_NAME` 在 C2.2 接管了 C2.1 的 cast / sizeof 类型组, 属于计划
+  内的结构升级, C2.1 的 dump 期望随之更新.
+
 ## 提交一览
 
 | 提交 | 步骤 | 内容 |
@@ -263,8 +304,8 @@ TU
 | 5a9057a | C0.1 | 三道闸门复验并留档(EXIT=0 / diff 空 / tinycc EXIT=0); A/B worktree `/tmp/cbase` 建立在 443b4c2; 语料清单核对 41 + 7 + 12; 基线回填 |
 | c5fa672 | C1.1 | `cst.c` 叶子树 + `-dump-cst` / `-reconstruct-cst` / `-verify-cst` 三通道; `cc1` 返回码; `test/cst.sh` 126 项断言并挂进两个测试目标; docker-test EXIT=0, snapshot diff 空 |
 | 40e9c05 | C1.2 | 定界符组 + 语句切分 + BLOCK / NULL_STMT / UNPARSED; cst.sh 第二段 9 个骨架 dump, 全脚本 158 项断言; docker-test EXIT=0, snapshot diff 空 |
-| (本提交) | C2.1 | 表达式递归下降(10 级二元链 / 一元 / 后缀 / cast / 条件 / 赋值 / 逗号 / 初始化列表 / 复合字面量)+ 文件内 typedef 预扫描; cst.sh 第三段 15 个 dump, 全脚本 203 项断言; docker-test EXIT=0, snapshot diff 空 |
-| (待填) | C2.2 | 声明与语句结构 |
+| 87858ef | C2.1 | 表达式递归下降(10 级二元链 / 一元 / 后缀 / cast / 条件 / 赋值 / 逗号 / 初始化列表 / 复合字面量)+ 文件内 typedef 预扫描; cst.sh 第三段 15 个 dump, 全脚本 203 项断言; docker-test EXIT=0, snapshot diff 空 |
+| (本提交) | C2.2 | 声明层(decl-specs / declarator / 参数 / type-name / 函数定义 / 指派初始化器)+ 语句层(if / switch / while / do / for / case / default / label / goto / break / continue / return / asm); cst.sh 第四段 19 个 dump, 全脚本 260 项断言; docker-test EXIT=0, snapshot diff 空 |
 | (待填) | C3.1 | 指令节点与条件分组 |
 | (待填) | C3.2 | 收口与终态验收 |
 
