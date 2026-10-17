@@ -153,7 +153,7 @@ trivia 终态(443b4c2: tokenize.c 924 行 + chibicc.h 864 行 + main.c 959 行 +
 
 ## 阶段 C1: 无损骨架(行为不变)
 
-- [ ] **C0.1 归档 / 账本 / 基线**: 四条旧线已归档(本次归档把 trivia 线归入
+- [x] **C0.1 归档 / 账本 / 基线**(闸门复验与基线回填完成, 见 `RESULT.md` 基线记录): 四条旧线已归档(本次归档把 trivia 线归入
   `PLAN-trivia.md` / `RESULT-trivia.md`, 并把 `PLAN.md` / `RESULT.md` 切到本线); `RESULT.md`
   建立 CST 设计账本(输入事实表 / 歧义清单 / 节点种类草案 / 指令分组规则 / 五条不变量)与
   基线占位. 本步剩余: 复验三道闸门(`make docker-test`, `make docker-snapshot-diff`,

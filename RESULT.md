@@ -19,16 +19,27 @@
   对同一输入逐字节对照 `-E` / `-S` / dump 输出.
 - 一步一提交; 每步汇报四项(改了什么 / 为什么 / 闸门结果 / 偏差).
 
-## 基线记录(C0.1 完成后填写)
+## 基线记录(C0.1, 复验于 fe3c56b)
 
-- 起始状态: HEAD = 443b4c2(trivia 线终态), tokenize.c 924 行, chibicc.h 864 行, main.c 959 行,
-  preprocess.c 1208 行, parse.c 2148 行, sema.c 2992 行, type.c 157 行, codegen.c 2677 行.
-- docker-test(`make docker-test`): (待 C0.1 复验)
-- snapshot-diff(`make docker-snapshot-diff`): (待 C0.1 复验)
-- tinycc(`make docker-test-thirdparty THIRDPARTY=tinycc`): (待 C0.1 复验)
-- A/B worktree(`/tmp/cbase`): (待 C0.1 建立)
-- `test/cst.sh`: (C1.1 立项; 语料清单与 trivia.sh 一致 = 41 个 test/*.c + 7 个 include/*.h +
-  12 个边界样本)
+- 起始状态: HEAD = fe3c56b(线间归档提交; 代码与其父 443b4c2 相同, 只动文档), tokenize.c 924 行,
+  chibicc.h 864 行, main.c 959 行, preprocess.c 1208 行, parse.c 2148 行, sema.c 2992 行,
+  type.c 157 行, codegen.c 2677 行.
+- docker-test(`make docker-test`): EXIT=0. 41 个 test/*.c 特性测试在 stage1/stage2 两遍全过
+  (日志 82 行 `.exe`), driver.sh / diagnostic.sh(55 例逐字节) / shape.sh(33 段) /
+  trivia.sh(7 -E + 23 dump + 48 round-trip + 12 边界 + 4 锚点)在 ./chibicc 与
+  ./stage2/chibicc 上各跑一遍, 自举完成. 日志 `.cache/C0.1-docker-test.log`.
+- snapshot-diff(`make docker-snapshot-diff`): `snapshot diff: empty`(raw 逐字节, 41 文件,
+  0 条 diff). 基线 .cache/snapshot 为 B2 终态重置的快照, 本线预期全程不重置.
+  日志 `.cache/C0.1-snapdiff.log`.
+- tinycc(`make docker-test-thirdparty THIRDPARTY=tinycc`): EXIT=0, 0 条失败记账
+  (Rosetta shim 照旧跳过 106_pthread/112_backtrace/113_btdll). 日志
+  `.cache/C0.1-tinycc.log`.
+- A/B worktree: `git worktree add /tmp/cbase 443b4c2` 已建(旧的可裁剪记录先 prune);
+  两份二进制可逐字节对照 `-E` / `-S` / dump 输出.
+- 语料清单核对: `test/*.c` 41 个 + `include/*.h` 7 个 = 48, 与 trivia.sh 的全量循环一致;
+  12 个边界样本按 trivia.sh 的 exp_rec 清单复用到 cst.sh (CRLF / 孤立 CR / 无末行换行 /
+  BOM / 续行 / 续行落在标识符 / 字符串 / universal chars / 续行 + universal chars /
+  CRLF + 续行 + 无末行换行 / 深层混合 / 空文件).
 - 既有闸门计数: 诊断 55 例, 形状 33 段, trivia 94 项断言.
 
 ## CST 设计账本(开工前分析, 实施时逐项核对)
@@ -150,8 +161,8 @@ TU
 
 | 提交 | 步骤 | 内容 |
 |---|---|---|
-| (本次归档) | 线间归档 | trivia 线归档为 `PLAN-trivia.md` / `RESULT-trivia.md`; 本线与设计账本建立, `PLAN.md` 计划书就位; AGENTS.md 现行线段与路线图同步 |
-| (待填) | C0.1 | 闸门复验与基线回填 |
+| fe3c56b | 线间归档 | trivia 线归档为 `PLAN-trivia.md` / `RESULT-trivia.md`; 本线与设计账本建立, `PLAN.md` 计划书就位; AGENTS.md 现行线段与路线图同步 |
+| (本提交) | C0.1 | 三道闸门复验并留档(EXIT=0 / diff 空 / tinycc EXIT=0); A/B worktree `/tmp/cbase` 建立在 443b4c2; 语料清单核对 41 + 7 + 12; 基线回填 |
 | (待填) | C1.1 | 叶子树 + 重建 / 校验通道 + cst.sh 第一段 |
 | (待填) | C1.2 | 定界符与语句骨架 |
 | (待填) | C2.1 | 表达式结构 |
