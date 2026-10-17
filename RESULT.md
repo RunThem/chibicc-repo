@@ -1,204 +1,169 @@
-# RESULT.md - trivia 保留执行记录
+# RESULT.md - CST 执行记录
 
-本文件记录 `PLAN.md`(trivia 保留线, 路线图阶段 1)各步骤的实际执行结果, 供审核与后续会话接续
-参考. 前三条线已归档: 语法语义拆分见 `PLAN-split.md` / `RESULT-split.md`, 忠实层收尾见
+本文件记录 `PLAN.md`(CST 线, 路线图阶段 2)各步骤的实际执行结果, 供审核与后续会话接续参考.
+前四条线已归档: 语法语义拆分见 `PLAN-split.md` / `RESULT-split.md`, 忠实层收尾见
 `PLAN-faithful.md` / `RESULT-faithful.md`, codegen 直连见 `PLAN-codegen-direct.md` /
-`RESULT-codegen-direct.md` - 后者记录的终态(5f2af8a)是本线的量化对比基线.
+`RESULT-codegen-direct.md`, trivia 保留见 `PLAN-trivia.md` / `RESULT-trivia.md` - 后者记录的
+终态(443b4c2)是本线的量化对比基线.
+
+本线的目标与边界见 `PLAN.md`: 在预处理前的原始文本上建 lossless CST, 叶子按序与 token 流
+一一对应, 重建逐字节等于输入文件; CST 只走 `-dump-cst` / `-reconstruct-cst` / `-verify-cst`
+三个只读通道, 不接编译路径.
 
 ## 闸门口径(本线生效)
 
 - 每步(均为行为不变步): `make docker-test`(含自举与诊断 55 例 + 形状 33 段) +
-  `make docker-snapshot-diff` 为空(raw 逐字节) + `test/trivia.sh` 该步新增的断言.
-- 计划内行为变化步(唯一候选: T2.2 注释内 \u 的显示): 单独提交, trivia.sh 同提交锁定新行为,
-  偏差逐条记入本文件; 汇编快照仍要求为空.
-- 本地 A/B 规程(出现无法归因的差异时): `git worktree add /tmp/cbase <上一个绿提交>`, 两份
-  二进制对同一输入逐字节对照 .s 与 -E / dump 输出.
+  `make docker-snapshot-diff` 为空(raw 逐字节) + `test/cst.sh` 该步新增的断言.
+- 本线不接编译路径, 预期快照全程为空, 不重置基线; 若出现 diff, 先查根因, 不视为计划内变化.
+- 本地 A/B 规程(出现无法归因的差异时): `git worktree add /tmp/cbase 443b4c2`, 两份二进制
+  对同一输入逐字节对照 `-E` / `-S` / dump 输出.
+- 一步一提交; 每步汇报四项(改了什么 / 为什么 / 闸门结果 / 偏差).
 
-## 基线记录(T0.1, 复验于 e8c8608)
+## 基线记录(C0.1 完成后填写)
 
-- 起始状态: HEAD = e8c8608(线间归档提交; 代码与其父 5f2af8a 相同, 只动文档), tokenize.c 805 行,
-  chibicc.h 832 行, main.c 791 行, preprocess.c 1208 行.
-- docker-test(`make docker-test`): EXIT=0. 40 个 test/*.c 特性测试在 stage1/stage2 两遍全过,
-  driver.sh / diagnostic.sh(55 例逐字节, 阶段锁定行 3888/3988) / shape.sh(33 段, 3967/4023) /
-  trivia.sh(7 样本, 3983/4032)在 ./chibicc 与 ./stage2/chibicc 上各跑一遍, 自举完成.
-  首次复验(挂 trivia.sh 前)同为 EXIT=0.
-- snapshot-diff(`make docker-snapshot-diff`): `snapshot diff: empty`(raw 逐字节, 41 文件,
-  0 条 diff). 基线 .cache/snapshot 为 B2 终态提交内重置的快照, 本线预期全程不重置.
-- tinycc(`make docker-test-thirdparty THIRDPARTY=tinycc`): EXIT=0, tests2 的 86 个用例跑完
-  (最后一例 111_conversion; Rosetta shim 跳过 106_pthread/112_backtrace/113_btdll),
-  日志 10 处 "failed as expected" 是 tcc 自身的预期失败记账.
-- -E 锁定样本: 7 条进 test/trivia.sh 首段(丢注释 + 折空白, 续行拼接, 行注释吞续行, 补末行换行,
-  丢 BOM, 空文件, 空行群). 脚本生成的输入与实测探针逐字节一致(7/7 cmp 相等); 对 ./chibicc 与
-  A/B 基线 /tmp/cbase/chibicc 两个二进制均通过.
-- A/B 规程: `git worktree add /tmp/cbase e8c8608` 已建并本机构建(该二进制可跑 -E 与后续 dump);
-  前端输出以两二进制逐字节对照. .s 侧等价性由快照链保证: 基线的 .s = .cache/snapshot(B2 终态
-  重置), HEAD 的 .s == .cache/snapshot(本次 diff 为空), 故 HEAD 与基线在 .s 上逐字节相等.
-- 账本核对: 丢弃点清单表 9 行逐行核对无误 - 四个丢弃点在 tokenize() 501-508 / 510-518 /
-  520-526 / 528-533, 五个前置换写在 read_file 670-672, tokenize_file 787-788,
-  canonicalize_newline 691-707, remove_backslash_newline 710-734, convert_universal_chars
-  747-776.
+- 起始状态: HEAD = 443b4c2(trivia 线终态), tokenize.c 924 行, chibicc.h 864 行, main.c 959 行,
+  preprocess.c 1208 行, parse.c 2148 行, sema.c 2992 行, type.c 157 行, codegen.c 2677 行.
+- docker-test(`make docker-test`): (待 C0.1 复验)
+- snapshot-diff(`make docker-snapshot-diff`): (待 C0.1 复验)
+- tinycc(`make docker-test-thirdparty THIRDPARTY=tinycc`): (待 C0.1 复验)
+- A/B worktree(`/tmp/cbase`): (待 C0.1 建立)
+- `test/cst.sh`: (C1.1 立项; 语料清单与 trivia.sh 一致 = 41 个 test/*.c + 7 个 include/*.h +
+  12 个边界样本)
+- 既有闸门计数: 诊断 55 例, 形状 33 段, trivia 94 项断言.
 
-## trivia 丢弃点清单表(账本初版, T0.1 核对, 实施时逐项打勾)
+## CST 设计账本(开工前分析, 实施时逐项核对)
 
-| # | 站点 | 现状行为 | 归属 | 目标形态 | 步 |
-|---|---|---|---|---|---|
-| 1 | `tokenize()` 501-508 行注释 | 跳过, `has_space = true` | trivia | 前置切片(行注释) | T1.1 ✓ |
-| 2 | `tokenize()` 510-518 块注释 | 跳过(未闭合在 514 走 `error_at`), `has_space = true` | trivia | 前置切片(块注释) | T1.1 ✓ |
-| 3 | `tokenize()` 520-526 换行 | 跳过, `at_bol = true`, `has_space = false` | trivia | 前置切片(换行, 置位语义不动) | T1.1 ✓ |
-| 4 | `tokenize()` 528-533 空白 | 跳过, `has_space = true` | trivia | 前置切片(空白串) | T1.1 ✓ |
-| 5 | `read_file` 补末行 `\n` | 没有末行换行的文件被加一字节 | 扫描缓冲 | 只进扫描缓冲; raw 里不存在, 故重建不补 | T2.1 ✓ |
-| 6 | `tokenize_file` BOM 跳过 | `p += 3`, `contents` 不含 | trivia | 首 token 的前置 trivia(raw 坐标), 重建含 BOM | T2.1 ✓ |
-| 7 | `canonicalize_newline` 691-707 | `\r\n` / `\r` 就地改写为 `\n` | trivia + 语义 | 扫描缓冲保改写; raw 保 `\r` / `\r\n` 进 trivia, 行号用 lines 表 | T2.1 ✓ |
-| 8 | `remove_backslash_newline` 710-734 | 就地删除 `\`+换行, 换行挪到下一个真实换行后 | trivia + 语义 | 扫描缓冲保删除; raw 保续行进 trivia/拼写; 行号按"挪换行"语义复现 | T2.1 ✓ |
-| 9 | `convert_universal_chars` 747-776 | 全缓冲就地改写 `\uXXXX` / `\UXXXXXXXX` | 扫描缓冲 | 扫描缓冲保改写; raw 保原拼写(重建原样, -E 与显示不变) - T2.2 因此不再必要 | T2.1 ✓ |
+### 输入事实(token 流已经提供什么)
 
-行 1-4 的"四个跳过点只字未动"是 T1.1 的实现方式: 字节的认领落在 token 产生点(见下).
-行 5-9 在 T2.1 的落点是 `make_scan_buffer`: 扫描缓冲的文字效果逐字节保留(行 5-9 的"现状行为"
-一栏就是它的规范), 同时产出 `map` / `lines` 两张 raw 坐标的表; raw 文本原样留给重建与 dump.
-计划里的"File 标记"字段没有采用 - BOM 与末行换行分别由前置 trivia 与 raw 缺省自然表达.
+| # | 事实 | 位置 | CST 的用法 |
+|---|---|---|---|
+| 1 | 每个 token 的前置被跳过字节 `trivia` / `trivia_len` | `chibicc.h:106-107` | 叶子的文本前半; 重建原样输出 |
+| 2 | 每个 token 的原拼写 `raw_loc` / `raw_len`(raw 坐标) | `chibicc.h:108-109` | 叶子的文本后半; 重建原样输出 |
+| 3 | EOF 携带文件尾部 trivia, `raw_len = 0` | `tokenize.c:703-705` | 根节点末尾放一个 `CST_EOF` 叶子, 重建统一 |
+| 4 | `at_bol` 标记行首(块注释内换行与续行不置位) | `tokenize.c:541-707` | 指令起点与指令行边界 |
+| 5 | `has_space` 标记前置空白 | `tokenize.c:541-707` | 函数宏与对象宏的分界(名字后紧跟 `(`) |
+| 6 | `line_no` 由 `File.lines` 按 raw 偏移给出 | `tokenize.c:512-515` | dump 与调试; 不影响重建 |
+| 7 | `equal()` 只按拼写比较, 与 kind 无关 | `tokenize.c:125-127` | 预处理前关键字是 `TK_IDENT`, 全用拼写判断 |
+| 8 | 预处理前的 token 未跑 `convert_pp_tokens` | `tokenize.c:502-509`, `preprocess.c:1198-1207` | CST 不调用预处理器, 保持与 tokenize 同一流 |
 
-## T1.1 trivia 通道与 -dump-tokens(已提交)
+结论: CST **不需要给 `Token` / `File` 增加任何字段**, 也不需要在 `tokenize.c` 里留钩子;
+`cst.c` 只消费既有字段.
 
-- 改了什么:
-  - `chibicc.h`: `Token` 增 `trivia` / `trivia_len` - 前置被跳过字节的切片, 判据 4 的表示
-    (指向缓冲的 (start, len), 不复制文本; 种类不存, 由 dump 从字节再派生).
-  - `tokenize.c`: `new_token` 增 `trivia` 参数并算 `trivia_len = start - trivia`; 10 个 token
-    产生点(4 个字面量辅助 + pp-num/ident/punct/EOF)带上前置切片, 消费后把起点推进到 `p`;
-    四个跳过点只字未动 - 字节从"丢弃"变为"被下一个 token 认领", `at_bol` / `has_space` 的
-    置位语义逐字未变; EOF 收尾部 trivia; `tokenize_string_literal` 的新 token 继承源 token
-    的切片(同 loc 同 buffer, 经 `*t = *` 回到流里).
-  - `main.c`: 新旗标 `-dump-tokens`(仿 `-hashmap-test`, 只读): cc1 里对 base_file 的
-    `tokenize` 直接输出后返回(判据 3: 预处理之前, 不跑预处理器), 驱动侧与 `-E` 同批透传
-    且不汇编. 输出每 token 一行 `T <line> <offset> <kind> <text>`, 每条 trivia 一行
-    `R <line> <offset> <kind> <text>`(lc/bc/nl/ws 从字节派生, 排在所属 token 之前);
-    文本转义 \n \t \r \\ 与非可见字节 \xHH.
-- 计划外的一个格式决定: 空格也转义为 \x20. 理由: 文本列只有一格, 空格原样输出则"空文本"与
-  "一个空格"不可分辨, 且行尾空白会被编辑工具剥除, 破坏逐字节锁定的稳定性. 影响面仅
-  -dump-tokens 这一新增只读输出, 无既有消费者.
-- 闸门: `make docker-test` EXIT=0(自举完成; trivia.sh 17 例 = 7 -E + 10 dump 在 ./chibicc 与
-  ./stage2/chibicc 上各过一遍, 日志 3999/4052 行; 诊断 55 例与形状 33 段照旧双跑全绿);
-  `make docker-snapshot-diff` = `snapshot diff: empty`. 本地 A/B(/tmp/cbase 的 e8c8608 二进制
-  vs 本步二进制): `-E` 46 个语料文件逐字节相同(2 个文件本地无系统头不可预处理 - atomic.c /
-  tls.c, 两个二进制的失败 stderr 逐字节相同); `-S` 39 个 test/*.c 逐字节相同(同样跳过 2 个).
-- 偏差: 无既有可观察行为变化; 唯一计划外项 = dump 的空格转义(见上).
+### 歧义清单(预处理前不可判定或不可解析的构造)
 
-## T1.2 重建与 round-trip(已提交)
+| # | 构造 | 为什么歧义 | 默认策略 | 锁定步 |
+|---|---|---|---|---|
+| 1 | `T *x;` vs `a * b;` | `T` 是否 typedef 名在预处理前不可知 | `T` 是类型关键字或文件内已见 typedef 名 -> 声明; 否则表达式 | C2.2 |
+| 2 | `(T)x` | cast 与括号表达式同形 | `T` 已知为类型 -> `CST_CAST`; 否则 `CST_PAREN`; 后续无法衔接 -> `CST_UNPARSED` | C2.1 |
+| 3 | `sizeof(T)` / `_Alignof(T)` | 类型名与表达式同形 | 同 2 的判据; 无法判定时保留括号内为表达式 | C2.1 |
+| 4 | `for (T x = ...; ...)` | 初始化子句可为声明或表达式 | 同 1 的判据 | C2.2 |
+| 5 | `T(x);` | 宏调用与声明同形 | `T` 未知 -> 调用表达式; `T` 已知为类型 -> 声明 | C2.2 |
+| 6 | `size_t x;`(来自 include 的类型) | 类型名不在本文件可见 | 表达式解析失败 -> 整条语句 `CST_UNPARSED`, 无损保持 | C2.2 |
+| 7 | `#if` 条件 | 条件求值属于预处理器, 不属于 CST | 不求值, 条件 token 原样保留 | C3.1 |
+| 8 | `#define` 替换列表 | 可含任意 token, 可跨续行 | 只保留 token 序列, 不解析成表达式 | C3.1 |
+| 9 | 孤立 `#elif` / `#else` / `#endif` | 畸形输入, 预处理器会报错退出 | CST 不报错: 保留为指令节点或 `CST_UNPARSED`, 仍可重建 | C3.1 |
+| 10 | 未闭合的 `(` / `{` / `#if` | 畸形输入 | 保留已消费叶子, 剩余跨度以 `CST_UNPARSED` 收尾, 仍可重建 | C1.2 / C3.1 |
 
-- 改了什么: `main.c` 增只读旗标 `-reconstruct`(与 `-dump-tokens` 同一 cc1 早退口, 同一份
-  `must_tokenize_file`)- 按流序输出每个 token 的前置切片与拼写(EOF 的尾部 trivia 随其切片
-  输出, 即"重建输入文本"); 驱动侧同 `-E` 透传, 不汇编.
-- 重建合同(判据 3): 只覆盖 `tokenize(file)` 的直接输出(预处理之前, 单文件). 全量断言覆盖
-  `test/*.c` 与 `include/*.h`(44 个文件; `.h` 走 `-xc`, 否则驱动的扩展名分派会拒绝),
-  例外四条与计划一致:
-  - `test/literal.c`, `include/stdarg.h`, `include/stdatomic.h` - 反斜杠续行(T2.1 退役)
-  - `test/unicode.c` - universal chars(T2.2 退役)
-- 边界样本 6 条锁"当前已知偏差"(T2.1/T2.2 退役对应 pass 时改成等于输入): CRLF 折 \n;
-  孤立 CR 折 \n; 补末行换行; 丢 BOM; 续行删除且换行数挪到下一个真实换行之后
-  (`1 +\` NL `2\n` -> `1 +2\n\n`); `\u00e9` 就地改写为 UTF-8 两字节. 语料实测: 例外恰为
-  上列四文件(全语料无 CR/BOM, 除锚点外无续行/\u), 无第五条.
-- 闸门: `make docker-test` EXIT=0(自举完成; trivia.sh 67 例 = 7 -E + 10 dump + 44 文件
-  round-trip + 6 边界样本, 在 ./chibicc 与 ./stage2/chibicc 上各过一遍, 日志 4076/4152 行)
-  `make docker-snapshot-diff` = `snapshot diff: empty`. 本地 A/B: `-S` 39/39 逐字节一致
-  (本步只加驱动旗标, 既有路径零改动).
-- 偏差: 无既有可观察行为变化.
+原则: 歧义决定的是**树形**, 不是**无损性**; 任何策略下叶子序列都必须与 token 流一致.
 
-## T2.1 CRLF 与续行归 trivia: 设计变更与实施(已提交)
+### 节点种类草案(名称在实施时可微调, 范畴不变)
 
-- **与计划的设计偏离(重要, 审核重点)**: 计划设想"让缓冲就是原文件 + 词法各扫描点把 `\`+换行当
-  透明 + File 级事实字段". 实施时的分析表明该路线会波及 token 恒等与显示路径: token 的拼写
-  (`loc`/`len`)一旦覆盖续行, `equal()` / `is_keyword`(哈希) / `read_punct` / `print_tokens`(-E)
-  以及诊断的拼接行显示与插入符列宽都会失真 - 而这些路径由红线(parse.c 零改动, 诊断逐字节,
-  -E 归一化)保护. 因此改用**双缓冲 + 偏移映射**:
-  - `File` 增 `raw`(文件原样字节)与 `map`(scan 偏移 -> raw 偏移)与 `lines`(raw 偏移 -> 行号);
-    `contents` 仍是今天的扫描缓冲 - **三个破坏性 pass 的文字效果逐字节保留**(canonicalize 的
-    CRLF/CR 归一、remove 的删除、\u 改写、BOM 跳过、末行补 `\n`), 只是由 `make_scan_buffer`
-    一遍完成并同时填两张表. 一切既有消费者(-E, 解析, sema, codegen, 诊断显示)看到的字节
-    与今天完全相同.
-  - token 的 trivia/拼写坐标换到 **raw**: `Token.trivia` / `trivia_len`(前置被跳过字节)与
-    `raw_loc` / `raw_len`(拼写)都是 raw 坐标; `reconstruct` / `-dump-tokens` 因此按原始文本
-    重建与展示. 计划里的"File 级事实字段"不需要了: BOM 成为首 token 的前置 trivia, 合成末行
-    换行在 raw 里不存在.
-  - 唯一需要复现的旧可观察量是**行号**: `lines` 表按被退役的"挪换行"语义填充(续行内的换行
-    推迟到下一个真实换行(或文件尾)才计入), `add_line_numbers` 与 `error_at` 改用它; 扫描
-    缓冲不变, 所以 `verror_at` 的拼接行显示与插入符列宽天然保持.
-- 改了什么: `chibicc.h`(File 3 字段 + Token 2 字段 + `is_line_break`/`line_break_len` 导出);
-  `tokenize.c`(求 raw 坐标的 `raw_off`/`raw_end`/`raw_end_of`, `make_scan_buffer` 取代三个
-  pass, `read_file` 返回原样文本+长度, `new_file` 对合成缓冲建恒等表, `add_line_numbers` /
-  `error_at` 用 lines 表; `tokenize_string_literal` 扫描时临时切到 `tok->file` 并恢复旧字段值,
-  保持它既有的(有瑕疵的)file/filename 行为逐字节不变); `main.c`(dump 改 raw 坐标, trivia
-  分片加 `cont` / `bom`, `nl` 覆盖 `\n` / `\r\n` / `\r`, R 行行号取 lines 表; `reconstruct`
-  用 raw 拼写).
-- 闸门: `make docker-test` EXIT=0(自举完成; trivia.sh 89 例 = 7 -E + 21 dump + 48 文件 round-trip
-  + 10 边界样本 + 4 锚点, 在 ./chibicc 与 ./stage2/chibicc 上各过一遍, 日志 4112/4199 行;
-  诊断 55 例与形状 33 段照旧双跑全绿); `make docker-snapshot-diff` = `snapshot diff: empty`
-  (扫描缓冲的文字效果逐字节保留的直接证据). 本地: 全语料 48 文件 round-trip 零例外; A/B 对
-  e8c8608 二进制 -E 46/46、-S 39/39 逐字节相同(macro.c 用快照的固定时间宏后亦相同); 诊断
-  55 例与形状 33 段全过; 锚点(p2b/p2/p3 诊断, p2c 的 .loc)逐字节一致并进 trivia.sh 锁定.
-- trivia.sh: 21 个 dump 样本(新增 CRLF / 孤立 CR / BOM / 七类扫描点的续行), 全量 round-trip
-  48 文件(例外清单清零), 10 个边界样本全部转正(期望 == 输入), 4 个行号/插入符锚点.
-- 计划内的行为变化: 无. T2.2(universal chars 保原拼写)随之**不再必要**: raw 坐标已让
-  \u 原样重建, 扫描缓冲保留改写使得 -E 与诊断显示维持原样(用户若要 -E/CST 层面看到 \u 原
-  拼写, 是后续线的事, 与第 1 层合同无关). 该开放决策已由用户路线图吸收, 见 PLAN.md 注记.
+- 根 / 叶子 / 回退: `CST_TRANSLATION_UNIT`, `CST_TOKEN`, `CST_EOF`, `CST_UNPARSED`.
+- 骨架(C1): `CST_GROUP_PAREN`, `CST_GROUP_BRACKET`, `CST_GROUP_BRACE`, `CST_STMT`,
+  `CST_BLOCK`, `CST_NULL_STMT`.
+- 声明(C2.2): `CST_DECL`, `CST_DECL_SPECS`, `CST_DECLARATOR`, `CST_INIT_DECLARATOR`,
+  `CST_INITIALIZER`, `CST_FUNC_DEF`, `CST_PARAM_LIST`, `CST_TYPE_NAME`, `CST_ATTRIBUTE`.
+- 语句(C2.2): `CST_IF`, `CST_SWITCH`, `CST_WHILE`, `CST_DO`, `CST_FOR`, `CST_CASE`,
+  `CST_DEFAULT`, `CST_LABEL`, `CST_GOTO`, `CST_BREAK`, `CST_CONTINUE`, `CST_RETURN`,
+  `CST_ASM`, `CST_EXPR_STMT`.
+- 表达式(C2.1): `CST_BINARY`, `CST_UNARY`, `CST_POSTFIX`, `CST_CALL`, `CST_SUBSCRIPT`,
+  `CST_MEMBER`, `CST_CAST`, `CST_COND`, `CST_ASSIGN`, `CST_COMMA`, `CST_PAREN`,
+  `CST_PRIMARY`, `CST_ARG_LIST`, `CST_INIT_LIST`, `CST_COMPOUND_LITERAL`.
+- 指令(C3.1): `CST_PP_DIRECTIVE`, `CST_PP_DEFINE`, `CST_PP_UNDEF`, `CST_PP_INCLUDE`,
+  `CST_PP_LINE`, `CST_PP_PRAGMA`, `CST_PP_ERROR`, `CST_PP_NULL`, `CST_PP_IF`,
+  `CST_PP_BRANCH`.
+- 每个节点持 `CstKind`, 子节点数组(`children` / `child_count` / `child_cap`); 叶子额外持
+  `Token *tok`; 非叶子的 `tok` 为 `NULL`. 不放 `Node` / `Type`, 不放类型与绑定.
+
+树形示例(以 `int x = 1 + 2;` 为例, 叶子文本来自 `Token`):
+
+```
+TU
+  DECL
+    DECL_SPECS
+      TOKEN "int"
+    INIT_DECLARATOR
+      DECLARATOR
+        TOKEN "x"
+      TOKEN "="
+      BINARY
+        TOKEN "1"
+        TOKEN "+"
+        TOKEN "2"
+    TOKEN ";"
+  EOF
+```
+
+### 指令分组规则(C3.1)
+
+1. 指令起点 = `at_bol && "#"`(`preprocess.c:76-78` 的 `is_hash` 语义); 不以 `at_bol` 开头的
+   `#` 是普通标点, 不进指令节点.
+2. 指令行 = 从 `#` 到下一个 `at_bol` token 之前. 扫描缓冲已删除续行, 续行后的 token 不置
+   `at_bol`; 块注释内的换行也不置 `at_bol` - 两者都与 tokenizer 的现状一致, 不要另行按
+   物理行切.
+3. `#define`: 名字后紧跟 `(` 且 `!has_space` 才是函数宏(`preprocess.c:368-386`); 参数表到
+   匹配的 `)`, 支持 `...` 与变参名; 替换列表 = 行内剩余 token, 不解析.
+4. `#include`: `TK_STR` 形, `<` ... `>` 形, 或其余 token 序列; 路径 token 原样保留,
+   不解释转义, 不查文件.
+5. `#if` / `#ifdef` / `#ifndef`: 建 `CST_PP_IF`, 后续 `#elif` / `#else` 切成
+   `CST_PP_BRANCH`, `#endif` 收尾; 分支体照常建声明 / 语句 / 指令子树; 条件 token 原样,
+   不求值. 嵌套用递归.
+6. `#pragma`(含 `once`), `#line`(含 GNU 行标记 `# 123 "file"`), `#error`, `#undef`, 空指令
+   `#`: 各自独立节点或指令行节点; 行内多余 token 全部保留.
+7. 孤立或错配的条件指令不报错: 保留为指令节点或 `CST_UNPARSED`; 无损优先.
+
+### 不变量(每一步都测)
+
+- **I1 叶子序列 == token 流**: 对 `tokenize_file` 的输出, 树的中序叶子指针序列逐项相等
+  (含 EOF).
+- **I2 重建 == 原文件**: 按叶子序写 `trivia` + 拼写, 48 个语料文件与 12 个边界样本逐字节
+  相等, 0 例外.
+- **I3 每个 token 恰好一次**: 不允许重复挂载或漏挂; 失败回溯产生的死节点不挂进树.
+- **I4 解析不改变文本**: 任何结构决策只影响分组, 不影响叶子的顺序与文本.
+- **I5 无静态状态**: `cst.c` 不新增文件域 static; 解析 context 在栈上; 内存走 arena.
+- **I6 无新 exit 点**: `cst.c` 不调用 `error` / `error_at` / `error_tok`; 校验失败由
+  `-verify-cst` 报出, 驱动返回非零.
 
 ## 关键结论(开工前分析, 供审核者速览)
 
-- 判据 1 的落点: 既有字段零改动; 新通道 = 每个 token 的前置切片 + `File` 级两个事实;
-  `has_space` / `at_bol` 的全部语义点(preprocess.c 77/83/86, 233, 374, 469/479, 610/611,
-  652/653, 680/681 与 main.c 438-440)不动.
-- 判据 3 的落点: 重建合同只覆盖预处理前; `paste` / `stringize` / 宏展开产物 /
-  `tokenize_string_literal` 的重扫都不承诺 trivia.
-- 行号是本线最重的行为约束(实测: 续行内报逻辑行起始的物理行号 p2b:2, 之后报物理行号 p2:4);
-  快照含 `.loc` 且诊断含行号, 双重锁定.
-- -E 的归一化(丢注释, 折空白)保持原样, 由 trivia.sh 锁定; "保留注释的 formatter 输出"不是
-  本线的目标(那是第 2 层消费者的自由).
-- 合成 token 只经 `copy_token` 的全字段拷贝这一处派生, 新字段天然随拷贝; `paste` 重入
-  `tokenize` 于无末行换行的合成缓冲, 属判据 3 的例外面.
+- 无损性已经在 trivia 线完成; 本线只加**结构**, 不改文本. 因此最大的风险不是字节, 而是
+  "为了结构而丢 token"; I1 / I3 与全量重建就是为此设的闸门.
+- 预处理前的 C 文法天然不可完全消歧(typedef 名, include 来的类型, 宏). 本线不试图用语义
+  补洞: 文件内 typedef 集合 + 类型关键字拼写 + 回溯是上限, 超出即 `CST_UNPARSED`. 这既
+  符合第 2 层"不查名字, 不算类型"的边界, 也保证 formatter 拿到的是可逐字节打印的树.
+- CST 不接编译路径, 所以 `make docker-snapshot-diff` 必须全程为空; 任何 `.s` 差异都说明
+  改动泄漏进了既有消费者, 按回归处理.
+- `cst.c` 是唯一的新源文件; `main.c` 只加三个只读旗标; `chibicc.h` 只加 CST 类型与声明.
+  这条边界让阶段 5 的库化可以直接把 CST 暴露为公共能力, 而不需要再拆逻辑.
 
 ## 提交一览
 
 | 提交 | 步骤 | 内容 |
 |---|---|---|
-| (已归档) | 线间归档 | codegen 直连线归档为 `PLAN-codegen-direct.md` / `RESULT-codegen-direct.md`, 新建本线与账本 |
-| 9312b10 | T0.1 基线 | 复验三道闸门并留档(见上); A/B worktree `/tmp/cbase` 建立; `test/trivia.sh` 立项(首段 7 条 -E 归一化样本, 对两二进制通过)并挂进 `make test` / `make test-stage2` |
-| c911de9 | T1.1 | `Token` 增 trivia 切片(四个跳过点未动); `-dump-tokens` 与 T/R 行 dump; trivia.sh 第二段 10 样本; docker-test + snapshot-diff 全绿; 本地 A/B -E 46/46 与 -S 39/39 逐字节一致 |
-| 2ddbf76 | T1.2 | `-reconstruct` 与全量 round-trip; trivia.sh 第三段(44 文件 + 6 边界样本); 语料实测: 例外恰为计划列的四文件 |
-| fd54766 | T2.1 | 双缓冲 + raw 坐标(设计偏离, 见 T2.1 一节): File 增 raw/map/lines, Token 坐标换 raw, make_scan_buffer 取代三个 pass; 全量 48 文件 round-trip 零例外; -E/-S/诊断/锚点逐字节不变; trivia.sh 扩到 21 dump + 10 边界转正 + 4 锚点 |
-| (本提交) | T3.1/T3.2 | 测试收口(23 dump + 12 边界 + 4 锚点, 94 项断言); AGENTS.md 终态(目标架构/路线图/测试段/代码地图); PLAN.md 勾选与终态验收实测; tinycc 终态 EXIT=0 |
-
-## T3.1/T3.2 测试收口与文档(已提交)
-
-- T3.1: trivia.sh 扩到 23 个 dump 样本、12 个边界样本、4 个行号/插入符锚点(-E 7 个), 共 94 项
-  断言; 新增"续行 + \u 在同一标识符"与"深层混合(BOM + 块注释内跨 CRLF 续行 + CRLF + 词间
-  续行 + 行注释 + 无末行换行)"两个样本后, 边界目录覆盖计划所列全部形状; 例外清单保持清零.
-- T3.2: AGENTS.md 的第一条目标架构(trivia 保留已实现), 现行线段(阶段 1 完成及落地形态),
-  `make test` 测试链(加入 trivia.sh)与前端验证手段(`-dump-tokens` / `-reconstruct`), 代码地图
-  (`chibicc.h` / `tokenize.c` 条目)均按终态更新; PLAN.md 的 T1-T3 全部勾选.
-- 闸门: `make docker-test` EXIT=0(94 项断言在 ./chibicc 与 ./stage2/chibicc 上各过一遍);
-  `make docker-snapshot-diff` 空; tinycc(`make docker-test-thirdparty THIRDPARTY=tinycc`)
-  EXIT=0(10 处 "failed as expected" 为 tcc 自身预期失败记账).
+| (本次归档) | 线间归档 | trivia 线归档为 `PLAN-trivia.md` / `RESULT-trivia.md`; 本线与设计账本建立, `PLAN.md` 计划书就位; AGENTS.md 现行线段与路线图同步 |
+| (待填) | C0.1 | 闸门复验与基线回填 |
+| (待填) | C1.1 | 叶子树 + 重建 / 校验通道 + cst.sh 第一段 |
+| (待填) | C1.2 | 定界符与语句骨架 |
+| (待填) | C2.1 | 表达式结构 |
+| (待填) | C2.2 | 声明与语句结构 |
+| (待填) | C3.1 | 指令节点与条件分组 |
+| (待填) | C3.2 | 收口与终态验收 |
 
 ## 终态验收(本线完成时逐项实测)
 
-- **通道**: 四个丢弃点全部转为 trivia(实现落在 token 产生点, 跳过点未动); "前置切片 + 拼写"
-  以 raw 坐标覆盖文件每个字节; 重建合同在 `test/*.c` + `include/*.h`(48 个文件)与 12 个边界
-  样本上成立, **例外清零**; 五处破坏性前置换写的文字效果保留在扫描缓冲(行 5-9 的账本规范),
-  其可观察量(行号)由 `lines` 表逐字节复现. 设计偏离(双缓冲取代"缓冲即原文件", T2.2 被吸收)
-  记录在 T2.1 一节.
-- **行为**: 诊断 55 例逐字节, 形状 33 段, -E 锁定 7 样本, `.s` 快照逐字节不变
-  (`snapshot diff: empty`), 本地 A/B 对归档提交 e8c8608 二进制 -E 46/46 与 -S 39/39 逐字节
-  一致(macro.c 用快照的固定时间宏); 行号锚点 p2b/p2/p3/p2c 在 trivia.sh 钉住.
-- **闸门**: `make docker-test`(含自举)EXIT=0; `docker-snapshot-diff` 空; tinycc 终态 EXIT=0;
-  trivia.sh 挂进两个测试目标.
-- **对比锚点**(实测): tokenize.c 805 -> 924, chibicc.h 832 -> 864, main.c 791 -> 959,
-  preprocess.c 1208 -> 1208(零改动); parse.c 2148 / sema.c 2992 / codegen.c 2677 全部零改动
-  (红线守住); 新增 test/trivia.sh 275 行.
-
-## 给审核者的提示
-
-- 审核重心: token 的 trivia / raw 坐标只在 `new_token` 一处赋值(T1.1-T2.1 后合成 token 走
-  `copy_token` 全字段拷贝或按源 token 继承); tokenize 四个跳过点的 `at_bol` / `has_space`
-  置位逐字节照旧; trivia.sh 的 round-trip 例外清单保持清零.
-- 本线不改 parse.c / sema.c / type.c / codegen.c(锚点行数证实零改动); preprocess.c 同样是
-  零改动; 全部改动落在 chibicc.h / tokenize.c / main.c / Makefile / test/trivia.sh / 文档.
-- 设计偏离(双缓冲 + raw 坐标取代"缓冲即原文件 + 词法透明化")的理由与边界在 T2.1 一节;
-  若审核不认可该偏离, 计划原路线(词法透明化 + File 事实字段)的代价评估也在那一节.
+- **通道**: (待填) 叶子序列与 token 流一致; 48 文件 + 12 边界样本重建零例外.
+- **结构**: (待填) 各节点 dump 样本齐全; 全语料建树不崩; 回退跨度与歧义清单一致.
+- **行为**: (待填) docker-test EXIT=0; snapshot diff 空; 诊断 55 / 形状 33 / trivia 94 不变;
+  tinycc EXIT=0.
+- **对比锚点**: (待填) cst.c 行数, test/cst.sh 断言数, main.c 与 chibicc.h 增量; tokenize.c /
+  preprocess.c / parse.c / sema.c / type.c / codegen.c 零改动.
