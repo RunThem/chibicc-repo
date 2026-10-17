@@ -103,54 +103,54 @@ exp_dump empty '' \
 
 # 单 token.
 exp_dump single 'int\n' \
-'TU\n  STMT\n    TOKEN int\n  EOF\n'
+'TU\n  UNPARSED\n    TOKEN int\n  EOF\n'
 
 # 多 token: 每个 token 与标点各占一行, 不合并同类项.
 exp_dump multi 'int x;\n' \
-'TU\n  STMT\n    TOKEN int\n    TOKEN x\n    TOKEN ;\n  EOF\n'
+'TU\n  UNPARSED\n    TOKEN int\n    TOKEN x\n    TOKEN ;\n  EOF\n'
 
 # 转义: 字符串字面量里的空格转成 \x20, 引号原样(它属于拼写).
 exp_dump string_space 'char *s = "a b";\n' \
-'TU\n  STMT\n    TOKEN char\n    TOKEN *\n    TOKEN s\n    TOKEN =\n    TOKEN "a\\x20b"\n    TOKEN ;\n  EOF\n'
+'TU\n  UNPARSED\n    TOKEN char\n    TOKEN *\n    TOKEN s\n    TOKEN =\n    TOKEN "a\\x20b"\n    TOKEN ;\n  EOF\n'
 
 # EOF 收尾 trivia: 末尾的注释与空行不进 dump, 但重建逐字节保留它们.
 exp_dump eof_trivia 'a /* tail */\n\n' \
-'TU\n  STMT\n    TOKEN a\n  EOF\n'
+'TU\n  UNPARSED\n    TOKEN a\n  EOF\n'
 $chibicc -reconstruct-cst "$tmp/d-eof_trivia.c" > "$tmp/d-eof_trivia.out"
 cmp -s "$tmp/d-eof_trivia.out" "$tmp/d-eof_trivia.c"
 check "-reconstruct-cst/eof_trivia"
 
 # ---- C1.2: 定界符与语句骨架 ----------------------------------------------------
 
-# 顶层与块内按 ';' 切 STMT; 每个定界符成组, 开闭符号是显式叶子. 语句切分只发生
+# 顶层与块内按 ';' 切语句; 每个定界符成组, 开闭符号是显式叶子. 语句切分只发生
 # 在语句层, 组内部保持原样 - for 头里的两个分号不是语句边界.
 exp_dump statements 'int x; y = 1;\n' \
-'TU\n  STMT\n    TOKEN int\n    TOKEN x\n    TOKEN ;\n  STMT\n    TOKEN y\n    TOKEN =\n    TOKEN 1\n    TOKEN ;\n  EOF\n'
+'TU\n  UNPARSED\n    TOKEN int\n    TOKEN x\n    TOKEN ;\n  EXPR_STMT\n    ASSIGN\n      PRIMARY\n        TOKEN y\n      TOKEN =\n      PRIMARY\n        TOKEN 1\n    TOKEN ;\n  EOF\n'
 
 exp_dump nested_delims 'f((a), [b]);\n' \
-'TU\n  STMT\n    TOKEN f\n    GROUP_PAREN\n      TOKEN (\n      GROUP_PAREN\n        TOKEN (\n        TOKEN a\n        TOKEN )\n      TOKEN ,\n      GROUP_BRACKET\n        TOKEN [\n        TOKEN b\n        TOKEN ]\n      TOKEN )\n    TOKEN ;\n  EOF\n'
+'TU\n  UNPARSED\n    TOKEN f\n    GROUP_PAREN\n      TOKEN (\n      GROUP_PAREN\n        TOKEN (\n        TOKEN a\n        TOKEN )\n      TOKEN ,\n      GROUP_BRACKET\n        TOKEN [\n        TOKEN b\n        TOKEN ]\n      TOKEN )\n    TOKEN ;\n  EOF\n'
 
 exp_dump for_header 'for (;;) ;\n' \
-'TU\n  STMT\n    TOKEN for\n    GROUP_PAREN\n      TOKEN (\n      TOKEN ;\n      TOKEN ;\n      TOKEN )\n    TOKEN ;\n  EOF\n'
+'TU\n  UNPARSED\n    TOKEN for\n    GROUP_PAREN\n      TOKEN (\n      TOKEN ;\n      TOKEN ;\n      TOKEN )\n    TOKEN ;\n  EOF\n'
 
 # 块: 花括号体在语句层单独成 BLOCK, 空语句是 NULL_STMT.
 exp_dump block '{ int x; ; }\n' \
-'TU\n  BLOCK\n    TOKEN {\n    STMT\n      TOKEN int\n      TOKEN x\n      TOKEN ;\n    NULL_STMT\n      TOKEN ;\n    TOKEN }\n  EOF\n'
+'TU\n  BLOCK\n    TOKEN {\n    UNPARSED\n      TOKEN int\n      TOKEN x\n      TOKEN ;\n    NULL_STMT\n      TOKEN ;\n    TOKEN }\n  EOF\n'
 
 exp_dump nested_block '{ { } }\n' \
 'TU\n  BLOCK\n    TOKEN {\n    BLOCK\n      TOKEN {\n      TOKEN }\n    TOKEN }\n  EOF\n'
 
 # 语句里出现的花括号(初始化器 / 函数体)只是原始组, 不按块切分.
 exp_dump brace_in_stmt 'int a[] = {1, 2};\n' \
-'TU\n  STMT\n    TOKEN int\n    TOKEN a\n    GROUP_BRACKET\n      TOKEN [\n      TOKEN ]\n    TOKEN =\n    GROUP_BRACE\n      TOKEN {\n      TOKEN 1\n      TOKEN ,\n      TOKEN 2\n      TOKEN }\n    TOKEN ;\n  EOF\n'
+'TU\n  UNPARSED\n    TOKEN int\n    TOKEN a\n    GROUP_BRACKET\n      TOKEN [\n      TOKEN ]\n    TOKEN =\n    GROUP_BRACE\n      TOKEN {\n      TOKEN 1\n      TOKEN ,\n      TOKEN 2\n      TOKEN }\n    TOKEN ;\n  EOF\n'
 
 # UNPARSED: 未闭合的组 / 块, 以及语句层没有开括号的孤立闭括号. 已消费的 token
 # 全部留在树里, 重建与校验照旧.
 exp_dump unclosed_paren 'int x = (1 + 2;\n' \
-'TU\n  STMT\n    TOKEN int\n    TOKEN x\n    TOKEN =\n    UNPARSED\n      TOKEN (\n      TOKEN 1\n      TOKEN +\n      TOKEN 2\n      TOKEN ;\n  EOF\n'
+'TU\n  UNPARSED\n    TOKEN int\n    TOKEN x\n    TOKEN =\n    UNPARSED\n      TOKEN (\n      TOKEN 1\n      TOKEN +\n      TOKEN 2\n      TOKEN ;\n  EOF\n'
 
 exp_dump unclosed_block '{ int x;\n' \
-'TU\n  UNPARSED\n    TOKEN {\n    STMT\n      TOKEN int\n      TOKEN x\n      TOKEN ;\n  EOF\n'
+'TU\n  UNPARSED\n    TOKEN {\n    UNPARSED\n      TOKEN int\n      TOKEN x\n      TOKEN ;\n  EOF\n'
 
 exp_dump stray_close ');\n' \
 'TU\n  UNPARSED\n    TOKEN )\n  NULL_STMT\n    TOKEN ;\n  EOF\n'
@@ -160,6 +160,79 @@ for f in "$tmp"/d-statements.c "$tmp"/d-nested_delims.c "$tmp"/d-for_header.c \
          "$tmp"/d-unclosed_paren.c "$tmp"/d-unclosed_block.c "$tmp"/d-stray_close.c; do
     $chibicc -reconstruct-cst "$f" > "$tmp/rec2.out"
     cmp -s "$tmp/rec2.out" "$f"
+    check "-reconstruct-cst/$(basename "$f" .c)"
+done
+
+# ---- C2.1: 表达式结构 ----------------------------------------------------------
+
+# 整条优先级链: * / % 高于 + - 高于 << >> 高于关系 高于相等 高于 & ^ | &&
+# ||, 全部左结合. 每个运算符都是显式叶子.
+exp_dump precedence 'a * b + c << d < e == f & g ^ h | i && j || k;\n' \
+'TU\n  EXPR_STMT\n    BINARY\n      BINARY\n        BINARY\n          BINARY\n            BINARY\n              BINARY\n                BINARY\n                  BINARY\n                    BINARY\n                      BINARY\n                        PRIMARY\n                          TOKEN a\n                        TOKEN *\n                        PRIMARY\n                          TOKEN b\n                      TOKEN +\n                      PRIMARY\n                        TOKEN c\n                    TOKEN <<\n                    PRIMARY\n                      TOKEN d\n                  TOKEN <\n                  PRIMARY\n                    TOKEN e\n                TOKEN ==\n                PRIMARY\n                  TOKEN f\n              TOKEN &\n              PRIMARY\n                TOKEN g\n            TOKEN ^\n            PRIMARY\n              TOKEN h\n          TOKEN |\n          PRIMARY\n            TOKEN i\n        TOKEN &&\n        PRIMARY\n          TOKEN j\n      TOKEN ||\n      PRIMARY\n        TOKEN k\n    TOKEN ;\n  EOF\n'
+
+# 赋值右结合; 左结合已由上一条锁定.
+exp_dump assign_chain 'a = b = c;\n' \
+'TU\n  EXPR_STMT\n    ASSIGN\n      PRIMARY\n        TOKEN a\n      TOKEN =\n      ASSIGN\n        PRIMARY\n          TOKEN b\n        TOKEN =\n        PRIMARY\n          TOKEN c\n    TOKEN ;\n  EOF\n'
+
+# 括号是显式 PAREN 节点, 不改写树形.
+exp_dump paren_explicit '(a + b) * c;\n' \
+'TU\n  EXPR_STMT\n    BINARY\n      PAREN\n        TOKEN (\n        BINARY\n          PRIMARY\n            TOKEN a\n          TOKEN +\n          PRIMARY\n            TOKEN b\n        TOKEN )\n      TOKEN *\n      PRIMARY\n        TOKEN c\n    TOKEN ;\n  EOF\n'
+
+# 调用 / 下标 / 成员 / 后缀自增: 每个都是 POSTFIX, 运算符与括号是叶子.
+exp_dump postfix_chain 'f(x)[i].m->p++;\n' \
+'TU\n  EXPR_STMT\n    POSTFIX\n      POSTFIX\n        POSTFIX\n          POSTFIX\n            POSTFIX\n              PRIMARY\n                TOKEN f\n              ARG_LIST\n                TOKEN (\n                PRIMARY\n                  TOKEN x\n                TOKEN )\n            TOKEN [\n            PRIMARY\n              TOKEN i\n            TOKEN ]\n          TOKEN .\n          TOKEN m\n        TOKEN ->\n        TOKEN p\n      TOKEN ++\n    TOKEN ;\n  EOF\n'
+
+# 条件表达式右结合; `?:` 是 GNU 的 elvis, 没有中间操作数.
+exp_dump conditional 'a ? b : c ? d : e;\n' \
+'TU\n  EXPR_STMT\n    COND\n      PRIMARY\n        TOKEN a\n      TOKEN ?\n      PRIMARY\n        TOKEN b\n      TOKEN :\n      COND\n        PRIMARY\n          TOKEN c\n        TOKEN ?\n        PRIMARY\n          TOKEN d\n        TOKEN :\n        PRIMARY\n          TOKEN e\n    TOKEN ;\n  EOF\n'
+
+exp_dump elvis 'a ?: b;\n' \
+'TU\n  EXPR_STMT\n    COND\n      PRIMARY\n        TOKEN a\n      TOKEN ?\n      TOKEN :\n      PRIMARY\n        TOKEN b\n    TOKEN ;\n  EOF\n'
+
+# 逗号是优先级最低的二元节点.
+exp_dump comma 'a = 1, b = 2;\n' \
+'TU\n  EXPR_STMT\n    COMMA\n      ASSIGN\n        PRIMARY\n          TOKEN a\n        TOKEN =\n        PRIMARY\n          TOKEN 1\n      TOKEN ,\n      ASSIGN\n        PRIMARY\n          TOKEN b\n        TOKEN =\n        PRIMARY\n          TOKEN 2\n    TOKEN ;\n  EOF\n'
+
+# 前缀一元运算符与后缀自减.
+exp_dump unary_ops '*p + -x + !y + ~z + &w + ++i + j--;\n' \
+'TU\n  EXPR_STMT\n    BINARY\n      BINARY\n        BINARY\n          BINARY\n            BINARY\n              BINARY\n                UNARY\n                  TOKEN *\n                  PRIMARY\n                    TOKEN p\n                TOKEN +\n                UNARY\n                  TOKEN -\n                  PRIMARY\n                    TOKEN x\n              TOKEN +\n              UNARY\n                TOKEN !\n                PRIMARY\n                  TOKEN y\n            TOKEN +\n            UNARY\n              TOKEN ~\n              PRIMARY\n                TOKEN z\n          TOKEN +\n          UNARY\n            TOKEN &\n            PRIMARY\n              TOKEN w\n        TOKEN +\n        UNARY\n          TOKEN ++\n          PRIMARY\n            TOKEN i\n      TOKEN +\n      POSTFIX\n        PRIMARY\n          TOKEN j\n        TOKEN --\n    TOKEN ;\n  EOF\n'
+
+# 括号内以类型开头判 cast / sizeof(type); 否则括号里是表达式.
+exp_dump sizeof_type '(int)x + sizeof(int) + sizeof y;\n' \
+'TU\n  EXPR_STMT\n    BINARY\n      BINARY\n        CAST\n          GROUP_PAREN\n            TOKEN (\n            TOKEN int\n            TOKEN )\n          PRIMARY\n            TOKEN x\n        TOKEN +\n        UNARY\n          TOKEN sizeof\n          GROUP_PAREN\n            TOKEN (\n            TOKEN int\n            TOKEN )\n      TOKEN +\n      UNARY\n        TOKEN sizeof\n        PRIMARY\n          TOKEN y\n    TOKEN ;\n  EOF\n'
+
+exp_dump sizeof_expr 'sizeof(a + b);\n' \
+'TU\n  EXPR_STMT\n    UNARY\n      TOKEN sizeof\n      PAREN\n        TOKEN (\n        BINARY\n          PRIMARY\n            TOKEN a\n          TOKEN +\n          PRIMARY\n            TOKEN b\n        TOKEN )\n    TOKEN ;\n  EOF\n'
+
+# 文件内 typedef 是 cast 的判据; 声明本身在 C2.2 之前保持原始 UNPARSED.
+exp_dump typedef_cast 'typedef int T;\n(T)z;\n' \
+'TU\n  UNPARSED\n    TOKEN typedef\n    TOKEN int\n    TOKEN T\n    TOKEN ;\n  EXPR_STMT\n    CAST\n      GROUP_PAREN\n        TOKEN (\n        TOKEN T\n        TOKEN )\n      PRIMARY\n        TOKEN z\n    TOKEN ;\n  EOF\n'
+
+# 结构体 typedef: 预扫描跳过成员名, 只收 T.
+exp_dump typedef_struct 'typedef struct { int x; } T;\n(T)z;\n' \
+'TU\n  UNPARSED\n    TOKEN typedef\n    TOKEN struct\n    GROUP_BRACE\n      TOKEN {\n      TOKEN int\n      TOKEN x\n      TOKEN ;\n      TOKEN }\n    TOKEN T\n    TOKEN ;\n  EXPR_STMT\n    CAST\n      GROUP_PAREN\n        TOKEN (\n        TOKEN T\n        TOKEN )\n      PRIMARY\n        TOKEN z\n    TOKEN ;\n  EOF\n'
+
+# 未知名字(U)不猜: 不作为 cast, 整条语句回退 UNPARSED.
+exp_dump unknown_type 'typedef int T;\n(U)z;\n' \
+'TU\n  UNPARSED\n    TOKEN typedef\n    TOKEN int\n    TOKEN T\n    TOKEN ;\n  UNPARSED\n    GROUP_PAREN\n      TOKEN (\n      TOKEN U\n      TOKEN )\n    TOKEN z\n    TOKEN ;\n  EOF\n'
+
+# 复合字面量: (type){...}; 初始化列表的元素是表达式或嵌套列表.
+exp_dump compound_literal '(int[]){1, 2};\n' \
+'TU\n  EXPR_STMT\n    COMPOUND_LITERAL\n      GROUP_PAREN\n        TOKEN (\n        TOKEN int\n        GROUP_BRACKET\n          TOKEN [\n          TOKEN ]\n        TOKEN )\n      INIT_LIST\n        TOKEN {\n        PRIMARY\n          TOKEN 1\n        TOKEN ,\n        PRIMARY\n          TOKEN 2\n        TOKEN }\n    TOKEN ;\n  EOF\n'
+
+# 相邻字符串字面量是一个 primary, 但每个仍是显式叶子.
+exp_dump string_concat '"a" "b";\n' \
+'TU\n  EXPR_STMT\n    PRIMARY\n      TOKEN "a"\n      TOKEN "b"\n    TOKEN ;\n  EOF\n'
+
+for f in "$tmp"/d-precedence.c "$tmp"/d-assign_chain.c \
+         "$tmp"/d-paren_explicit.c "$tmp"/d-postfix_chain.c \
+         "$tmp"/d-conditional.c "$tmp"/d-elvis.c "$tmp"/d-comma.c \
+         "$tmp"/d-unary_ops.c "$tmp"/d-sizeof_type.c "$tmp"/d-sizeof_expr.c \
+         "$tmp"/d-typedef_cast.c "$tmp"/d-typedef_struct.c \
+         "$tmp"/d-unknown_type.c \
+         "$tmp"/d-compound_literal.c "$tmp"/d-string_concat.c; do
+    $chibicc -reconstruct-cst "$f" > "$tmp/rec3.out"
+    cmp -s "$tmp/rec3.out" "$f"
     check "-reconstruct-cst/$(basename "$f" .c)"
 done
 

@@ -179,7 +179,7 @@ trivia 终态(443b4c2: tokenize.c 924 行 + chibicc.h 864 行 + main.c 959 行 +
 
 ## 阶段 C2: 语法结构(无类型, 无名字绑定)
 
-- [ ] **C2.1 表达式结构**: 按 C 的优先级链建 `CST_BINARY` / `CST_UNARY` / `CST_POSTFIX`
+- [x] **C2.1 表达式结构**: 按 C 的优先级链建 `CST_BINARY` / `CST_UNARY` / `CST_POSTFIX`
   (调用, 下标, 成员, 自增自减) / `CST_CAST` / `CST_COND` / `CST_ASSIGN` / `CST_COMMA` /
   `CST_PAREN`(括号是显式叶子) / `CST_PRIMARY`(标识符, 数字, 字符串, 字符) /
   `CST_ARG_LIST` / 初始化列表. 类型转换与括号的消歧: 括号内以类型关键字 / 文件内 typedef /
