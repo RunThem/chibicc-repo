@@ -141,6 +141,35 @@ Token *tokenize_file(char *filename);
   error("internal error at %s:%d", __FILE__, __LINE__)
 
 //
+// cst.c
+//
+
+// Lossless concrete syntax tree over tokenize_file()'s direct output
+// (AGENTS.md stage 2). Every token of the stream is one leaf, in order,
+// with CST_EOF for the end marker; the leaves' trivia and spellings in
+// order rebuild the input file byte for byte. Structural kinds arrive in
+// later steps; nothing here reads names, types or preprocessor state.
+typedef enum {
+  CST_TRANSLATION_UNIT,
+  CST_TOKEN,
+  CST_EOF,
+} CstKind;
+
+typedef struct CstNode CstNode;
+struct CstNode {
+  CstKind kind;
+  Token *tok;          // Set on leaves (CST_TOKEN / CST_EOF)
+  CstNode **children;  // Set on inner nodes
+  int child_count;
+  int child_cap;
+};
+
+CstNode *cst_parse(Token *tok);
+void cst_reconstruct(CstNode *root, FILE *out);
+void cst_dump(CstNode *root, FILE *out);
+bool cst_verify(CstNode *root, Token *tok);
+
+//
 // preprocess.c
 //
 

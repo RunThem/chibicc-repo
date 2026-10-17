@@ -21,6 +21,9 @@ static bool opt_cc1;
 static bool opt_hash_hash_hash;
 static bool opt_dump_tokens;
 static bool opt_reconstruct;
+static bool opt_dump_cst;
+static bool opt_reconstruct_cst;
+static bool opt_verify_cst;
 static bool opt_static;
 static bool opt_shared;
 static char *opt_MF;
@@ -179,6 +182,21 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-reconstruct")) {
       opt_reconstruct = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-dump-cst")) {
+      opt_dump_cst = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-reconstruct-cst")) {
+      opt_reconstruct_cst = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-verify-cst")) {
+      opt_verify_cst = true;
       continue;
     }
 
@@ -668,17 +686,27 @@ static Token *append_tokens(Token *tok1, Token *tok2) {
   return tok1;
 }
 
-static void cc1(void) {
-  // -dump-tokens and -reconstruct work on the raw stream of the base
-  // file: the trivia contract covers tokenize()'s direct output, before
-  // preprocessing (PLAN.md 判据 3).
-  if (opt_dump_tokens || opt_reconstruct) {
+static int cc1(void) {
+  // -dump-tokens, -reconstruct and the CST channels work on the raw stream
+  // of the base file: the trivia contract, and the CST built on it, cover
+  // tokenize()'s direct output, before preprocessing (PLAN.md 判据 3).
+  if (opt_dump_tokens || opt_reconstruct ||
+      opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
     Token *tok = must_tokenize_file(base_file);
     if (opt_dump_tokens)
       print_token_dump(tok);
     if (opt_reconstruct)
       reconstruct(tok);
-    return;
+    if (opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
+      CstNode *root = cst_parse(tok);
+      if (opt_dump_cst)
+        cst_dump(root, open_file(opt_o ? opt_o : "-"));
+      if (opt_reconstruct_cst)
+        cst_reconstruct(root, open_file(opt_o ? opt_o : "-"));
+      if (opt_verify_cst && !cst_verify(root, tok))
+        return 1;
+    }
+    return 0;
   }
 
   Token *tok = NULL;
@@ -709,13 +737,13 @@ static void cc1(void) {
   if (opt_M || opt_MD) {
     print_dependencies();
     if (opt_M)
-      return;
+      return 0;
   }
 
   // If -E is given, print out preprocessed C code as a result.
   if (opt_E) {
     print_tokens(tok);
-    return;
+    return 0;
   }
 
   Obj *prog = sema(parse(tok));
@@ -733,6 +761,7 @@ static void cc1(void) {
   FILE *out = open_file(output_file);
   fwrite(buf, buflen, 1, out);
   fclose(out);
+  return 0;
 }
 
 static void assemble(char *input, char *output) {
@@ -872,8 +901,7 @@ int main(int argc, char **argv) {
 
   if (opt_cc1) {
     add_default_include_paths(argv[0]);
-    cc1();
-    return 0;
+    return cc1();
   }
 
   if (input_paths.len > 1 && opt_o && (opt_c || opt_S | opt_E))
@@ -924,8 +952,9 @@ int main(int argc, char **argv) {
 
     assert(type == FILE_C);
 
-    // Just preprocess (or dump/reconstruct the raw token stream)
-    if (opt_E || opt_M || opt_dump_tokens || opt_reconstruct) {
+    // Just preprocess (or dump/reconstruct the raw token or CST stream)
+    if (opt_E || opt_M || opt_dump_tokens || opt_reconstruct ||
+        opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
       run_cc1(argc, argv, input, NULL);
       continue;
     }

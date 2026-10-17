@@ -157,13 +157,47 @@ TU
 - `cst.c` 是唯一的新源文件; `main.c` 只加三个只读旗标; `chibicc.h` 只加 CST 类型与声明.
   这条边界让阶段 5 的库化可以直接把 CST 暴露为公共能力, 而不需要再拆逻辑.
 
+## C1.1 叶子树与三个只读通道(已提交)
+
+- 改了什么:
+  - `chibicc.h`: 在 tokenize.c 与 preprocess.c 之间新增 cst.c 段 - `CstKind`
+    (`CST_TRANSLATION_UNIT` / `CST_TOKEN` / `CST_EOF`) 与 `CstNode`(kind / tok /
+    可增长 children 数组), 四个函数声明. `Token` / `File` 一个字段未动.
+  - `cst.c`(136 行): `cst_parse` 建 `TU -> TOKEN* + EOF` 的扁平叶子脊(EOF 单独成
+    kind, 因为它收文件尾部 trivia 且没有拼写); `cst_reconstruct` 按叶子序写
+    trivia + 拼写; `cst_dump` 两空格缩进打印种类与转义后的原始拼写; `cst_verify`
+    按叶子序与 token 流逐指针比较, 并检查叶子不带子节点. 全函数: 不调用
+    `error*`, 无文件域 static, arena 分配, 只返回结果.
+  - `main.c`: 新增 `-dump-cst` / `-reconstruct-cst` / `-verify-cst` 三个旗标, 共用
+    `-dump-tokens` 的早退分支(只 tokenize, 不预处理)与驱动透传; `cc1` 由 void 改为
+    int, `main` 的 opt_cc1 分支改为 `return cc1()`, 使校验失败以非零退出(驱动侧由
+    `run_subprocess` 传播). 其余分支行为不变.
+  - `Makefile`: `test/cst.sh` 挂进 `make test` 与 `make test-stage2`.
+  - `test/cst.sh`(新): 48 文件 `-reconstruct-cst` 全量 round-trip + 48 文件
+    `-verify-cst` + 12 个边界样本(每个既查重建也查校验)+ 5 个叶子 dump 样本 +
+    EOF 收尾 trivia 的重建, 共 126 项断言.
+- 为什么: 第 2 层的无损合同先以最小树形落地 - 叶子就是 token 流本身, 结构后加
+  (判据 6); 三个只读通道给后续每一步提供 round-trip / 不变量 / 树形三种证据.
+- dump 口径(冻结): 每行 `<两空格缩进><KIND>`; 叶子再跟一个空格与转义后的 raw 拼写
+  (与 `-dump-tokens` 同一规则: `\n` `\t` `\r` `\\`, 其余不可见字节与空格写成
+  `\xHH`); EOF 无文本; 不加引号 - 空格已转义, 行内不存在歧义. `-verify-cst` 成功
+  时不输出, 失败时由驱动返回 1.
+- 闸门: `make docker-test` EXIT=0(日志 `.cache/C1.1-docker-test.log`; cst lock
+  在 ./chibicc 与 ./stage2/chibicc 各一遍, 诊断 55 / 形状 33 / trivia 94 不变);
+  `make docker-snapshot-diff`: `snapshot diff: empty`(日志
+  `.cache/C1.1-snapdiff.log`). 本地负向探针: 临时让 `cst_verify` 恒假, 驱动与
+  `-cc1` 两条路径都返回 1, 已还原.
+- 偏差: `cc1` 的返回类型改动超出"main.c 只增旗标"的字面边界, 但判据 5 要求校验失败
+  时驱动返回非零且不调用 `exit`, 这是满足该条的最小改动. dump 用无引号形式, 与
+  PLAN 树形示例的引号写法不同 - 示例只示意分组, 不是格式合同.
+
 ## 提交一览
 
 | 提交 | 步骤 | 内容 |
 |---|---|---|
 | fe3c56b | 线间归档 | trivia 线归档为 `PLAN-trivia.md` / `RESULT-trivia.md`; 本线与设计账本建立, `PLAN.md` 计划书就位; AGENTS.md 现行线段与路线图同步 |
-| (本提交) | C0.1 | 三道闸门复验并留档(EXIT=0 / diff 空 / tinycc EXIT=0); A/B worktree `/tmp/cbase` 建立在 443b4c2; 语料清单核对 41 + 7 + 12; 基线回填 |
-| (待填) | C1.1 | 叶子树 + 重建 / 校验通道 + cst.sh 第一段 |
+| 5a9057a | C0.1 | 三道闸门复验并留档(EXIT=0 / diff 空 / tinycc EXIT=0); A/B worktree `/tmp/cbase` 建立在 443b4c2; 语料清单核对 41 + 7 + 12; 基线回填 |
+| (本提交) | C1.1 | `cst.c` 叶子树 + `-dump-cst` / `-reconstruct-cst` / `-verify-cst` 三通道; `cc1` 返回码; `test/cst.sh` 126 项断言并挂进两个测试目标; docker-test EXIT=0, snapshot diff 空 |
 | (待填) | C1.2 | 定界符与语句骨架 |
 | (待填) | C2.1 | 表达式结构 |
 | (待填) | C2.2 | 声明与语句结构 |

@@ -160,7 +160,7 @@ trivia 终态(443b4c2: tokenize.c 924 行 + chibicc.h 864 行 + main.c 959 行 +
   `make docker-test-thirdparty THIRDPARTY=tinycc`)并回填基线; 建立本地 A/B 规程
   (`git worktree add /tmp/cbase 443b4c2`, 对照 `-E` / `-S` / dump 输出); 确认 `test/cst.sh`
   的语料清单与 trivia.sh 一致.
-- [ ] **C1.1 叶子树与重建 / 校验通道**: `chibicc.h` 增 `CstKind` / `CstNode` 与三个函数
+- [x] **C1.1 叶子树与重建 / 校验通道**: `chibicc.h` 增 `CstKind` / `CstNode` 与三个函数
   声明; 新建 `cst.c`: `cst_parse` 对 `tokenize_file` 的直接输出建
   `CST_TRANSLATION_UNIT -> CST_TOKEN* + CST_EOF` 的叶子树(此时还没有任何语法分组),
   `cst_reconstruct` 按叶子序写 trivia + 拼写, `cst_dump` 按缩进打印种类与叶子拼写,
