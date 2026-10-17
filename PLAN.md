@@ -170,7 +170,7 @@ trivia 终态(443b4c2: tokenize.c 924 行 + chibicc.h 864 行 + main.c 959 行 +
   round-trip 逐字节相等; 12 个边界样本;
   `-verify-cst` 全绿; 叶子树 dump 样本(空文件, 单 token, 多 token, EOF 收尾 trivia).
   验收: 两个二进制(stage1 / stage2)都过; snapshot diff 为空.
-- [ ] **C1.2 定界符与语句骨架**: 在叶子树上加 `CST_GROUP`(`()` / `[]` / `{}` 各自节点,
+- [x] **C1.2 定界符与语句骨架**: 在叶子树上加 `CST_GROUP`(`()` / `[]` / `{}` 各自节点,
   开闭括号是显式叶子), 语句切分(顶层与块内按 `;` 切 `CST_STMT`), `CST_BLOCK`(花括号体),
   空语句, 以及 `CST_UNPARSED` 回退节点(未闭合定界符, 无法切分的跨度). 本步不做声明与
   表达式文法, 解析仍是全函数. `test/cst.sh` 第二段: 嵌套括号 / 花括号 / `for (;;)` 的

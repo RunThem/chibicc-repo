@@ -93,6 +93,8 @@ exp_dump() {
     $chibicc -dump-cst "$tmp/d-$name.c" > "$tmp/d-$name.out"
     cmp -s "$tmp/d-$name.out" "$tmp/d-$name.expected"
     check "-dump-cst/$name"
+    $chibicc -verify-cst "$tmp/d-$name.c"
+    check "-verify-cst/$name"
 }
 
 # 空文件: 没有 token, 只剩收尾的 EOF.
@@ -101,21 +103,64 @@ exp_dump empty '' \
 
 # 单 token.
 exp_dump single 'int\n' \
-'TU\n  TOKEN int\n  EOF\n'
+'TU\n  STMT\n    TOKEN int\n  EOF\n'
 
 # 多 token: 每个 token 与标点各占一行, 不合并同类项.
 exp_dump multi 'int x;\n' \
-'TU\n  TOKEN int\n  TOKEN x\n  TOKEN ;\n  EOF\n'
+'TU\n  STMT\n    TOKEN int\n    TOKEN x\n    TOKEN ;\n  EOF\n'
 
 # 转义: 字符串字面量里的空格转成 \x20, 引号原样(它属于拼写).
 exp_dump string_space 'char *s = "a b";\n' \
-'TU\n  TOKEN char\n  TOKEN *\n  TOKEN s\n  TOKEN =\n  TOKEN "a\\x20b"\n  TOKEN ;\n  EOF\n'
+'TU\n  STMT\n    TOKEN char\n    TOKEN *\n    TOKEN s\n    TOKEN =\n    TOKEN "a\\x20b"\n    TOKEN ;\n  EOF\n'
 
 # EOF 收尾 trivia: 末尾的注释与空行不进 dump, 但重建逐字节保留它们.
 exp_dump eof_trivia 'a /* tail */\n\n' \
-'TU\n  TOKEN a\n  EOF\n'
+'TU\n  STMT\n    TOKEN a\n  EOF\n'
 $chibicc -reconstruct-cst "$tmp/d-eof_trivia.c" > "$tmp/d-eof_trivia.out"
 cmp -s "$tmp/d-eof_trivia.out" "$tmp/d-eof_trivia.c"
 check "-reconstruct-cst/eof_trivia"
+
+# ---- C1.2: 定界符与语句骨架 ----------------------------------------------------
+
+# 顶层与块内按 ';' 切 STMT; 每个定界符成组, 开闭符号是显式叶子. 语句切分只发生
+# 在语句层, 组内部保持原样 - for 头里的两个分号不是语句边界.
+exp_dump statements 'int x; y = 1;\n' \
+'TU\n  STMT\n    TOKEN int\n    TOKEN x\n    TOKEN ;\n  STMT\n    TOKEN y\n    TOKEN =\n    TOKEN 1\n    TOKEN ;\n  EOF\n'
+
+exp_dump nested_delims 'f((a), [b]);\n' \
+'TU\n  STMT\n    TOKEN f\n    GROUP_PAREN\n      TOKEN (\n      GROUP_PAREN\n        TOKEN (\n        TOKEN a\n        TOKEN )\n      TOKEN ,\n      GROUP_BRACKET\n        TOKEN [\n        TOKEN b\n        TOKEN ]\n      TOKEN )\n    TOKEN ;\n  EOF\n'
+
+exp_dump for_header 'for (;;) ;\n' \
+'TU\n  STMT\n    TOKEN for\n    GROUP_PAREN\n      TOKEN (\n      TOKEN ;\n      TOKEN ;\n      TOKEN )\n    TOKEN ;\n  EOF\n'
+
+# 块: 花括号体在语句层单独成 BLOCK, 空语句是 NULL_STMT.
+exp_dump block '{ int x; ; }\n' \
+'TU\n  BLOCK\n    TOKEN {\n    STMT\n      TOKEN int\n      TOKEN x\n      TOKEN ;\n    NULL_STMT\n      TOKEN ;\n    TOKEN }\n  EOF\n'
+
+exp_dump nested_block '{ { } }\n' \
+'TU\n  BLOCK\n    TOKEN {\n    BLOCK\n      TOKEN {\n      TOKEN }\n    TOKEN }\n  EOF\n'
+
+# 语句里出现的花括号(初始化器 / 函数体)只是原始组, 不按块切分.
+exp_dump brace_in_stmt 'int a[] = {1, 2};\n' \
+'TU\n  STMT\n    TOKEN int\n    TOKEN a\n    GROUP_BRACKET\n      TOKEN [\n      TOKEN ]\n    TOKEN =\n    GROUP_BRACE\n      TOKEN {\n      TOKEN 1\n      TOKEN ,\n      TOKEN 2\n      TOKEN }\n    TOKEN ;\n  EOF\n'
+
+# UNPARSED: 未闭合的组 / 块, 以及语句层没有开括号的孤立闭括号. 已消费的 token
+# 全部留在树里, 重建与校验照旧.
+exp_dump unclosed_paren 'int x = (1 + 2;\n' \
+'TU\n  STMT\n    TOKEN int\n    TOKEN x\n    TOKEN =\n    UNPARSED\n      TOKEN (\n      TOKEN 1\n      TOKEN +\n      TOKEN 2\n      TOKEN ;\n  EOF\n'
+
+exp_dump unclosed_block '{ int x;\n' \
+'TU\n  UNPARSED\n    TOKEN {\n    STMT\n      TOKEN int\n      TOKEN x\n      TOKEN ;\n  EOF\n'
+
+exp_dump stray_close ');\n' \
+'TU\n  UNPARSED\n    TOKEN )\n  NULL_STMT\n    TOKEN ;\n  EOF\n'
+
+for f in "$tmp"/d-statements.c "$tmp"/d-nested_delims.c "$tmp"/d-for_header.c \
+         "$tmp"/d-block.c "$tmp"/d-nested_block.c "$tmp"/d-brace_in_stmt.c \
+         "$tmp"/d-unclosed_paren.c "$tmp"/d-unclosed_block.c "$tmp"/d-stray_close.c; do
+    $chibicc -reconstruct-cst "$f" > "$tmp/rec2.out"
+    cmp -s "$tmp/rec2.out" "$f"
+    check "-reconstruct-cst/$(basename "$f" .c)"
+done
 
 echo "cst lock: $n_rt round-trip files, $n_vf verify files, $n_rb boundary samples, $n_d dump samples"

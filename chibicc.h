@@ -147,12 +147,20 @@ Token *tokenize_file(char *filename);
 // Lossless concrete syntax tree over tokenize_file()'s direct output
 // (AGENTS.md stage 2). Every token of the stream is one leaf, in order,
 // with CST_EOF for the end marker; the leaves' trivia and spellings in
-// order rebuild the input file byte for byte. Structural kinds arrive in
-// later steps; nothing here reads names, types or preprocessor state.
+// order rebuild the input file byte for byte. The skeleton groups
+// delimiters and splits statements; declarations and expressions arrive
+// in later steps. Nothing here reads names, types or preprocessor state.
 typedef enum {
   CST_TRANSLATION_UNIT,
   CST_TOKEN,
   CST_EOF,
+  CST_GROUP_PAREN,
+  CST_GROUP_BRACKET,
+  CST_GROUP_BRACE,
+  CST_BLOCK,
+  CST_STMT,
+  CST_NULL_STMT,
+  CST_UNPARSED,
 } CstKind;
 
 typedef struct CstNode CstNode;

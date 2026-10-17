@@ -191,13 +191,38 @@ TU
   时驱动返回非零且不调用 `exit`, 这是满足该条的最小改动. dump 用无引号形式, 与
   PLAN 树形示例的引号写法不同 - 示例只示意分组, 不是格式合同.
 
+## C1.2 定界符与语句骨架(已提交)
+
+- 改了什么:
+  - `chibicc.h`: `CstKind` 增 `CST_GROUP_PAREN` / `CST_GROUP_BRACKET` /
+    `CST_GROUP_BRACE` / `CST_BLOCK` / `CST_STMT` / `CST_NULL_STMT` / `CST_UNPARSED`.
+  - `cst.c`: 语句层切分(顶层与块内): 每项是 `;` 结尾的 `STMT`, 孤立 `;` 的
+    `NULL_STMT`, 或 `{` 开头的 `BLOCK`; 语句内 `(` `[` `{` 递归成原始组, 组内不
+    切语句(`for (;;)` 的分号是叶子); 缺闭括号的组 / 块与语句层无开括号的孤立
+    闭括号成为 `UNPARSED`, 已消费 token 全保留. 仍是全函数, 无诊断.
+  - `test/cst.sh`: 第二段 9 个骨架 dump(语句切分 / 嵌套括号 / for 头 / 块 / 嵌套
+    块 / 语句内花括号 / 未闭合括号 / 未闭合块 / 孤立闭括号), 每个 dump 样本同时
+    跑 `-verify-cst` 与重建; C1.1 的 5 个 dump 期望随 `STMT` 包装更新. 全脚本
+    158 项断言, 汇总行 14 个 dump 样本.
+- 为什么: 先固定"定界符不错配, 语句边界可切"的骨架, 让 C2 的表达式与声明文法
+  有一个可靠的容器; 组内不切语句是刻意的 - 骨架阶段无法区分 `for` 头与普通括号.
+- 口径与限制: 语句层只覆盖顶层与块内. 函数体的 `{` 出现在语句中段, C1.2 按原始
+  `GROUP_BRACE` 处理(没有声明文法时无法与初始化器花括号区分); C2.2 的 `FUNC_DEF`
+  再把函数体落成 `BLOCK`. 这是判据 6 的 best-effort 结构, 不影响无损.
+- 闸门: `make docker-test` EXIT=0(日志 `.cache/C1.2-docker-test.log`; cst lock
+  158 项在 ./chibicc 与 ./stage2/chibicc 各一遍); `make docker-snapshot-diff`:
+  `snapshot diff: empty`(日志 `.cache/C1.2-snapdiff.log`).
+- 偏差: 无. 计划里的 `CST_GROUP` 三种括号与 `CST_BLOCK` / `CST_STMT` /
+  `CST_NULL_STMT` / `CST_UNPARSED` 全部落地; dump 名称用去掉 `CST_` 前缀的全名.
+
 ## 提交一览
 
 | 提交 | 步骤 | 内容 |
 |---|---|---|
 | fe3c56b | 线间归档 | trivia 线归档为 `PLAN-trivia.md` / `RESULT-trivia.md`; 本线与设计账本建立, `PLAN.md` 计划书就位; AGENTS.md 现行线段与路线图同步 |
 | 5a9057a | C0.1 | 三道闸门复验并留档(EXIT=0 / diff 空 / tinycc EXIT=0); A/B worktree `/tmp/cbase` 建立在 443b4c2; 语料清单核对 41 + 7 + 12; 基线回填 |
-| (本提交) | C1.1 | `cst.c` 叶子树 + `-dump-cst` / `-reconstruct-cst` / `-verify-cst` 三通道; `cc1` 返回码; `test/cst.sh` 126 项断言并挂进两个测试目标; docker-test EXIT=0, snapshot diff 空 |
+| c5fa672 | C1.1 | `cst.c` 叶子树 + `-dump-cst` / `-reconstruct-cst` / `-verify-cst` 三通道; `cc1` 返回码; `test/cst.sh` 126 项断言并挂进两个测试目标; docker-test EXIT=0, snapshot diff 空 |
+| (本提交) | C1.2 | 定界符组 + 语句切分 + BLOCK / NULL_STMT / UNPARSED; cst.sh 第二段 9 个骨架 dump, 全脚本 158 项断言; docker-test EXIT=0, snapshot diff 空 |
 | (待填) | C1.2 | 定界符与语句骨架 |
 | (待填) | C2.1 | 表达式结构 |
 | (待填) | C2.2 | 声明与语句结构 |
