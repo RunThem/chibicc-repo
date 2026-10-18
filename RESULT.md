@@ -143,9 +143,27 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
   3 个 verify 样本通过; 既有 trivia(94 项)与 CST(305 项)计数不变.
 - 偏差: 无. 新文件自举通过(stage2 由 docker-test 覆盖).
 
-## M1.2 对象宏 / 函数宏 body 层(未开工)
+## M1.2 对象宏 / 函数宏 body 层
 
-待填.
+- 改了什么:
+  - `preprocess.c`: 新增 `new_prov`(只 prepend)与 `new_expansion`(建记录)、
+    `count_macro_args`; `expand_macro` 的 object-like 分支建记录并在既有的 `origin`
+    循环里给宏体 token 挂 `new_prov(e, -1, 调用名 token 的 prov)`; function-like 分支在
+    `rparen` 之后建记录(写入 `name` / `rparen` / `macro` / `args` / `arg_count`), 同样在
+    `origin` 循环里挂 body 层. `origin` 的语义与写入位置不变.
+  - `expansion_dump.c`: `-dump-expansions` 输出完整 chain; entry 为
+    `<macro>@<call-file>:<call-line>:<body|argN>:<def-file>:<def-line>`, 最内层在前用
+    `>` 连接, 定义缺失打 `?:?`(`-D` / 内建).
+  - `test/expand.sh`: 加 7 个 dump 样本(对象宏, 函数宏体, 嵌套, `#undef` / 重定义,
+    `#line`, 空宏, 头文件定义)与 3 个 verify 样本.
+- 为什么: 先把"展开产物从哪来"的最小闭环(调用点 / 定义 / 层)打通; 实参层留给 M1.3.
+  本步 function-like 的 body 层在 `expand_macro` 的输出循环里统一挂, 对引用实参的宏会
+  暂时把实参 token 也标成 body(本步没有这样的测试); M1.3 把挂接移进 `subst` 后按分支
+  细分, 该临时行为消失.
+- 闸门: `snapshot diff: empty`; `make docker-test` EXIT=0; `test/expand.sh`
+  10 个 dump 样本 + 6 个 verify 样本通过(stage1 与 stage2 各一遍).
+- 偏差: 无. 运行时实测的 dump 与本步推导的期望逐字节一致(重定义指向旧定义, `#line`
+  还原物理行, 头文件定义显示 `./defs.h:1`).
 
 ## M1.3 实参层(未开工)
 
@@ -164,6 +182,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 | 提交 | 步骤 | 内容 |
 |---|---|---|
 | `659eadb` | M0.1 | 归档 CST 线, 建立本线计划与记录, 基线闸门全绿 |
+| `922711a` | M1.1 | 记录类型 / 访问器 / 两个只读通道骨架 + test/expand.sh |
 
 ## 终态验收(本线完成时逐项实测)
 

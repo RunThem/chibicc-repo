@@ -290,7 +290,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
   新建 `test/expand.sh`(harness + 3 个无宏样本)并挂进两个 Makefile 目标.
   验收: 既有通道逐字节不变; 新骨架通道可跑; stage1 / stage2 都通过; snapshot 为空.
 
-- [ ] **M1.2 对象宏 / 函数宏 body 层**:
+- [x] **M1.2 对象宏 / 函数宏 body 层**:
   在 `expand_macro` 的 E2 / E4 建立记录; 宏体 token 挂 body; 写 name / rparen / macro /
   args / arg_count; `origin` 循环保持不动.
   测试: 对象宏, 函数宏体, 嵌套对象宏(A 体里调 B), 重定义 / `#undef` 后旧展开仍指向旧定义,

@@ -5,8 +5,14 @@
 //
 //   T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 //
-// <chain> is "-" for a token read from the source; otherwise it lists the
-// token's MacroProv layers, innermost first (a later step fills this in).
+// <chain> is "-" for a token read from the source. Otherwise it lists the
+// token's MacroProv layers, innermost first, joined by ">"; a layer reads
+//
+//   <macro>@<call-file>:<call-line>:<body|argN>:<def-file>:<def-line>
+//
+// with argN 1-based and "?:?" when the macro has no #define token
+// (builtins, -D definitions). A pasted macro name makes a call position
+// synthetic; it prints as @synth like any other synthetic token.
 //
 // -verify-expansions checks the chain invariants and prints at most one
 // message on stderr: exit 0 on success, 1 on the first violation. This
@@ -38,7 +44,35 @@ void expansion_dump(Token *tok, FILE *out) {
     print_pos(out, tok);
     fprintf(out, " %s ", token_kind_name(tok->kind));
     print_escaped(out, tok->loc, tok->len);
-    fputs(" -\n", out);
+
+    MacroProv *prov = token_provenance(tok);
+    if (!prov) {
+      fputs(" -\n", out);
+      continue;
+    }
+
+    fputc(' ', out);
+    for (MacroProv *p = prov; p; p = macro_prov_next(p)) {
+      if (p != prov)
+        fputc('>', out);
+
+      MacroExpansion *e = macro_prov_expansion(p);
+      fprintf(out, "%s@", macro_expansion_macro(e));
+      print_pos(out, macro_expansion_name(e));
+
+      int arg_index = macro_prov_arg_index(p);
+      if (arg_index < 0)
+        fputs(":body:", out);
+      else
+        fprintf(out, ":arg%d:", arg_index + 1);
+
+      Token *def = macro_expansion_def(e);
+      if (def)
+        print_pos(out, def);
+      else
+        fputs("?:?", out);
+    }
+    fputc('\n', out);
   }
 }
 

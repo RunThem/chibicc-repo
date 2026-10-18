@@ -124,6 +124,39 @@ static Token *new_eof(Token *tok) {
   return t;
 }
 
+// Prepend one provenance layer. The tail is the chain the invocation's
+// own text already carried, so chains are built by prepending only and
+// shared tails are never mutated (PLAN.md, "挂接规则").
+static MacroProv *new_prov(MacroExpansion *exp, int arg_index, MacroProv *next) {
+  MacroProv *p = calloc(1, sizeof(MacroProv));
+  p->exp = exp;
+  p->arg_index = arg_index;
+  p->next = next;
+  return p;
+}
+
+// Build the record of one expansion. It is immutable once returned; every
+// token the expansion produces shares it.
+static MacroExpansion *
+new_expansion(Token *name, Token *rparen, Macro *macro, MacroArg *args,
+              int arg_count, bool is_builtin) {
+  MacroExpansion *e = calloc(1, sizeof(MacroExpansion));
+  e->name = name;
+  e->rparen = rparen;
+  e->macro = macro;
+  e->args = args;
+  e->arg_count = arg_count;
+  e->is_builtin = is_builtin;
+  return e;
+}
+
+static int count_macro_args(MacroArg *args) {
+  int n = 0;
+  for (; args; args = args->next)
+    n++;
+  return n;
+}
+
 static Hideset *new_hideset(char *name) {
   Hideset *hs = calloc(1, sizeof(Hideset));
   hs->name = name;
@@ -669,10 +702,13 @@ static bool expand_macro(Token **rest, Token *tok) {
 
   // Object-like macro application
   if (m->is_objlike) {
+    MacroExpansion *e = new_expansion(tok, NULL, m, NULL, 0, false);
     Hideset *hs = hideset_union(tok->hideset, new_hideset(m->name));
     Token *body = add_hideset(m->body, hs);
-    for (Token *t = body; t->kind != TK_EOF; t = t->next)
+    for (Token *t = body; t->kind != TK_EOF; t = t->next) {
       t->origin = tok;
+      t->prov = new_prov(e, -1, tok->prov);
+    }
     *rest = append(body, tok->next);
     (*rest)->at_bol = tok->at_bol;
     (*rest)->has_space = tok->has_space;
@@ -688,6 +724,8 @@ static bool expand_macro(Token **rest, Token *tok) {
   Token *macro_token = tok;
   MacroArg *args = read_macro_args(&tok, tok, m->params, m->va_args_name);
   Token *rparen = tok;
+  MacroExpansion *e = new_expansion(macro_token, rparen, m, args,
+                                    count_macro_args(args), false);
 
   // Tokens that consist a func-like macro invocation may have different
   // hidesets, and if that's the case, it's not clear what the hideset
@@ -699,8 +737,10 @@ static bool expand_macro(Token **rest, Token *tok) {
 
   Token *body = subst(m->body, args);
   body = add_hideset(body, hs);
-  for (Token *t = body; t->kind != TK_EOF; t = t->next)
+  for (Token *t = body; t->kind != TK_EOF; t = t->next) {
     t->origin = macro_token;
+    t->prov = new_prov(e, -1, macro_token->prov);
+  }
   *rest = append(body, tok->next);
   (*rest)->at_bol = macro_token->at_bol;
   (*rest)->has_space = macro_token->has_space;
