@@ -11,7 +11,7 @@
 #   C1.1 - 叶子树的全量 round-trip(48 文件)/ 12 个边界样本 / -verify-cst / 叶子 dump
 #   C1.2 - 定界符与语句骨架
 #   C2.x - 表达式与声明 / 语句结构
-#   C3.x - 预处理指令与条件分组
+#   C3.1 - 预处理指令与条件分组
 #
 # 用法: test/cst.sh ./chibicc (由 make test 与 make test-stage2 调用)
 
@@ -322,6 +322,76 @@ for f in "$tmp"/d-decl_scalar.c "$tmp"/d-decl_init.c "$tmp"/d-decl_multi.c \
          "$tmp"/d-ambig_call_unknown.c; do
     $chibicc -reconstruct-cst "$f" > "$tmp/rec4.out"
     cmp -s "$tmp/rec4.out" "$f"
+    check "-reconstruct-cst/$(basename "$f" .c)"
+done
+
+# ---- C3.1: 预处理指令与条件分组 ------------------------------------------------
+
+# 指令行 = 行首 '#' 到下一个行首 token 之前; 指令的 token 全是叶子, 树只按行分组.
+# #include 的引号形与尖括号形原样保留路径 token(不解释转义, 不查文件).
+exp_dump pp_include '#include "a.h"\n#include <b/c.h>\n' \
+'TU\n  PP_INCLUDE\n    TOKEN #\n    TOKEN include\n    TOKEN "a.h"\n  PP_INCLUDE\n    TOKEN #\n    TOKEN include\n    TOKEN <\n    TOKEN b\n    TOKEN /\n    TOKEN c\n    TOKEN .\n    TOKEN h\n    TOKEN >\n  EOF\n'
+
+# #define: 名字后紧跟 '(' 且无空白才是函数宏, 参数表是一个 GROUP_PAREN;
+# 对象宏(名字后有空白)与替换列表是平铺叶子. 变参 '...' 留在参数表里.
+exp_dump pp_define '#define X 1 + 2\n#define F(x, y) x + y\n#define OBJ (x)\n' \
+'TU\n  PP_DEFINE\n    TOKEN #\n    TOKEN define\n    TOKEN X\n    TOKEN 1\n    TOKEN +\n    TOKEN 2\n  PP_DEFINE\n    TOKEN #\n    TOKEN define\n    TOKEN F\n    GROUP_PAREN\n      TOKEN (\n      TOKEN x\n      TOKEN ,\n      TOKEN y\n      TOKEN )\n    TOKEN x\n    TOKEN +\n    TOKEN y\n  PP_DEFINE\n    TOKEN #\n    TOKEN define\n    TOKEN OBJ\n    TOKEN (\n    TOKEN x\n    TOKEN )\n  EOF\n'
+
+exp_dump pp_variadic '#define V(fmt, ...) f(fmt, __VA_ARGS__)\n' \
+'TU\n  PP_DEFINE\n    TOKEN #\n    TOKEN define\n    TOKEN V\n    GROUP_PAREN\n      TOKEN (\n      TOKEN fmt\n      TOKEN ,\n      TOKEN ...\n      TOKEN )\n    TOKEN f\n    TOKEN (\n    TOKEN fmt\n    TOKEN ,\n    TOKEN __VA_ARGS__\n    TOKEN )\n  EOF\n'
+
+# #undef / #line(含 GNU 行标记 `# 123 "file"`) 各自成节点, 行内 token 全保留.
+exp_dump pp_undef_line '#undef X\n#line 10 "f.c"\n# 200 "xyz" 2 3\n' \
+'TU\n  PP_UNDEF\n    TOKEN #\n    TOKEN undef\n    TOKEN X\n  PP_LINE\n    TOKEN #\n    TOKEN line\n    TOKEN 10\n    TOKEN "f.c"\n  PP_LINE\n    TOKEN #\n    TOKEN 200\n    TOKEN "xyz"\n    TOKEN 2\n    TOKEN 3\n  EOF\n'
+
+# #pragma / #error / 空指令 / 未知指令: 空指令只有 '#', 未知拼写走通用指令节点.
+exp_dump pp_pragma_error '#pragma once\n#error boom\n#\n#unknown stuff\n' \
+'TU\n  PP_PRAGMA\n    TOKEN #\n    TOKEN pragma\n    TOKEN once\n  PP_ERROR\n    TOKEN #\n    TOKEN error\n    TOKEN boom\n  PP_NULL\n    TOKEN #\n  PP_DIRECTIVE\n    TOKEN #\n    TOKEN unknown\n    TOKEN stuff\n  EOF\n'
+
+# #if / #ifdef / #ifndef 成 PP_IF, 每个 #if / #elif / #else 是一个 PP_BRANCH,
+# 收尾的 #endif 是 PP_IF 的最后一个孩子; 条件不求值, 所有分支全部保留.
+exp_dump pp_if_branches '#if A\nint x;\n#elif B\nint y;\n#else\nint z;\n#endif\n' \
+'TU\n  PP_IF\n    PP_BRANCH\n      PP_DIRECTIVE\n        TOKEN #\n        TOKEN if\n        TOKEN A\n      DECL\n        DECL_SPECS\n          TOKEN int\n        DECLARATOR\n          TOKEN x\n        TOKEN ;\n    PP_BRANCH\n      PP_DIRECTIVE\n        TOKEN #\n        TOKEN elif\n        TOKEN B\n      DECL\n        DECL_SPECS\n          TOKEN int\n        DECLARATOR\n          TOKEN y\n        TOKEN ;\n    PP_BRANCH\n      PP_DIRECTIVE\n        TOKEN #\n        TOKEN else\n      DECL\n        DECL_SPECS\n          TOKEN int\n        DECLARATOR\n          TOKEN z\n        TOKEN ;\n    PP_DIRECTIVE\n      TOKEN #\n      TOKEN endif\n  EOF\n'
+
+# 嵌套条件在分支体里递归; 内层 PP_IF 是外层分支的一个孩子.
+exp_dump pp_if_nested '#if A\n#if B\nint x;\n#endif\n#else\nint y;\n#endif\n' \
+'TU\n  PP_IF\n    PP_BRANCH\n      PP_DIRECTIVE\n        TOKEN #\n        TOKEN if\n        TOKEN A\n      PP_IF\n        PP_BRANCH\n          PP_DIRECTIVE\n            TOKEN #\n            TOKEN if\n            TOKEN B\n          DECL\n            DECL_SPECS\n              TOKEN int\n            DECLARATOR\n              TOKEN x\n            TOKEN ;\n        PP_DIRECTIVE\n          TOKEN #\n          TOKEN endif\n    PP_BRANCH\n      PP_DIRECTIVE\n        TOKEN #\n        TOKEN else\n      DECL\n        DECL_SPECS\n          TOKEN int\n        DECLARATOR\n          TOKEN y\n        TOKEN ;\n    PP_DIRECTIVE\n      TOKEN #\n      TOKEN endif\n  EOF\n'
+
+# 块内的条件与块外一样成节点: 分支体按语句 / 声明建树.
+exp_dump pp_if_block 'int main() {\n#if 1\n  return 0;\n#else\n  return 1;\n#endif\n}\n' \
+'TU\n  FUNC_DEF\n    DECL_SPECS\n      TOKEN int\n    DECLARATOR\n      TOKEN main\n      PARAM_LIST\n        TOKEN (\n        TOKEN )\n    BLOCK\n      TOKEN {\n      PP_IF\n        PP_BRANCH\n          PP_DIRECTIVE\n            TOKEN #\n            TOKEN if\n            TOKEN 1\n          RETURN\n            TOKEN return\n            PRIMARY\n              TOKEN 0\n            TOKEN ;\n        PP_BRANCH\n          PP_DIRECTIVE\n            TOKEN #\n            TOKEN else\n          RETURN\n            TOKEN return\n            PRIMARY\n              TOKEN 1\n            TOKEN ;\n        PP_DIRECTIVE\n          TOKEN #\n          TOKEN endif\n      TOKEN }\n  EOF\n'
+
+# 孤立的条件指令是普通指令行, 不报错也不丢弃.
+exp_dump pp_orphan '#endif\n#else\n#elif X\n' \
+'TU\n  PP_DIRECTIVE\n    TOKEN #\n    TOKEN endif\n  PP_DIRECTIVE\n    TOKEN #\n    TOKEN else\n  PP_DIRECTIVE\n    TOKEN #\n    TOKEN elif\n    TOKEN X\n  EOF\n'
+
+# 未闭合的宏参数表停在行尾(UNPARSED), 未闭合的条件保留已消费的分支.
+exp_dump pp_bad_params '#define F(x\nint y;\n' \
+'TU\n  PP_DEFINE\n    TOKEN #\n    TOKEN define\n    TOKEN F\n    UNPARSED\n      TOKEN (\n      TOKEN x\n  DECL\n    DECL_SPECS\n      TOKEN int\n    DECLARATOR\n      TOKEN y\n    TOKEN ;\n  EOF\n'
+
+exp_dump pp_unclosed_if '#if X\nint x;\n' \
+'TU\n  PP_IF\n    PP_BRANCH\n      PP_DIRECTIVE\n        TOKEN #\n        TOKEN if\n        TOKEN X\n      DECL\n        DECL_SPECS\n          TOKEN int\n        DECLARATOR\n          TOKEN x\n        TOKEN ;\n  EOF\n'
+
+# 续行与注释是 trivia: 指令仍是一行, dump 里看不到它们, 重建逐字节保留.
+exp_dump pp_continuation '#define LONG a \\\n  b\n' \
+'TU\n  PP_DEFINE\n    TOKEN #\n    TOKEN define\n    TOKEN LONG\n    TOKEN a\n    TOKEN b\n  EOF\n'
+
+exp_dump pp_comment '#define X 1 /* c */\nint y;\n' \
+'TU\n  PP_DEFINE\n    TOKEN #\n    TOKEN define\n    TOKEN X\n    TOKEN 1\n  DECL\n    DECL_SPECS\n      TOKEN int\n    DECLARATOR\n      TOKEN y\n    TOKEN ;\n  EOF\n'
+
+# 边界样本: BOM / CRLF 在指令行前, 缺分号的语句后紧跟指令(指令是回退的边界).
+exp_rec pp_crlf '#include <a.h>\r\n#define X 1\r\n'
+exp_rec pp_bom '\xef\xbb\xbf#include "a.h"\n#define Y 2\n'
+exp_rec pp_malformed_directive 'int x\n#define Y 1\nint z;\n'
+
+for f in "$tmp"/d-pp_include.c "$tmp"/d-pp_define.c "$tmp"/d-pp_variadic.c \
+         "$tmp"/d-pp_undef_line.c "$tmp"/d-pp_pragma_error.c \
+         "$tmp"/d-pp_if_branches.c "$tmp"/d-pp_if_nested.c \
+         "$tmp"/d-pp_if_block.c "$tmp"/d-pp_orphan.c \
+         "$tmp"/d-pp_bad_params.c "$tmp"/d-pp_unclosed_if.c \
+         "$tmp"/d-pp_continuation.c "$tmp"/d-pp_comment.c; do
+    $chibicc -reconstruct-cst "$f" > "$tmp/rec5.out"
+    cmp -s "$tmp/rec5.out" "$f"
     check "-reconstruct-cst/$(basename "$f" .c)"
 done
 

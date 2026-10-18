@@ -196,6 +196,16 @@ typedef enum {
   CST_CONTINUE,
   CST_RETURN,
   CST_ASM,
+  CST_PP_DIRECTIVE,
+  CST_PP_DEFINE,
+  CST_PP_UNDEF,
+  CST_PP_INCLUDE,
+  CST_PP_LINE,
+  CST_PP_PRAGMA,
+  CST_PP_ERROR,
+  CST_PP_NULL,
+  CST_PP_IF,
+  CST_PP_BRANCH,
 } CstKind;
 
 typedef struct CstNode CstNode;

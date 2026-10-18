@@ -296,6 +296,43 @@ TU
   计划里的 `CST_TYPE_NAME` 在 C2.2 接管了 C2.1 的 cast / sizeof 类型组, 属于计划
   内的结构升级, C2.1 的 dump 期望随之更新.
 
+## C3.1 指令节点与条件分组(已提交)
+
+- 改了什么:
+  - `chibicc.h`: `CstKind` 增 10 个指令种类(`CST_PP_DIRECTIVE` / `CST_PP_DEFINE` /
+    `CST_PP_UNDEF` / `CST_PP_INCLUDE` / `CST_PP_LINE` / `CST_PP_PRAGMA` /
+    `CST_PP_ERROR` / `CST_PP_NULL` / `CST_PP_IF` / `CST_PP_BRANCH`).
+  - `cst.c`(2254 行): 指令行 = `at_bol && "#"` 到下一个 `at_bol` token 之前, 行内 token
+    全是叶子. `#define` 的对象 / 函数宏分界与 `preprocess.c` 一致(名字后 `(` 且无空白):
+    函数宏参数表是一个扁平 `GROUP_PAREN`(未闭合则整组 `UNPARSED`, 停在行尾), 替换列表
+    平铺; 变参 `...` 留在参数表里. `#undef` / `#include`(引号形与尖括号形, 路径 token
+    原样) / `#line`(含 GNU 行标记 `# 123 "file"`) / `#pragma` / `#error` / 空指令 /
+    未知指令各成节点. `#if` / `#ifdef` / `#ifndef` 成 `CST_PP_IF`, 每个 `#if` /
+    `#elif` / `#else` 是一个 `CST_PP_BRANCH`, 收尾的 `#endif` 是 `PP_IF` 的最后一个
+    孩子; 分支体按所在上下文(顶层 / 块内)用同一套 item 文法建树, 嵌套条件递归. 孤立的
+    条件指令是普通指令节点; 未闭合的条件保留已消费部分.
+  - 语句层把 item 解析收进 `cst_parse_item`(指令分派 + 语句 / 声明 + 原始回退);
+    `cst_parse_fallback_statement` 把行首 `#` 当作跨度边界, 畸形语句不会吞掉后面的指令.
+  - `test/cst.sh`: 第五段 13 个 dump(include / define 对象与函数宏 / 变参 /
+    undef+line / GNU 行标记 / pragma+error+空指令+未知 / 三分支 / 嵌套 / 块内 / 孤立 /
+    未闭合参数表 / 未闭合条件 / 续行 / 注释)与 3 个边界样本(BOM / CRLF / 缺分号后的
+    指令), 全脚本 305 项断言, 61 个 dump 样本.
+- 为什么: 预处理指令是阶段 2 的显式节点; 指令与条件分支是 formatter 与源到源工具必须
+  保留的源码结构, 而条件求值与宏展开属于预处理器, 不在 CST.
+- 口径与限制: 指令只在语句层(顶层与块内)的 item 位置识别; 原始组(结构体成员体, 初始化
+  列表, 函数参数等)内部的指令仍按 token 叶子保留(全语料无此形态, 无损不受影响).
+  条件分组按 `#elif` / `#else` / `#endif` 的语法层级配对, 不求值; 块内未闭合的条件停在
+  包围的 `}` 前, 其后的 `#else` / `#endif` 成为孤立指令节点.
+- 开发中校验: ASan 构建跑遍 48 个语料的 reconstruct / verify / dump 与全部 cst.sh,
+  无 AddressSanitizer 报告(`intercept_memcmp=0`, 原因同 C2.1).
+- 闸门: `make docker-test` EXIT=0(日志 `.cache/C3.1-docker-test.log`; cst lock 305 项在
+  ./chibicc 与 ./stage2/chibicc 各一遍); `make docker-snapshot-diff`:
+  `snapshot diff: empty`(日志 `.cache/C3.1-snapdiff.log`); `make docker-test-thirdparty
+  THIRDPARTY=tinycc` EXIT=0(日志 `.cache/C3.1-tinycc.log`).
+- 偏差: 函数宏参数表复用 `CST_GROUP_PAREN` 而未新增参数表种类 - 让对象 / 函数宏的分界
+  在 dump 里可见, 同时不扩散种类; 参数表内层括号不再嵌套分组(合法宏参数不嵌套),
+  未闭合时整组变 `UNPARSED`.
+
 ## 提交一览
 
 | 提交 | 步骤 | 内容 |
@@ -305,8 +342,8 @@ TU
 | c5fa672 | C1.1 | `cst.c` 叶子树 + `-dump-cst` / `-reconstruct-cst` / `-verify-cst` 三通道; `cc1` 返回码; `test/cst.sh` 126 项断言并挂进两个测试目标; docker-test EXIT=0, snapshot diff 空 |
 | 40e9c05 | C1.2 | 定界符组 + 语句切分 + BLOCK / NULL_STMT / UNPARSED; cst.sh 第二段 9 个骨架 dump, 全脚本 158 项断言; docker-test EXIT=0, snapshot diff 空 |
 | 87858ef | C2.1 | 表达式递归下降(10 级二元链 / 一元 / 后缀 / cast / 条件 / 赋值 / 逗号 / 初始化列表 / 复合字面量)+ 文件内 typedef 预扫描; cst.sh 第三段 15 个 dump, 全脚本 203 项断言; docker-test EXIT=0, snapshot diff 空 |
-| (本提交) | C2.2 | 声明层(decl-specs / declarator / 参数 / type-name / 函数定义 / 指派初始化器)+ 语句层(if / switch / while / do / for / case / default / label / goto / break / continue / return / asm); cst.sh 第四段 19 个 dump, 全脚本 260 项断言; docker-test EXIT=0, snapshot diff 空 |
-| (待填) | C3.1 | 指令节点与条件分组 |
+| 67864c3 | C2.2 | 声明层(decl-specs / declarator / 参数 / type-name / 函数定义 / 指派初始化器)+ 语句层(if / switch / while / do / for / case / default / label / goto / break / continue / return / asm); cst.sh 第四段 19 个 dump, 全脚本 260 项断言; docker-test EXIT=0, snapshot diff 空 |
+| (本提交) | C3.1 | 指令行节点(#define 对象 / 函数宏 / 变参, #undef, #include, #line 与 GNU 行标记, #pragma, #error, 空指令与未知指令)+ 条件分组(PP_IF / PP_BRANCH, 分支全保留, 嵌套, 块内, 孤立与未闭合); cst.sh 第五段 13 个 dump 与 3 个边界样本, 全脚本 305 项断言; docker-test EXIT=0(含自举), snapshot diff 空, tinycc EXIT=0 |
 | (待填) | C3.2 | 收口与终态验收 |
 
 ## 终态验收(本线完成时逐项实测)

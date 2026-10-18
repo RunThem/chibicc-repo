@@ -200,7 +200,7 @@ trivia 终态(443b4c2: tokenize.c 924 行 + chibicc.h 864 行 + main.c 959 行 +
 
 ## 阶段 C3: 预处理指令与收口
 
-- [ ] **C3.1 指令节点与条件分组**: 指令行按 `at_bol` 切分, 建 `CST_PP_DIRECTIVE` 家族:
+- [x] **C3.1 指令节点与条件分组**: 指令行按 `at_bol` 切分, 建 `CST_PP_DIRECTIVE` 家族:
   `#define`(对象宏 / 函数宏 / 变参宏, 参数表与替换列表是 token 叶子, 不解析成表达式),
   `#undef`, `#include`(引号形与尖括号形, 路径 token 原样), `#line`(含 GNU 行标记),
   `#pragma`(含 `once`), `#error`, 空指令. `#if` / `#ifdef` / `#ifndef` 与其

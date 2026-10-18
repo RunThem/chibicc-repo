@@ -1,7 +1,7 @@
 #include "chibicc.h"
 
 // Lossless concrete syntax tree over the raw token stream (PLAN.md stage
-// C1/C2). Every token of the input becomes one leaf, in order; the
+// C1/C2/C3). Every token of the input becomes one leaf, in order; the
 // leaves' trivia and spellings rebuild the input file byte for byte.
 //
 // The tree groups delimiters, splits statements and builds declarations.
@@ -17,6 +17,14 @@
 // grouped). A group or block without its closing token, and a closer
 // that has no opener at this level, are CST_UNPARSED too; the tokens
 // they already hold stay in the tree.
+//
+// A preprocessing directive is a node of its own (CST_PP_*). The line
+// runs from a '#' at the beginning of a logical line to the token before
+// the next one; its tokens stay leaves. Conditional groups keep every
+// branch: CST_PP_IF holds one CST_PP_BRANCH per #if / #elif / #else and
+// the closing #endif, and the branch bodies are built with the same item
+// grammar as their surroundings. Conditions are never evaluated and
+// macros are never expanded.
 //
 // The expression grammar is the C precedence chain up to and including
 // the comma operator. Every operator, parenthesis and bracket is an
@@ -1327,6 +1335,12 @@ static CstNode *cst_parse_decl(CstParser *p) {
 // Statement layer
 //
 
+static bool cst_is_directive(Token *tok);
+static bool cst_is_pp_terminator(Token *tok);
+static CstNode *cst_parse_directive_line(CstParser *p);
+static CstNode *cst_parse_pp_if(CstParser *p);
+static CstNode *cst_parse_item(CstParser *p);
+
 // Parse one statement into the fallback shape: tokens up to and
 // including a ';' at this level, a raw group per delimiter, and stop
 // before a closer that belongs to an outer level. A span cut short by a
@@ -1339,6 +1353,11 @@ static CstNode *cst_parse_fallback_statement(Token **rest, Token *tok) {
 
   Token *p = tok;
   while (p && p->kind != TK_EOF) {
+    // A directive at the start of a line begins the next item; a
+    // malformed span must not swallow it. The span's own first token is
+    // never a directive (the item parser handles those).
+    if (p != tok && cst_is_directive(p))
+      break;
     if (equal(p, ";")) {
       cst_add_leaf(stmt, p);
       p = p->next;
@@ -1821,6 +1840,212 @@ static CstNode *cst_parse_statement(CstParser *p) {
   return NULL;
 }
 
+//
+// Preprocessor directive layer (C3.1)
+//
+// A directive line starts at a '#' with at_bol - the same test as
+// preprocess.c's is_hash - and ends before the next at_bol token. The
+// scan buffer has already removed continuations and a newline inside a
+// block comment does not set at_bol, so a multi-line directive is one
+// line here too. The tokens of a directive stay leaves; the tree only
+// groups them by line and, for conditionals, by branch. Conditions are
+// not evaluated, macros are not expanded and no file is looked up.
+//
+
+static bool cst_is_directive(Token *tok) {
+  return tok && tok->kind != TK_EOF && tok->at_bol && equal(tok, "#");
+}
+
+// The directive word after '#'. NULL means an empty directive (`#` alone
+// on its logical line).
+static Token *cst_directive_name(Token *tok) {
+  Token *name = tok->next;
+  if (!name || name->kind == TK_EOF || name->at_bol)
+    return NULL;
+  return name;
+}
+
+// #elif / #else / #endif close a branch body; they belong to the
+// enclosing CST_PP_IF rather than to the body's items.
+static bool cst_is_pp_terminator(Token *tok) {
+  if (!cst_is_directive(tok))
+    return false;
+  Token *name = cst_directive_name(tok);
+  return name && (equal(name, "elif") || equal(name, "else") ||
+                  equal(name, "endif"));
+}
+
+static bool cst_is_pp_if(Token *tok) {
+  if (!cst_is_directive(tok))
+    return false;
+  Token *name = cst_directive_name(tok);
+  return name && (equal(name, "if") || equal(name, "ifdef") ||
+                  equal(name, "ifndef"));
+}
+
+// The first token after this directive line: the next token with at_bol,
+// or EOF. Never NULL on tokenize_file()'s output.
+static Token *cst_directive_end(Token *tok) {
+  Token *p = tok->next;
+  while (p && p->kind != TK_EOF && !p->at_bol)
+    p = p->next;
+  return p;
+}
+
+// The directive's kind by spelling. A number after '#' is a GNU line
+// marker (`# 123 "file"`); an unrecognized word stays CST_PP_DIRECTIVE
+// and an empty line is CST_PP_NULL. #if / #elif / #else / #endif never
+// reach this function as part of a well-formed conditional.
+static CstKind cst_pp_kind(Token *tok) {
+  Token *name = cst_directive_name(tok);
+  if (!name)
+    return CST_PP_NULL;
+  if (name->kind == TK_PP_NUM)
+    return CST_PP_LINE;
+  if (equal(name, "define"))
+    return CST_PP_DEFINE;
+  if (equal(name, "undef"))
+    return CST_PP_UNDEF;
+  if (equal(name, "include"))
+    return CST_PP_INCLUDE;
+  if (equal(name, "line"))
+    return CST_PP_LINE;
+  if (equal(name, "pragma"))
+    return CST_PP_PRAGMA;
+  if (equal(name, "error"))
+    return CST_PP_ERROR;
+  return CST_PP_DIRECTIVE;
+}
+
+// A function-like macro's parameter list: '(' through the matching ')',
+// not past the end of the line. Parameters do not nest in valid input,
+// so the group is flat; a missing ')' stops at the line's end and turns
+// the group into UNPARSED.
+static CstNode *cst_parse_pp_params(Token **rest, Token *tok, Token *end) {
+  CstNode *group = new_cst_node(CST_GROUP_PAREN);
+  cst_add_leaf(group, tok);
+
+  int depth = 1;
+  Token *p = tok->next;
+  while (p != end) {
+    if (equal(p, "(")) {
+      depth++;
+    } else if (equal(p, ")")) {
+      depth--;
+      cst_add_leaf(group, p);
+      p = p->next;
+      if (depth == 0) {
+        *rest = p;
+        return group;
+      }
+      continue;
+    }
+    cst_add_leaf(group, p);
+    p = p->next;
+  }
+
+  group->kind = CST_UNPARSED;
+  *rest = p;
+  return group;
+}
+
+// Consume exactly one directive line. All of its tokens become leaves of
+// the directive node. For #define the macro name is followed by a
+// GROUP_PAREN only when '(' comes with no space - the object / function
+// macro boundary of preprocess.c - so the dump records the distinction.
+static CstNode *cst_parse_directive_line(CstParser *p) {
+  Token *hash = p->tok;
+  Token *end = cst_directive_end(hash);
+  CstNode *node = new_cst_node(cst_pp_kind(hash));
+  cst_add_leaf(node, hash);
+
+  Token *tok = hash->next;
+  if (node->kind == CST_PP_DEFINE && tok != end && tok->kind == TK_IDENT) {
+    cst_add_leaf(node, tok); // "define"
+    tok = tok->next;
+
+    if (tok != end && tok->kind == TK_IDENT) {
+      cst_add_leaf(node, tok); // macro name
+      tok = tok->next;
+
+      if (tok != end && equal(tok, "(") && !tok->has_space) {
+        Token *rest = NULL;
+        cst_add_child(node, cst_parse_pp_params(&rest, tok, end));
+        tok = rest;
+      }
+    }
+  }
+
+  while (tok != end) {
+    cst_add_leaf(node, tok);
+    tok = tok->next;
+  }
+
+  p->tok = end;
+  return node;
+}
+
+// #if / #ifdef / #ifndef open a conditional group: one CST_PP_BRANCH per
+// #if / #elif / #else and the closing #endif as the group's last child.
+// A branch body uses the same item grammar as its surroundings, so
+// nesting recurses through cst_parse_item and every branch keeps its
+// tokens. An unterminated group ends at EOF or at an enclosing closer;
+// an orphan #elif / #else / #endif is an ordinary directive line.
+static CstNode *cst_parse_pp_if(CstParser *p) {
+  CstNode *node = new_cst_node(CST_PP_IF);
+  CstNode *branch = new_cst_node(CST_PP_BRANCH);
+  cst_add_child(branch, cst_parse_directive_line(p));
+  cst_add_child(node, branch);
+
+  for (;;) {
+    while (p->ok && p->tok && p->tok->kind != TK_EOF &&
+           !cst_is_pp_terminator(p->tok)) {
+      // A closer belongs to the enclosing block; leave it there and let
+      // the group end unterminated instead of swallowing it.
+      if (cst_is_close(p->tok))
+        return node;
+      cst_add_child(branch, cst_parse_item(p));
+    }
+
+    if (!p->ok || !p->tok || p->tok->kind == TK_EOF ||
+        !cst_is_directive(p->tok))
+      return node;
+
+    Token *name = cst_directive_name(p->tok);
+    if (equal(name, "endif")) {
+      cst_add_child(node, cst_parse_directive_line(p));
+      return node;
+    }
+
+    branch = new_cst_node(CST_PP_BRANCH);
+    cst_add_child(branch, cst_parse_directive_line(p));
+    cst_add_child(node, branch);
+  }
+}
+
+// One item at statement level: a directive line (conditionals recurse),
+// or a statement / declaration with the raw fallback. Every path
+// consumes at least one token when one is available.
+static CstNode *cst_parse_item(CstParser *p) {
+  if (cst_is_directive(p->tok)) {
+    if (cst_is_pp_if(p->tok))
+      return cst_parse_pp_if(p);
+    return cst_parse_directive_line(p);
+  }
+
+  Token *start = p->tok;
+  CstNode *item = cst_parse_statement(p);
+  if (item)
+    return item;
+
+  p->tok = start;
+  p->ok = true;
+  Token *next = NULL;
+  item = cst_parse_fallback_statement(&next, start);
+  p->tok = next;
+  return item;
+}
+
 // compound-stmt = "{" (declaration | statement)* "}"
 //
 // A failed item is rebuilt from its first token with the raw fallback, so
@@ -1839,16 +2064,7 @@ static void cst_parse_compound(CstParser *p, CstNode *block) {
       continue;
     }
 
-    Token *start = p->tok;
-    CstNode *item = cst_parse_statement(p);
-    if (!item) {
-      p->tok = start;
-      p->ok = true;
-      Token *next = NULL;
-      item = cst_parse_fallback_statement(&next, start);
-      p->tok = next;
-    }
-    cst_add_child(block, item);
+    cst_add_child(block, cst_parse_item(p));
   }
 
   if (p->ok && p->tok && p->tok->kind != TK_EOF && equal(p->tok, "}")) {
@@ -1871,16 +2087,7 @@ static void cst_parse_items(CstNode *parent, CstParser *p) {
       continue;
     }
 
-    Token *start = p->tok;
-    CstNode *item = cst_parse_statement(p);
-    if (!item) {
-      p->tok = start;
-      p->ok = true;
-      Token *next = NULL;
-      item = cst_parse_fallback_statement(&next, start);
-      p->tok = next;
-    }
-    cst_add_child(parent, item);
+    cst_add_child(parent, cst_parse_item(p));
   }
 }
 
@@ -1964,6 +2171,16 @@ static char *cst_kind_name(CstKind kind) {
   case CST_CONTINUE:         return "CONTINUE";
   case CST_RETURN:           return "RETURN";
   case CST_ASM:              return "ASM";
+  case CST_PP_DIRECTIVE:     return "PP_DIRECTIVE";
+  case CST_PP_DEFINE:        return "PP_DEFINE";
+  case CST_PP_UNDEF:         return "PP_UNDEF";
+  case CST_PP_INCLUDE:       return "PP_INCLUDE";
+  case CST_PP_LINE:          return "PP_LINE";
+  case CST_PP_PRAGMA:        return "PP_PRAGMA";
+  case CST_PP_ERROR:         return "PP_ERROR";
+  case CST_PP_NULL:          return "PP_NULL";
+  case CST_PP_IF:            return "PP_IF";
+  case CST_PP_BRANCH:        return "PP_BRANCH";
   }
   unreachable();
 }
