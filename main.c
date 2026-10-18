@@ -24,6 +24,8 @@ static bool opt_reconstruct;
 static bool opt_dump_cst;
 static bool opt_reconstruct_cst;
 static bool opt_verify_cst;
+static bool opt_dump_expansions;
+static bool opt_verify_expansions;
 static bool opt_static;
 static bool opt_shared;
 static char *opt_MF;
@@ -197,6 +199,16 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-verify-cst")) {
       opt_verify_cst = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-dump-expansions")) {
+      opt_dump_expansions = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-verify-expansions")) {
+      opt_verify_expansions = true;
       continue;
     }
 
@@ -478,7 +490,7 @@ static void print_tokens(Token *tok) {
 // Print bytes in C literal style: the escapes \n, \t, \r and \\, and
 // \xHH for everything invisible (including the space, so that a dump
 // line never ends in whitespace that tools could strip).
-static void print_escaped(FILE *out, char *p, int len) {
+void print_escaped(FILE *out, char *p, int len) {
   for (int i = 0; i < len; i++) {
     unsigned char c = p[i];
 
@@ -509,7 +521,7 @@ static void print_dump_line(FILE *out, char *tag, int line, int offset,
   fputc('\n', out);
 }
 
-static char *token_kind_name(TokenKind kind) {
+char *token_kind_name(TokenKind kind) {
   switch (kind) {
   case TK_IDENT:   return "ident";
   case TK_PUNCT:   return "punct";
@@ -733,6 +745,16 @@ static int cc1(void) {
   tok = append_tokens(tok, tok2);
   tok = preprocess(tok);
 
+  // The provenance channels read the preprocessed stream and stop there:
+  // no object file, no assembler, no linker (PLAN.md 判据 5).
+  if (opt_dump_expansions || opt_verify_expansions) {
+    if (opt_dump_expansions)
+      expansion_dump(tok, open_file(opt_o ? opt_o : "-"));
+    if (opt_verify_expansions && !expansion_verify(tok))
+      return 1;
+    return 0;
+  }
+
   // If -M or -MD are given, print file dependencies.
   if (opt_M || opt_MD) {
     print_dependencies();
@@ -952,9 +974,11 @@ int main(int argc, char **argv) {
 
     assert(type == FILE_C);
 
-    // Just preprocess (or dump/reconstruct the raw token or CST stream)
+    // Just preprocess (or dump/reconstruct the raw token or CST stream,
+    // or run a provenance channel)
     if (opt_E || opt_M || opt_dump_tokens || opt_reconstruct ||
-        opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
+        opt_dump_cst || opt_reconstruct_cst || opt_verify_cst ||
+        opt_dump_expansions || opt_verify_expansions) {
       run_cc1(argc, argv, input, NULL);
       continue;
     }

@@ -274,14 +274,14 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 
 ## 阶段 M1: 数据结构与 body 层(行为不变)
 
-- [ ] **M0.1 归档 / 账本 / 基线**: CST 线已归档为 `PLAN-cst.md` / `RESULT-cst.md`(本次
+- [x] **M0.1 归档 / 账本 / 基线**: CST 线已归档为 `PLAN-cst.md` / `RESULT-cst.md`(本次
   完成); 本文件与新的 `RESULT.md` 已建立. 本步剩余: 在 `RESULT.md` 回填基线(当前 HEAD,
   `make docker-test` 与 `make docker-snapshot-diff` 结果), 建立设计账本(输入事实 / 歧义
   清单 / 数据模型 / 分支清单 / dump 冻结尾 / 不变量 I1-I5), 确认 `test/expand.sh` 尚未
   存在时 `make test` 不受影响.
   验收: 无代码改动; 两道闸门全绿; 账本与计划一致.
 
-- [ ] **M1.1 记录类型 / 访问器 / 通道骨架**:
+- [x] **M1.1 记录类型 / 访问器 / 通道骨架**:
   `chibicc.h` 前向声明 `MacroExpansion` / `MacroProv`, `Token` 增 `prov`, 声明 11 个访问器
   与两个通道函数; `preprocess.c` 定义结构, `Macro` 增 `def`, 在 `read_macro_definition`
   保存定义处名 token, 实现 `new_prov` 与访问器; `main.c` 增 `-dump-expansions` /

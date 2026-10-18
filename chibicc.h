@@ -30,6 +30,8 @@ typedef struct Node Node;
 typedef struct Member Member;
 typedef struct Relocation Relocation;
 typedef struct Hideset Hideset;
+typedef struct MacroExpansion MacroExpansion;
+typedef struct MacroProv MacroProv;
 
 //
 // strings.c
@@ -119,6 +121,11 @@ struct Token {
   bool has_space;   // True if this token follows a space character
   Hideset *hideset; // For macro expansion
   Token *origin;    // If this is expanded from a macro, the original token
+  MacroProv *prov;  // How this token came to be: the chain of macro
+                    // expansions that produced it, innermost layer
+                    // first, or NULL for a token read from the source
+                    // (preprocess.c owns the chain; the accessors below
+                    // are the public face)
 };
 
 noreturn void error(char *fmt, ...) __attribute__((format(printf, 1, 2)));
@@ -231,6 +238,38 @@ void init_macros(void);
 void define_macro(char *name, char *buf);
 void undef_macro(char *name);
 Token *preprocess(Token *tok);
+
+// Macro expansion provenance (PLAN.md, the prelude to stage 5). Every token
+// the preprocessor produces by expanding a macro carries a chain of
+// MacroProv nodes, one per expansion layer, innermost first; a token read
+// from the source carries NULL. The records a chain points to are built
+// once per expansion, immutable afterwards, and live as long as the tokens
+// (arena allocation, never freed). Macro, MacroArg and MacroParam stay
+// private to preprocess.c; these accessors are their public face, and the
+// seed of the future library API.
+MacroProv *token_provenance(Token *tok);
+MacroProv *macro_prov_next(MacroProv *p);
+MacroExpansion *macro_prov_expansion(MacroProv *p);
+int macro_prov_arg_index(MacroProv *p);
+
+Token *macro_expansion_name(MacroExpansion *e);
+Token *macro_expansion_end(MacroExpansion *e);   // rparen; name if none
+char *macro_expansion_macro(MacroExpansion *e);  // the macro's spelling
+Token *macro_expansion_def(MacroExpansion *e);   // #define name; NULL if none
+Token *macro_expansion_arg(MacroExpansion *e, int i);
+int macro_expansion_arg_count(MacroExpansion *e);
+bool macro_expansion_is_builtin(MacroExpansion *e);
+
+//
+// expansion_dump.c
+//
+
+// The read-only provenance channels (PLAN.md 判据 5). The dump prints one
+// line per non-EOF token of the preprocessed stream; the verifier checks
+// every chain and returns false at the first violation (exit status 1, no
+// error call). Neither touches the compilation path.
+void expansion_dump(Token *tok, FILE *out);
+bool expansion_verify(Token *tok);
 
 //
 // parse.c
@@ -939,6 +978,8 @@ void hashmap_test(void);
 //
 
 bool file_exists(char *path);
+void print_escaped(FILE *out, char *p, int len);
+char *token_kind_name(TokenKind kind);
 
 extern StringArray include_paths;
 extern bool opt_fpic;

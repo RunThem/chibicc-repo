@@ -47,7 +47,28 @@ struct Macro {
   MacroParam *params;
   char *va_args_name;
   Token *body;
+  Token *def;      // the name token of the #define; NULL for -D and builtins
   macro_handler_fn *handler;
+};
+
+// Provenance records (PLAN.md): one MacroExpansion per expansion, built
+// once and shared read-only by every token that expansion produced; one
+// MacroProv per token and layer, prepended so a chain reads innermost
+// first. Both are arena objects that live as long as the tokens. The
+// types are private; chibicc.h exposes accessors over them.
+struct MacroExpansion {
+  Token *name;      // macro name token at the call site
+  Token *rparen;    // ')' of a function-like call; NULL otherwise
+  Macro *macro;     // definition in force at expansion time
+  MacroArg *args;   // actual arguments; NULL for object-like and builtins
+  int arg_count;
+  bool is_builtin;  // produced by a handler (__LINE__ and friends)
+};
+
+struct MacroProv {
+  MacroExpansion *exp;
+  int arg_index;    // -1: macro body; >= 0: index of the argument
+  MacroProv *next;  // the context the invocation itself appeared in
 };
 
 // `#if` can be nested, so we use a stack to manage nested `#if`s.
@@ -99,6 +120,7 @@ static Token *new_eof(Token *tok) {
   Token *t = copy_token(tok);
   t->kind = TK_EOF;
   t->len = 0;
+  t->prov = NULL;
   return t;
 }
 
@@ -368,6 +390,7 @@ static MacroParam *read_macro_params(Token **rest, Token *tok, char **va_args_na
 static void read_macro_definition(Token **rest, Token *tok) {
   if (tok->kind != TK_IDENT)
     error_tok(tok, "macro name must be an identifier");
+  Token *name_tok = tok;
   char *name = strndup(tok->loc, tok->len);
   tok = tok->next;
 
@@ -379,9 +402,11 @@ static void read_macro_definition(Token **rest, Token *tok) {
     Macro *m = add_macro(name, false, copy_line(rest, tok));
     m->params = params;
     m->va_args_name = va_args_name;
+    m->def = name_tok;
   } else {
     // Object-like macro
-    add_macro(name, true, copy_line(rest, tok));
+    Macro *m = add_macro(name, true, copy_line(rest, tok));
+    m->def = name_tok;
   }
 }
 
@@ -1205,4 +1230,58 @@ Token *preprocess(Token *tok) {
   for (Token *t = tok; t; t = t->next)
     t->line_no += t->line_delta;
   return tok;
+}
+
+// Provenance accessors. Their bodies are trivial on purpose: the chain
+// layout is preprocess.c's business, and consumers (expansion_dump.c
+// today, the library API later) see only these functions.
+
+MacroProv *token_provenance(Token *tok) {
+  return tok->prov;
+}
+
+MacroProv *macro_prov_next(MacroProv *p) {
+  return p->next;
+}
+
+MacroExpansion *macro_prov_expansion(MacroProv *p) {
+  return p->exp;
+}
+
+int macro_prov_arg_index(MacroProv *p) {
+  return p->arg_index;
+}
+
+Token *macro_expansion_name(MacroExpansion *e) {
+  return e->name;
+}
+
+Token *macro_expansion_end(MacroExpansion *e) {
+  return e->rparen ? e->rparen : e->name;
+}
+
+char *macro_expansion_macro(MacroExpansion *e) {
+  return e->macro->name;
+}
+
+Token *macro_expansion_def(MacroExpansion *e) {
+  return e->macro->def;
+}
+
+Token *macro_expansion_arg(MacroExpansion *e, int i) {
+  if (i < 0 || i >= e->arg_count)
+    return NULL;
+
+  MacroArg *arg = e->args;
+  for (; i > 0; i--)
+    arg = arg->next;
+  return arg->tok;
+}
+
+int macro_expansion_arg_count(MacroExpansion *e) {
+  return e->arg_count;
+}
+
+bool macro_expansion_is_builtin(MacroExpansion *e) {
+  return e->is_builtin;
 }

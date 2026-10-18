@@ -118,9 +118,30 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
     `PLAN.md` 一致, 本步未改动其口径.
 - 偏差: 无. 本步无代码改动.
 
-## M1.1 记录类型 / 访问器 / 通道骨架(未开工)
+## M1.1 记录类型 / 访问器 / 通道骨架
 
-待填.
+- 改了什么:
+  - `chibicc.h`: 前向声明 `MacroExpansion` / `MacroProv`; `Token` 增 `prov`(紧跟
+    `origin`); 11 个访问器与 `expansion_dump` / `expansion_verify` 两个通道函数;
+    `print_escaped` / `token_kind_name` 去 static 并在头文件声明(expansion_dump.c 复用
+    同一套转义与 kind 名, 不复制实现).
+  - `preprocess.c`: 定义 `MacroExpansion` / `MacroProv`(不透明, 只在文件内); `Macro` 增
+    `def`; `read_macro_definition` 保存 `#define` 处的宏名 token; `new_eof` 显式清空
+    `prov`; 访问器实现(参数列表按 `arg_count` 越界返回 NULL).
+  - `expansion_dump.c`(新): dump 输出 `T <file>:<phys-line|@synth> <kind> <spelling> -`
+    骨架(本步还没有链); verify 恒真(骨架, M2.2 实现检查). 只用头文件访问器与
+    `print_escaped` / `token_kind_name`.
+  - `main.c`: `-dump-expansions` / `-verify-expansions` 旗标; `cc1()` 在
+    `preprocess(tok)` 之后早退(dump 走 `-o`, verify 失败返回 1), 不进入 sema;
+    driver 的 pass-through 列表加入两个旗标.
+  - `test/expand.sh`(新): harness + 3 个无宏 dump 样本(plain / directive / empty)与
+    3 个 verify 样本; `Makefile` 的 `test` 与 `test-stage2` 各加一行.
+- 为什么: provenance 的公共面先立起来(记录不透明, 访问器是未来库 API 的种子), 通道
+  先能跑, 后续步骤只填记录写入点; 本步不建任何记录, 因此 dump 的 chain 全为 `-`.
+- 闸门: `make docker-snapshot-diff` 输出 `snapshot diff: empty`; `make docker-test`
+  EXIT=0(stage1 + stage2, 含 trivia / cst / expand); `test/expand.sh` 3 个 dump 样本 +
+  3 个 verify 样本通过; 既有 trivia(94 项)与 CST(305 项)计数不变.
+- 偏差: 无. 新文件自举通过(stage2 由 docker-test 覆盖).
 
 ## M1.2 对象宏 / 函数宏 body 层(未开工)
 
@@ -142,7 +163,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 
 | 提交 | 步骤 | 内容 |
 |---|---|---|
-| 待填 | M0.1 | 归档 CST 线, 建立本线计划与记录 |
+| `659eadb` | M0.1 | 归档 CST 线, 建立本线计划与记录, 基线闸门全绿 |
 
 ## 终态验收(本线完成时逐项实测)
 
