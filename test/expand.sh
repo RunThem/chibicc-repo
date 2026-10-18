@@ -283,4 +283,97 @@ exp_verify paste '#define C(a,b) a##b\nint x = C(foo,bar);\n'
 exp_verify va_comma '#define V(...) f(0 ,##__VA_ARGS__)\nint x = V(1);\n'
 exp_verify variadic '#define V(...) __VA_ARGS__\nint x = V(a, b);\n'
 
-echo "expand lock: $n_d dump samples, $n_v verify samples"
+# ---- M2.1: 内建宏 / 合成 token / 相邻字符串 -------------------------------------
+# 内建宏的产物没有源位置(合成缓冲, @synth), 也没有 #define 名 token(定义打 ?:?).
+
+# __LINE__: 值是使用处的逻辑行, 产物是合成数字 token.
+exp_dump builtin_line 'int x = __LINE__;\n' \
+'T builtin_line.c:1 keyword int -
+T builtin_line.c:1 ident x -
+T builtin_line.c:1 punct = -
+T builtin_line.c:@synth num 1 __LINE__@builtin_line.c:1:body:?:?
+T builtin_line.c:1 punct ; -
+'
+
+# __FILE__: 值是文件名, 产物是合成字符串 token.
+exp_dump builtin_file 'char *f = __FILE__;\n' \
+'T builtin_file.c:1 keyword char -
+T builtin_file.c:1 punct * -
+T builtin_file.c:1 ident f -
+T builtin_file.c:1 punct = -
+T builtin_file.c:@synth str "builtin_file.c" __FILE__@builtin_file.c:1:body:?:?
+T builtin_file.c:1 punct ; -
+'
+
+# __COUNTER__: 每次展开一个新值; 两次使用是两条独立记录.
+exp_dump builtin_counter 'int a = __COUNTER__;\nint b = __COUNTER__;\n' \
+'T builtin_counter.c:1 keyword int -
+T builtin_counter.c:1 ident a -
+T builtin_counter.c:1 punct = -
+T builtin_counter.c:@synth num 0 __COUNTER__@builtin_counter.c:1:body:?:?
+T builtin_counter.c:1 punct ; -
+T builtin_counter.c:2 keyword int -
+T builtin_counter.c:2 ident b -
+T builtin_counter.c:2 punct = -
+T builtin_counter.c:@synth num 1 __COUNTER__@builtin_counter.c:2:body:?:?
+T builtin_counter.c:2 punct ; -
+'
+
+# __BASE_FILE__: 值是输入文件名.
+exp_dump builtin_base_file 'char *b = __BASE_FILE__;\n' \
+'T builtin_base_file.c:1 keyword char -
+T builtin_base_file.c:1 punct * -
+T builtin_base_file.c:1 ident b -
+T builtin_base_file.c:1 punct = -
+T builtin_base_file.c:@synth str "builtin_base_file.c" __BASE_FILE__@builtin_base_file.c:1:body:?:?
+T builtin_base_file.c:1 punct ; -
+'
+
+# 内建宏嵌套在外层展开里: 外层链作为尾; __LINE__ 的 origin 走到最外层调用点
+# (值是外层调用的行), 而链上 __LINE__ 的调用点是它的拼写位置(宏体定义行).
+exp_dump builtin_nested '#define L __LINE__\nint x = L;\n' \
+'T builtin_nested.c:2 keyword int -
+T builtin_nested.c:2 ident x -
+T builtin_nested.c:2 punct = -
+T builtin_nested.c:@synth num 2 __LINE__@builtin_nested.c:1:body:?:?>L@builtin_nested.c:2:body:builtin_nested.c:1
+T builtin_nested.c:2 punct ; -
+'
+
+# 相邻字符串合并: 合并结果保留第一个 literal 的 provenance, 第二个的链随 token
+# 一起消失(已知限制).
+exp_dump adjacent_strings '#define A "a"\n#define B "b"\nchar *s = A B;\n' \
+'T adjacent_strings.c:3 keyword char -
+T adjacent_strings.c:3 punct * -
+T adjacent_strings.c:3 ident s -
+T adjacent_strings.c:3 punct = -
+T adjacent_strings.c:1 str "a" A@adjacent_strings.c:3:body:adjacent_strings.c:1
+T adjacent_strings.c:3 punct ; -
+'
+
+# 取直不稳定的内建宏(__DATE__ / __TIMESTAMP__)只锁记录形状, 不断言文本.
+n_c=0
+exp_chain() {
+    name=$1; shift
+    n_c=$((n_c + 1))
+    printf "$1" > "$tmp/$name.c"
+    (cd "$tmp" && "$chibicc" -dump-expansions "$name.c") | grep -Eq "$2"
+    check "-chain/$name"
+}
+
+exp_chain date_shape 'char *d = __DATE__;\n' \
+'^T <built-in>:@synth str .* __DATE__@date_shape\.c:1:body:\?:\?$'
+
+exp_chain timestamp_shape 'char *t = __TIMESTAMP__;\n' \
+'^T timestamp_shape\.c:@synth str .* __TIMESTAMP__@timestamp_shape\.c:1:body:\?:\?$'
+
+# 宽字符串合并前, 普通 literal 会被就地重扫成宽字面量; 重扫不得丢掉 provenance.
+# (重扫出的 token 没设 line_no, 位置沿用既有的 0, 这里只锁链.)
+exp_chain wide_concat '#define A "a"\nchar *s = A L"b";\n' \
+' A@wide_concat\.c:2:body:wide_concat\.c:1$'
+
+exp_verify builtin_line 'int x = __LINE__;\n'
+exp_verify builtin_nested '#define L __LINE__\nint x = L;\n'
+exp_verify adjacent_strings '#define A "a"\n#define B "b"\nchar *s = A B;\n'
+exp_verify wide_concat '#define A "a"\nchar *s = A L"b";\n'
+
+echo "expand lock: $n_d dump samples, $n_c chain samples, $n_v verify samples"

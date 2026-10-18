@@ -723,8 +723,12 @@ static bool expand_macro(Token **rest, Token *tok) {
 
   // Built-in dynamic macro application such as __LINE__
   if (m->handler) {
-    *rest = m->handler(tok);
-    (*rest)->next = tok->next;
+    MacroExpansion *e = new_expansion(tok, NULL, m, NULL, 0, true);
+    Token *body = m->handler(tok);
+    for (Token *t = body; t->kind != TK_EOF; t = t->next)
+      t->prov = new_prov(e, -1, tok->prov);
+    body->next = tok->next;
+    *rest = body;
     return true;
   }
 
@@ -1247,8 +1251,13 @@ static void join_adjacent_string_literals(Token *tok) {
 
     if (basety->size > 1)
       for (Token *t = tok1; t->kind == TK_STR; t = t->next)
-        if (t->ty->base->size == 1)
+        if (t->ty->base->size == 1) {
+          // The re-scan replaces the whole token (and does not set
+          // line_no); the provenance belongs to the source token.
+          MacroProv *prov = t->prov;
           *t = *tokenize_string_literal(t, basety);
+          t->prov = prov;
+        }
 
     while (tok1->kind == TK_STR)
       tok1 = tok1->next;

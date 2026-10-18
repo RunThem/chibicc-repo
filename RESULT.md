@@ -187,9 +187,25 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 - 偏差: 无. paste 的产物只保留 body 层, 被拼接的操作数 provenance 不留在结果 token 上
   (PLAN.md 已列为已知限制, 字符级重放靠记录与实参列表).
 
-## M2.1 内建宏 / 合成 token(未开工)
+## M2.1 内建宏 / 合成 token
 
-待填.
+- 改了什么:
+  - `preprocess.c`: `expand_macro` 的 handler 分支建 `is_builtin = true` 的记录(名 token /
+    定义宏 / 无 rparen / 无实参), 在把 handler 产物接到调用点之后**之前**逐个挂 body 层
+    (链尾是调用名 token 的 prov); `join_adjacent_string_literals` 第一遍的
+    `*t = *tokenize_string_literal(t, basety)` 保存 / 恢复 `prov`, 合并后的宽字面量保留
+    源 token 的链; 第二遍的 `*tok1 = *copy_token(tok1)` 本来就整结构拷贝, 不改.
+  - `test/expand.sh`: 加 6 个 dump 样本(`__LINE__` / `__FILE__` / `__COUNTER__` /
+    `__BASE_FILE__` / 嵌套 `__LINE__` / 相邻字符串合并), 3 个 chain 形状样本
+    (`__DATE__` / `__TIMESTAMP__` / 宽字符串重扫)与 4 个 verify 样本.
+- 为什么: handler 产物与 paste / stringize 一样没有源位置, 记录与链是唯一可查的来源;
+  `__DATE__` / `__TIMESTAMP__` 的文本随环境变化, 只锁链的形状. 宽字符串重扫是
+  `join_adjacent_string_literals` 里唯一整体覆盖 token 的点, 不保存 prov 会静默丢链.
+- 闸门: `snapshot diff: empty`; `make docker-test` EXIT=0; `test/expand.sh`
+  28 个 dump 样本 + 3 个 chain 样本 + 16 个 verify 样本通过(stage1 与 stage2).
+- 偏差: 宽字符串重扫出的 token 沿用既有的 `line_no = 0`(重扫路径从不调用
+  `add_line_numbers`), 这是本线之前就有的字段状态, 不在本线修; chain 形状样本只锁链,
+  不锁该位置.
 
 ## M2.2 验证器 / 文档 / 终态(未开工)
 
@@ -202,6 +218,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 | `659eadb` | M0.1 | 归档 CST 线, 建立本线计划与记录, 基线闸门全绿 |
 | `922711a` | M1.1 | 记录类型 / 访问器 / 两个只读通道骨架 + test/expand.sh |
 | `d2af2d2` | M1.2 | 对象宏 / 函数宏 body 层与 dump 的完整链 |
+| `da7e241` | M1.3 | subst 全分支的实参层(body / arg 细分, 嵌套链保留) |
 
 ## 终态验收(本线完成时逐项实测)
 

@@ -306,7 +306,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 
 ## 阶段 M2: 内建宏, 合成 token 与收口
 
-- [ ] **M2.1 内建宏 / 合成 token**:
+- [x] **M2.1 内建宏 / 合成 token**:
   E1 handler 建 builtin 记录; paste / stringize 归 body; `join_adjacent_string_literals`
   的 1160 行保存 / 恢复 `prov`; 相邻字符串合并保留第一个 literal 的 provenance.
   测试: `__LINE__`, `__FILE__`, `__COUNTER__`, `__BASE_FILE__`, stringize, paste,
