@@ -136,7 +136,15 @@
 
 ## L2.3 preprocess 状态
 
-(待执行)
+- 动作: 删除 `preprocess.c` 的 `macros` / `cond_incl` / `pragma_once` static, 统一走
+  `chibicc_ctx()`; `chibicc_context_new` 在 arena 建立后调用 `init_macros`;
+  `chibicc_context_define` / `_undef` 以**有序**操作列表记录命令行宏
+  (`D:name=body` / `U:name`) 并立即应用, `reset` 清空后重放该列表;
+  `main.c` 的 `-D` / `-U` 改走 context 接口.
+- 说明: 顺序保留 `-DX -UX -DX` 的语义; `search_cache` 已在 L2.2 收进 context.
+- 验收: 287 次只读通道与基线逐字节一致; `-E` 样本一致; `-DX=1 -UX -DX=2`
+  的预处理结果与基线一致; 构建零新告警.
+- 偏差: 无.
 
 ## L2.4 parse 作用域
 

@@ -103,16 +103,37 @@ void chibicc_context_add_include_path(ChibiccContext *ctx, char *path) {
               &ctx->include_paths_cap, strdup(path));
 }
 
+static void apply_macro_op(ChibiccContext *ctx, char *op) {
+  chibicc_active_ctx = ctx;
+  if (op[0] == 'D') {
+    char *name = op + 2;
+    char *eq = strchr(name, '=');
+    if (eq) {
+      *eq = '\0';
+      define_macro(name, eq + 1);
+      *eq = '=';
+    } else {
+      define_macro(name, "1");
+    }
+  } else {
+    undef_macro(op + 2);
+  }
+}
+
 void chibicc_context_define(ChibiccContext *ctx, char *name, char *buf) {
-  size_t n = strlen(name) + strlen(buf) + 2;
+  size_t n = strlen(name) + strlen(buf) + 4;
   char *s = calloc(1, n);
-  snprintf(s, n, "%s=%s", name, buf);
-  config_push(&ctx->defines, &ctx->defines_len, &ctx->defines_cap, s);
+  snprintf(s, n, "D:%s=%s", name, buf);
+  config_push(&ctx->macro_ops, &ctx->macro_ops_len, &ctx->macro_ops_cap, s);
+  apply_macro_op(ctx, s);
 }
 
 void chibicc_context_undef(ChibiccContext *ctx, char *name) {
-  config_push(&ctx->undefs, &ctx->undefs_len, &ctx->undefs_cap,
-              strdup(name));
+  size_t n = strlen(name) + 3;
+  char *s = calloc(1, n);
+  snprintf(s, n, "U:%s", name);
+  config_push(&ctx->macro_ops, &ctx->macro_ops_len, &ctx->macro_ops_cap, s);
+  apply_macro_op(ctx, s);
 }
 
 void chibicc_context_set_diagnostic(ChibiccContext *ctx,
@@ -165,6 +186,7 @@ static void clear_state(ChibiccContext *ctx) {
 ChibiccContext *chibicc_context_new(void) {
   ChibiccContext *ctx = calloc(1, sizeof(ChibiccContext));
   chibicc_active_ctx = ctx;
+  init_macros();
   return ctx;
 }
 
@@ -172,6 +194,9 @@ void chibicc_context_reset(ChibiccContext *ctx) {
   free_arena(ctx);
   clear_state(ctx);
   chibicc_active_ctx = ctx;
+  init_macros();
+  for (int i = 0; i < ctx->macro_ops_len; i++)
+    apply_macro_op(ctx, ctx->macro_ops[i]);
 }
 
 void chibicc_context_free(ChibiccContext *ctx) {
@@ -181,12 +206,9 @@ void chibicc_context_free(ChibiccContext *ctx) {
   for (int i = 0; i < ctx->include_paths_len; i++)
     free(ctx->include_paths[i]);
   free(ctx->include_paths);
-  for (int i = 0; i < ctx->defines_len; i++)
-    free(ctx->defines[i]);
-  free(ctx->defines);
-  for (int i = 0; i < ctx->undefs_len; i++)
-    free(ctx->undefs[i]);
-  free(ctx->undefs);
+  for (int i = 0; i < ctx->macro_ops_len; i++)
+    free(ctx->macro_ops[i]);
+  free(ctx->macro_ops);
   if (chibicc_active_ctx == ctx)
     chibicc_active_ctx = NULL;
   free(ctx);

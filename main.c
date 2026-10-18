@@ -74,10 +74,12 @@ static void add_default_include_paths(char *argv0) {
 
 static void define(char *str) {
   char *eq = strchr(str, '=');
-  if (eq)
-    define_macro(strndup(str, eq - str), eq + 1);
-  else
-    define_macro(str, "1");
+  if (eq) {
+    char *name = strndup(str, eq - str);
+    chibicc_context_define(ctx, name, eq + 1);
+  } else {
+    chibicc_context_define(ctx, str, "1");
+  }
 }
 
 static FileType parse_opt_x(char *s) {
@@ -228,12 +230,12 @@ static void parse_args(int argc, char **argv) {
     }
 
     if (!strcmp(argv[i], "-U")) {
-      undef_macro(argv[++i]);
+      chibicc_context_undef(ctx, argv[++i]);
       continue;
     }
 
     if (!strncmp(argv[i], "-U", 2)) {
-      undef_macro(argv[i] + 2);
+      chibicc_context_undef(ctx, argv[i] + 2);
       continue;
     }
 
@@ -919,7 +921,6 @@ static FileType get_file_type(char *filename) {
 int main(int argc, char **argv) {
   atexit(cleanup);
   ctx = chibicc_context_new();
-  init_macros();
   parse_args(argc, argv);
 
   if (opt_cc1) {

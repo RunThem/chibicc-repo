@@ -1006,12 +1006,10 @@ struct ChibiccContext {
   char **include_paths;
   int include_paths_len;
   int include_paths_cap;
-  char **defines;
-  int defines_len;
-  int defines_cap;
-  char **undefs;
-  int undefs_len;
-  int undefs_cap;
+  // Command-line macro operations in order: "D:name=body" or "U:name".
+  char **macro_ops;
+  int macro_ops_len;
+  int macro_ops_cap;
   ChibiccDiagnosticFn diag_fn;
   void *diag_user;
   JmpFrame *jmp_top;

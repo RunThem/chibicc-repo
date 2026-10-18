@@ -211,7 +211,7 @@ provenance:   chibicc_token_provenance / chibicc_macro_prov_* /
   `include_paths` 从 `main.c` 的全局搬进 context 配置, `search_include_paths` 读
   context. `chibicc_context_add_include_path` 生效.
   验收: `-E` / 诊断锚点 / trivia / CST 逐字节不变; docker-test.
-- [ ] **L2.3 preprocess 状态**:
+- [x] **L2.3 preprocess 状态**:
   `macros` / `cond_incl` / `pragma_once` / `include_next_idx` 进 context;
   `init_macros` / `define_macro` 在 `preprocess` 入口按 context 配置执行.
   验收: `-E` 逐字节不变; expand 全绿; docker-test.

@@ -87,9 +87,12 @@ struct Hideset {
   char *name;
 };
 
-static HashMap macros;
-static CondIncl *cond_incl;
-static HashMap pragma_once;
+// The macro table, conditional stack and pragma-once set live in
+// ChibiccContext (PLAN L2.3). The preprocessor reads them through the
+// active context like every other phase.
+#define macros (chibicc_ctx()->macros)
+#define cond_incl (chibicc_ctx()->cond_incl)
+#define pragma_once (chibicc_ctx()->pragma_once)
 
 static Token *preprocess2(Token *tok);
 static Macro *find_macro(Token *tok);
