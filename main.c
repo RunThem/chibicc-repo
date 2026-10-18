@@ -490,26 +490,6 @@ static void print_tokens(Token *tok) {
 }
 
 // Print bytes in C literal style: the escapes \n, \t, \r and \\, and
-// \xHH for everything invisible (including the space, so that a dump
-// line never ends in whitespace that tools could strip).
-void print_escaped(FILE *out, char *p, int len) {
-  for (int i = 0; i < len; i++) {
-    unsigned char c = p[i];
-
-    switch (c) {
-    case '\n': fprintf(out, "\\n"); break;
-    case '\t': fprintf(out, "\\t"); break;
-    case '\r': fprintf(out, "\\r"); break;
-    case '\\': fprintf(out, "\\\\"); break;
-    default:
-      if (c < 0x20 || c >= 0x7f || c == ' ')
-        fprintf(out, "\\x%02x", c);
-      else
-        fputc(c, out);
-    }
-  }
-}
-
 // Print one line of the token dump: a tag, the line number, the byte
 // offset into the file, the kind, and the text (omitted for a token
 // without a spelling, i.e. EOF).
@@ -521,19 +501,6 @@ static void print_dump_line(FILE *out, char *tag, int line, int offset,
     print_escaped(out, text, len);
   }
   fputc('\n', out);
-}
-
-char *token_kind_name(TokenKind kind) {
-  switch (kind) {
-  case TK_IDENT:   return "ident";
-  case TK_PUNCT:   return "punct";
-  case TK_KEYWORD: return "keyword";
-  case TK_STR:     return "str";
-  case TK_NUM:     return "num";
-  case TK_PP_NUM:  return "pp-num";
-  case TK_EOF:     return "eof";
-  }
-  unreachable();
 }
 
 // The raw position after any backslash-continuations starting at p (a
@@ -683,10 +650,7 @@ static void print_dependencies(void) {
 }
 
 static Token *must_tokenize_file(char *path) {
-  Token *tok = chibicc_tokenize_file(ctx, path);
-  if (!tok)
-    error("%s: %s", path, strerror(errno));
-  return tok;
+  return chibicc_tokenize_file(ctx, path);
 }
 
 static Token *append_tokens(Token *tok1, Token *tok2) {
@@ -707,12 +671,16 @@ static int cc1(void) {
   if (opt_dump_tokens || opt_reconstruct ||
       opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
     Token *tok = must_tokenize_file(base_file);
+    if (!tok)
+      return 1;
     if (opt_dump_tokens)
       print_token_dump(tok);
     if (opt_reconstruct)
       reconstruct(tok);
     if (opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
       CstNode *root = chibicc_cst_parse(ctx, tok);
+      if (!root)
+        return 1;
       if (opt_dump_cst)
         chibicc_cst_dump(ctx, root, open_file(opt_o ? opt_o : "-"));
       if (opt_reconstruct_cst)
@@ -739,13 +707,19 @@ static int cc1(void) {
     }
 
     Token *tok2 = must_tokenize_file(path);
+    if (!tok2)
+      return 1;
     tok = append_tokens(tok, tok2);
   }
 
   // Tokenize and parse.
   Token *tok2 = must_tokenize_file(base_file);
+  if (!tok2)
+    return 1;
   tok = append_tokens(tok, tok2);
   tok = chibicc_preprocess(ctx, tok);
+  if (ctx->failed)
+    return 1;
 
   // The provenance channels read the preprocessed stream and stop there:
   // no object file, no assembler, no linker (PLAN.md 判据 5).
@@ -770,7 +744,12 @@ static int cc1(void) {
     return 0;
   }
 
-  Obj *prog = chibicc_sema(ctx, chibicc_parse(ctx, tok));
+  Node *ast = chibicc_parse(ctx, tok);
+  if (ctx->failed)
+    return 1;
+  Obj *prog = chibicc_sema(ctx, ast);
+  if (ctx->failed)
+    return 1;
 
   // Open a temporary output buffer.
   char *buf;
@@ -801,12 +780,6 @@ static char *find_file(char *pattern) {
     path = strdup(buf.gl_pathv[buf.gl_pathc - 1]);
   globfree(&buf);
   return path;
-}
-
-// Returns true if a given file exists.
-bool file_exists(char *path) {
-  struct stat st;
-  return !stat(path, &st);
 }
 
 static char *find_libpath(void) {
@@ -922,6 +895,8 @@ int main(int argc, char **argv) {
   atexit(cleanup);
   ctx = chibicc_context_new();
   parse_args(argc, argv);
+  if (base_file)
+    chibicc_context_set_base_file(ctx, base_file);
 
   if (opt_cc1) {
     add_default_include_paths(argv[0]);

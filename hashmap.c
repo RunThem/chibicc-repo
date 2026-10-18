@@ -39,7 +39,7 @@ static void rehash(HashMap *map) {
 
   // Create a new hashmap and copy all key-values.
   HashMap map2 = {};
-  map2.buckets = calloc(cap, sizeof(HashEntry));
+  map2.buckets = chibicc_arena_calloc(cap, sizeof(HashEntry));
   map2.capacity = cap;
 
   for (int i = 0; i < map->capacity; i++) {
@@ -75,7 +75,7 @@ static HashEntry *get_entry(HashMap *map, char *key, int keylen) {
 
 static HashEntry *get_or_insert_entry(HashMap *map, char *key, int keylen) {
   if (!map->buckets) {
-    map->buckets = calloc(INIT_SIZE, sizeof(HashEntry));
+    map->buckets = chibicc_arena_calloc(INIT_SIZE, sizeof(HashEntry));
     map->capacity = INIT_SIZE;
   } else if ((map->used * 100) / map->capacity >= HIGH_WATERMARK) {
     rehash(map);
@@ -134,7 +134,7 @@ void hashmap_delete2(HashMap *map, char *key, int keylen) {
 }
 
 void hashmap_test(void) {
-  HashMap *map = calloc(1, sizeof(HashMap));
+  HashMap *map = chibicc_arena_calloc(1, sizeof(HashMap));
 
   for (int i = 0; i < 5000; i++)
     hashmap_put(map, format("key %d", i), (void *)(size_t)i);

@@ -156,19 +156,59 @@
 
 ## L2.5 sema 状态
 
-(待执行)
+- 动作: 10 个文件域 static(`locals` / `globals` / `sema_fn` / `builtin_alloca` /
+  `gotos` / `labels` / `loop_depth` / `switch_depth` / `unique_name_id` /
+  `resolving_body`)与 `Scope *scope` 收进 context; `struct Scope` 的 tag 改名
+  `struct SemaScope`; 新增 `sema_init()` 在 arena 里建根作用域并清空 per-function 状态,
+  `sema()` 入口调用; `fn->locals` 的字段访问走 `obj_locals` / `set_obj_locals` 两个
+  小 helper, 避开同名宏.
+- 说明: 宏在 `sema_init` 之后定义, 因此 `sema_init` 本身访问的是 `ctx->` 字段而不是
+  被宏重写的短名.
+- 验收: 287 次只读通道 + 39 个文件的 `-S` 与基线逐字节一致; 构建零新告警.
+- 偏差: 无.
 
 ## L2.6 诊断回调与 longjmp
 
-(待执行)
+- 动作: 新增 `ChibiccDiagnostic` / `ChibiccDiagnosticFn` /
+  `chibicc_context_set_diagnostic`; `error` / `error_at` / `error_tok` 改成
+  "格式化 -> 回调(或旧格式打印) -> `raise_error()`"; `raise_error` 在 context 有
+  `jmp_top` 时 `longjmp`, 否则保持旧的 `exit(1)`(驱动器 pre-cc1 路径). 公共入口各压一个
+  `JmpFrame`, 出错返回 NULL / false; 驱动器 `cc1` 用 `ctx->failed` 区分空翻译单元与错误.
+  默认路径逐字节复用旧的 `verror_at` 输出.
+- 同时把库对驱动器的反向依赖挪进库: `file_exists` / `align_to` / `print_escaped` /
+  `token_kind_name` 从 `main.c` / `codegen.c` 移到 `strings.c` / `tokenize.c`;
+  `__BASE_FILE__` 改用 `ctx->base_file`, 由 `chibicc_context_set_base_file` /
+  首次 tokenize 设置.
+- 新增库消费样本(临时, 后并入 `test/library.sh`): 注册回调后解析坏输入, 回调收到
+  `expected an expression` 且进程不退出; `reset` 后再解析成功; 5 轮 tokenize ->
+  preprocess -> parse -> sema 的 `globals` 计数稳定.
+- 验收: 287 次只读通道 + 39 个文件的 `-S` 与基线一致; `test/diagnostic.sh` 55 例
+  逐字节通过; 构建零新告警.
+- 偏差: 驱动器在 macOS 上跑 `test/driver.sh` 仍会在汇编阶段失败(Apple `as`), 与改动无关;
+  docker 为权威.
 
 ## L2.7 分配点收口
 
-(待执行)
+- 动作: 库层 `calloc` / `strdup` / `strndup` 全部改走 `chibicc_arena_*`;
+  `strarray_push` / `nodearray_push` 的扩容改 `chibicc_arena_realloc`(旧容量显式传入);
+  `format` 改为 `vsnprintf` 两次写入 arena; `read_file` 的 memstream 缓冲复制进 arena 后
+  `free`; `hashmap` 的桶数组走 arena. 代码生成器的不在库内, 保持 `calloc`.
+- 验收: 5 轮 reset 压测稳定; 287 次只读通道 + 39 个文件的 `-S` + 55 例诊断全部通过.
+- 偏差: `open_memstream` 只在 `print_tokens` 的输出路径保留(驱动器的 -E 输出), 不参与
+  库对象生命周期.
 
 ## L2.8 状态收口验证
 
-(待执行)
+- 静态审计追加发现并收进 context 的函数域 static: `tokenize_file` 的 `file_no`、
+  `is_keyword` 的关键字 HashMap、`is_typename` 的关键字 HashMap、
+  `include_file` 的 `include_guards` HashMap、`counter_macro` 的 `__COUNTER__` 计数器
+  (加上 L2.2 的 `search_cache`). 这些都是 arena 分配, 若不迁移会在 reset 后悬垂.
+- 结果: 库层只剩只读表:`read_punct` / `is_keyword` / `is_typename` 的关键字数组与
+  `format_date` 的月份名; 没有文件域可变 static, 没有函数域可变 static.
+- 闸门: `make docker-test` EXIT=0(`.cache/L2-docker-test.log`, 含 stage2 自举 -
+  `_Thread_local` / `setjmp` / `va_copy` 均被 chibicc 自己编译通过);
+  `make docker-snapshot-diff` -> `snapshot diff: empty`(`.cache/L2-snapshot.log`);
+  诊断 55 例 / trivia / CST / expand 全绿.
 
 ## L3.1 公共头拆分
 

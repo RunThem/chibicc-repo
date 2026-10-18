@@ -53,12 +53,26 @@ static int raw_end_of(File *file, int off) {
   return lo + 1;
 }
 
-// Reports an error and exit.
-void error(char *fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  vfprintf(stderr, fmt, ap);
-  fprintf(stderr, "\n");
+// Formats a diagnostic message into the arena (or malloc before a
+// context exists).
+static char *vformat(char *fmt, va_list ap) {
+  va_list ap2;
+  va_copy(ap2, ap);
+  int n = vsnprintf(NULL, 0, fmt, ap2);
+  va_end(ap2);
+  char *buf = chibicc_arena_alloc(n + 1, 1);
+  vsnprintf(buf, n + 1, fmt, ap);
+  return buf;
+}
+
+// Unwinds to the innermost public-entry frame; without one (the
+// driver's pre-cc1 paths), exits as before.
+static noreturn void raise_error(void) {
+  ChibiccContext *ctx = chibicc_ctx();
+  if (ctx && ctx->jmp_top) {
+    ctx->failed = true;
+    longjmp(ctx->jmp_top->buf, 1);
+  }
   exit(1);
 }
 
@@ -66,12 +80,26 @@ void error(char *fmt, ...) {
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
-static void verror_at(char *filename, char *input, int line_no,
-                      char *loc, char *fmt, va_list ap) {
+//
+// A registered callback gets the structured form instead; the default
+// path below is byte-for-byte what the compiler printed before L2.6.
+static void verror_at(char *filename, char *input, int line_no, char *loc,
+                      int severity, char *fmt, va_list ap) {
+  ChibiccContext *ctx = chibicc_ctx();
+
   // Find a line containing `loc`.
   char *line = loc;
   while (input < line && line[-1] != '\n')
     line--;
+
+  if (ctx && ctx->diag_fn) {
+    char *msg = vformat(fmt, ap);
+    ChibiccDiagnostic d = {filename, line_no,
+                           display_width(line, loc - line) + 1,
+                           severity, msg};
+    ctx->diag_fn(ctx->diag_user, &d);
+    return;
+  }
 
   char *end = loc;
   while (*end && *end != '\n')
@@ -90,27 +118,68 @@ static void verror_at(char *filename, char *input, int line_no,
   fprintf(stderr, "\n");
 }
 
+// Reports an error; unwinds to the current public entry, or exits when
+// the driver is outside one.
+void error(char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+
+  ChibiccContext *ctx = chibicc_ctx();
+  if (ctx && ctx->diag_fn) {
+    char *msg = vformat(fmt, ap);
+    ChibiccDiagnostic d = {NULL, 0, 0, 0, msg};
+    ctx->diag_fn(ctx->diag_user, &d);
+  } else {
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+  }
+
+  va_end(ap);
+  raise_error();
+}
+
 void error_at(char *loc, char *fmt, ...) {
-  int line_no = chibicc_ctx()->current_file->lines[raw_off(chibicc_ctx()->current_file, loc)];
+  ChibiccContext *ctx = chibicc_ctx();
+  int line_no = ctx->current_file->lines[raw_off(ctx->current_file, loc)];
 
   va_list ap;
   va_start(ap, fmt);
-  verror_at(chibicc_ctx()->current_file->name, chibicc_ctx()->current_file->contents, line_no, loc, fmt, ap);
-  exit(1);
+  verror_at(ctx->current_file->name, ctx->current_file->contents, line_no,
+            loc, 0, fmt, ap);
+  va_end(ap);
+  raise_error();
 }
 
 void error_tok(Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc, fmt, ap);
-  exit(1);
+  verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc,
+            0, fmt, ap);
+  va_end(ap);
+  raise_error();
 }
 
 void warn_tok(Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc, fmt, ap);
+  verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc,
+            1, fmt, ap);
   va_end(ap);
+}
+
+// The dump name of a token kind. Lives here, not in the driver, so the
+// provenance channel can use it without main.c.
+char *token_kind_name(TokenKind kind) {
+  switch (kind) {
+  case TK_IDENT:   return "ident";
+  case TK_PUNCT:   return "punct";
+  case TK_KEYWORD: return "keyword";
+  case TK_STR:     return "str";
+  case TK_NUM:     return "num";
+  case TK_PP_NUM:  return "pp-num";
+  case TK_EOF:     return "eof";
+  }
+  unreachable();
 }
 
 // Consumes the current token if it matches `op`.
@@ -137,7 +206,7 @@ bool consume(Token **rest, Token *tok, char *str) {
 // Create a new token. `raw_trivia` is the raw offset where the bytes
 // skipped in front of this token start (see Token.trivia).
 static Token *new_token(TokenKind kind, char *start, char *end, int raw_trivia) {
-  Token *tok = calloc(1, sizeof(Token));
+  Token *tok = chibicc_arena_calloc(1, sizeof(Token));
   tok->kind = kind;
   tok->loc = start;
   tok->len = end - start;
@@ -195,9 +264,10 @@ static int read_punct(char *p) {
 }
 
 static bool is_keyword(Token *tok) {
-  static HashMap map;
+  ChibiccContext *ctx = chibicc_ctx();
+  HashMap *map = &ctx->keyword_map;
 
-  if (map.capacity == 0) {
+  if (map->capacity == 0) {
     static char *kw[] = {
       "return", "if", "else", "for", "while", "int", "sizeof", "char",
       "struct", "union", "short", "long", "void", "typedef", "_Bool",
@@ -210,10 +280,10 @@ static bool is_keyword(Token *tok) {
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
-      hashmap_put(&map, kw[i], (void *)1);
+      hashmap_put(map, kw[i], (void *)1);
   }
 
-  return hashmap_get2(&map, tok->loc, tok->len);
+  return hashmap_get2(map, tok->loc, tok->len);
 }
 
 static int read_escaped_char(char **new_pos, char *p) {
@@ -283,7 +353,7 @@ static char *string_literal_end(char *p) {
 
 static Token *read_string_literal(char *start, char *quote, int raw_trivia) {
   char *end = string_literal_end(quote + 1);
-  char *buf = calloc(1, end - quote);
+  char *buf = chibicc_arena_calloc(1, end - quote);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
@@ -308,7 +378,7 @@ static Token *read_string_literal(char *start, char *quote, int raw_trivia) {
 // is called a "surrogate pair".
 static Token *read_utf16_string_literal(char *start, char *quote, int raw_trivia) {
   char *end = string_literal_end(quote + 1);
-  uint16_t *buf = calloc(2, end - start);
+  uint16_t *buf = chibicc_arena_calloc(2, end - start);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
@@ -341,7 +411,7 @@ static Token *read_utf16_string_literal(char *start, char *quote, int raw_trivia
 // encoded in 4 bytes.
 static Token *read_utf32_string_literal(char *start, char *quote, Type *ty, int raw_trivia) {
   char *end = string_literal_end(quote + 1);
-  uint32_t *buf = calloc(4, end - quote);
+  uint32_t *buf = chibicc_arena_calloc(4, end - quote);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
@@ -734,6 +804,15 @@ static char *read_file(char *path, int *len) {
   *len = buflen;
   fputc('\0', out);
   fclose(out);
+
+  // The memstream buffer is malloc-owned; move the text into the arena
+  // so a context reset releases it with everything else.
+  if (chibicc_active_ctx) {
+    char *copy = chibicc_arena_alloc(buflen + 1, 1);
+    memcpy(copy, buf, buflen + 1);
+    free(buf);
+    return copy;
+  }
   return buf;
 }
 
@@ -742,7 +821,7 @@ File **get_input_files(void) {
 }
 
 File *new_file(char *name, int file_no, char *contents) {
-  File *file = calloc(1, sizeof(File));
+  File *file = chibicc_arena_calloc(1, sizeof(File));
   file->name = name;
   file->display_name = name;
   file->file_no = file_no;
@@ -754,8 +833,8 @@ File *new_file(char *name, int file_no, char *contents) {
   // make_scan_buffer builds.)
   file->raw = contents;
   int len = strlen(contents);
-  file->map = calloc(len + 2, sizeof(int));
-  file->lines = calloc(len + 2, sizeof(int));
+  file->map = chibicc_arena_calloc(len + 2, sizeof(int));
+  file->lines = chibicc_arena_calloc(len + 2, sizeof(int));
 
   int line = 1;
   for (int i = 0; i <= len; i++) {
@@ -791,13 +870,13 @@ int line_break_len(char *p) {
 // pass moved those newlines down) and the synthesized final newline
 // counts at the end.
 static char *make_scan_buffer(char *raw, int len, int **map_out, int **lines_out) {
-  int *map = calloc(len + 2, sizeof(int));
-  int *lines = calloc(len + 2, sizeof(int));
-  char *buf = calloc(1, len + 2);
+  int *map = chibicc_arena_calloc(len + 2, sizeof(int));
+  int *lines = chibicc_arena_calloc(len + 2, sizeof(int));
+  char *buf = chibicc_arena_calloc(1, len + 2);
 
   // The text the pre-passes used to see: the raw text plus the final
   // newline for a text that does not end in one.
-  char *text = calloc(1, len + 2);
+  char *text = chibicc_arena_calloc(1, len + 2);
   memcpy(text, raw, len);
   if (len == 0 || raw[len - 1] != '\n')
     text[len] = '\n';
@@ -898,7 +977,7 @@ Token *tokenize_file(char *path) {
   char *contents = make_scan_buffer(raw, raw_len, &map, &lines);
 
   // Save the filename for assembler .file directive.
-  static int file_no;
+  int file_no = chibicc_ctx()->next_file_no++;
   File *file = new_file(path, file_no + 1, contents);
 
   // The scan buffer replaces the identity tables new_file built.

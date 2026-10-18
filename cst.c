@@ -40,7 +40,7 @@
 // total, never reports a diagnostic and never exits (RESULT.md I1-I6).
 
 static CstNode *new_cst_node(CstKind kind) {
-  CstNode *node = calloc(1, sizeof(CstNode));
+  CstNode *node = chibicc_arena_calloc(1, sizeof(CstNode));
   node->kind = kind;
   return node;
 }
@@ -196,7 +196,7 @@ static bool cst_is_decl_start(Token *tok, CstContext *ctx) {
 }
 
 static void cst_add_typedef(CstContext *ctx, Token *tok) {
-  strarray_push(&ctx->typedefs, strndup(tok->loc, tok->len));
+  strarray_push(&ctx->typedefs, chibicc_arena_strndup(tok->loc, tok->len));
 }
 
 // A conservative pre-scan for file-local typedef names. Names introduced

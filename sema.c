@@ -43,6 +43,16 @@
 
 #include "chibicc.h"
 
+// `fn->locals` is the field the context's `locals` list is spliced
+// into; these helpers keep the field access out of the macro below.
+static Obj *obj_locals(Obj *fn) {
+  return fn->locals;
+}
+
+static void set_obj_locals(Obj *fn, Obj *v) {
+  fn->locals = v;
+}
+
 static int64_t eval(Node *node);
 
 // The target an address constant resolves to. `name` is a symbol the
@@ -77,21 +87,17 @@ static Member *get_struct_member(Type *ty, Token *tok);
 
 // All local variable instances created for the function being analyzed
 // are accumulated to this list.
-static Obj *locals;
 
 // Likewise, global variables are accumulated to this list.
-static Obj *globals;
 
 // The function sema is currently working on, needed when a reference to
 // a "static inline" function is recorded and when a return statement is
 // converted to the return type. Like the parser's old current_fn, it
 // persists after a [GNU] nested function definition is analyzed.
-static Obj *sema_fn;
 
 // The declaration of `alloca`, which the VLA lowering calls. It is a
 // global object so that the call node can refer to it, but never a
 // definition, so codegen emits nothing for it.
-static Obj *builtin_alloca;
 
 // Constructors for the node shapes only sema produces: a bound name
 // (the parser leaves names unbound, as ND_IDENT), a VLA designator, and
@@ -134,7 +140,7 @@ Node *new_ulong(long val, Token *tok) {
 Node *new_cast(Node *expr, Type *ty) {
   add_type(expr);
 
-  Node *node = calloc(1, sizeof(Node));
+  Node *node = chibicc_arena_calloc(1, sizeof(Node));
   node->kind = ND_CAST;
   node->tok = expr->tok;
   node->lhs = expr;
@@ -151,19 +157,37 @@ typedef struct {
 } VarScope;
 
 // Represents a block scope.
-typedef struct Scope Scope;
-struct Scope {
+typedef struct SemaScope Scope;
+struct SemaScope {
   Scope *next;
   HashMap vars;
 };
 
 // The resolve pass derives this scope stack from the tree structure, so
 // it lives entirely within sema; the parser keeps a separate stack of
-// its own for the typedef/tag classification the C grammar needs.
-static Scope *scope = &(Scope){};
+// its own for the typedef/tag classification the C grammar needs. The
+// stack lives in ChibiccContext (PLAN L2.5).
+static void sema_init(void) {
+  ChibiccContext *ctx = chibicc_ctx();
+  ctx->sema_scope = chibicc_arena_calloc(1, sizeof(Scope));
+  ctx->locals = NULL;
+  ctx->sema_fn = NULL;
+  ctx->builtin_alloca = NULL;
+  ctx->gotos = (NodeArray){};
+  ctx->labels = (NodeArray){};
+  ctx->loop_depth = 0;
+  ctx->switch_depth = 0;
+  ctx->resolving_body = false;
+}
+
+#define scope (chibicc_ctx()->sema_scope)
+#define locals (chibicc_ctx()->locals)
+#define globals (chibicc_ctx()->globals)
+#define sema_fn (chibicc_ctx()->sema_fn)
+#define builtin_alloca (chibicc_ctx()->builtin_alloca)
 
 static void enter_scope(void) {
-  Scope *sc = calloc(1, sizeof(Scope));
+  Scope *sc = chibicc_arena_calloc(1, sizeof(Scope));
   sc->next = scope;
   scope = sc;
 }
@@ -183,7 +207,7 @@ static VarScope *find_var(Token *tok) {
 }
 
 static VarScope *push_scope(char *name) {
-  VarScope *sc = calloc(1, sizeof(VarScope));
+  VarScope *sc = chibicc_arena_calloc(1, sizeof(VarScope));
   hashmap_put(&scope->vars, name, sc);
   return sc;
 }
@@ -243,8 +267,8 @@ static Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
 // annotated and checked (a label value can live outside the statement
 // tree, in a block-scope static initializer, which only the
 // annotation pass reaches - see add_type's ND_LABEL_VAL case).
-static NodeArray gotos;
-static NodeArray labels;
+#define gotos (chibicc_ctx()->gotos)
+#define labels (chibicc_ctx()->labels)
 
 // The pairing check: every goto and label value must name a label of
 // the same function. Gotos may refer to a label that appears later,
@@ -272,8 +296,8 @@ static void check_labels(void) {
 // nesting the checks need (a break binds to the innermost loop or
 // switch, a continue to the innermost loop, a case to the innermost
 // switch - existence is all each check asks). It writes no names.
-static int loop_depth;
-static int switch_depth;
+#define loop_depth (chibicc_ctx()->loop_depth)
+#define switch_depth (chibicc_ctx()->switch_depth)
 
 static void check_node(Node *node);
 
@@ -755,7 +779,7 @@ static void bind_ident(Node *node) {
 }
 
 static Obj *new_var(char *name, Type *ty) {
-  Obj *var = calloc(1, sizeof(Obj));
+  Obj *var = chibicc_arena_calloc(1, sizeof(Obj));
   var->name = name;
   var->ty = ty;
   resolve_type(ty);
@@ -794,7 +818,7 @@ static Obj *new_gvar(char *name, Type *ty) {
 // ".<digits>", so a prefix change shows up as a diff even when
 // only the numbering moved. A2.1 moves label allocation to codegen
 // against this same namespace (one counter), not a parallel one.
-static int unique_name_id;
+#define unique_name_id (chibicc_ctx()->unique_name_id)
 
 static char *new_unique_name(void) {
   return format(".L..%d", unique_name_id++);
@@ -956,7 +980,7 @@ static void lower_funcall(Node *node, Token *tok) {
 }
 
 static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
-  InitTree *init = calloc(1, sizeof(InitTree));
+  InitTree *init = chibicc_arena_calloc(1, sizeof(InitTree));
   init->ty = ty;
 
   if (ty->kind == TY_ARRAY) {
@@ -965,7 +989,7 @@ static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
       return init;
     }
 
-    init->children = calloc(ty->array_len, sizeof(InitTree *));
+    init->children = chibicc_arena_calloc(ty->array_len, sizeof(InitTree *));
     for (int i = 0; i < ty->array_len; i++)
       init->children[i] = new_resolved_init(ty->base, false);
     return init;
@@ -977,11 +1001,11 @@ static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
     for (Member *mem = ty->members; mem; mem = mem->next)
       len++;
 
-    init->children = calloc(len, sizeof(InitTree *));
+    init->children = chibicc_arena_calloc(len, sizeof(InitTree *));
 
     for (Member *mem = ty->members; mem; mem = mem->next) {
       if (is_flexible && ty->is_flexible && !mem->next) {
-        InitTree *child = calloc(1, sizeof(InitTree));
+        InitTree *child = chibicc_arena_calloc(1, sizeof(InitTree));
         child->ty = mem->ty;
         child->is_flexible = true;
         init->children[mem->idx] = child;
@@ -1001,7 +1025,7 @@ static Type *copy_struct_type(Type *ty) {
   Member head = {};
   Member *cur = &head;
   for (Member *mem = ty->members; mem; mem = mem->next) {
-    Member *m = calloc(1, sizeof(Member));
+    Member *m = chibicc_arena_calloc(1, sizeof(Member));
     *m = *mem;
     cur = cur->next = m;
   }
@@ -1547,7 +1571,7 @@ write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset
     return cur;
   }
 
-  Relocation *rel = calloc(1, sizeof(Relocation));
+  Relocation *rel = chibicc_arena_calloc(1, sizeof(Relocation));
   rel->offset = offset;
   rel->label = label.name;
   rel->label_node = label.node;
@@ -1560,7 +1584,7 @@ write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset
 // global variable.
 static void gvar_init_data(Obj *var, InitTree *init) {
   Relocation head = {};
-  char *buf = calloc(1, var->ty->size);
+  char *buf = chibicc_arena_calloc(1, var->ty->size);
   write_gvar_data(&head, init, var->ty, buf, 0);
   var->init_data = buf;
   var->rel = head.next;
@@ -2649,7 +2673,7 @@ static double eval_double(Node *node) {
 // literal owns a hidden local there and an anonymous global at file
 // scope, and this is what says which: the storage class follows from
 // where the resolve pass is, not from the depth of a scope stack.
-static bool resolving_body;
+#define resolving_body (chibicc_ctx()->resolving_body)
 
 // Walks a faithful initializer record and resolves the expressions it
 // carries (values and designator bounds); resolution and lowering of
@@ -2913,7 +2937,7 @@ static void resolve_function(Node *node) {
   enter_scope();
   begin_function(fn, ty);
   resolve_node(node->body);
-  fn->locals = locals;
+  set_obj_locals(fn, locals);
   leave_scope();
 
   resolving_body = save_body;
@@ -2932,8 +2956,8 @@ static void splice_locals(Obj *fn) {
     Obj *tail = pass2;
     while (tail->next)
       tail = tail->next;
-    tail->next = fn->locals;
-    fn->locals = pass2;
+    tail->next = obj_locals(fn);
+    set_obj_locals(fn, pass2);
   }
 }
 
@@ -2967,6 +2991,7 @@ static void analyze_function(Obj *fn) {
 // see its name, and its body is annotated and descended right after -
 // the order the parser used to interleave declaration and analysis.
 Obj *sema(Node *toplevel) {
+  sema_init();
   declare_builtin_functions();
   // `alloca` is only a declaration for the VLA lowering to call; the
   // list codegen walks starts after it.

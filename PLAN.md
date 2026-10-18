@@ -218,21 +218,21 @@ provenance:   chibicc_token_provenance / chibicc_macro_prov_* /
 - [x] **L2.4 parse 作用域**:
   `parse.c` 的 `scope` 进 context; typedef/tag oracle 的语义不变.
   验收: 全语料 parse; docker-test.
-- [ ] **L2.5 sema 状态**:
+- [x] **L2.5 sema 状态**:
   10 个 static 进 context; `new_unique_name` 的计数器随 context;
   `const_expr` 供 `#if` 使用时仍走同一个 context.
   验收: 全语料 sema; diagnostics; docker-test.
-- [ ] **L2.6 诊断回调与 longjmp**:
+- [x] **L2.6 诊断回调与 longjmp**:
   加 `ChibiccDiagnostic` / 回调注册 / 默认处理器; `error` / `error_at` / `error_tok`
   改成"回调 + longjmp"; 公共入口捕获并返回 NULL; 驱动器返回 1. 无 active context 时
   保持旧的打印 + exit 路径. 默认处理器逐字节复现旧格式.
   验收: `test/diagnostic.sh` 55 例逐字节; `test/driver.sh` 退出码; 新增一个
   "注册回调后不再 exit" 的库测试(先放 `test/library.sh` 草稿); docker-test.
-- [ ] **L2.7 分配点收口**:
+- [x] **L2.7 分配点收口**:
   库层 `calloc` / `strdup` / `strndup` / `realloc` 全部改走 arena(驱动器和 `lib.c`
   自己的 arena 实现除外); `format` 在有 context 时用 arena.
   验收: grep 库层零 `calloc` / `strdup`; 全部只读通道; docker-test; snapshot 为空.
-- [ ] **L2.8 状态收口验证**:
+- [x] **L2.8 状态收口验证**:
   grep 证明 `tokenize.c` / `preprocess.c` / `parse.c` / `sema.c` 无文件域可变 static
   (只读关键字表与 `active_ctx` 除外); `chibicc_context_reset` 后连续跑两个 TU 的
   测试(先放 library.sh).

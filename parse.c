@@ -79,7 +79,7 @@ static Node *function_def(Token **rest, Token *tok, Type *basety, VarAttr *attr)
 static Node *global_variable(Token **rest, Token *tok, Type *basety, VarAttr *attr);
 
 Node *new_node(NodeKind kind, Token *tok) {
-  Node *node = calloc(1, sizeof(Node));
+  Node *node = chibicc_arena_calloc(1, sizeof(Node));
   node->kind = kind;
   node->tok = tok;
   return node;
@@ -107,7 +107,7 @@ Node *new_num(int64_t val, Token *tok) {
 char *get_ident(Token *tok) {
   if (tok->kind != TK_IDENT)
     error_tok(tok, "expected an identifier");
-  return strndup(tok->loc, tok->len);
+  return chibicc_arena_strndup(tok->loc, tok->len);
 }
 
 //
@@ -146,7 +146,7 @@ void parse_init(void) {
 #define scope (chibicc_ctx()->scope)
 
 static void enter_scope(void) {
-  ParseScope *sc = calloc(1, sizeof(ParseScope));
+  ParseScope *sc = chibicc_arena_calloc(1, sizeof(ParseScope));
   sc->next = scope;
   scope = sc;
 }
@@ -174,7 +174,7 @@ static Type *find_typedef(Token *tok) {
 // identifier. sema completes the type when it reaches the ND_TYPEDEF
 // record this declaration also emits.
 static void add_typedef(Node *node) {
-  NameEntry *e = calloc(1, sizeof(NameEntry));
+  NameEntry *e = chibicc_arena_calloc(1, sizeof(NameEntry));
   e->type_def = node->ty;
   hashmap_put(&scope->names, get_ident(node->tok), e);
 }
@@ -183,7 +183,7 @@ static void add_typedef(Node *node) {
 // parameter or enum constant), so that it shadows a typedef of the same
 // spelling for the rest of the parse.
 static void add_declared_name(Token *tok) {
-  hashmap_put(&scope->names, get_ident(tok), calloc(1, sizeof(NameEntry)));
+  hashmap_put(&scope->names, get_ident(tok), chibicc_arena_calloc(1, sizeof(NameEntry)));
 }
 
 // Find a struct/union/enum tag by name, in any enclosing scope.
@@ -802,7 +802,7 @@ static InitDesig *designators(Token **rest, Token *tok) {
 
   while (1) {
     if (equal(tok, "[")) {
-      InitDesig *desig = calloc(1, sizeof(InitDesig));
+      InitDesig *desig = chibicc_arena_calloc(1, sizeof(InitDesig));
       desig->tok = tok;
       desig->begin = conditional(&tok, tok->next);
       desig->after_begin = tok;
@@ -815,7 +815,7 @@ static InitDesig *designators(Token **rest, Token *tok) {
     }
 
     if (equal(tok, ".")) {
-      InitDesig *desig = calloc(1, sizeof(InitDesig));
+      InitDesig *desig = chibicc_arena_calloc(1, sizeof(InitDesig));
       desig->tok = tok;
       tok = tok->next;
       if (tok->kind != TK_IDENT)
@@ -842,7 +842,7 @@ static InitDesig *designators(Token **rest, Token *tok) {
 // the target type is made here. Brace elision, string expansion,
 // designator application and flexible-array sizing all happen in sema.
 static Initializer *init_record(Token **rest, Token *tok) {
-  Initializer *rec = calloc(1, sizeof(Initializer));
+  Initializer *rec = chibicc_arena_calloc(1, sizeof(Initializer));
   rec->tok = tok;
 
   if (equal(tok, "{")) {
@@ -854,7 +854,7 @@ static Initializer *init_record(Token **rest, Token *tok) {
     bool first = true;
 
     while (!consume_end(&tok, tok)) {
-      InitItem *item = calloc(1, sizeof(InitItem));
+      InitItem *item = chibicc_arena_calloc(1, sizeof(InitItem));
       if (!first) {
         item->comma_tok = tok;
         tok = skip(tok, ",");
@@ -887,9 +887,9 @@ static Initializer *init_record(Token **rest, Token *tok) {
 
 // Returns true if a given token represents a type.
 static bool is_typename(Token *tok) {
-  static HashMap map;
+  HashMap *map = &chibicc_ctx()->typename_map;
 
-  if (map.capacity == 0) {
+  if (map->capacity == 0) {
     static char *kw[] = {
       "void", "_Bool", "char", "short", "int", "long", "struct", "union",
       "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
@@ -899,10 +899,10 @@ static bool is_typename(Token *tok) {
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
-      hashmap_put(&map, kw[i], (void *)1);
+      hashmap_put(map, kw[i], (void *)1);
   }
 
-  return hashmap_get2(&map, tok->loc, tok->len) || find_typedef(tok);
+  return hashmap_get2(map, tok->loc, tok->len) || find_typedef(tok);
 }
 
 // asm-stmt = "asm" ("volatile" | "inline")* "(" string-literal ")"
@@ -1081,7 +1081,7 @@ static Node *stmt(Token **rest, Token *tok) {
 
   if (tok->kind == TK_IDENT && equal(tok->next, ":")) {
     Node *node = new_node(ND_LABEL, tok);
-    node->label = strndup(tok->loc, tok->len);
+    node->label = chibicc_arena_strndup(tok->loc, tok->len);
     node->lhs = stmt(rest, tok->next->next);
     return node;
   }
@@ -1554,7 +1554,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
     if ((basety->kind == TY_STRUCT || basety->kind == TY_UNION ||
          basety->kind == TY_TYPEOF) &&
         consume(&tok, tok, ";")) {
-      Member *mem = calloc(1, sizeof(Member));
+      Member *mem = chibicc_arena_calloc(1, sizeof(Member));
       mem->ty = basety;
       mem->idx = idx++;
       mem->align_ty = attr.align_ty;
@@ -1569,7 +1569,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
         tok = skip(tok, ",");
       first = false;
 
-      Member *mem = calloc(1, sizeof(Member));
+      Member *mem = chibicc_arena_calloc(1, sizeof(Member));
       mem->ty = declarator(&tok, tok, basety);
       mem->name = mem->ty->name;
       mem->idx = idx++;

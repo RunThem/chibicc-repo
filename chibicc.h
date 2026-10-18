@@ -33,6 +33,7 @@ typedef struct ChibiccContext ChibiccContext;
 typedef struct ArenaBlock ArenaBlock;
 struct CondIncl;
 struct ParseScope;
+struct SemaScope;
 typedef struct Relocation Relocation;
 typedef struct Hideset Hideset;
 typedef struct MacroExpansion MacroExpansion;
@@ -1017,10 +1018,12 @@ struct ChibiccContext {
   bool failed;
 
   // Per-TU state (PLAN L2.2-L2.5). These were file-scope statics.
+  char *base_file;
   File *current_file;
   File **input_files;
   int input_files_len;
   int input_files_cap;
+  int next_file_no;
   bool at_bol;
   bool has_space;
 
@@ -1028,9 +1031,14 @@ struct ChibiccContext {
   struct CondIncl *cond_incl;
   HashMap pragma_once;
   HashMap search_cache;
+  HashMap include_guards;
+  HashMap keyword_map;
+  HashMap typename_map;
+  int counter;
   int include_next_idx;
 
   struct ParseScope *scope;
+  struct SemaScope *sema_scope;
 
   Obj *locals;
   Obj *globals;
@@ -1054,6 +1062,7 @@ void chibicc_context_activate(ChibiccContext *ctx);
 void chibicc_context_set_diagnostic(ChibiccContext *ctx,
                                     ChibiccDiagnosticFn fn, void *user);
 void chibicc_context_add_include_path(ChibiccContext *ctx, char *path);
+void chibicc_context_set_base_file(ChibiccContext *ctx, char *path);
 void chibicc_context_define(ChibiccContext *ctx, char *name, char *buf);
 void chibicc_context_undef(ChibiccContext *ctx, char *name);
 

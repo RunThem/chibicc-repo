@@ -10,6 +10,38 @@ ChibiccContext *chibicc_ctx(void) {
   return chibicc_active_ctx;
 }
 
+// Every public entry is an error boundary: an error_* longjmps to the
+// innermost frame, and the entry returns its failure value.
+#define ENTER_RET(ctx, fail)                                              \
+  ChibiccContext *_prev = chibicc_active_ctx;                             \
+  JmpFrame _jf;                                                           \
+  _jf.prev = (ctx)->jmp_top;                                              \
+  (ctx)->jmp_top = &_jf;                                                  \
+  chibicc_active_ctx = (ctx);                                             \
+  if (setjmp(_jf.buf)) {                                                  \
+    (ctx)->jmp_top = _jf.prev;                                            \
+    chibicc_active_ctx = _prev;                                           \
+    return fail;                                                          \
+  }
+
+#define ENTER_VOID(ctx)                                                   \
+  ChibiccContext *_prev = chibicc_active_ctx;                             \
+  JmpFrame _jf;                                                           \
+  _jf.prev = (ctx)->jmp_top;                                              \
+  (ctx)->jmp_top = &_jf;                                                  \
+  chibicc_active_ctx = (ctx);                                             \
+  if (setjmp(_jf.buf)) {                                                  \
+    (ctx)->jmp_top = _jf.prev;                                            \
+    chibicc_active_ctx = _prev;                                           \
+    return;                                                               \
+  }
+
+#define LEAVE(ctx)                                                        \
+  do {                                                                    \
+    (ctx)->jmp_top = _jf.prev;                                            \
+    chibicc_active_ctx = _prev;                                           \
+  } while (0)
+
 struct ArenaBlock {
   ArenaBlock *next;
   size_t used;
@@ -103,6 +135,11 @@ void chibicc_context_add_include_path(ChibiccContext *ctx, char *path) {
               &ctx->include_paths_cap, strdup(path));
 }
 
+void chibicc_context_set_base_file(ChibiccContext *ctx, char *path) {
+  chibicc_active_ctx = ctx;
+  ctx->base_file = chibicc_arena_strdup(path);
+}
+
 static void apply_macro_op(ChibiccContext *ctx, char *op) {
   chibicc_active_ctx = ctx;
   if (op[0] == 'D') {
@@ -157,18 +194,25 @@ static void free_arena(ChibiccContext *ctx) {
 }
 
 static void clear_state(ChibiccContext *ctx) {
+  ctx->base_file = NULL;
   ctx->current_file = NULL;
   ctx->input_files = NULL;
   ctx->input_files_len = 0;
   ctx->input_files_cap = 0;
+  ctx->next_file_no = 0;
   ctx->at_bol = false;
   ctx->has_space = false;
   ctx->macros = (HashMap){};
   ctx->cond_incl = NULL;
   ctx->pragma_once = (HashMap){};
   ctx->search_cache = (HashMap){};
+  ctx->include_guards = (HashMap){};
+  ctx->keyword_map = (HashMap){};
+  ctx->typename_map = (HashMap){};
+  ctx->counter = 0;
   ctx->include_next_idx = 0;
   ctx->scope = NULL;
+  ctx->sema_scope = NULL;
   ctx->locals = NULL;
   ctx->globals = NULL;
   ctx->sema_fn = NULL;
@@ -215,58 +259,81 @@ void chibicc_context_free(ChibiccContext *ctx) {
 }
 
 Token *chibicc_tokenize_file(ChibiccContext *ctx, char *path) {
-  chibicc_active_ctx = ctx;
-  return tokenize_file(path);
+  ENTER_RET(ctx, NULL);
+  if (!ctx->base_file)
+    ctx->base_file = chibicc_arena_strdup(path);
+  Token *tok = tokenize_file(path);
+  LEAVE(ctx);
+  return tok;
 }
 
 Token *chibicc_tokenize_buffer(ChibiccContext *ctx, char *name, char *contents) {
-  chibicc_active_ctx = ctx;
+  ENTER_RET(ctx, NULL);
+  if (!ctx->base_file)
+    ctx->base_file = chibicc_arena_strdup(name);
   char *copy = chibicc_arena_strdup(contents);
   File *file = new_file(chibicc_arena_strdup(name), 0, copy);
-  return tokenize(file);
+  Token *tok = tokenize(file);
+  LEAVE(ctx);
+  return tok;
 }
 
 Token *chibicc_preprocess(ChibiccContext *ctx, Token *tok) {
-  chibicc_active_ctx = ctx;
-  return preprocess(tok);
+  ENTER_RET(ctx, NULL);
+  Token *r = preprocess(tok);
+  LEAVE(ctx);
+  return r;
 }
 
 Node *chibicc_parse(ChibiccContext *ctx, Token *tok) {
-  chibicc_active_ctx = ctx;
-  return parse(tok);
+  ENTER_RET(ctx, NULL);
+  Node *r = parse(tok);
+  LEAVE(ctx);
+  return r;
 }
 
 Obj *chibicc_sema(ChibiccContext *ctx, Node *toplevel) {
-  chibicc_active_ctx = ctx;
-  return sema(toplevel);
+  ENTER_RET(ctx, NULL);
+  Obj *r = sema(toplevel);
+  LEAVE(ctx);
+  return r;
 }
 
 CstNode *chibicc_cst_parse(ChibiccContext *ctx, Token *tok) {
-  chibicc_active_ctx = ctx;
-  return cst_parse(tok);
+  ENTER_RET(ctx, NULL);
+  CstNode *r = cst_parse(tok);
+  LEAVE(ctx);
+  return r;
 }
 
 void chibicc_cst_reconstruct(ChibiccContext *ctx, CstNode *root, FILE *out) {
-  chibicc_active_ctx = ctx;
+  ENTER_VOID(ctx);
   cst_reconstruct(root, out);
+  LEAVE(ctx);
 }
 
 void chibicc_cst_dump(ChibiccContext *ctx, CstNode *root, FILE *out) {
-  chibicc_active_ctx = ctx;
+  ENTER_VOID(ctx);
   cst_dump(root, out);
+  LEAVE(ctx);
 }
 
 bool chibicc_cst_verify(ChibiccContext *ctx, CstNode *root, Token *tok) {
-  chibicc_active_ctx = ctx;
-  return cst_verify(root, tok);
+  ENTER_RET(ctx, false);
+  bool r = cst_verify(root, tok);
+  LEAVE(ctx);
+  return r;
 }
 
 void chibicc_expansion_dump(ChibiccContext *ctx, Token *tok, FILE *out) {
-  chibicc_active_ctx = ctx;
+  ENTER_VOID(ctx);
   expansion_dump(tok, out);
+  LEAVE(ctx);
 }
 
 bool chibicc_expansion_verify(ChibiccContext *ctx, Token *tok) {
-  chibicc_active_ctx = ctx;
-  return expansion_verify(tok);
+  ENTER_RET(ctx, false);
+  bool r = expansion_verify(tok);
+  LEAVE(ctx);
+  return r;
 }
