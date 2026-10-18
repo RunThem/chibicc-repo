@@ -333,6 +333,18 @@ TU
   在 dump 里可见, 同时不扩散种类; 参数表内层括号不再嵌套分组(合法宏参数不嵌套),
   未闭合时整组变 `UNPARSED`.
 
+## C3.2 收口(已提交)
+
+- 改了什么: `AGENTS.md` 更新(目标架构第 2 条标为已实现; 路线图第 2 条与现行线段改为
+  完成; `make test` 与前端的可跑命令加入 `test/cst.sh` 与三个 CST 旗标; 代码地图新增
+  `cst.c` 条目并更新 `chibicc.h` / `main.c` 说明; 测试约定加入 CST 的断言数与 dump
+  覆盖); `PLAN.md` 勾选完成; `RESULT.md` 的终态验收逐项回填. 本步无代码改动.
+- 覆盖审计: 55 个 `CstKind` 全部出现在 `test/cst.sh` 的期望 dump 中(61 个 dump 样本).
+- 闸门: 沿用 C3.1 终态代码的闸门结果(`make docker-test` EXIT=0 含自举,
+  `make docker-snapshot-diff` 为 `snapshot diff: empty`, tinycc EXIT=0); C3.2 只改
+  文档, 不改变二进制.
+- 偏差: 无.
+
 ## 提交一览
 
 | 提交 | 步骤 | 内容 |
@@ -343,14 +355,22 @@ TU
 | 40e9c05 | C1.2 | 定界符组 + 语句切分 + BLOCK / NULL_STMT / UNPARSED; cst.sh 第二段 9 个骨架 dump, 全脚本 158 项断言; docker-test EXIT=0, snapshot diff 空 |
 | 87858ef | C2.1 | 表达式递归下降(10 级二元链 / 一元 / 后缀 / cast / 条件 / 赋值 / 逗号 / 初始化列表 / 复合字面量)+ 文件内 typedef 预扫描; cst.sh 第三段 15 个 dump, 全脚本 203 项断言; docker-test EXIT=0, snapshot diff 空 |
 | 67864c3 | C2.2 | 声明层(decl-specs / declarator / 参数 / type-name / 函数定义 / 指派初始化器)+ 语句层(if / switch / while / do / for / case / default / label / goto / break / continue / return / asm); cst.sh 第四段 19 个 dump, 全脚本 260 项断言; docker-test EXIT=0, snapshot diff 空 |
-| (本提交) | C3.1 | 指令行节点(#define 对象 / 函数宏 / 变参, #undef, #include, #line 与 GNU 行标记, #pragma, #error, 空指令与未知指令)+ 条件分组(PP_IF / PP_BRANCH, 分支全保留, 嵌套, 块内, 孤立与未闭合); cst.sh 第五段 13 个 dump 与 3 个边界样本, 全脚本 305 项断言; docker-test EXIT=0(含自举), snapshot diff 空, tinycc EXIT=0 |
-| (待填) | C3.2 | 收口与终态验收 |
+| 05d4099 | C3.1 | 指令行节点(#define 对象 / 函数宏 / 变参, #undef, #include, #line 与 GNU 行标记, #pragma, #error, 空指令与未知指令)+ 条件分组(PP_IF / PP_BRANCH, 分支全保留, 嵌套, 块内, 孤立与未闭合); cst.sh 第五段 13 个 dump 与 3 个边界样本, 全脚本 305 项断言; docker-test EXIT=0(含自举), snapshot diff 空, tinycc EXIT=0 |
+| (本提交) | C3.2 | 收口: AGENTS.md / PLAN.md / RESULT.md 更新; 55 个 CstKind 的 dump 覆盖审计; 终态验收回填; 无代码改动 |
 
 ## 终态验收(本线完成时逐项实测)
 
-- **通道**: (待填) 叶子序列与 token 流一致; 48 文件 + 12 边界样本重建零例外.
-- **结构**: (待填) 各节点 dump 样本齐全; 全语料建树不崩; 回退跨度与歧义清单一致.
-- **行为**: (待填) docker-test EXIT=0; snapshot diff 空; 诊断 55 / 形状 33 / trivia 94 不变;
-  tinycc EXIT=0.
-- **对比锚点**: (待填) cst.c 行数, test/cst.sh 断言数, main.c 与 chibicc.h 增量; tokenize.c /
-  preprocess.c / parse.c / sema.c / type.c / codegen.c 零改动.
+- **通道**: `tokenize_file` 的直接输出可建 CST; 48 个语料文件的叶子序列与 token 流逐指针
+  相等(每个 token 恰好一次, `-verify-cst` 全绿); 重建在 48 个语料文件与 15 个边界样本
+  (C1.1 的 12 个 + C3.1 的 BOM / CRLF / 缺分号后接指令 3 个)上逐字节成立, 例外清零.
+- **结构**: 55 个 `CstKind` 全部出现在 `test/cst.sh` 的期望 dump 里(61 个 dump 样本,
+  含声明 / 语句 / 表达式 / 指令 / 条件分支 / 宏参数表 / `CST_UNPARSED`), 由脚本逐种类
+  核对; 48 个语料的 dump 与 verify 全部正常结束; 回退跨度与歧义清单一致 - 唯一的已知
+  结构限制是原始组(结构体成员体, 初始化列表, 函数参数)内部的指令仍按 token 叶子保留.
+- **行为**: `make docker-test`(含自举)EXIT=0; snapshot diff 空; 诊断锁 55 例逐字节,
+  形状锁 33 段, trivia 锁 7 个 -E 样本 / 23 个 dump / 48 个 round-trip / 12 个边界 /
+  4 个锚点, 全部不变; `make docker-test-thirdparty THIRDPARTY=tinycc` EXIT=0.
+- **对比锚点**(相对本线起点 `fe3c56b`): `cst.c` 2254 行(新文件); `test/cst.sh` 398 行 /
+  305 项断言(61 个 dump 样本, 15 个边界样本); `main.c` +41/-12, `chibicc.h` +82,
+  `Makefile` +2; `tokenize.c` / `preprocess.c` / `parse.c` / `sema.c` / `type.c` /
+  `codegen.c` 零改动(红线守住).
