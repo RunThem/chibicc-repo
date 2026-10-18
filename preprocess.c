@@ -90,7 +90,6 @@ struct Hideset {
 static HashMap macros;
 static CondIncl *cond_incl;
 static HashMap pragma_once;
-static int include_next_idx;
 
 static Token *preprocess2(Token *tok);
 static Macro *find_macro(Token *tok);
@@ -781,26 +780,29 @@ char *search_include_paths(char *filename) {
   if (filename[0] == '/')
     return filename;
 
-  static HashMap cache;
-  char *cached = hashmap_get(&cache, filename);
+  ChibiccContext *ctx = chibicc_ctx();
+  char *cached = hashmap_get(&ctx->search_cache, filename);
   if (cached)
     return cached;
 
   // Search a file from the include paths.
-  for (int i = 0; i < include_paths.len; i++) {
-    char *path = format("%s/%s", include_paths.data[i], filename);
+  for (int i = 0; i < ctx->include_paths_len; i++) {
+    char *path = format("%s/%s", ctx->include_paths[i], filename);
     if (!file_exists(path))
       continue;
-    hashmap_put(&cache, filename, path);
-    include_next_idx = i + 1;
+    hashmap_put(&ctx->search_cache, filename, path);
+    ctx->include_next_idx = i + 1;
     return path;
   }
   return NULL;
 }
 
 static char *search_include_next(char *filename) {
-  for (; include_next_idx < include_paths.len; include_next_idx++) {
-    char *path = format("%s/%s", include_paths.data[include_next_idx], filename);
+  ChibiccContext *ctx = chibicc_ctx();
+  for (; ctx->include_next_idx < ctx->include_paths_len;
+       ctx->include_next_idx++) {
+    char *path = format("%s/%s", ctx->include_paths[ctx->include_next_idx],
+                        filename);
     if (file_exists(path))
       return path;
   }

@@ -206,7 +206,7 @@ provenance:   chibicc_token_provenance / chibicc_macro_prov_* /
   `new` / `free` / `reset` 骨架, 以及 D7 的公共包装函数(先声明在根 `chibicc.h`).
   `main.c` 创建 context, 所有入口经包装调用. 此步先不迁 static, 只建立边界.
   验收: 构建; 本机全部只读通道; docker-test; snapshot 为空.
-- [ ] **L2.2 tokenize 状态与文件表**:
+- [x] **L2.2 tokenize 状态与文件表**:
   `current_file` / `input_files` / `at_bol` / `has_space` 进 context;
   `include_paths` 从 `main.c` 的全局搬进 context 配置, `search_include_paths` 读
   context. `chibicc_context_add_include_path` 生效.

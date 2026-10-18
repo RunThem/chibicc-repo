@@ -4,7 +4,6 @@ typedef enum {
   FILE_NONE, FILE_C, FILE_ASM, FILE_OBJ, FILE_AR, FILE_DSO,
 } FileType;
 
-StringArray include_paths;
 bool opt_fcommon = true;
 bool opt_fpic;
 
@@ -61,16 +60,16 @@ static bool take_arg(char *arg) {
 static void add_default_include_paths(char *argv0) {
   // We expect that chibicc-specific include files are installed
   // to ./include relative to argv[0].
-  strarray_push(&include_paths, format("%s/include", dirname(strdup(argv0))));
+  chibicc_context_add_include_path(ctx, format("%s/include", dirname(strdup(argv0))));
 
   // Add standard include paths.
-  strarray_push(&include_paths, "/usr/local/include");
-  strarray_push(&include_paths, "/usr/include/x86_64-linux-gnu");
-  strarray_push(&include_paths, "/usr/include");
+  chibicc_context_add_include_path(ctx, "/usr/local/include");
+  chibicc_context_add_include_path(ctx, "/usr/include/x86_64-linux-gnu");
+  chibicc_context_add_include_path(ctx, "/usr/include");
 
   // Keep a copy of the standard include paths for -MMD option.
-  for (int i = 0; i < include_paths.len; i++)
-    strarray_push(&std_include_paths, include_paths.data[i]);
+  for (int i = 0; i < ctx->include_paths_len; i++)
+    strarray_push(&std_include_paths, ctx->include_paths[i]);
 }
 
 static void define(char *str) {
@@ -214,7 +213,7 @@ static void parse_args(int argc, char **argv) {
     }
 
     if (!strncmp(argv[i], "-I", 2)) {
-      strarray_push(&include_paths, argv[i] + 2);
+      chibicc_context_add_include_path(ctx, argv[i] + 2);
       continue;
     }
 
@@ -380,7 +379,7 @@ static void parse_args(int argc, char **argv) {
   }
 
   for (int i = 0; i < idirafter.len; i++)
-    strarray_push(&include_paths, idirafter.data[i]);
+    chibicc_context_add_include_path(ctx, idirafter.data[i]);
 
   if (input_paths.len == 0)
     error("no input files");

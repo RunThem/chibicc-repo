@@ -1,16 +1,8 @@
 #include "chibicc.h"
 
-// Input file
-static File *current_file;
-
-// A list of all input files.
-static File **input_files;
-
-// True if the current position is at the beginning of a line
-static bool at_bol;
-
-// True if the current position follows a space character
-static bool has_space;
+// The input file, the input file list and the current position flags
+// live in ChibiccContext (PLAN L2.2). The lexer reads them through the
+// active context like every other phase.
 
 // The raw offset of a position in the scan buffer (PLAN T2.1): the two
 // texts differ where a continuation, a '\r' or a universal character
@@ -99,11 +91,11 @@ static void verror_at(char *filename, char *input, int line_no,
 }
 
 void error_at(char *loc, char *fmt, ...) {
-  int line_no = current_file->lines[raw_off(current_file, loc)];
+  int line_no = chibicc_ctx()->current_file->lines[raw_off(chibicc_ctx()->current_file, loc)];
 
   va_list ap;
   va_start(ap, fmt);
-  verror_at(current_file->name, current_file->contents, line_no, loc, fmt, ap);
+  verror_at(chibicc_ctx()->current_file->name, chibicc_ctx()->current_file->contents, line_no, loc, fmt, ap);
   exit(1);
 }
 
@@ -150,19 +142,19 @@ static Token *new_token(TokenKind kind, char *start, char *end, int raw_trivia) 
   tok->loc = start;
   tok->len = end - start;
 
-  int raw_start = raw_off(current_file, start);
-  tok->trivia = current_file->raw + raw_trivia;
+  int raw_start = raw_off(chibicc_ctx()->current_file, start);
+  tok->trivia = chibicc_ctx()->current_file->raw + raw_trivia;
   tok->trivia_len = raw_start - raw_trivia;
-  tok->raw_loc = current_file->raw + raw_start;
+  tok->raw_loc = chibicc_ctx()->current_file->raw + raw_start;
   tok->raw_len = start == end ? 0 :
-    raw_end_of(current_file, end - current_file->contents - 1) - raw_start;
+    raw_end_of(chibicc_ctx()->current_file, end - chibicc_ctx()->current_file->contents - 1) - raw_start;
 
-  tok->file = current_file;
-  tok->filename = current_file->display_name;
-  tok->at_bol = at_bol;
-  tok->has_space = has_space;
+  tok->file = chibicc_ctx()->current_file;
+  tok->filename = chibicc_ctx()->current_file->display_name;
+  tok->at_bol = chibicc_ctx()->at_bol;
+  tok->has_space = chibicc_ctx()->has_space;
 
-  at_bol = has_space = false;
+  chibicc_ctx()->at_bol = chibicc_ctx()->has_space = false;
   return tok;
 }
 
@@ -520,8 +512,8 @@ Token *tokenize_string_literal(Token *tok, Type *basety) {
   // `current_file` is whichever file was tokenized last). The `file` and
   // `filename` fields are restored afterwards: they used to be the stale
   // ones, and that pre-existing behavior is kept for now.
-  File *save = current_file;
-  current_file = tok->file;
+  File *save = chibicc_ctx()->current_file;
+  chibicc_ctx()->current_file = tok->file;
 
   Token *t;
   if (basety->size == 2)
@@ -530,7 +522,7 @@ Token *tokenize_string_literal(Token *tok, Type *basety) {
     t = read_utf32_string_literal(tok->loc, tok->loc, basety,
                                   tok->trivia - tok->file->raw);
 
-  current_file = save;
+  chibicc_ctx()->current_file = save;
   t->file = save;
   t->filename = save->display_name;
   t->next = tok->next;
@@ -539,7 +531,7 @@ Token *tokenize_string_literal(Token *tok, Type *basety) {
 
 // Tokenize a given string and returns new tokens.
 Token *tokenize(File *file) {
-  current_file = file;
+  chibicc_ctx()->current_file = file;
 
   char *p = file->contents;
 
@@ -551,8 +543,8 @@ Token *tokenize(File *file) {
   Token head = {};
   Token *cur = &head;
 
-  at_bol = true;
-  has_space = false;
+  chibicc_ctx()->at_bol = true;
+  chibicc_ctx()->has_space = false;
 
   while (*p) {
     // Skip line comments.
@@ -560,7 +552,7 @@ Token *tokenize(File *file) {
       p += 2;
       while (*p != '\n')
         p++;
-      has_space = true;
+      chibicc_ctx()->has_space = true;
       continue;
     }
 
@@ -570,22 +562,22 @@ Token *tokenize(File *file) {
       if (!q)
         error_at(p, "unclosed block comment");
       p = q + 2;
-      has_space = true;
+      chibicc_ctx()->has_space = true;
       continue;
     }
 
     // Skip newline.
     if (*p == '\n') {
       p++;
-      at_bol = true;
-      has_space = false;
+      chibicc_ctx()->at_bol = true;
+      chibicc_ctx()->has_space = false;
       continue;
     }
 
     // Skip whitespace characters.
     if (isspace(*p)) {
       p++;
-      has_space = true;
+      chibicc_ctx()->has_space = true;
       continue;
     }
 
@@ -746,7 +738,7 @@ static char *read_file(char *path, int *len) {
 }
 
 File **get_input_files(void) {
-  return input_files;
+  return chibicc_ctx()->input_files;
 }
 
 File *new_file(char *name, int file_no, char *contents) {
@@ -915,9 +907,17 @@ Token *tokenize_file(char *path) {
   file->lines = lines;
 
   // Save the filename for assembler .file directive.
-  input_files = realloc(input_files, sizeof(char *) * (file_no + 2));
-  input_files[file_no] = file;
-  input_files[file_no + 1] = NULL;
+  ChibiccContext *ctx = chibicc_ctx();
+  if (ctx->input_files_cap < file_no + 2) {
+    size_t old = sizeof(File *) * ctx->input_files_cap;
+    int cap = file_no + 2;
+    ctx->input_files = chibicc_arena_realloc(ctx->input_files, old,
+                                             sizeof(File *) * cap);
+    ctx->input_files_cap = cap;
+  }
+  ctx->input_files[file_no] = file;
+  ctx->input_files[file_no + 1] = NULL;
+  ctx->input_files_len = file_no + 1;
   file_no++;
 
   return tokenize(file);

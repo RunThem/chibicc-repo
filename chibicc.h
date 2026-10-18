@@ -967,7 +967,6 @@ bool file_exists(char *path);
 void print_escaped(FILE *out, char *p, int len);
 char *token_kind_name(TokenKind kind);
 
-extern StringArray include_paths;
 extern bool opt_fpic;
 extern bool opt_fcommon;
 extern char *base_file;
@@ -1029,6 +1028,7 @@ struct ChibiccContext {
   HashMap macros;
   struct CondIncl *cond_incl;
   HashMap pragma_once;
+  HashMap search_cache;
   int include_next_idx;
 
   struct ParseScope *scope;

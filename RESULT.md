@@ -125,7 +125,14 @@
 
 ## L2.2 tokenize 状态与文件表
 
-(待执行)
+- 动作: 删除 `tokenize.c` 的 `current_file` / `input_files` / `at_bol` / `has_space`,
+  全部改走 `chibicc_ctx()`; `input_files` 变成 context 里的可增长数组(NULL 结尾),
+  `get_input_files()` 返回它; `include_paths` 从 `main.c` 的全局搬进 context 配置
+  (`chibicc_context_add_include_path`), `search_include_paths` / `search_include_next`
+  读 context; 同时把 `search_include_paths` 里的函数域 `static HashMap cache` 收进
+  context(`search_cache`), 它也是跨 TU 的隐藏状态.
+- 验收: 本机 287 次只读通道 + 39 个文件的 `-S` 与基线逐字节一致; 构建零新告警.
+- 偏差: 无. `input_files` 的容量按 `file_no + 2` 增长, 保持原有 NULL 结尾契约.
 
 ## L2.3 preprocess 状态
 

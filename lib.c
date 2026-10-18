@@ -145,6 +145,7 @@ static void clear_state(ChibiccContext *ctx) {
   ctx->macros = (HashMap){};
   ctx->cond_incl = NULL;
   ctx->pragma_once = (HashMap){};
+  ctx->search_cache = (HashMap){};
   ctx->include_next_idx = 0;
   ctx->scope = NULL;
   ctx->locals = NULL;
