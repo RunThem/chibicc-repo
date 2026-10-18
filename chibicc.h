@@ -222,6 +222,9 @@ void cst_reconstruct(CstNode *root, FILE *out);
 void cst_dump(CstNode *root, FILE *out);
 bool cst_verify(CstNode *root, Token *tok);
 
+// Temporary debug channel (ast_dump.c); see DUMP-AST-PLAN.md.
+void dump_ast(Node *toplevel, FILE *out);
+
 //
 // preprocess.c
 //
