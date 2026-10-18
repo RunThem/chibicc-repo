@@ -24,7 +24,6 @@ static bool opt_reconstruct;
 static bool opt_dump_cst;
 static bool opt_reconstruct_cst;
 static bool opt_verify_cst;
-static bool opt_dump_ast;
 static bool opt_static;
 static bool opt_shared;
 static char *opt_MF;
@@ -198,12 +197,6 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-verify-cst")) {
       opt_verify_cst = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "--dump-ast") ||
-        !strcmp(argv[i], "-dump-ast")) {
-      opt_dump_ast = true;
       continue;
     }
 
@@ -753,14 +746,7 @@ static int cc1(void) {
     return 0;
   }
 
-  Node *toplevel = parse(tok);
-
-  if (opt_dump_ast) {
-    dump_ast(toplevel, open_file(opt_o ? opt_o : "-"));
-    return 0;
-  }
-
-  Obj *prog = sema(toplevel);
+  Obj *prog = sema(parse(tok));
 
   // Open a temporary output buffer.
   char *buf;
@@ -968,8 +954,7 @@ int main(int argc, char **argv) {
 
     // Just preprocess (or dump/reconstruct the raw token or CST stream)
     if (opt_E || opt_M || opt_dump_tokens || opt_reconstruct ||
-        opt_dump_cst || opt_reconstruct_cst || opt_verify_cst ||
-        opt_dump_ast) {
+        opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
       run_cc1(argc, argv, input, NULL);
       continue;
     }
