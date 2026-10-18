@@ -179,6 +179,10 @@ void chibicc_context_set_diagnostic(ChibiccContext *ctx,
   ctx->diag_user = user;
 }
 
+bool chibicc_context_failed(ChibiccContext *ctx) {
+  return ctx->failed;
+}
+
 void chibicc_context_activate(ChibiccContext *ctx) {
   chibicc_active_ctx = ctx;
 }

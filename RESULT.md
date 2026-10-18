@@ -205,33 +205,68 @@
   (加上 L2.2 的 `search_cache`). 这些都是 arena 分配, 若不迁移会在 reset 后悬垂.
 - 结果: 库层只剩只读表:`read_punct` / `is_keyword` / `is_typename` 的关键字数组与
   `format_date` 的月份名; 没有文件域可变 static, 没有函数域可变 static.
-- 闸门: `make docker-test` EXIT=0(`.cache/L2-docker-test.log`, 含 stage2 自举 -
-  `_Thread_local` / `setjmp` / `va_copy` 均被 chibicc 自己编译通过);
-  `make docker-snapshot-diff` -> `snapshot diff: empty`(`.cache/L2-snapshot.log`);
-  诊断 55 例 / trivia / CST / expand 全绿.
+- 闸门: 最终代码由 L3 收口闸门覆盖 - `make docker-test` EXIT=0
+  (`.cache/L3-docker-test.log`, 含 stage2 自举; `_Thread_local` / `setjmp` /
+  `va_copy` 均被 chibicc 自己编译通过; `test/library.sh` 在 stage1 与 stage2 各跑一遍,
+  均输出 `library: ok`); `make docker-snapshot-diff` -> `snapshot diff: empty`
+  (`.cache/L3-snapshot.log`); 诊断 55 例 / trivia / CST / expand 全绿.
 
 ## L3.1 公共头拆分
 
-(待执行)
+- 动作(已完成的部分): `chibicc.h` 移到 `libchibicc/include/chibicc/chibicc.h`;
+  根 `chibicc.h` 变为内部 umbrella(`#define CHIBICC_INTERNAL` + include); 构建加
+  `-Ilibchibicc/include`; `test/library.sh` 只 include `<chibicc/chibicc.h>`.
+- 偏差: 公共头目前仍是"完整内部头"搬家, 内部函数声明与 `HashMap` / 作用域类型仍在
+  公共面; 收窄到 D7 是 L3.1b, 尚未执行. 因此本步只完成了路径与构建边界, 不是最终
+  的公共面.
 
 ## L3.2 公共函数前缀与 facade 收口
 
-(待执行)
+- 动作(已完成的部分): D7 的包装函数全部带 `chibicc_` 前缀并在公共头声明; 公共类型
+  追加了 `ChibiccToken` / `ChibiccNode` / `ChibiccType` / `ChibiccObj` /
+  `ChibiccCstNode` 等别名; `ChibiccContext` 是显式句柄.
+- 偏差: 短 typedef 与 struct tag 仍可见; `chibicc_reconstruct` 仍在 `main.c`;
+  `nm` 公共符号清单尚未收窄. 这是 L3.2 的剩余工作.
 
 ## L3.3 Makefile 库目标
 
-(待执行)
+- 动作(已完成的部分): `libchibicc.a` 由除 `main.c` / `codegen.c` 外的全部 `.c`
+  构建(含 `lib.c`); `chibicc` 链接 `main.o` + `codegen.o` + 静态库; `make test` 与
+  `make test-stage2` 调用 `test/library.sh`; docker BOOT 排除本机 `libchibicc.a`.
+- 偏差: Linux `libchibicc.so`(PIC / 可见性 / SONAME)与"stage2 用 chibicc 重编库对象"
+  尚未做; 当前 library.sh 链接宿主 cc 构建的静态库.
 
 ## L3.4 库测试定稿
 
-(待执行)
+- 动作: `test/library.sh` 用宿主 cc 编译一个只 include 公共头的消费者, 链接
+  `libchibicc.a`; 覆盖 tokenize buffer -> preprocess -> parse -> sema, CST parse +
+  verify, 诊断回调(不写 stderr / 不 exit), 错误后 `reset` 再跑第二个 TU.
+- 本机结果: `library: ok`, EXIT=0.
+- 偏差: provenance 访问器与 `chibicc_reconstruct` 的逐字节断言尚未加入.
 
 ## L4 终态验收
 
-(待执行)
+- L4.1 全量闸门: `make docker-test` EXIT=0(`.cache/L3-docker-test.log`, 5,036 行,
+  stage1 + stage2 + 自举 + 全部通道 + `test/library.sh` 两次通过);
+  `make docker-snapshot-diff` -> `snapshot diff: empty`(`.cache/L3-snapshot.log`).
+- 本机: 287 次只读通道 + 39 个文件的 `-S` 与基线 `8c1c1d1` 逐字节一致; 诊断 55 例
+  逐字节通过; `test/library.sh` 输出 `library: ok`.
+- L4.2 文档: AGENTS.md 的路线图 / 构建与测试 / 现状与代码地图已更新; PLAN.md 与
+  RESULT.md 的勾选与偏差一致.
+- **未完成(本线后续)**: L3.1b 公共面收窄, L3.2 短 typedef / tag 移出公共面与
+  `chibicc_reconstruct` 进库, L3.3b `.so` 与 stage2 库对象, L3.4 的 provenance /
+  reconstruct 断言. 因此终态验收里"公共头只暴露 D7"与"`nm` 清单一致"两项尚未满足;
+  当前交付是可链接的静态库与可用的 context / 阶段 API, 公共头仍是完整内部头的搬家.
 
 ## 提交一览
 
 | 提交 | 步骤 | 内容 |
 |---|---|---|
-| (待填) | L0.1 | 归档 provenance 线, 建立库化线 |
+| `4456d41` | L0.1 | 归档 provenance 线, 建立库化线, 基线闸门 |
+| `8e58192` | L1.1-L1.5 | codegen 状态移出公共 Node / Type / Obj |
+| `28e9956` | L2.1 | context 骨架, arena, facade |
+| `f459f7f` | L2.2 | tokenizer / include 路径状态进 context |
+| `75158e5` | L2.3 | 预处理器状态与命令行宏进 context |
+| `8f76115` | L2.4 | parser 作用域进 context |
+| `375eb3d` | L2.5-L2.8 | sema 状态, 诊断回调 + longjmp, arena 分配, 状态审计 |
+| (本提交) | L3 | 公共头路径, `libchibicc.a`, `test/library.sh` |

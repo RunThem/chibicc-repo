@@ -6,6 +6,9 @@
 /tmp*
 /thirdparty
 /chibicc
+/libchibicc.a
+/libchibicc.so
+/libchibicc.so.*
 /test/*.exe
 /stage2
 

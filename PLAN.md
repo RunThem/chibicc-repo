@@ -240,39 +240,43 @@ provenance:   chibicc_token_provenance / chibicc_macro_prov_* /
 
 ## 阶段 L3: 公共头 / 命名 / 构建
 
-- [ ] **L3.1 公共头拆分**:
-  建 `libchibicc/include/chibicc/` 的 9 个头; 把公共类型定义搬过去, 类型名改
-  `Chibicc*`, tag 改 `struct chibicc_*`; 根 `chibicc.h` 变内部 umbrella, 加
-  `typedef ChibiccNode Node;` 等别名. 公共头只含标准头与公共头.
-  验收: 一个只 include `<chibicc/chibicc.h>` 的 TU 用宿主 cc `-fsyntax-only` 通过;
-  公共头 grep 无内部符号(`new_node` / `HashMap` / `ctx` / `Initializer` 定义);
-  docker-test.
+- [x] **L3.1a 公共头路径拆分**:
+  根 `chibicc.h` 改为内部 umbrella(`#define CHIBICC_INTERNAL` + include);
+  类型与声明搬到 `libchibicc/include/chibicc/chibicc.h`; 构建加
+  `-Ilibchibicc/include`; 消费者可以只 include `<chibicc/chibicc.h>`.
+  验收: `test/library.sh` 用公共路径编译通过; docker-test.
+- [ ] **L3.1b 公共面收窄**:
+  把内部函数声明(`new_node` / `add_type` / `hashmap_*` / parse / sema 内部入口等)与
+  内部类型(`HashMap` / `ParseScope` / `SemaScope` / `CondIncl` 等)从公共头移到根
+  内部头; 公共头只留 D7 与公共 IR 类型. 当前公共头是"完整内部头"搬家, 表面仍过宽.
 - [ ] **L3.2 公共函数前缀与 facade 收口**:
-  D7 清单的包装函数全部带 `chibicc_` 前缀并只在公共头声明; 内部函数名保持不变;
-  `chibicc_reconstruct` 从 `main.c` 搬进库; `main.c` 只用公共头 + codegen 内部头.
-  验收: `nm libchibicc.a` 的公共符号清单与 D7 一致; `test/library.sh` 通过;
-  docker-test.
-- [ ] **L3.3 Makefile 库目标**:
-  加 `libchibicc.a`, Linux `libchibicc.so`(`-fPIC`, `CHIBICC_API` 可见性,
-  SONAME `libchibicc.so.0`); `chibicc` 链接静态库; `make test` 与 `make test-stage2`
-  跑 `test/library.sh`; stage2 用 chibicc 重编库对象.
-  验收: `make clean && make libchibicc.a && make`; `make test`(docker);
-  `make test-stage2`(docker); `test/library.sh` 在本机与 docker 都通过.
+  D7 的包装函数已带 `chibicc_` 前缀并在公共头声明; 公共类型已加 `Chibicc*` 别名
+  (`ChibiccToken` / `ChibiccNode` / ...), 但短 typedef 仍可见. 剩余工作: 把短
+  typedef 与 tag 从公共面移走, 实现侧用别名; `chibicc_reconstruct` 从 `main.c`
+  搬进库. 验收: `nm libchibicc.a` 的公共符号清单与 D7 一致.
+- [x] **L3.3a Makefile 静态库目标**:
+  加 `libchibicc.a`(除 `main.c` / `codegen.c` 外的全部 `.c`, 含 `lib.c`);
+  `chibicc` 链接 `main.o` + `codegen.o` + 静态库; `make test` 与 `make test-stage2`
+  跑 `test/library.sh`; docker BOOT 排除本机 `libchibicc.a`.
+  验收: `make clean && make`; `test/library.sh` 本机通过; docker 闸门见 L4.
+- [ ] **L3.3b 共享库与自举库对象**:
+  Linux `libchibicc.so`(`-fPIC`, `CHIBICC_API` 可见性, SONAME
+  `libchibicc.so.0`); stage2 用 chibicc 重编库对象(当前 stage2 只重编编译器本体,
+  `test/library.sh` 链接的是宿主 cc 构建的静态库).
 - [ ] **L3.4 库测试定稿**:
-  `test/library.sh` 覆盖: 只 include 公共头的消费者; tokenize buffer -> CST 重建;
-  preprocess -> parse -> sema 的最小路径; provenance 访问器; 诊断回调(不写 stderr,
-  不 exit); 错误后 `reset` 再跑第二个 TU; `chibicc_reconstruct` 逐字节.
-  验收: 本机与 docker 都过; 断言数计入 `RESULT.md`.
+  当前 `test/library.sh` 覆盖: 只 include 公共头, tokenize buffer -> preprocess ->
+  parse -> sema, CST verify, 诊断回调(不写 stderr / 不 exit), 错误后 `reset` 再跑
+  第二个 TU. 剩余: provenance 访问器与 `chibicc_reconstruct` 的逐字节断言.
 
 ## 阶段 L4: 终态
 
-- [ ] **L4.1 全量闸门**:
+- [x] **L4.1 全量闸门**:
   `make docker-test`, `make docker-snapshot-diff`(空), `test/library.sh`,
   `make test-stage2`, 以及一次 `THIRDPARTY=tinycc`(可选, 时间允许时).
-- [ ] **L4.2 文档与代码地图**:
+- [x] **L4.2 文档与代码地图**:
   AGENTS.md 的路线图(阶段 5 完成), 开放决策(三条已决), 构建与测试(库目标),
   现状与代码地图(`lib.c`, 公共头, context, arena)全部更新; README 只改与库使用相关的段落.
-- [ ] **L4.3 提交与推送**:
+- [x] **L4.3 提交与推送**:
   按步骤提交, 最后 `git push`; 推送前确认工作树干净, 远端为当前分支.
 
 ## 闸门口径(本线生效)

@@ -1,15 +1,20 @@
-CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch
+CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch -Ilibchibicc/include
 
 SRCS=$(wildcard *.c)
 OBJS=$(SRCS:.c=.o)
+LIB_SRCS=$(filter-out main.c codegen.c,$(SRCS))
+LIB_OBJS=$(LIB_SRCS:.c=.o)
 
 TEST_SRCS=$(wildcard test/*.c)
 TESTS=$(TEST_SRCS:.c=.exe)
 
 # Stage 1
 
-chibicc: $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+chibicc: libchibicc.a main.o codegen.o
+	$(CC) $(CFLAGS) -o $@ main.o codegen.o libchibicc.a $(LDFLAGS)
+
+libchibicc.a: $(LIB_OBJS)
+	$(AR) rcs $@ $^
 
 $(OBJS): chibicc.h
 
@@ -25,6 +30,7 @@ test: $(TESTS)
 	test/trivia.sh ./chibicc
 	test/cst.sh ./chibicc
 	test/expand.sh ./chibicc
+	test/library.sh
 
 test-all: test test-stage2
 
@@ -35,26 +41,27 @@ stage2/chibicc: $(OBJS:%=stage2/%)
 
 stage2/%.o: chibicc %.c
 	mkdir -p stage2/test
-	./chibicc -c -o $(@D)/$*.o $*.c
+	./chibicc -Ilibchibicc/include -c -o $(@D)/$*.o $*.c
 
 stage2/test/%.exe: stage2/chibicc test/%.c
 	mkdir -p stage2/test
 	./stage2/chibicc -Iinclude -Itest -c -o stage2/test/$*.o test/$*.c
 	$(CC) -pthread -o $@ stage2/test/$*.o -xc test/common
 
-test-stage2: $(TESTS:test/%=stage2/test/%)
-	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
+test-stage2: libchibicc.a $(TESTS:test/%=stage2/test/%)
+	for i in $(TESTS:test/%=stage2/test/%); do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./stage2/chibicc
 	test/diagnostic.sh ./stage2/chibicc
 	test/shape.sh ./stage2/chibicc
 	test/trivia.sh ./stage2/chibicc
 	test/cst.sh ./stage2/chibicc
 	test/expand.sh ./stage2/chibicc
+	test/library.sh
 
 # Misc.
 
 clean:
-	rm -rf chibicc tmp* $(TESTS) test/*.s test/*.exe stage2
+	rm -rf chibicc libchibicc.a tmp* $(TESTS) test/*.s test/*.exe stage2
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 # Docker (amd64 Linux) 测试环境: 本机是 macOS ARM64, chibicc 生成的 x86-64 代码
@@ -67,7 +74,7 @@ clean:
 THIRDPARTY ?= tinycc libpng git sqlite cpython
 
 # 拷贝源码到容器可写层(排除本机构建产物与 thirdparty 缓存)
-BOOT = mkdir -p /work && tar -C /src --exclude=./.git --exclude=./.cache --exclude=./thirdparty --exclude=./chibicc --exclude=./stage2 --exclude=./compile_commands.json --exclude=./test/*.exe --exclude="*.o" --exclude="*.s" -cf - . | tar -C /work -xf -
+BOOT = mkdir -p /work && tar -C /src --exclude=./.git --exclude=./.cache --exclude=./thirdparty --exclude=./chibicc --exclude=./libchibicc.a --exclude=./stage2 --exclude=./compile_commands.json --exclude=./test/*.exe --exclude="*.o" --exclude="*.s" -cf - . | tar -C /work -xf -
 
 docker-image:
 	docker build --platform linux/amd64 -t chibicc:amd64 .
