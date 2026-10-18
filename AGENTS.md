@@ -2,7 +2,7 @@
 
 本仓库是 Rui Ueyama 的 chibicc(小型 C11 编译器, 约 9k 行, 扁平目录布局)的 fork. 项目目标已从"教学用编译器"重定位为:
 
-**把 C 前端(tokenize / preprocess / parse / sema)做成一个可复用的库**, 供编译器之外的其他软件使用 - formatter(格式化), C 转 C 的源到源代码生成, linter, 静态分析等. chibicc 本体退化为"驱动器 + x86-64 codegen", 作为这个库的参考消费者. 上游 README(含 "Design principles" 一节)描述的是上游的教学定位; 与本文件冲突时, 以本文件为准. 除 `test/` 与 `include/` 外目前没有子目录, 库化后的目录形态在实施时定.
+**把 C 前端(tokenize / preprocess / parse / sema)做成一个可复用的库**, 供编译器之外的其他软件使用 - formatter(格式化), C 转 C 的源到源代码生成, linter, 静态分析等. chibicc 本体退化为"驱动器 + x86-64 codegen", 作为这个库的参考消费者. 上游 README(含 "Design principles" 一节)描述的是上游的教学定位; 与本文件冲突时, 以本文件为准. 库化(阶段 5)已在实施: 库名 `libchibicc`, 公共头根 `libchibicc/include/chibicc/`, 公共符号 `chibicc_` / `Chibicc` 前缀; 现有源文件保持扁平, 新增 facade `lib.c` 与公共头目录.
 
 ## 全局约定
 
@@ -23,12 +23,12 @@
 
 ## 面向库的硬性规则(存量代码按路线图收敛, 新代码立即生效)
 
-- 不新增 `exit()` 调用: 现有 `error_tok` 直接 exit(1), 作为库最终要改成可注册的错误回调或错误返回; 新代码不得引入新的 exit 点.
-- 不新增静态全局状态: 语义状态已全部收到 sema.c(10 个文件域 static: `locals` / `globals` / `sema_fn` / `builtin_alloca` / 作用域表 `scope` / goto 配对检查的 `gotos` / `labels` / 检查用的 `loop_depth` / `switch_depth` / `resolving_body`; 外加 `new_unique_name` 的 `unique_name_id` 计数器. 控制流标签与控制流整形的 static 已随 A2.1 移入 codegen, `decl_remove` 随 A8.1 消失), 与库的可重入性冲突; parse.c 只剩 `scope`(typedef/tag 分类 oracle)与 `is_typename` 的关键字表缓存(建一次后只读). 新代码把状态放进显式的 context 结构.
+- 不新增 `exit()` 调用: 现有 `error_tok` 直接 exit(1), 库化线(L2.6)把它改成诊断回调 + longjmp 到公共入口, 默认处理器仍逐字节复现旧输出; 新代码不得引入新的 exit 点(驱动器与默认处理器路径除外).
+- 不新增静态全局状态: 语义状态已全部收到 sema.c(10 个文件域 static: `locals` / `globals` / `sema_fn` / `builtin_alloca` / 作用域表 `scope` / goto 配对检查的 `gotos` / `labels` / 检查用的 `loop_depth` / `switch_depth` / `resolving_body`; 外加 `new_unique_name` 的 `unique_name_id` 计数器. 控制流标签与控制流整形的 static 已随 A2.1 移入 codegen, `decl_remove` 随 A8.1 消失), 与库的可重入性冲突; parse.c 只剩 `scope`(typedef/tag 分类 oracle)与 `is_typename` 的关键字表缓存(建一次后只读). 库化线(L2.2-L2.5)把这些 static 全部收进 `ChibiccContext`; 实现侧用一个线程局部的 `active_ctx` 访问器, 不同 context 可在不同线程并存, 同一 context 不跨线程并发; 这是本线唯一接受的隐式状态. 新代码把状态放进 context 结构.
 - API 纪律: 公共头(未来从 `chibicc.h` 拆出)与内部头分离; 中间表示边界处不泄漏编译器内部假设(Linux 路径, 单次进程生命周期, 直接 exit 等).
 - 后端整形只允许出现在 codegen.c: 指针算术缩放, 读写回环, 临时槽与隐藏变量, 语句重排, 标签与唯一名分配, 都不是库层的事. 库层(sema 及以下)只做标注与语义结论(含物化语言规定存在的对象). 该红线经 A9.2 的逐项 grep 证实已达成(缩放/回环/标签/重排/临时槽/调用 codegen 在库层均为 0 处; 库层的建槽只剩语言与 ABI 对象), 佐证留档于 `RESULT-codegen-direct.md` 的 A9.2 一节.
 - 检查与诊断留在库层: 夹在降级代码里的检查(左值性, 实参个数, 位域取地址, VLA 不得初始化, 不完整类型等)在降级搬走时必须在库层显式保留; 文案与插入符锚点以 `test/diagnostic.sh` 的逐字节锁定为准.
-- 库名与对外头文件名属于用户决策; 定名前, 文档与代码注释统一用"前端库"指称, 不擅自更名.
+- 库名与公共头命名已定(2026-10-19): `libchibicc`, `<chibicc/...>`, `chibicc_` / `Chibicc` 前缀; 只承诺源码兼容, 不承诺 ABI.
 
 ## 路线图
 
@@ -40,7 +40,9 @@
 
 **CST 线(路线图阶段 2)已完成** - 用户 2026-10-17 拍板开工, 同线完成(C0.1-C3.2, 终态见本线 C3.2 提交; 计划与执行记录已归档为 `PLAN-cst.md` / `RESULT-cst.md`): 在预处理**之前**的原始文本上建 lossless 具体语法树, 预处理指令是树中的节点, 条件分支全部保留, 每个语法 token 与标点是显式叶子, trivia 挂在 token 叶子上, 叶子按序重建逐字节等于输入文件. 终态: `cst.c` 2254 行, 55 个 `CstKind`, 三个只读通道 `-dump-cst` / `-reconstruct-cst` / `-verify-cst` 不接编译路径; 48 个语料文件 + 15 个边界样本重建零例外, 叶子按序与 token 流逐指针相等; `test/cst.sh` 305 项断言 / 61 个 dump 样本, 覆盖每一种节点; `tokenize.c` / `preprocess.c` / `parse.c` / `sema.c` / `type.c` / `codegen.c` 零改动. 库化(阶段 5)与参考消费者(阶段 6)在其后, 待用户拍板.
 
-**宏展开 provenance 线(阶段 5 的前置)已完成** - 用户 2026-10-18 拍板开工, 同线完成(M0.1-M2.2, 终态见本线 M2.2 提交; 计划与执行记录在 `PLAN.md` / `RESULT.md`): 每次展开建 `MacroExpansion` 记录, 每个产物 token 携带 `MacroProv` 链(最内层在前, 只 prepend); 调用点宏名 token / function-like 的 `rparen` / 展开时刻的 `Macro` / `#define` 名 token / 实参序号与实参 token 列表 / 嵌套链经 `chibicc.h` 的 11 个访问器查询(`Macro` / `MacroArg` / `MacroParam` 仍留在 `preprocess.c`, 不进入公共面); 新增只读通道 `-dump-expansions` / `-verify-expansions`, 由 `test/expand.sh` 锁定(29 个 dump 样本 / 3 个 chain 形状样本 / 17 个 verify 样本 / 48 个语料文件的全量校验). `-E` / 诊断 / trivia / CST 逐字节不变, 汇编快照为空 diff; `parse.c` / `sema.c` / `type.c` / `codegen.c` 零改动. 同日裁决的宏保真策略(消费展开流, 不引入宏调用节点, 放弃宏内手术)见"开放决策与已决事项".
+**宏展开 provenance 线(阶段 5 的前置)已完成** - 用户 2026-10-18 拍板开工, 同线完成(M0.1-M2.2, 终态见本线 M2.2 提交; 计划与执行记录已归档为 `PLAN-provenance.md` / `RESULT-provenance.md`): 每次展开建 `MacroExpansion` 记录, 每个产物 token 携带 `MacroProv` 链(最内层在前, 只 prepend); 调用点宏名 token / function-like 的 `rparen` / 展开时刻的 `Macro` / `#define` 名 token / 实参序号与实参 token 列表 / 嵌套链经 `chibicc.h` 的 11 个访问器查询(`Macro` / `MacroArg` / `MacroParam` 仍留在 `preprocess.c`, 不进入公共面); 新增只读通道 `-dump-expansions` / `-verify-expansions`, 由 `test/expand.sh` 锁定(29 个 dump 样本 / 3 个 chain 形状样本 / 17 个 verify 样本 / 48 个语料文件的全量校验). `-E` / 诊断 / trivia / CST 逐字节不变, 汇编快照为空 diff; `parse.c` / `sema.c` / `type.c` / `codegen.c` 零改动. 同日裁决的宏保真策略(消费展开流, 不引入宏调用节点, 放弃宏内手术)见"开放决策与已决事项".
+
+**库边界固化线(路线图阶段 5)已立项, 进行中** - 用户 2026-10-19 拍板: 库名 `libchibicc`, 公共头 `<chibicc/...>`, 公共符号 `chibicc_` / `Chibicc` 前缀, 只承诺源码兼容; 一个 context 一个翻译单元; 公共 `Node` / `Obj` 只保留第 3/4 层字段, codegen 字段进 codegen 私有表. 计划与执行记录在 `PLAN.md` / `RESULT.md`(本线): L1 把 `is_lowered` / `brk_label` / `cont_label` / `pass_by_stack` / `ret_buffer` / `unique_label` / `case_next` / `default_case` / `goto_next` 与 `Obj.offset` / `stack_size` 移出公共面; L2 建立 `ChibiccContext`(arena, 诊断回调, 配置)并把 19 个文件域 static 与约 60 个分配点收进去; L3 拆公共头 / 内部头, 加 `libchibicc.a` / `.so` 与 `test/library.sh`; L4 全量闸门与文档. 步骤 L0.1-L4.3 全部未勾选.
 
 每个阶段完成时三道闸门必须全绿: `make docker-test`(含自举), 汇编等价性 diff(阶段 0 建立), 该阶段新增的针对性测试. 阶段内行为不允许变化, 变化只发生在阶段边界并单独提交.
 
@@ -49,15 +51,16 @@
 2. **CST**(已实现): 建立在原始文本(含预处理指令)上的 lossless 树; 预处理指令是节点(`#define` 对象 / 函数宏与变参, `#undef`, `#include`, `#line` 与 GNU 行标记, `#pragma`, `#error`, 空指令与未知指令), 条件指令成 `CST_PP_IF` / `CST_PP_BRANCH` 且所有分支保留(不求值, 不展开); 每个语法 token 与标点是显式叶子, trivia 挂在 token 上; 验收标准是逐字节 round-trip(重建结果 == 输入文件), 且叶子按序与 token 流一一对应. 终态见 `cst.c` 与 `test/cst.sh`.
 3. **忠实语法 AST**(已实现): 新增 21 个 NodeKind(上游 48 + 21 = 69): 忠实写法类 `ND_SUBSCRIPT`, `ND_GT`/`ND_GE`, `ND_INCDEC`, `ND_WHILE`, `ND_BREAK`/`ND_CONTINUE`, `ND_SIZEOF`/`ND_ALIGNOF`, `ND_STRING`; 未决引用类 `ND_IDENT`(parser 不绑定的名字); 声明记录类 `ND_DECL`, `ND_GVAR_DECL`, `ND_FUNCDEF`, `ND_TYPEDEF`, `ND_ENUM_CONST`, `ND_COMPOUND_LITERAL`; sema 侧载体类 `ND_GENERIC`/`ND_GENERIC_ASSOC`, `ND_TYPES_COMPATIBLE`, `ND_REG_CLASS`. 上游 48 个 kind 中 5 个加忠实性字段(`ND_ASSIGN.op`; `ND_CAST` 的 `ty_op` 与 `is_implicit`; `ND_MEMBER` 的 `arrow_tok`; `ND_COND` 的 `is_elvis`; `ND_FOR` 的标签槽); `ND_MEMZERO` 退出 parse 的树(sema 降级时重建). parse.c 原约 55 处不忠实构造点(复合赋值/自增自减重写, 指针算术缩放, 初始化器拍平, sizeof 折叠, 字符串字面量转匿名全局, 关系运算符交换操作数等)已全部消除, 降级逻辑在 sema.
 4. **sema 独立 pass**(已实现, 现行线继续收边): parse.c 去语义化 - 名字解析/类型检查/常量求值/结构体布局/降级全部搬出到新的 sema.c; 解析器只保留 typedef 名字分类 oracle(C 文法要求的最小语义反馈). `eval/eval2/eval_double/is_const_expr`, `add_type`, `struct_decl` 布局, `write_gvar_data` 等随之迁移. 现行线把其中的"降级"再移一层: sema 只留标注, 整形归 codegen(见上).
-5. **库边界固化**: 错误处理回调化, static 全局收敛为 context 对象, 公共头/内部头拆分, Makefile 新增库构建目标.
+5. **库边界固化**(进行中, 见 `PLAN.md`): 错误处理回调化, static 全局收敛为 context 对象, 公共头/内部头拆分, Makefile 新增 `libchibicc.a` / `libchibicc.so` 构建目标与 `test/library.sh`.
 6. **参考消费者(可选)**: 最小 formatter(消费 CST)与 C→C 打印器(消费语法层 AST)作为示例, 验证库 API 的好用性.
 
 ## 开放决策与已决事项(新决策仍由用户拍板, 不擅自定)
 
-- 已定 (2026-10-18): 语法层 AST 对宏调用的保真策略 - 消费展开后的 token 流, 不引入宏调用节点; 宏保真由第 2 层 CST 与 token provenance 共同承担; 放弃宏展开内部的外科式编辑. provenance 侧已落地(`PLAN.md` / `RESULT.md`), 公共面是 11 个访问器与两个只读通道.
-- 公共 `Node` 的形状: codegen 写入的 `brk_label` / `cont_label` / `ret_buffer` / `unique_label` / `is_lowered` 如何移出公共头; 阶段 5 拆头前必须定, 不阻塞本线.
-- 库名与公共头命名.
-- 长驻进程场景下 arena 的整体 reset 时机与 API 形态.
+- 已定 (2026-10-18): 语法层 AST 对宏调用的保真策略 - 消费展开后的 token 流, 不引入宏调用节点; 宏保真由第 2 层 CST 与 token provenance 共同承担; 放弃宏展开内部的外科式编辑. provenance 侧已落地并归档(`PLAN-provenance.md` / `RESULT-provenance.md`), 公共面是 11 个访问器与两个只读通道.
+- 已定 (2026-10-19): 公共 `Node` / `Obj` 的形状 - 公共面只保留第 3/4 层字段; codegen 的 `brk_label` / `cont_label` / `ret_buffer` / `unique_label` / `is_lowered` / `pass_by_stack` / case 链 / `goto_next` 与 `Obj.offset` / `stack_size` 进 codegen 私有表; `Relocation.label` 改为 `Node *label_node`. 实施见 `PLAN.md` L1.
+- 已定 (2026-10-19): 库名与公共头命名 - `libchibicc`, `<chibicc/...>`, `chibicc_` / `Chibicc` 前缀; 只承诺源码兼容, 不承诺 ABI.
+- 已定 (2026-10-19): arena 与 context 的 API 形态 - 一个 context 一个翻译单元; `new` / `free` / `reset` 三态; reset 保留配置并释放全部 per-TU 内存; 不做逐对象 free, 不做 per-phase arena. 实施见 `PLAN.md` L2.
+- 未决: 公共面是否给工具留一个明确的 per-node user data 扩展点(本线不引入 `void *backend`); 需要时另行拍板.
 
 ## 构建与测试
 
@@ -67,7 +70,7 @@
 - `make test-all` - 以上两项合计. `make clean` 用于清理.
 - 单独运行某个特性测试: `make test/sizeof.exe && ./test/sizeof.exe`(模式规则会自动处理).
 - 没有 Linux 后端时只验证前端: `./chibicc -E file.c`(仅预处理), `./chibicc -S file.c`(输出汇编文本), `./chibicc -dump-tokens file.c`(原始 token 流与 trivia 的 T/R 行 dump), `./chibicc -reconstruct file.c`(按 token 流重建原始字节), `./chibicc -dump-cst file.c`(CST 树形 dump), `./chibicc -reconstruct-cst file.c`(按 CST 叶子重建原始字节), `./chibicc -verify-cst file.c`(叶子序列与 token 流逐指针校验), `./chibicc -dump-expansions file.c`(预处理后 token 的 provenance 链 dump)或 `./chibicc -verify-expansions file.c`(provenance 链校验; 这些通道与 trivia.sh / cst.sh / expand.sh 一样在本机可跑).
-- 库构建目标(`.a`/`.so` 与目标名)在路线图第 5 阶段加入 Makefile.
+- 库构建目标(本线 L3 加入): `make libchibicc.a` 产出静态库; Linux 下 `make libchibicc.so` 产出共享库(PIC + 可见性控制 + SONAME `libchibicc.so.0`); `chibicc` 链接静态库. 公共头在 `libchibicc/include/chibicc/`, 消费者只 include `<chibicc/chibicc.h>`; `test/library.sh` 由 `make test` 与 `make test-stage2` 调用.
 
 ## 平台陷阱与 Docker 测试环境(本工作区为 macOS ARM64)
 
@@ -84,7 +87,7 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 
 ## 现状与代码地图
 
-现状: 语法语义拆分线, 忠实层收尾线, codegen 直连线(阶段 A + 阶段 B + B2), trivia 保留线(阶段 1), CST 线(阶段 2)与宏展开 provenance 线(阶段 5 的前置)均已完成 - 第 3 层(忠实语法 AST)与第 4 层(sema 产物)在 parse.c / sema.c 之间分开; sema.c 持有名字解析(作用域表), 类型检查, 常量求值, 结构体布局与结论记录, **不做任何降级**(A9.2 审计: add_type 34 个 case 全部纯标注, 无形状改写); codegen 直接消费标注树 - 需要后端整形的项分两处落地: 只需换发射方式的(`x[y]`, `p->x`, `>`/`>=`, elvis, `while`, break/continue, 声明初始化链, 加减法的指针缩放)在**发射点就地处理**, 需要槽/语句/标签的(op=, 自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配)留在整形遍(契约 3 的六条不变量, 见该文件头注释); parse.c 只建忠实语法形状(表达式无类型, 名字不绑定, 常量不求值), 保留文法分类 oracle(typedef 名 / tag)与判定表 A 的 15 处文法可判诊断; 第 1 层的 token 流保留 trivia 且可逐字节重建输入文件; 第 2 层(CST)在 `cst.c`, 从 `tokenize_file()` 的直接输出建树, 只走三个只读通道, 编译路径不感知它; 预处理后 token 的 provenance 链在 `preprocess.c`(记录与链)与 `provenance.c`(两个只读通道), 编译路径同样不感知它(见"路线图"). 改动前先了解现状:
+现状: 语法语义拆分线, 忠实层收尾线, codegen 直连线(阶段 A + 阶段 B + B2), trivia 保留线(阶段 1), CST 线(阶段 2)与宏展开 provenance 线(阶段 5 的前置)均已完成; **库边界固化线(阶段 5)正在进行**(`PLAN.md` / `RESULT.md`), 目标是把 context / arena / 诊断回调 / 公共头 / 库产物落地, 本段其余描述是 L1 之前的形态, L4 时按终态改写 - 第 3 层(忠实语法 AST)与第 4 层(sema 产物)在 parse.c / sema.c 之间分开; sema.c 持有名字解析(作用域表), 类型检查, 常量求值, 结构体布局与结论记录, **不做任何降级**(A9.2 审计: add_type 34 个 case 全部纯标注, 无形状改写); codegen 直接消费标注树 - 需要后端整形的项分两处落地: 只需换发射方式的(`x[y]`, `p->x`, `>`/`>=`, elvis, `while`, break/continue, 声明初始化链, 加减法的指针缩放)在**发射点就地处理**, 需要槽/语句/标签的(op=, 自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配)留在整形遍(契约 3 的六条不变量, 见该文件头注释); parse.c 只建忠实语法形状(表达式无类型, 名字不绑定, 常量不求值), 保留文法分类 oracle(typedef 名 / tag)与判定表 A 的 15 处文法可判诊断; 第 1 层的 token 流保留 trivia 且可逐字节重建输入文件; 第 2 层(CST)在 `cst.c`, 从 `tokenize_file()` 的直接输出建树, 只走三个只读通道, 编译路径不感知它; 预处理后 token 的 provenance 链在 `preprocess.c`(记录与链)与 `provenance.c`(两个只读通道), 编译路径同样不感知它(见"路线图"). 改动前先了解现状:
 
 - `chibicc.h` - 所有共享类型(`Token`, `Obj`, `Node`, `Type`, `Member`, `VarAttr`, CST 的 `CstKind` / `CstNode`)与跨文件声明(`cst_parse` / `cst_reconstruct` / `cst_dump` / `cst_verify` 在这里声明); 未来在此拆分公共头与内部头. `File` 除 `contents`(扫描缓冲)外有 `raw`(文件原样文本)与 `map` / `lines`(scan 偏移到 raw 偏移, raw 偏移到行号的两张表); `Token` 除 `loc` / `len`(扫描坐标)外有 `trivia` / `trivia_len` 与 `raw_loc` / `raw_len`(raw 坐标: 前置被跳过字节与拼写), 以及 `prov`(宏展开 provenance 链头; 源 token 为 NULL). `MacroExpansion` / `MacroProv` 只前向声明: 记录是 `preprocess.c` 的不透明对象, 公共面是 11 个访问器(`token_provenance` / `macro_prov_*` / `macro_expansion_*`)与两个通道函数(`expansion_dump` / `expansion_verify`).
 - `tokenize.c` - 词法, 第 1 层的落点. 扫描缓冲仍是"被改写过的文本"(换行归一, 续行删除, \u 改写 - 见 `make_scan_buffer`, 它一遍产出缓冲与两张映射表, 取代了 T1 前就地改写的三个 pass), 但每个 token 记录 raw 坐标的 trivia 与拼写, 因此 token 流可逐字节重建原文件; 行号由 `lines` 表按旧 pass 的"挪换行"语义复现(`add_line_numbers` / `error_at` 用它), 诊断显示与 -E 逐字节不变. 宏与合成缓冲路径(paste / new_str_token)不承诺 trivia(合同只覆盖 `tokenize_file` 的直接输出).
@@ -97,12 +100,12 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 - `codegen.c` - 整形遍(残留) + 发射点就地降级 + AST 翻译成 x86-64 汇编文本, 无优化 pass. 整形遍在 `codegen()` 入口先于一切赋值与发射运行(契约 3 的六条不变量见文件头注释), 只剩需要槽/语句/标签的项: 控制流标签分配(case 链与 goto/label 配对), **VLA 声明**的展开(运行时尺寸槽必须先于帧布局)与其余记录的**残留项到达**(`shape_init_exprs` 只走不再改), 复合赋值与自增自减, 调用返回缓冲, 复合字面量; 发射点就地处理的是下标(`gen_addr`/`gen_expr` 经 `new_add` 现建现发), 箭头成员(`gen_addr` 按 `arrow_tok`), `>`/`>=`(二元尾部换序), elvis(`gen_expr(ND_COND)` 无槽), `while` 与 break/continue(`gen_stmt` + 发射侧环境标签栈), 声明初始化链(`gen_stmt(ND_DECL)` 就地摊), 加减法的缩放与 `num+ptr` 规范化(`gen_expr` 顶部把未标记的 `ND_ADD`/`ND_SUB` 替换成 `new_add`/`new_sub` 的产物 - 三个降级工厂把自己产出的节点打上 `is_lowered` 标记, 发射点只降级没标记的, 即忠实节点). 该线(阶段 A + B + B2)的每一步与验证见 `PLAN-codegen-direct.md` / `RESULT-codegen-direct.md`.
 - `main.c` - 驱动器; 只读旗标 `-dump-tokens` / `-reconstruct`(第 1 层), `-dump-cst` / `-reconstruct-cst` / `-verify-cst`(第 2 层)与 `-dump-expansions` / `-verify-expansions`(预处理后的 provenance)在 `cc1()` 的早退口返回, 不写目标文件, 不汇编. `hashmap.c`(字符串驻留哈希表), `unicode.c`(UTF 编码表), `strings.c`(字符串辅助)为基础设施.
 
-本节的代码地图已按 provenance 线的终态更新(`MacroExpansion` / `MacroProv` / `Token.prov` 与 `provenance.c` 已补入); 库化(阶段 5)开工时再随其改造(`cst.c` / `provenance.c` 是新增源文件, 阶段 5 把它们的类型与函数一起搬进公共头).
+本节的代码地图已按 provenance 线的终态更新(`MacroExpansion` / `MacroProv` / `Token.prov` 与 `provenance.c` 已补入); 库化(阶段 5)正在实施, L3 时改按 `lib.c` / `libchibicc/include/chibicc/` / `ChibiccContext` 的终态重写, 并删除本段对 codegen 字段仍留在公共 `Node` 的描述.
 
 ## 设计原则
 
 - 可读性优先于巧妙. 路线图内的阶段化重构是本项目明确授权的工作; 除此之外不做顺手的"改进", 不重组无关代码, 不用宏/高阶函数合并解析器里有意的重复.
-- 内存: 一律 `calloc` 的 arena 式分配, 从不逐对象 `free`; 库语境下生命周期按"一次编译会话一个 arena"设计(整体 reset 的 API 见开放决策). 简单但慢的算法是可接受的设计.
+- 内存: 一律 `calloc` 的 arena 式分配, 从不逐对象 `free`; 库语境下生命周期按"一个 context 一个翻译单元一个 arena"设计, reset 的整体 API 已在 `PLAN.md` L2 定形(context 的 `new` / `free` / `reset`). 简单但慢的算法是可接受的设计.
 - codegen 中没有优化 pass - 这是故意的, 保留.
 - `include/` 存放 chibicc 自带的自举头文件(`stddef.h`, `stdarg.h`, `stdbool.h`, `float.h`, `stdalign.h`, `stdatomic.h`, `stdnoreturn.h`), 通过 `-Iinclude` 使用, 保持不变.
 
