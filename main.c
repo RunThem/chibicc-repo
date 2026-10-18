@@ -37,6 +37,7 @@ static StringArray std_include_paths;
 
 char *base_file;
 static char *output_file;
+static ChibiccContext *ctx;
 
 static StringArray input_paths;
 static StringArray tmpfiles;
@@ -681,7 +682,7 @@ static void print_dependencies(void) {
 }
 
 static Token *must_tokenize_file(char *path) {
-  Token *tok = tokenize_file(path);
+  Token *tok = chibicc_tokenize_file(ctx, path);
   if (!tok)
     error("%s: %s", path, strerror(errno));
   return tok;
@@ -710,12 +711,12 @@ static int cc1(void) {
     if (opt_reconstruct)
       reconstruct(tok);
     if (opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
-      CstNode *root = cst_parse(tok);
+      CstNode *root = chibicc_cst_parse(ctx, tok);
       if (opt_dump_cst)
-        cst_dump(root, open_file(opt_o ? opt_o : "-"));
+        chibicc_cst_dump(ctx, root, open_file(opt_o ? opt_o : "-"));
       if (opt_reconstruct_cst)
-        cst_reconstruct(root, open_file(opt_o ? opt_o : "-"));
-      if (opt_verify_cst && !cst_verify(root, tok))
+        chibicc_cst_reconstruct(ctx, root, open_file(opt_o ? opt_o : "-"));
+      if (opt_verify_cst && !chibicc_cst_verify(ctx, root, tok))
         return 1;
     }
     return 0;
@@ -743,14 +744,14 @@ static int cc1(void) {
   // Tokenize and parse.
   Token *tok2 = must_tokenize_file(base_file);
   tok = append_tokens(tok, tok2);
-  tok = preprocess(tok);
+  tok = chibicc_preprocess(ctx, tok);
 
   // The provenance channels read the preprocessed stream and stop there:
   // no object file, no assembler, no linker (PLAN.md 判据 5).
   if (opt_dump_expansions || opt_verify_expansions) {
     if (opt_dump_expansions)
-      expansion_dump(tok, open_file(opt_o ? opt_o : "-"));
-    if (opt_verify_expansions && !expansion_verify(tok))
+      chibicc_expansion_dump(ctx, tok, open_file(opt_o ? opt_o : "-"));
+    if (opt_verify_expansions && !chibicc_expansion_verify(ctx, tok))
       return 1;
     return 0;
   }
@@ -768,7 +769,7 @@ static int cc1(void) {
     return 0;
   }
 
-  Obj *prog = sema(parse(tok));
+  Obj *prog = chibicc_sema(ctx, chibicc_parse(ctx, tok));
 
   // Open a temporary output buffer.
   char *buf;
@@ -918,6 +919,7 @@ static FileType get_file_type(char *filename) {
 
 int main(int argc, char **argv) {
   atexit(cleanup);
+  ctx = chibicc_context_new();
   init_macros();
   parse_args(argc, argv);
 

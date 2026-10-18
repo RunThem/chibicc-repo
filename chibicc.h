@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdnoreturn.h>
@@ -28,6 +29,10 @@
 typedef struct Type Type;
 typedef struct Node Node;
 typedef struct Member Member;
+typedef struct ChibiccContext ChibiccContext;
+typedef struct ArenaBlock ArenaBlock;
+struct CondIncl;
+struct ParseScope;
 typedef struct Relocation Relocation;
 typedef struct Hideset Hideset;
 typedef struct MacroExpansion MacroExpansion;
@@ -966,3 +971,107 @@ extern StringArray include_paths;
 extern bool opt_fpic;
 extern bool opt_fcommon;
 extern char *base_file;
+
+//
+// context / arena / diagnostics (PLAN L2)
+//
+
+typedef struct JmpFrame JmpFrame;
+
+// A diagnostic handed to a registered callback. `message` is the
+// formatted text; the default handler additionally prints the source
+// line and the caret from the location it was given.
+typedef struct {
+  const char *filename;
+  int line;
+  int column;
+  int severity; // 0 = error, 1 = warning
+  const char *message;
+} ChibiccDiagnostic;
+
+typedef void (*ChibiccDiagnosticFn)(void *user, const ChibiccDiagnostic *);
+
+// The error boundary: every public entry pushes one, and error_* longjmps
+// to the innermost frame. The driver pushes one around codegen too.
+struct JmpFrame {
+  JmpFrame *prev;
+  jmp_buf buf;
+};
+
+struct ChibiccContext {
+  // Arena for everything this translation unit allocates.
+  ArenaBlock *arena;
+
+  // Configuration. Survives reset, owned by malloc, freed by
+  // chibicc_context_free.
+  char **include_paths;
+  int include_paths_len;
+  int include_paths_cap;
+  char **defines;
+  int defines_len;
+  int defines_cap;
+  char **undefs;
+  int undefs_len;
+  int undefs_cap;
+  ChibiccDiagnosticFn diag_fn;
+  void *diag_user;
+  JmpFrame *jmp_top;
+  bool failed;
+
+  // Per-TU state (PLAN L2.2-L2.5). These were file-scope statics.
+  File *current_file;
+  File **input_files;
+  int input_files_len;
+  int input_files_cap;
+  bool at_bol;
+  bool has_space;
+
+  HashMap macros;
+  struct CondIncl *cond_incl;
+  HashMap pragma_once;
+  int include_next_idx;
+
+  struct ParseScope *scope;
+
+  Obj *locals;
+  Obj *globals;
+  Obj *sema_fn;
+  Obj *builtin_alloca;
+  NodeArray gotos;
+  NodeArray labels;
+  int loop_depth;
+  int switch_depth;
+  int unique_name_id;
+  bool resolving_body;
+};
+
+extern _Thread_local ChibiccContext *chibicc_active_ctx;
+ChibiccContext *chibicc_ctx(void);
+
+ChibiccContext *chibicc_context_new(void);
+void chibicc_context_free(ChibiccContext *ctx);
+void chibicc_context_reset(ChibiccContext *ctx);
+void chibicc_context_activate(ChibiccContext *ctx);
+void chibicc_context_set_diagnostic(ChibiccContext *ctx,
+                                    ChibiccDiagnosticFn fn, void *user);
+void chibicc_context_add_include_path(ChibiccContext *ctx, char *path);
+void chibicc_context_define(ChibiccContext *ctx, char *name, char *buf);
+void chibicc_context_undef(ChibiccContext *ctx, char *name);
+
+void *chibicc_arena_alloc(size_t size, size_t align);
+void *chibicc_arena_calloc(size_t count, size_t size);
+char *chibicc_arena_strdup(char *s);
+char *chibicc_arena_strndup(char *s, size_t n);
+void *chibicc_arena_realloc(void *old, size_t old_size, size_t new_size);
+
+Token *chibicc_tokenize_file(ChibiccContext *ctx, char *path);
+Token *chibicc_tokenize_buffer(ChibiccContext *ctx, char *name, char *contents);
+Token *chibicc_preprocess(ChibiccContext *ctx, Token *tok);
+Node *chibicc_parse(ChibiccContext *ctx, Token *tok);
+Obj *chibicc_sema(ChibiccContext *ctx, Node *toplevel);
+CstNode *chibicc_cst_parse(ChibiccContext *ctx, Token *tok);
+void chibicc_cst_reconstruct(ChibiccContext *ctx, CstNode *root, FILE *out);
+void chibicc_cst_dump(ChibiccContext *ctx, CstNode *root, FILE *out);
+bool chibicc_cst_verify(ChibiccContext *ctx, CstNode *root, Token *tok);
+void chibicc_expansion_dump(ChibiccContext *ctx, Token *tok, FILE *out);
+bool chibicc_expansion_verify(ChibiccContext *ctx, Token *tok);

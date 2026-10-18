@@ -201,7 +201,7 @@ provenance:   chibicc_token_provenance / chibicc_macro_prov_* /
 
 ## 阶段 L2: context / arena / 诊断
 
-- [ ] **L2.1 context 骨架与 facade**:
+- [x] **L2.1 context 骨架与 facade**:
   新增 `lib.c`: `ChibiccContext` 定义(先放内部头), arena 块链, `active_ctx`(TLS),
   `new` / `free` / `reset` 骨架, 以及 D7 的公共包装函数(先声明在根 `chibicc.h`).
   `main.c` 创建 context, 所有入口经包装调用. 此步先不迁 static, 只建立边界.

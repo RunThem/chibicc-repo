@@ -113,7 +113,15 @@
 
 ## L2.1 context 骨架与 facade
 
-(待执行)
+- 动作: 新增 `lib.c` - `ChibiccContext` 骨架, 块链 arena(`chibicc_arena_alloc/calloc/
+  strdup/strndup/realloc`), `_Thread_local chibicc_active_ctx` 访问器,
+  `chibicc_context_new/free/reset/activate/set_diagnostic/add_include_path/define/undef`,
+  以及 `chibicc_tokenize_file` / `_tokenize_buffer` / `_preprocess` / `_parse` / `_sema` /
+  `_cst_*` / `_expansion_*` 包装. `main.c` 创建 context, 所有入口经包装调用.
+- 说明: 公共包装显式收 `ChibiccContext *`; 实现侧通过 active 指针访问状态. 这是
+  PLAN D2 的落地形态, 本步还没有迁移任何 static, 也没有注册 longjmp 帧.
+- 验收: 构建; 本机 287 次只读通道 + 39 个文件的 `-S` 与基线逐字节一致.
+- 偏差: 无.
 
 ## L2.2 tokenize 状态与文件表
 
