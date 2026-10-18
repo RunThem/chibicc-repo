@@ -191,7 +191,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 
 - 改了什么:
   - `preprocess.c`: `expand_macro` 的 handler 分支建 `is_builtin = true` 的记录(名 token /
-    定义宏 / 无 rparen / 无实参), 在把 handler 产物接到调用点之后**之前**逐个挂 body 层
+    定义宏 / 无 rparen / 无实参), 在把 handler 产物接到调用点**之前**逐个挂 body 层
     (链尾是调用名 token 的 prov); `join_adjacent_string_literals` 第一遍的
     `*t = *tokenize_string_literal(t, basety)` 保存 / 恢复 `prov`, 合并后的宽字面量保留
     源 token 的链; 第二遍的 `*tok1 = *copy_token(tok1)` 本来就整结构拷贝, 不改.
@@ -207,9 +207,63 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
   `add_line_numbers`), 这是本线之前就有的字段状态, 不在本线修; chain 形状样本只锁链,
   不锁该位置.
 
-## M2.2 验证器 / 文档 / 终态(未开工)
+## M2.2 验证器 / 文档 / 终态
 
-待填.
+- 改了什么:
+  - `expansion_dump.c`: `expansion_verify` 从骨架改为完整实现. 对每个有链的 token 检查:
+    深度上界(1000)与链上节点唯一性(I3); 每层记录非空; 名 token 与宏拼写一致; arg_index
+    为 -1 或落在 `[0, arg_count)`(I2); 每个实参列表非空且以 EOF 终止(带 1M token 上界);
+    arg_index >= 0 时展开必须是 function-like(`end != name`)且不是内建. 失败用
+    `fprintf(stderr, ...)` 打一条 `chibicc: <file>:<line|@synth>: invalid macro provenance:
+    <what>` 并返回 false(exit 1, 不调用 error, 不新增 exit 点).
+  - `preprocess.c`: `macro_expansion_arg` 在遍历中加 NULL 守卫(损坏的 arg_count 不会让
+    验证器自己崩溃); 合法输入行为不变.
+  - `test/expand.sh`: 全量语料段(48 个 `test/*.c` + `include/*.h`)逐个跑
+    `-verify-expansions`; 本机用 `#include <stdio.h>` 探测, 失败则打印 skipped, docker 内
+    必定执行. 汇总行增加 corpus 计数.
+  - `AGENTS.md`: 路线图(provenance 线标记完成并写明终态), 构建与测试(新增 expand.sh 与两个
+    本机可跑通道), 现状与代码地图(`Token.prov` / `MacroExpansion` / `MacroProv` /
+    `preprocess.c` 写入点 / 新增 `expansion_dump.c` / `main.c` 旗标), 测试约定(expand.sh
+    的段落结构), 已决事项(落地状态).
+- 为什么: 验证器是链结构的守门人, 它必须只靠访问器判断, 并在失败时以退出码而不是
+  进程终止报告(库化红线); 全量语料校验把"每个 token 的链都自洽"从样本推广到所有输入.
+- 闸门中发现并修正的问题: 第一次终态 docker run 里 stage2 的全量段打印了 skipped.
+  容器内手工探测确认原因: stage2 的 argv[0] 是 `./stage2/chibicc`, 自动 include 路径指向
+  不存在的 `./stage2/include`, 而 `<stdio.h>` 链上的 `<stddef.h>` 由 chibicc 自带的
+  `include/` 提供, 于是探测命令本身失败. 这是测试脚本的 include 路径问题, 不是编译器
+  缺陷(同一容器里 stage1 的 48 个文件全部通过, stage2 的样本测试也全部通过). 修正:
+  探测与全量段都带 `-Iinclude -Itest`, 与主测试集的编译命令一致; 复跑后两个阶段都验证
+  48 个文件.
+- 负向自测(手工, 不入库): 临时把 `new_prov` 的 body 层下标强制成 0, 对
+  `#define M 1 / int x = M;` 跑 `-verify-expansions` 得到
+  `chibicc: /tmp/neg.c:1: invalid macro provenance: argument index out of range` 与
+  exit 1; 恢复源码并重建后同一命令 exit 0, 全部样本与语料通过. 这说明失败路径真的会触发,
+  且失败不是静默的.
+- 闸门: `snapshot diff: empty`; `make docker-test` EXIT=0(含 stage2 自举); `test/expand.sh`
+  29 个 dump 样本 + 3 个 chain 样本 + 17 个 verify 样本 + 48 个语料文件通过(stage1 与
+  stage2 各一遍, 两个阶段都报告 48 files verified).
+- 偏差: 无. 本机全量段因缺 Linux 系统头按计划 skipped; docker 内 stage1 与 stage2 都是
+  48 个文件全量通过.
+
+## 终态验收
+
+- 覆盖: 判据 1 的每一类产物都有 dump 样本 - 对象宏(obj), 函数宏体(fn), 嵌套(nest /
+  arg_nested / builtin_nested), 内建宏(builtin_line / file / counter / base_file,
+  date_shape / timestamp_shape), `#`(stringize / stringize_ws), `##`(paste /
+  paste_left_empty / paste_body_rhs), `,##__VA_ARGS__`(va_comma / va_comma_empty),
+  `__VA_OPT__`(va_opt), 变参(variadic). 空宏展开不产生 token 的已知限制由 empty_macro
+  样本锁定. `subst` 记录清单的每一行至少有一个测试.
+- 查询: 调用点(链的 call 位置), 调用范围(`macro_expansion_end`, verify 的 function-like
+  检查), 定义(`?:?` 与 def 位置; redef / hdr / #line 样本锁定时序与跨文件),
+  实参序号与实参列表(arg / arg_repeat / arg_nested / paste_left_empty / variadic),
+  嵌套链(nest / arg_nested / builtin_nested)全部由 `test/expand.sh` 覆盖.
+- 行为: `make docker-test` EXIT=0; `snapshot diff: empty`; `-E` / 诊断 55 例 /
+  trivia 94 项 / CST 305 项逐字节不变(同一次 docker-test 全绿); `Token.origin` 的语义与
+  唯一消费者未改; `parse.c` / `sema.c` / `type.c` / `codegen.c` 零改动.
+- 验证器: docker 内 48 个语料文件全部通过 `-verify-expansions`(stage1 与 stage2 各一遍);
+  本地片段(17 个 verify 样本)通过; 手工负向样本按预期 exit 1.
+- 文档: AGENTS.md 的路线图 / 构建与测试 / 现状与代码地图 / 测试约定与终态一致; 本文件
+  与 `PLAN.md` 的勾选状态一致.
 
 ## 提交一览
 
@@ -219,7 +273,5 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 | `922711a` | M1.1 | 记录类型 / 访问器 / 两个只读通道骨架 + test/expand.sh |
 | `d2af2d2` | M1.2 | 对象宏 / 函数宏 body 层与 dump 的完整链 |
 | `da7e241` | M1.3 | subst 全分支的实参层(body / arg 细分, 嵌套链保留) |
-
-## 终态验收(本线完成时逐项实测)
-
-- 覆盖 / 查询 / 行为 / 验证器 / 文档五项, 按 `PLAN.md` 的"终态验收"逐条填写.
+| `68772e2` | M2.1 | 内建宏记录 / 合成 token 与相邻字符串合并的 provenance |
+| (本提交) | M2.2 | 验证器 / 全量语料校验 / 文档与终态验收 |

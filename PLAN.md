@@ -313,7 +313,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
   相邻字符串; `__DATE__` / `__TIMESTAMP__` 只测记录形状, 不测取值.
   验收: 新断言全过; `-E` 与诊断不变; snapshot 为空.
 
-- [ ] **M2.2 验证器 / 文档 / 终态**:
+- [x] **M2.2 验证器 / 文档 / 终态**:
   实现 `-verify-expansions`; 在 docker 里对 `test/*.c` + `include/*.h` 全量跑(本地用
   `#include <stdio.h>` 探测, 失败则跳过并在摘要注明 skipped); 收口 `test/expand.sh`
   计数; 更新 AGENTS.md 的代码地图与测试统计; 在 `RESULT.md` 写逐步记录, 提交表与终态验收.

@@ -1348,9 +1348,9 @@ Token *macro_expansion_arg(MacroExpansion *e, int i) {
     return NULL;
 
   MacroArg *arg = e->args;
-  for (; i > 0; i--)
+  for (; i > 0 && arg; i--)
     arg = arg->next;
-  return arg->tok;
+  return arg ? arg->tok : NULL;
 }
 
 int macro_expansion_arg_count(MacroExpansion *e) {

@@ -180,6 +180,12 @@ T arg_nested.c:1 num 2 F@arg_nested.c:3:arg1:arg_nested.c:2>G@arg_nested.c:3:bod
 T arg_nested.c:3 punct ; -
 '
 
+# PLAN.md 的规范例子: 外层宏体里的调用, 实参也来自外层宏体. `1` 先由 A 的宏体
+# 产生, 再作为 F 的实参被消费, 所以链是 [F arg1, A body].
+exp_dump nested_call '#define A F(1)\n#define F(x) x\nA\n' \
+'T nested_call.c:1 num 1 F@nested_call.c:1:arg1:nested_call.c:2>A@nested_call.c:3:body:nested_call.c:1
+'
+
 # `#` 的产物: 合成字符串 token(@synth), 层归 body.
 exp_dump stringize '#define S(x) #x\nchar *s = S(abc);\n' \
 'T stringize.c:2 keyword char -
@@ -278,6 +284,7 @@ T variadic.c:2 punct ; -
 
 exp_verify arg '#define F(x) x\nint y = F(7);\n'
 exp_verify arg_nested '#define G 2\n#define F(x) x\nint y = F(G);\n'
+exp_verify nested_call '#define A F(1)\n#define F(x) x\nA\n'
 exp_verify stringize '#define S(x) #x\nchar *s = S(abc);\n'
 exp_verify paste '#define C(a,b) a##b\nint x = C(foo,bar);\n'
 exp_verify va_comma '#define V(...) f(0 ,##__VA_ARGS__)\nint x = V(1);\n'
@@ -376,4 +383,24 @@ exp_verify builtin_nested '#define L __LINE__\nint x = L;\n'
 exp_verify adjacent_strings '#define A "a"\n#define B "b"\nchar *s = A B;\n'
 exp_verify wide_concat '#define A "a"\nchar *s = A L"b";\n'
 
-echo "expand lock: $n_d dump samples, $n_c chain samples, $n_v verify samples"
+# ---- M2.2: 全量语料校验 --------------------------------------------------------
+# 每个语料文件都必须让验证器成功且无输出. 本机(macOS)可能缺 Linux 系统头,
+# 用探测决定是否跳过; docker 内(权威)必定执行. 语料清单与 trivia / CST 线一致.
+# -Iinclude 是必需的: stage2 的 argv[0] 在 stage2/ 下, 自动 include 路径指向
+# stage2/include(不存在), 而 <stdio.h> 链上的 <stddef.h> 由 chibicc 自带的
+# include/ 提供; 主测试集本来就用 -Iinclude -Itest 编译.
+
+n_f=0
+if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
+   "$chibicc" -Iinclude -Itest -E "$tmp/probe.c" > /dev/null 2>&1; then
+    for f in test/*.c include/*.h; do
+        $chibicc -Iinclude -Itest -xc -verify-expansions "$f" > "$tmp/full.out" 2>&1
+        n_f=$((n_f + 1))
+        check "-corpus/$f"
+    done
+    echo "expand corpus: $n_f files verified"
+else
+    echo "expand corpus: skipped (no Linux system headers)"
+fi
+
+echo "expand lock: $n_d dump samples, $n_c chain samples, $n_v verify samples, $n_f corpus files"

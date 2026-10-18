@@ -40,7 +40,7 @@
 
 **CST 线(路线图阶段 2)已完成** - 用户 2026-10-17 拍板开工, 同线完成(C0.1-C3.2, 终态见本线 C3.2 提交; 计划与执行记录已归档为 `PLAN-cst.md` / `RESULT-cst.md`): 在预处理**之前**的原始文本上建 lossless 具体语法树, 预处理指令是树中的节点, 条件分支全部保留, 每个语法 token 与标点是显式叶子, trivia 挂在 token 叶子上, 叶子按序重建逐字节等于输入文件. 终态: `cst.c` 2254 行, 55 个 `CstKind`, 三个只读通道 `-dump-cst` / `-reconstruct-cst` / `-verify-cst` 不接编译路径; 48 个语料文件 + 15 个边界样本重建零例外, 叶子按序与 token 流逐指针相等; `test/cst.sh` 305 项断言 / 61 个 dump 样本, 覆盖每一种节点; `tokenize.c` / `preprocess.c` / `parse.c` / `sema.c` / `type.c` / `codegen.c` 零改动. 库化(阶段 5)与参考消费者(阶段 6)在其后, 待用户拍板.
 
-**宏展开 provenance 线(阶段 5 的前置)已立项, 尚未开工** - 用户 2026-10-18 拍板: 第 3/4 层消费展开后的 token 流, 不引入宏调用节点; 宏保真由第 2 层 CST 与 token provenance 承担; 放弃宏展开内部的外科式编辑. 计划与执行记录在 `PLAN.md` / `RESULT.md`(本线): 每次展开建 `MacroExpansion` 记录, 每个产物 token 携带 `MacroProv` 链, 提供调用点 / 调用范围 / 定义 / 实参 / 嵌套链的访问器, 并新增只读通道 `-dump-expansions` / `-verify-expansions`; 不改 parse / sema / codegen, 汇编快照必须保持为空 diff. 步骤 M0.1-M2.2 全部未勾选.
+**宏展开 provenance 线(阶段 5 的前置)已完成** - 用户 2026-10-18 拍板开工, 同线完成(M0.1-M2.2, 终态见本线 M2.2 提交; 计划与执行记录在 `PLAN.md` / `RESULT.md`): 每次展开建 `MacroExpansion` 记录, 每个产物 token 携带 `MacroProv` 链(最内层在前, 只 prepend); 调用点宏名 token / function-like 的 `rparen` / 展开时刻的 `Macro` / `#define` 名 token / 实参序号与实参 token 列表 / 嵌套链经 `chibicc.h` 的 11 个访问器查询(`Macro` / `MacroArg` / `MacroParam` 仍留在 `preprocess.c`, 不进入公共面); 新增只读通道 `-dump-expansions` / `-verify-expansions`, 由 `test/expand.sh` 锁定(29 个 dump 样本 / 3 个 chain 形状样本 / 17 个 verify 样本 / 48 个语料文件的全量校验). `-E` / 诊断 / trivia / CST 逐字节不变, 汇编快照为空 diff; `parse.c` / `sema.c` / `type.c` / `codegen.c` 零改动. 同日裁决的宏保真策略(消费展开流, 不引入宏调用节点, 放弃宏内手术)见"开放决策与已决事项".
 
 每个阶段完成时三道闸门必须全绿: `make docker-test`(含自举), 汇编等价性 diff(阶段 0 建立), 该阶段新增的针对性测试. 阶段内行为不允许变化, 变化只发生在阶段边界并单独提交.
 
@@ -54,7 +54,7 @@
 
 ## 开放决策与已决事项(新决策仍由用户拍板, 不擅自定)
 
-- 已定 (2026-10-18): 语法层 AST 对宏调用的保真策略 - 消费展开后的 token 流, 不引入宏调用节点; 宏保真由第 2 层 CST 与 token provenance 共同承担; 放弃宏展开内部的外科式编辑. 落地计划见 `PLAN.md`.
+- 已定 (2026-10-18): 语法层 AST 对宏调用的保真策略 - 消费展开后的 token 流, 不引入宏调用节点; 宏保真由第 2 层 CST 与 token provenance 共同承担; 放弃宏展开内部的外科式编辑. provenance 侧已落地(`PLAN.md` / `RESULT.md`), 公共面是 11 个访问器与两个只读通道.
 - 公共 `Node` 的形状: codegen 写入的 `brk_label` / `cont_label` / `ret_buffer` / `unique_label` / `is_lowered` 如何移出公共头; 阶段 5 拆头前必须定, 不阻塞本线.
 - 库名与公共头命名.
 - 长驻进程场景下 arena 的整体 reset 时机与 API 形态.
@@ -62,11 +62,11 @@
 ## 构建与测试
 
 - `make` - 构建 `chibicc` 二进制(纯 C11, 无外部依赖; CFLAGS 定义在 Makefile 中).
-- `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 最后依次运行 `test/driver.sh ./chibicc`(命令行选项检查), `test/diagnostic.sh ./chibicc`(诊断锁定 55 例逐字节), `test/shape.sh ./chibicc`(发射形状回归锁 33 段), `test/trivia.sh ./chibicc`(trivia 通道: -dump-tokens / -reconstruct / -E 与行号锚点锁定)与 `test/cst.sh ./chibicc`(CST 通道: -dump-cst / -reconstruct-cst / -verify-cst, 全量 round-trip 与树形 dump).
+- `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 最后依次运行 `test/driver.sh ./chibicc`(命令行选项检查), `test/diagnostic.sh ./chibicc`(诊断锁定 55 例逐字节), `test/shape.sh ./chibicc`(发射形状回归锁 33 段), `test/trivia.sh ./chibicc`(trivia 通道: -dump-tokens / -reconstruct / -E 与行号锚点锁定), `test/cst.sh ./chibicc`(CST 通道: -dump-cst / -reconstruct-cst / -verify-cst, 全量 round-trip 与树形 dump)与 `test/expand.sh ./chibicc`(provenance 通道: -dump-expansions / -verify-expansions, 样本断言与全量语料校验).
 - `make test-stage2` - 自举检查: 用 chibicc 编译它自己, 再重跑全部测试.
 - `make test-all` - 以上两项合计. `make clean` 用于清理.
 - 单独运行某个特性测试: `make test/sizeof.exe && ./test/sizeof.exe`(模式规则会自动处理).
-- 没有 Linux 后端时只验证前端: `./chibicc -E file.c`(仅预处理), `./chibicc -S file.c`(输出汇编文本), `./chibicc -dump-tokens file.c`(原始 token 流与 trivia 的 T/R 行 dump), `./chibicc -reconstruct file.c`(按 token 流重建原始字节), `./chibicc -dump-cst file.c`(CST 树形 dump), `./chibicc -reconstruct-cst file.c`(按 CST 叶子重建原始字节)或 `./chibicc -verify-cst file.c`(叶子序列与 token 流逐指针校验; 这些通道与 trivia.sh / cst.sh 一样在本机可跑).
+- 没有 Linux 后端时只验证前端: `./chibicc -E file.c`(仅预处理), `./chibicc -S file.c`(输出汇编文本), `./chibicc -dump-tokens file.c`(原始 token 流与 trivia 的 T/R 行 dump), `./chibicc -reconstruct file.c`(按 token 流重建原始字节), `./chibicc -dump-cst file.c`(CST 树形 dump), `./chibicc -reconstruct-cst file.c`(按 CST 叶子重建原始字节), `./chibicc -verify-cst file.c`(叶子序列与 token 流逐指针校验), `./chibicc -dump-expansions file.c`(预处理后 token 的 provenance 链 dump)或 `./chibicc -verify-expansions file.c`(provenance 链校验; 这些通道与 trivia.sh / cst.sh / expand.sh 一样在本机可跑).
 - 库构建目标(`.a`/`.so` 与目标名)在路线图第 5 阶段加入 Makefile.
 
 ## 平台陷阱与 Docker 测试环境(本工作区为 macOS ARM64)
@@ -84,19 +84,20 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 
 ## 现状与代码地图
 
-现状: 语法语义拆分线, 忠实层收尾线, codegen 直连线(阶段 A + 阶段 B + B2), trivia 保留线(阶段 1)与 CST 线(阶段 2)均已完成; 宏展开 provenance 线(阶段 5 的前置)已立项, 计划见 `PLAN.md`, 代码尚未落地 - 第 3 层(忠实语法 AST)与第 4 层(sema 产物)在 parse.c / sema.c 之间分开; sema.c 持有名字解析(作用域表), 类型检查, 常量求值, 结构体布局与结论记录, **不做任何降级**(A9.2 审计: add_type 34 个 case 全部纯标注, 无形状改写); codegen 直接消费标注树 - 需要后端整形的项分两处落地: 只需换发射方式的(`x[y]`, `p->x`, `>`/`>=`, elvis, `while`, break/continue, 声明初始化链, 加减法的指针缩放)在**发射点就地处理**, 需要槽/语句/标签的(op=, 自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配)留在整形遍(契约 3 的六条不变量, 见该文件头注释); parse.c 只建忠实语法形状(表达式无类型, 名字不绑定, 常量不求值), 保留文法分类 oracle(typedef 名 / tag)与判定表 A 的 15 处文法可判诊断; 第 1 层的 token 流保留 trivia 且可逐字节重建输入文件; 第 2 层(CST)在 `cst.c`, 从 `tokenize_file()` 的直接输出建树, 只走三个只读通道, 编译路径不感知它(见"路线图"). 改动前先了解现状:
+现状: 语法语义拆分线, 忠实层收尾线, codegen 直连线(阶段 A + 阶段 B + B2), trivia 保留线(阶段 1), CST 线(阶段 2)与宏展开 provenance 线(阶段 5 的前置)均已完成 - 第 3 层(忠实语法 AST)与第 4 层(sema 产物)在 parse.c / sema.c 之间分开; sema.c 持有名字解析(作用域表), 类型检查, 常量求值, 结构体布局与结论记录, **不做任何降级**(A9.2 审计: add_type 34 个 case 全部纯标注, 无形状改写); codegen 直接消费标注树 - 需要后端整形的项分两处落地: 只需换发射方式的(`x[y]`, `p->x`, `>`/`>=`, elvis, `while`, break/continue, 声明初始化链, 加减法的指针缩放)在**发射点就地处理**, 需要槽/语句/标签的(op=, 自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配)留在整形遍(契约 3 的六条不变量, 见该文件头注释); parse.c 只建忠实语法形状(表达式无类型, 名字不绑定, 常量不求值), 保留文法分类 oracle(typedef 名 / tag)与判定表 A 的 15 处文法可判诊断; 第 1 层的 token 流保留 trivia 且可逐字节重建输入文件; 第 2 层(CST)在 `cst.c`, 从 `tokenize_file()` 的直接输出建树, 只走三个只读通道, 编译路径不感知它; 预处理后 token 的 provenance 链在 `preprocess.c`(记录与链)与 `expansion_dump.c`(两个只读通道), 编译路径同样不感知它(见"路线图"). 改动前先了解现状:
 
-- `chibicc.h` - 所有共享类型(`Token`, `Obj`, `Node`, `Type`, `Member`, `VarAttr`, CST 的 `CstKind` / `CstNode`)与跨文件声明(`cst_parse` / `cst_reconstruct` / `cst_dump` / `cst_verify` 在这里声明); 未来在此拆分公共头与内部头. `File` 除 `contents`(扫描缓冲)外有 `raw`(文件原样文本)与 `map` / `lines`(scan 偏移到 raw 偏移, raw 偏移到行号的两张表); `Token` 除 `loc` / `len`(扫描坐标)外有 `trivia` / `trivia_len` 与 `raw_loc` / `raw_len`(raw 坐标: 前置被跳过字节与拼写).
+- `chibicc.h` - 所有共享类型(`Token`, `Obj`, `Node`, `Type`, `Member`, `VarAttr`, CST 的 `CstKind` / `CstNode`)与跨文件声明(`cst_parse` / `cst_reconstruct` / `cst_dump` / `cst_verify` 在这里声明); 未来在此拆分公共头与内部头. `File` 除 `contents`(扫描缓冲)外有 `raw`(文件原样文本)与 `map` / `lines`(scan 偏移到 raw 偏移, raw 偏移到行号的两张表); `Token` 除 `loc` / `len`(扫描坐标)外有 `trivia` / `trivia_len` 与 `raw_loc` / `raw_len`(raw 坐标: 前置被跳过字节与拼写), 以及 `prov`(宏展开 provenance 链头; 源 token 为 NULL). `MacroExpansion` / `MacroProv` 只前向声明: 记录是 `preprocess.c` 的不透明对象, 公共面是 11 个访问器(`token_provenance` / `macro_prov_*` / `macro_expansion_*`)与两个通道函数(`expansion_dump` / `expansion_verify`).
 - `tokenize.c` - 词法, 第 1 层的落点. 扫描缓冲仍是"被改写过的文本"(换行归一, 续行删除, \u 改写 - 见 `make_scan_buffer`, 它一遍产出缓冲与两张映射表, 取代了 T1 前就地改写的三个 pass), 但每个 token 记录 raw 坐标的 trivia 与拼写, 因此 token 流可逐字节重建原文件; 行号由 `lines` 表按旧 pass 的"挪换行"语义复现(`add_line_numbers` / `error_at` 用它), 诊断显示与 -E 逐字节不变. 宏与合成缓冲路径(paste / new_str_token)不承诺 trivia(合同只覆盖 `tokenize_file` 的直接输出).
-- `preprocess.c` - 宏展开与预处理指令, 输入输出都是 token 列表.
+- `preprocess.c` - 宏展开与预处理指令, 输入输出都是 token 列表. provenance 的写入点: `expand_macro` 的 handler 分支(内建宏, `is_builtin` 记录), object-like 分支与 function-like 分支(调用名 token / `rparen` / 展开时刻的 `Macro` / `MacroArg` 列表), `subst` 的每个产物分支(body 层与 arg 层, `MacroArg.index` 给序号), 以及 `join_adjacent_string_literals` 的重扫点(`prov` 保存 / 恢复). 记录与链节点都是 arena 对象, 只 prepend, 共享尾不可变; `Token.origin` 的旧语义不动(`__FILE__` / `__LINE__` 仍靠它走到最外层调用点).
+- `expansion_dump.c` - provenance 的两个只读通道(不接编译路径). `-dump-expansions` 在 `preprocess()` 之后每个非 EOF token 一行: `T <file>:<phys-line|@synth> <kind> <spelling> <chain>`, chain 是 `-` 或若干 entry(`<macro>@<call>:<body|argN>:<def>`, 最内层在前, `>` 连接, 合成位置打 `@synth`, 无 `#define` 打 `?:?`); `-verify-expansions` 校验链的深度 / 唯一性 / 记录完整性 / 名字一致 / 实参序号与列表, 失败用 `fprintf` 报一条含物理位置的消息并返回 false(exit 1, 不调用 error).
 - `cst.c` - CST, 第 2 层的落点(2254 行, 只读分支, 不接编译路径). 从 `tokenize_file()` 的直接输出建 lossless 树: 每个 token 是显式叶子, 定界符成组, 语句 / 声明 / 表达式按文法分组, 预处理指令是节点(指令行按 `at_bol` 切分, `#define` 的对象 / 函数宏分界与 `preprocess.c` 一致, `#if` / `#elif` / `#else` / `#endif` 成 `PP_IF` / `PP_BRANCH` 且分支全保留). 文法不能覆盖的跨度是 `CST_UNPARSED`(其子节点是已建的叶子, 不复制 token); 解析是全函数, 不报诊断, 不调用预处理器, 不求值, 不展开. 三个通道 `cst_dump` / `cst_reconstruct` / `cst_verify` 分别锁树形, 逐字节重建, 叶子与 token 流逐指针相等.
 - `parse.c` - 递归下降解析器(2148 行), 只做语法分析与忠实建树: 声明产出记录节点(ND_DECL / ND_GVAR_DECL / ND_FUNCDEF / ND_TYPEDEF / ND_ENUM_CONST)交 sema 消费, 待补全的类型记录(数组维度 / typeof 操作数 / 对齐 / 位宽)挂在类型或节点上留给 sema. 唯一的语义反馈是文法必需的 typedef/tag 分类 oracle(本文件唯一的文件域 static). 诊断只剩 RESULT-split.md 判定表 A 的 15 处文法可判项(B/C/D 已清空, 见 RESULT-faithful.md 的 R4.2); parse 不在构造现场调用任何降级(旧的时序原则已废止).
 - `sema.c` - 语义分析(2992 行), 每个函数体两趟(见文件头注释): resolve 遍历重建作用域并绑名, 声明对象, 补全类型(维度 / typeof / 对齐 / 位宽 / case 值)与布局; 标注遍历(`add_type`/`type_chain`)定型, 插隐式 cast, 跑检查, 写结论(物化字符串/复合字面量/块域 static 数据镜像), 不改写树形状. 控制流四检查与 goto/label 配对检查随后跑(纯检查, 不分配名字); 标签与唯一名分配在 codegen. 常量求值(`eval`/`eval2`/`eval_double`/`is_const_expr`/`const_expr`)与全局初始化器序列化(`write_gvar_data`)也在这一侧, 预处理器 `#if` 经 `const_expr` 调用. 全部语义 static 状态在此.
 - `type.c` - 类型构造器与类型谓词(`is_compatible`/`is_integer` 等).
 - `codegen.c` - 整形遍(残留) + 发射点就地降级 + AST 翻译成 x86-64 汇编文本, 无优化 pass. 整形遍在 `codegen()` 入口先于一切赋值与发射运行(契约 3 的六条不变量见文件头注释), 只剩需要槽/语句/标签的项: 控制流标签分配(case 链与 goto/label 配对), **VLA 声明**的展开(运行时尺寸槽必须先于帧布局)与其余记录的**残留项到达**(`shape_init_exprs` 只走不再改), 复合赋值与自增自减, 调用返回缓冲, 复合字面量; 发射点就地处理的是下标(`gen_addr`/`gen_expr` 经 `new_add` 现建现发), 箭头成员(`gen_addr` 按 `arrow_tok`), `>`/`>=`(二元尾部换序), elvis(`gen_expr(ND_COND)` 无槽), `while` 与 break/continue(`gen_stmt` + 发射侧环境标签栈), 声明初始化链(`gen_stmt(ND_DECL)` 就地摊), 加减法的缩放与 `num+ptr` 规范化(`gen_expr` 顶部把未标记的 `ND_ADD`/`ND_SUB` 替换成 `new_add`/`new_sub` 的产物 - 三个降级工厂把自己产出的节点打上 `is_lowered` 标记, 发射点只降级没标记的, 即忠实节点). 该线(阶段 A + B + B2)的每一步与验证见 `PLAN-codegen-direct.md` / `RESULT-codegen-direct.md`.
-- `main.c` - 驱动器; 只读旗标 `-dump-tokens` / `-reconstruct`(第 1 层)与 `-dump-cst` / `-reconstruct-cst` / `-verify-cst`(第 2 层)在 `cc1()` 的早退口返回, 不写目标文件, 不汇编. `hashmap.c`(字符串驻留哈希表), `unicode.c`(UTF 编码表), `strings.c`(字符串辅助)为基础设施.
+- `main.c` - 驱动器; 只读旗标 `-dump-tokens` / `-reconstruct`(第 1 层), `-dump-cst` / `-reconstruct-cst` / `-verify-cst`(第 2 层)与 `-dump-expansions` / `-verify-expansions`(预处理后的 provenance)在 `cc1()` 的早退口返回, 不写目标文件, 不汇编. `hashmap.c`(字符串驻留哈希表), `unicode.c`(UTF 编码表), `strings.c`(字符串辅助)为基础设施.
 
-本节的代码地图已按 CST 线(阶段 2)的终态更新; provenance 线开工后把 `MacroExpansion` / `MacroProv` / `Token.prov` 与 `expansion_dump.c` 补入本节; 库化(阶段 5)开工时再随其改造(`cst.c` 是新增源文件, 阶段 5 把它的类型与四个函数一起搬进公共头).
+本节的代码地图已按 provenance 线的终态更新(`MacroExpansion` / `MacroProv` / `Token.prov` 与 `expansion_dump.c` 已补入); 库化(阶段 5)开工时再随其改造(`cst.c` / `expansion_dump.c` 是新增源文件, 阶段 5 把它们的类型与函数一起搬进公共头).
 
 ## 设计原则
 
@@ -109,5 +110,6 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 
 - 每个特性对应一个 `test/<feature>.c`; 测试使用 `test/test.h` 中的 `ASSERT(expected, expr)`(打印表达式与结果, 失败即退出), 并链接 `test/common` 以获得 `assert()` 辅助函数与共享符号. 新测试加到对应的特性文件里; 仅在必要时才扩展 `test/test.h`/`test/common`.
 - CST 的测试在 `test/cst.sh`: 48 个语料文件 + 15 个边界样本的逐字节 round-trip, `-verify-cst` 的叶子序列检查(48 个语料文件), 61 个 dump 样本(覆盖全部 55 个 `CstKind`)与相应重建, 305 项断言, 由 `make test` 与 `make test-stage2` 各跑一遍. 忠实 AST 用打印/结构断言; 阶段改造期间用汇编快照 diff 防行为回归.
+- provenance 的测试在 `test/expand.sh`: 29 个 `-dump-expansions` 样本(每个 `subst` 分支至少一个; 链逐字节锁定), 3 个只锁链形状的样本(`__DATE__` / `__TIMESTAMP__` 的取值不稳定, 宽字符串重扫沿用既有的 `line_no = 0`), 17 个 `-verify-expansions` 样本, 以及 48 个语料文件的全量校验(本机缺 Linux 系统头时探测跳过, docker 内为权威). `subst` 新增分支必须同时更新 `PLAN.md` 的记录清单与本脚本.
 - `test/diagnostic.sh` 逐字节锁定诊断文案与插入符锚点(55 例); `test/shape.sh` 锁定发射形状(33 段: 每个片段用 `$chibicc -S` 汇编后断言助记符序列 `want` / 整行正则 `wantline` / 不得出现的形 `absent`). 两者都由 `make test` 与 `make test-stage2` 调用, 即自举出的编译器也要过一遍; 改 codegen 的发射形时必须同步更新 shape.sh 的对应片段.
 - `test/thirdparty/*.sh` 用 chibicc 构建真实项目(git, sqlite, libpng, cpython, tinycc) - 很慢, 仅限 Linux, 不属于 `make test`.
