@@ -1308,7 +1308,7 @@ Token *preprocess(Token *tok) {
 }
 
 // Provenance accessors. Their bodies are trivial on purpose: the chain
-// layout is preprocess.c's business, and consumers (expansion_dump.c
+// layout is preprocess.c's business, and consumers (provenance.c
 // today, the library API later) see only these functions.
 
 MacroProv *token_provenance(Token *tok) {

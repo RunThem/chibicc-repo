@@ -123,12 +123,12 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 - 改了什么:
   - `chibicc.h`: 前向声明 `MacroExpansion` / `MacroProv`; `Token` 增 `prov`(紧跟
     `origin`); 11 个访问器与 `expansion_dump` / `expansion_verify` 两个通道函数;
-    `print_escaped` / `token_kind_name` 去 static 并在头文件声明(expansion_dump.c 复用
+    `print_escaped` / `token_kind_name` 去 static 并在头文件声明(provenance.c 复用
     同一套转义与 kind 名, 不复制实现).
   - `preprocess.c`: 定义 `MacroExpansion` / `MacroProv`(不透明, 只在文件内); `Macro` 增
     `def`; `read_macro_definition` 保存 `#define` 处的宏名 token; `new_eof` 显式清空
     `prov`; 访问器实现(参数列表按 `arg_count` 越界返回 NULL).
-  - `expansion_dump.c`(新): dump 输出 `T <file>:<phys-line|@synth> <kind> <spelling> -`
+  - `provenance.c`(新): dump 输出 `T <file>:<phys-line|@synth> <kind> <spelling> -`
     骨架(本步还没有链); verify 恒真(骨架, M2.2 实现检查). 只用头文件访问器与
     `print_escaped` / `token_kind_name`.
   - `main.c`: `-dump-expansions` / `-verify-expansions` 旗标; `cc1()` 在
@@ -151,7 +151,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
     循环里给宏体 token 挂 `new_prov(e, -1, 调用名 token 的 prov)`; function-like 分支在
     `rparen` 之后建记录(写入 `name` / `rparen` / `macro` / `args` / `arg_count`), 同样在
     `origin` 循环里挂 body 层. `origin` 的语义与写入位置不变.
-  - `expansion_dump.c`: `-dump-expansions` 输出完整 chain; entry 为
+  - `provenance.c`: `-dump-expansions` 输出完整 chain; entry 为
     `<macro>@<call-file>:<call-line>:<body|argN>:<def-file>:<def-line>`, 最内层在前用
     `>` 连接, 定义缺失打 `?:?`(`-D` / 内建).
   - `test/expand.sh`: 加 7 个 dump 样本(对象宏, 函数宏体, 嵌套, `#undef` / 重定义,
@@ -210,7 +210,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 ## M2.2 验证器 / 文档 / 终态
 
 - 改了什么:
-  - `expansion_dump.c`: `expansion_verify` 从骨架改为完整实现. 对每个有链的 token 检查:
+  - `provenance.c`: `expansion_verify` 从骨架改为完整实现. 对每个有链的 token 检查:
     深度上界(1000)与链上节点唯一性(I3); 每层记录非空; 名 token 与宏拼写一致; arg_index
     为 -1 或落在 `[0, arg_count)`(I2); 每个实参列表非空且以 EOF 终止(带 1M token 上界);
     arg_index >= 0 时展开必须是 function-like(`end != name`)且不是内建. 失败用
@@ -223,7 +223,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
     必定执行. 汇总行增加 corpus 计数.
   - `AGENTS.md`: 路线图(provenance 线标记完成并写明终态), 构建与测试(新增 expand.sh 与两个
     本机可跑通道), 现状与代码地图(`Token.prov` / `MacroExpansion` / `MacroProv` /
-    `preprocess.c` 写入点 / 新增 `expansion_dump.c` / `main.c` 旗标), 测试约定(expand.sh
+    `preprocess.c` 写入点 / 新增 `provenance.c` / `main.c` 旗标), 测试约定(expand.sh
     的段落结构), 已决事项(落地状态).
 - 为什么: 验证器是链结构的守门人, 它必须只靠访问器判断, 并在失败时以退出码而不是
   进程终止报告(库化红线); 全量语料校验把"每个 token 的链都自洽"从样本推广到所有输入.
@@ -244,6 +244,8 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
   stage2 各一遍, 两个阶段都报告 48 files verified).
 - 偏差: 无. 本机全量段因缺 Linux 系统头按计划 skipped; docker 内 stage1 与 stage2 都是
   48 个文件全量通过.
+- 线后收尾: `expansion_dump.c` 改名为 `provenance.c`(文件同时承载 dump 与 verify, 旧名
+  只提 dump, 名不副实); 只改文件名与引用, 无代码或行为变化. 计划里的旧名已同步.
 
 ## 终态验收
 
@@ -274,4 +276,5 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 | `d2af2d2` | M1.2 | 对象宏 / 函数宏 body 层与 dump 的完整链 |
 | `da7e241` | M1.3 | subst 全分支的实参层(body / arg 细分, 嵌套链保留) |
 | `68772e2` | M2.1 | 内建宏记录 / 合成 token 与相邻字符串合并的 provenance |
-| (本提交) | M2.2 | 验证器 / 全量语料校验 / 文档与终态验收 |
+| `a75de30` | M2.2 | 验证器 / 全量语料校验 / 文档与终态验收 |
+| (本提交) | 收尾 | `expansion_dump.c` 改名为 `provenance.c`(仅改名与引用) |

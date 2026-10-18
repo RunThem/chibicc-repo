@@ -257,7 +257,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
   (`!macro->is_objlike`) 且不是内建.
 - 失败时用 `fprintf(stderr, ...)` 报一条含物理位置的消息, 返回 false (不新增 exit 点).
 
-实现放在新文件 `expansion_dump.c`, 只用上面的访问器; `main.c` 只增旗标与调用.
+实现放在新文件 `provenance.c`, 只用上面的访问器; `main.c` 只增旗标与调用.
 
 ## 闸门口径
 
@@ -286,7 +286,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
   与两个通道函数; `preprocess.c` 定义结构, `Macro` 增 `def`, 在 `read_macro_definition`
   保存定义处名 token, 实现 `new_prov` 与访问器; `main.c` 增 `-dump-expansions` /
   `-verify-expansions` 旗标, `cc1()` 在 `preprocess(tok)` 之后接入, driver pass-through
-  加两个旗标; 新建 `expansion_dump.c`(dump 先输出 `T ... -` 骨架, verify 恒真);
+  加两个旗标; 新建 `provenance.c`(dump 先输出 `T ... -` 骨架, verify 恒真);
   新建 `test/expand.sh`(harness + 3 个无宏样本)并挂进两个 Makefile 目标.
   验收: 既有通道逐字节不变; 新骨架通道可跑; stage1 / stage2 都通过; snapshot 为空.
 

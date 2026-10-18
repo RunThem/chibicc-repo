@@ -261,7 +261,7 @@ int macro_expansion_arg_count(MacroExpansion *e);
 bool macro_expansion_is_builtin(MacroExpansion *e);
 
 //
-// expansion_dump.c
+// provenance.c
 //
 
 // The read-only provenance channels (PLAN.md 判据 5). The dump prints one
