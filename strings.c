@@ -16,6 +16,22 @@ void strarray_push(StringArray *arr, char *s) {
   arr->data[arr->len++] = s;
 }
 
+void nodearray_push(NodeArray *arr, Node *node) {
+  if (!arr->data) {
+    arr->data = calloc(8, sizeof(Node *));
+    arr->capacity = 8;
+  }
+
+  if (arr->capacity == arr->len) {
+    arr->data = realloc(arr->data, sizeof(Node *) * arr->capacity * 2);
+    arr->capacity *= 2;
+    for (int i = arr->len; i < arr->capacity; i++)
+      arr->data[i] = NULL;
+  }
+
+  arr->data[arr->len++] = node;
+}
+
 // Takes a printf-style format string and returns a formatted string.
 char *format(char *fmt, ...) {
   char *buf;

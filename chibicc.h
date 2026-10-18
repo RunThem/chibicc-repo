@@ -43,7 +43,14 @@ typedef struct {
   int len;
 } StringArray;
 
+typedef struct {
+  Node **data;
+  int capacity;
+  int len;
+} NodeArray;
+
 void strarray_push(StringArray *arr, char *s);
+void nodearray_push(NodeArray *arr, Node *node);
 char *format(char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 //
@@ -285,9 +292,6 @@ struct Obj {
   bool is_local; // local or global/function
   int align;     // alignment
 
-  // Local variable
-  int offset;
-
   // Global variable or function
   bool is_function;
   bool is_definition;
@@ -306,16 +310,15 @@ struct Obj {
   Obj *locals;
   Obj *va_area;
   Obj *alloca_bottom;
-  int stack_size;
 
   // Per function: the goto and [GNU] label-value references of this
-  // body, chained via goto_next. sema's check pass collects them (a
-  // label value can sit outside the statement tree, in a block-scope
-  // static initializer, which its own descent cannot reach) and pairs
-  // them by name for the undeclared-label check; codegen's shaping
-  // pass resolves them against the labels it allocates. Written by
-  // sema, read once by codegen.
-  Node *label_gotos;
+  // body. sema's check pass collects them (a label value can sit
+  // outside the statement tree, in a block-scope static initializer,
+  // which its own descent cannot reach) and pairs them by name for the
+  // undeclared-label check; codegen's shaping pass resolves them
+  // against the labels it allocates. Written by sema, read once by
+  // codegen.
+  NodeArray label_gotos;
 
   // Static inline function
   bool is_live;
@@ -330,7 +333,16 @@ typedef struct Relocation Relocation;
 struct Relocation {
   Relocation *next;
   int offset;
-  char **label;
+
+  // The target of an address constant. A named symbol (a global, a
+  // function, a string literal's anonymous global, a file-scope
+  // compound literal's object) is known at serialization time and
+  // lives in `label`. A [GNU] `&&label` reference has no name yet:
+  // codegen allocates the `.L` name during shaping, so the node is
+  // kept here and resolved at emission.
+  char *label;
+  Node *label_node;
+
   long addend;
 };
 
@@ -541,15 +553,6 @@ struct Node {
   // 0 means a plain "=".
   NodeKind op;
 
-  // ND_ADD/ND_SUB: true when one of codegen's own lowering helpers
-  // built the node (new_add, new_sub, combine). Its operands already
-  // carry the element-size scaling, or the `ptr - ptr` element count,
-  // and new_arith has applied the conversions, so gen_expr emits it as
-  // plain machine arithmetic. A node the parser built never carries
-  // the mark - the emitter lowers such a node itself, at emission
-  // (PLAN B2), and the mark is what tells the two apart.
-  bool is_lowered;
-
   // Increment/decrement for ND_INCDEC: postfix (`i++`) or prefix
   // (`++i`), with an addend of +1 or -1. sema lowers the node to a
   // compound assignment.
@@ -562,12 +565,6 @@ struct Node {
   Node *els;
   Node *init;
   Node *inc;
-
-  // "break" and "continue" labels of a loop or a switch. Written by
-  // codegen's shaping pass - the label allocation is the consumer's
-  // since A2.1 - and read by gen_stmt at emission time.
-  char *brk_label;
-  char *cont_label;
 
   // Block or statement expression
   Node *body;
@@ -592,32 +589,17 @@ struct Node {
   Token *arrow_tok;
 
   // Function call. func_ty and the conversions on the arguments are
-  // sema's (the annotation); pass_by_stack is computed by codegen's
-  // push_args when it emits the call, and ret_buffer - the caller-owned
-  // buffer a struct or union return writes into - is a slot codegen's
-  // shaping pass creates (A6.1), read by gen_expr.
+  // sema's (the annotation). The call's codegen-side state - the
+  // pass-by-stack marks and the caller-owned return buffer - lives in
+  // codegen's private per-node table (PLAN L1).
   Type *func_ty;
   Node *args;
-  bool pass_by_stack;
-  Obj *ret_buffer;
 
   // Goto or labeled statement, or labels-as-values. `label` is the
-  // spelled name the parser recorded (and the goto/label pairing
-  // check compares); `unique_label` is the `.L..` name codegen's
-  // shaping pass allocates for the label a goto resolves to.
-  // `goto_next` links the function's collected goto and label-value
-  // references while the pairing check and the shaping pass resolve
-  // them.
+  // spelled name the parser recorded and the goto/label pairing check
+  // compares; the `.L..` names codegen allocates for goto, label and
+  // case nodes live in its private per-node table (PLAN L1).
   char *label;
-  char *unique_label;
-  Node *goto_next;
-
-  // Switch: the case labels of the body, linked into the switch that
-  // encloses them by codegen's shaping pass (A2.1), read by gen_stmt
-  // when it emits the comparison chain. `label` above carries each
-  // case's own `.L..` name.
-  Node *case_next;
-  Node *default_case;
 
   // [GNU] `a ?: b` conditional. sema types it; gen_expr emits it from
   // its own fields without a slot - the test value stays in the
@@ -850,10 +832,9 @@ struct Type {
   Node *typeof_expr;
   Node *align_expr;
 
-  // Variable-length array
+  // Variable-length array. The runtime size slot codegen creates for
+  // it (A7.1) is kept in codegen's private per-type table (PLAN L1).
   Node *vla_len; // # of elements
-  Obj *vla_size; // the runtime size of a VLA: a slot of the
-                 // consumer, written by codegen's shaping pass (A7.1)
 
   // Struct
   Member *members;

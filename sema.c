@@ -44,8 +44,17 @@
 #include "chibicc.h"
 
 static int64_t eval(Node *node);
-static int64_t eval2(Node *node, char ***label);
-static int64_t eval_rval(Node *node, char ***label);
+
+// The target an address constant resolves to. `name` is a symbol the
+// serializer can write down now; `node` is a [GNU] `&&label` whose
+// `.L` name codegen allocates later.
+typedef struct {
+  char *name;
+  Node *node;
+} LabelRef;
+
+static int64_t eval2(Node *node, LabelRef *label);
+static int64_t eval_rval(Node *node, LabelRef *label);
 static double eval_double(Node *node);
 static bool is_const_expr(Node *node);
 static void layout_struct(Type *ty);
@@ -234,18 +243,19 @@ static Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
 // annotated and checked (a label value can live outside the statement
 // tree, in a block-scope static initializer, which only the
 // annotation pass reaches - see add_type's ND_LABEL_VAL case).
-static Node *gotos;
-static Node *labels;
+static NodeArray gotos;
+static NodeArray labels;
 
 // The pairing check: every goto and label value must name a label of
 // the same function. Gotos may refer to a label that appears later,
 // so this runs once the whole body has been checked. The matched name
 // is written by codegen's shaping pass, which is what allocates it.
 static void check_labels(void) {
-  for (Node *x = gotos; x; x = x->goto_next) {
+  for (int i = 0; i < gotos.len; i++) {
+    Node *x = gotos.data[i];
     bool found = false;
-    for (Node *y = labels; y; y = y->goto_next)
-      if (!strcmp(x->label, y->label)) {
+    for (int j = 0; j < labels.len; j++)
+      if (!strcmp(x->label, labels.data[j]->label)) {
         found = true;
         break;
       }
@@ -323,12 +333,10 @@ static void check_node(Node *node) {
       error_tok(node->tok, "stray continue");
     return;
   case ND_GOTO:
-    node->goto_next = gotos;
-    gotos = node;
+    nodearray_push(&gotos, node);
     return;
   case ND_LABEL:
-    node->goto_next = labels;
-    labels = node;
+    nodearray_push(&labels, node);
     check_node(node->lhs);
     return;
   case ND_FUNCDEF:
@@ -336,8 +344,7 @@ static void check_node(Node *node) {
     // was reached - checks, label pairing and all - and its body is
     // not this function's to descend. Walking it here would collect
     // the nested function's goto and label nodes into this function's
-    // lists, rewriting the very `goto_next` chain its own resolution
-    // was handed (the collected list is a single-linked one).
+    // population, which its own resolution already handed to codegen.
     return;
   default:
     check_children(node);
@@ -1532,17 +1539,18 @@ write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset
     return cur;
   }
 
-  char **label = NULL;
+  LabelRef label = {};
   uint64_t val = eval2(init->expr, &label);
 
-  if (!label) {
+  if (!label.name && !label.node) {
     write_buf(buf + offset, val, ty->size);
     return cur;
   }
 
   Relocation *rel = calloc(1, sizeof(Relocation));
   rel->offset = offset;
-  rel->label = label;
+  rel->label = label.name;
+  rel->label_node = label.node;
   rel->addend = val;
   cur->next = rel;
   return cur->next;
@@ -2136,8 +2144,7 @@ void add_type(Node *node) {
     // expression can live outside the statement tree - a block-scope
     // static initializer holds one, and only the evaluator reaches it.
     // The type annotation makes this run exactly once per node.
-    node->goto_next = gotos;
-    gotos = node;
+    nodearray_push(&gotos, node);
     node->ty = pointer_to(ty_void);
     return;
   case ND_CAS:
@@ -2255,7 +2262,7 @@ static int64_t eval(Node *node) {
 // (A6.1 onwards), the entry call stays - it still types the tree -
 // but the switch starts seeing faithful kinds, which the cases below
 // recognize alongside the lowered ones.
-static int64_t eval2(Node *node, char ***label) {
+static int64_t eval2(Node *node, LabelRef *label) {
   add_type(node);
 
   if (is_flonum(node->ty))
@@ -2405,7 +2412,7 @@ static int64_t eval2(Node *node, char ***label) {
   case ND_ADDR:
     return eval_rval(node->lhs, label);
   case ND_LABEL_VAL:
-    *label = &node->unique_label;
+    label->node = node;
     return 0;
   case ND_MEMBER:
     // `p->arr`, an array member of a pointer operand: the member's
@@ -2429,7 +2436,7 @@ static int64_t eval2(Node *node, char ***label) {
       error_tok(node->tok, "not a compile-time constant");
     if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
       error_tok(node->tok, "invalid initializer");
-    *label = &node->var->name;
+    label->name = node->var->name;
     return 0;
   case ND_STRING:
     // The literal's anonymous global, materialized where the literal
@@ -2437,7 +2444,7 @@ static int64_t eval2(Node *node, char ***label) {
     // object, so the address is read off the object directly.
     if (!label)
       error_tok(node->tok, "not a compile-time constant");
-    *label = &node->var->name;
+    label->name = node->var->name;
     return 0;
   case ND_COMPOUND_LITERAL:
     // A file-scope compound literal's hidden object, whose data the
@@ -2445,7 +2452,7 @@ static int64_t eval2(Node *node, char ***label) {
     // the node keeps its kind since A9.2, like a string.
     if (node->var->is_local)
       error_tok(node->tok, "not a compile-time constant");
-    *label = &node->var->name;
+    label->name = node->var->name;
     return 0;
   case ND_SIZEOF:
   case ND_ALIGNOF: {
@@ -2472,25 +2479,25 @@ static int64_t eval2(Node *node, char ***label) {
   error_tok(node->tok, "not a compile-time constant");
 }
 
-static int64_t eval_rval(Node *node, char ***label) {
+static int64_t eval_rval(Node *node, LabelRef *label) {
   switch (node->kind) {
   case ND_VAR:
     if (node->var->is_local)
       error_tok(node->tok, "not a compile-time constant");
-    *label = &node->var->name;
+    label->name = node->var->name;
     return 0;
   case ND_DEREF:
     return eval2(node->lhs, label);
   case ND_STRING:
     // The literal's anonymous global, as above.
-    *label = &node->var->name;
+    label->name = node->var->name;
     return 0;
   case ND_COMPOUND_LITERAL:
     // The file-scope literal's hidden global, as above: its address
     // is the object's, and a block-scope one is not a constant.
     if (node->var->is_local)
       error_tok(node->tok, "not a compile-time constant");
-    *label = &node->var->name;
+    label->name = node->var->name;
     return 0;
   case ND_SUBSCRIPT: {
     // The address of `x[y]`: the base's address plus the index
@@ -2947,7 +2954,7 @@ static void analyze_function(Obj *fn) {
   // static initializers) make this the only chain that reaches them
   // all.
   fn->label_gotos = gotos;
-  gotos = labels = NULL;
+  gotos = labels = (NodeArray){};
 
   splice_locals(fn);
   locals = save;

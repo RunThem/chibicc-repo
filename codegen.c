@@ -48,6 +48,101 @@ static char *argreg32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
 static char *argreg64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
 static Obj *current_fn;
 
+// Codegen-owned state that used to live on the public Node/Type/Obj
+// structs (PLAN L1). The library-facing shape keeps only what the
+// source and sema put there; the labels, the lowering marker, the call
+// slots and the VLA size slots are keyed by pointer here. Entries are
+// created lazily and live as long as the process, like every other
+// allocation of this consumer.
+typedef struct CgNode CgNode;
+struct CgNode {
+  Node *node;
+  CgNode *next;
+  char *brk_label;
+  char *cont_label;
+  char *unique_label;
+  Obj *ret_buffer;
+  Node *case_next;
+  Node *default_case;
+  bool pass_by_stack;
+  bool is_lowered;
+};
+
+typedef struct CgType CgType;
+struct CgType {
+  Type *ty;
+  CgType *next;
+  Obj *vla_size;
+};
+
+typedef struct CgObj CgObj;
+struct CgObj {
+  Obj *obj;
+  CgObj *next;
+  int offset;
+  int stack_size;
+};
+
+#define CG_BUCKETS 4096
+static CgNode *cg_nodes[CG_BUCKETS];
+static CgType *cg_types[CG_BUCKETS];
+static CgObj *cg_objs[CG_BUCKETS];
+
+static unsigned cg_hash(void *p) {
+  uintptr_t x = (uintptr_t)p;
+  x ^= x >> 17;
+  x *= (uintptr_t)0xed5ad4bbU;
+  x ^= x >> 11;
+  return x % CG_BUCKETS;
+}
+
+static CgNode *cg(Node *node) {
+  unsigned h = cg_hash(node);
+  for (CgNode *p = cg_nodes[h]; p; p = p->next)
+    if (p->node == node)
+      return p;
+
+  CgNode *p = calloc(1, sizeof(CgNode));
+  p->node = node;
+  p->next = cg_nodes[h];
+  cg_nodes[h] = p;
+  return p;
+}
+
+static CgType *cg_type(Type *ty) {
+  unsigned h = cg_hash(ty);
+  for (CgType *p = cg_types[h]; p; p = p->next)
+    if (p->ty == ty)
+      return p;
+
+  CgType *p = calloc(1, sizeof(CgType));
+  p->ty = ty;
+  p->next = cg_types[h];
+  cg_types[h] = p;
+  return p;
+}
+
+static CgObj *cg_obj(Obj *obj) {
+  unsigned h = cg_hash(obj);
+  for (CgObj *p = cg_objs[h]; p; p = p->next)
+    if (p->obj == obj)
+      return p;
+
+  CgObj *p = calloc(1, sizeof(CgObj));
+  p->obj = obj;
+  p->next = cg_objs[h];
+  cg_objs[h] = p;
+  return p;
+}
+
+static int obj_offset(Obj *obj) {
+  return cg_obj(obj)->offset;
+}
+
+static int obj_stack_size(Obj *obj) {
+  return cg_obj(obj)->stack_size;
+}
+
 // The innermost enclosing loop's break and continue labels while a
 // body is being emitted (PLAN B1.2a): a break or a continue resolves
 // against them here, where the shaping pass used to bind the label
@@ -135,13 +230,13 @@ static void gen_addr(Node *node) {
   case ND_VAR:
     // Variable-length array, which is always local.
     if (node->var->ty->kind == TY_VLA) {
-      println("  mov %d(%%rbp), %%rax", node->var->offset);
+      println("  mov %d(%%rbp), %%rax", obj_offset(node->var));
       return;
     }
 
     // Local variable
     if (node->var->is_local) {
-      println("  lea %d(%%rbp), %%rax", node->var->offset);
+      println("  lea %d(%%rbp), %%rax", obj_offset(node->var));
       return;
     }
 
@@ -235,7 +330,7 @@ static void gen_addr(Node *node) {
     println("  add $%d, %%rax", node->member->offset);
     return;
   case ND_FUNCALL:
-    if (node->ret_buffer) {
+    if (cg(node)->ret_buffer) {
       gen_expr(node);
       return;
     }
@@ -254,7 +349,7 @@ static void gen_addr(Node *node) {
     }
     break;
   case ND_VLA_PTR:
-    println("  lea %d(%%rbp), %%rax", node->var->offset);
+    println("  lea %d(%%rbp), %%rax", obj_offset(node->var));
     return;
   }
 
@@ -537,7 +632,8 @@ static void push_args2(Node *args, bool first_pass) {
     return;
   push_args2(args->next, first_pass);
 
-  if ((first_pass && !args->pass_by_stack) || (!first_pass && args->pass_by_stack))
+  CgNode *ci = cg(args);
+  if ((first_pass && !ci->pass_by_stack) || (!first_pass && ci->pass_by_stack))
     return;
 
   gen_expr(args);
@@ -585,7 +681,7 @@ static int push_args(Node *node) {
 
   // If the return type is a large struct/union, the caller passes
   // a pointer to a buffer as if it were the first argument.
-  if (node->ret_buffer && node->ty->size > 16)
+  if (cg(node)->ret_buffer && node->ty->size > 16)
     gp++;
 
   // Load as many arguments to the registers as possible.
@@ -596,7 +692,7 @@ static int push_args(Node *node) {
     case TY_STRUCT:
     case TY_UNION:
       if (ty->size > 16) {
-        arg->pass_by_stack = true;
+        cg(arg)->pass_by_stack = true;
         stack += align_to(ty->size, 8) / 8;
       } else {
         bool fp1 = has_flonum1(ty);
@@ -606,7 +702,7 @@ static int push_args(Node *node) {
           fp = fp + fp1 + fp2;
           gp = gp + !fp1 + !fp2;
         } else {
-          arg->pass_by_stack = true;
+          cg(arg)->pass_by_stack = true;
           stack += align_to(ty->size, 8) / 8;
         }
       }
@@ -614,17 +710,17 @@ static int push_args(Node *node) {
     case TY_FLOAT:
     case TY_DOUBLE:
       if (fp++ >= FP_MAX) {
-        arg->pass_by_stack = true;
+        cg(arg)->pass_by_stack = true;
         stack++;
       }
       break;
     case TY_LDOUBLE:
-      arg->pass_by_stack = true;
+      cg(arg)->pass_by_stack = true;
       stack += 2;
       break;
     default:
       if (gp++ >= GP_MAX) {
-        arg->pass_by_stack = true;
+        cg(arg)->pass_by_stack = true;
         stack++;
       }
     }
@@ -641,8 +737,8 @@ static int push_args(Node *node) {
 
   // If the return type is a large struct/union, the caller passes
   // a pointer to a buffer as if it were the first argument.
-  if (node->ret_buffer && node->ty->size > 16) {
-    println("  lea %d(%%rbp), %%rax", node->ret_buffer->offset);
+  if (cg(node)->ret_buffer && node->ty->size > 16) {
+    println("  lea %d(%%rbp), %%rax", obj_offset(cg(node)->ret_buffer));
     push();
   }
 
@@ -656,13 +752,13 @@ static void copy_ret_buffer(Obj *var) {
   if (has_flonum1(ty)) {
     assert(ty->size == 4 || 8 <= ty->size);
     if (ty->size == 4)
-      println("  movss %%xmm0, %d(%%rbp)", var->offset);
+      println("  movss %%xmm0, %d(%%rbp)", obj_offset(var));
     else
-      println("  movsd %%xmm0, %d(%%rbp)", var->offset);
+      println("  movsd %%xmm0, %d(%%rbp)", obj_offset(var));
     fp++;
   } else {
     for (int i = 0; i < MIN(8, ty->size); i++) {
-      println("  mov %%al, %d(%%rbp)", var->offset + i);
+      println("  mov %%al, %d(%%rbp)", obj_offset(var) + i);
       println("  shr $8, %%rax");
     }
     gp++;
@@ -672,14 +768,14 @@ static void copy_ret_buffer(Obj *var) {
     if (has_flonum2(ty)) {
       assert(ty->size == 12 || ty->size == 16);
       if (ty->size == 12)
-        println("  movss %%xmm%d, %d(%%rbp)", fp, var->offset + 8);
+        println("  movss %%xmm%d, %d(%%rbp)", fp, obj_offset(var) + 8);
       else
-        println("  movsd %%xmm%d, %d(%%rbp)", fp, var->offset + 8);
+        println("  movsd %%xmm%d, %d(%%rbp)", fp, obj_offset(var) + 8);
     } else {
       char *reg1 = (gp == 0) ? "%al" : "%dl";
       char *reg2 = (gp == 0) ? "%rax" : "%rdx";
       for (int i = 8; i < MIN(16, ty->size); i++) {
-        println("  mov %s, %d(%%rbp)", reg1, var->offset + i);
+        println("  mov %s, %d(%%rbp)", reg1, obj_offset(var) + i);
         println("  shr $8, %s", reg2);
       }
     }
@@ -731,7 +827,7 @@ static void copy_struct_mem(void) {
   Type *ty = current_fn->ty->return_ty;
   Obj *var = current_fn->params;
 
-  println("  mov %d(%%rbp), %%rdi", var->offset);
+  println("  mov %d(%%rbp), %%rdi", obj_offset(var));
 
   for (int i = 0; i < ty->size; i++) {
     println("  mov %d(%%rax), %%dl", i);
@@ -745,7 +841,7 @@ static void builtin_alloca(void) {
   println("  and $0xfffffff0, %%edi");
 
   // Shift the temporary area by %rdi.
-  println("  mov %d(%%rbp), %%rcx", current_fn->alloca_bottom->offset);
+  println("  mov %d(%%rbp), %%rcx", obj_offset(current_fn->alloca_bottom));
   println("  sub %%rsp, %%rcx");
   println("  mov %%rsp, %%rax");
   println("  sub %%rdi, %%rsp");
@@ -762,9 +858,9 @@ static void builtin_alloca(void) {
   println("2:");
 
   // Move alloca_bottom pointer.
-  println("  mov %d(%%rbp), %%rax", current_fn->alloca_bottom->offset);
+  println("  mov %d(%%rbp), %%rax", obj_offset(current_fn->alloca_bottom));
   println("  sub %%rdi, %%rax");
-  println("  mov %%rax, %d(%%rbp)", current_fn->alloca_bottom->offset);
+  println("  mov %%rax, %d(%%rbp)", obj_offset(current_fn->alloca_bottom));
 }
 
 // Generate code for a given node.
@@ -778,7 +874,7 @@ static void gen_expr(Node *node) {
   // evaluation order are the pre-B2 ones. Additive nodes codegen
   // built itself carry the mark and fall through to the plain
   // machine-arithmetic emission below.
-  if ((node->kind == ND_ADD || node->kind == ND_SUB) && !node->is_lowered)
+  if ((node->kind == ND_ADD || node->kind == ND_SUB) && !cg(node)->is_lowered)
     node = node->kind == ND_ADD ? new_add(node->lhs, node->rhs, node->tok)
                                 : new_sub(node->lhs, node->rhs, node->tok);
 
@@ -938,7 +1034,7 @@ static void gen_expr(Node *node) {
   case ND_MEMZERO:
     // `rep stosb` is equivalent to `memset(%rdi, %al, %rcx)`.
     println("  mov $%d, %%rcx", node->var->ty->size);
-    println("  lea %d(%%rbp), %%rdi", node->var->offset);
+    println("  lea %d(%%rbp), %%rdi", obj_offset(node->var));
     println("  mov $0, %%al");
     println("  rep stosb");
     return;
@@ -1041,7 +1137,7 @@ static void gen_expr(Node *node) {
 
     // If the return type is a large struct/union, the caller passes
     // a pointer to a buffer as if it were the first argument.
-    if (node->ret_buffer && node->ty->size > 16)
+    if (cg(node)->ret_buffer && node->ty->size > 16)
       pop(argreg64[gp++]);
 
     for (Node *arg = node->args; arg; arg = arg->next) {
@@ -1113,15 +1209,15 @@ static void gen_expr(Node *node) {
 
     // If the return type is a small struct, a value is returned
     // using up to two registers.
-    if (node->ret_buffer && node->ty->size <= 16) {
-      copy_ret_buffer(node->ret_buffer);
-      println("  lea %d(%%rbp), %%rax", node->ret_buffer->offset);
+    if (cg(node)->ret_buffer && node->ty->size <= 16) {
+      copy_ret_buffer(cg(node)->ret_buffer);
+      println("  lea %d(%%rbp), %%rax", obj_offset(cg(node)->ret_buffer));
     }
 
     return;
   }
   case ND_LABEL_VAL:
-    println("  lea %s(%%rip), %%rax", node->unique_label);
+    println("  lea %s(%%rip), %%rax", cg(node)->unique_label);
     return;
   case ND_CAS: {
     gen_expr(node->cas_addr);
@@ -1380,17 +1476,17 @@ static void gen_stmt(Node *node) {
     int c = count();
     char *brk = cur_brk_label;
     char *cont = cur_cont_label;
-    cur_brk_label = node->brk_label;
-    cur_cont_label = node->cont_label;
+    cur_brk_label = cg(node)->brk_label;
+    cur_cont_label = cg(node)->cont_label;
 
     println(".L.begin.%d:", c);
     gen_expr(node->cond);
     cmp_zero(node->cond->ty);
-    println("  je %s", node->brk_label);
+    println("  je %s", cg(node)->brk_label);
     gen_stmt(node->then);
-    println("%s:", node->cont_label);
+    println("%s:", cg(node)->cont_label);
     println("  jmp .L.begin.%d", c);
-    println("%s:", node->brk_label);
+    println("%s:", cg(node)->brk_label);
 
     cur_brk_label = brk;
     cur_cont_label = cont;
@@ -1400,8 +1496,8 @@ static void gen_stmt(Node *node) {
     int c = count();
     char *brk = cur_brk_label;
     char *cont = cur_cont_label;
-    cur_brk_label = node->brk_label;
-    cur_cont_label = node->cont_label;
+    cur_brk_label = cg(node)->brk_label;
+    cur_cont_label = cg(node)->cont_label;
 
     if (node->init)
       gen_stmt(node->init);
@@ -1409,14 +1505,14 @@ static void gen_stmt(Node *node) {
     if (node->cond) {
       gen_expr(node->cond);
       cmp_zero(node->cond->ty);
-      println("  je %s", node->brk_label);
+      println("  je %s", cg(node)->brk_label);
     }
     gen_stmt(node->then);
-    println("%s:", node->cont_label);
+    println("%s:", cg(node)->cont_label);
     if (node->inc)
       gen_expr(node->inc);
     println("  jmp .L.begin.%d", c);
-    println("%s:", node->brk_label);
+    println("%s:", cg(node)->brk_label);
 
     cur_brk_label = brk;
     cur_cont_label = cont;
@@ -1426,16 +1522,16 @@ static void gen_stmt(Node *node) {
     int c = count();
     char *brk = cur_brk_label;
     char *cont = cur_cont_label;
-    cur_brk_label = node->brk_label;
-    cur_cont_label = node->cont_label;
+    cur_brk_label = cg(node)->brk_label;
+    cur_cont_label = cg(node)->cont_label;
 
     println(".L.begin.%d:", c);
     gen_stmt(node->then);
-    println("%s:", node->cont_label);
+    println("%s:", cg(node)->cont_label);
     gen_expr(node->cond);
     cmp_zero(node->cond->ty);
     println("  jne .L.begin.%d", c);
-    println("%s:", node->brk_label);
+    println("%s:", cg(node)->brk_label);
 
     cur_brk_label = brk;
     cur_cont_label = cont;
@@ -1446,17 +1542,17 @@ static void gen_stmt(Node *node) {
     // B1.2a): the continue label of an enclosing loop stays in force
     // in the body.
     char *brk = cur_brk_label;
-    cur_brk_label = node->brk_label;
+    cur_brk_label = cg(node)->brk_label;
 
     gen_expr(node->cond);
 
-    for (Node *n = node->case_next; n; n = n->case_next) {
+    for (Node *n = cg(node)->case_next; n; n = cg(n)->case_next) {
       char *ax = (node->cond->ty->size == 8) ? "%rax" : "%eax";
       char *di = (node->cond->ty->size == 8) ? "%rdi" : "%edi";
 
       if (n->begin == n->end) {
         println("  cmp $%ld, %s", n->begin, ax);
-        println("  je %s", n->label);
+        println("  je %s", cg(n)->unique_label);
         continue;
       }
 
@@ -1464,21 +1560,21 @@ static void gen_stmt(Node *node) {
       println("  mov %s, %s", ax, di);
       println("  sub $%ld, %s", n->begin, di);
       println("  cmp $%ld, %s", n->end - n->begin, di);
-      println("  jbe %s", n->label);
+      println("  jbe %s", cg(n)->unique_label);
     }
 
-    if (node->default_case)
-      println("  jmp %s", node->default_case->label);
+    if (cg(node)->default_case)
+      println("  jmp %s", cg(cg(node)->default_case)->unique_label);
 
-    println("  jmp %s", node->brk_label);
+    println("  jmp %s", cg(node)->brk_label);
     gen_stmt(node->then);
-    println("%s:", node->brk_label);
+    println("%s:", cg(node)->brk_label);
 
     cur_brk_label = brk;
     return;
   }
   case ND_CASE:
-    println("%s:", node->label);
+    println("%s:", cg(node)->unique_label);
     gen_stmt(node->lhs);
     return;
   case ND_BLOCK:
@@ -1513,14 +1609,14 @@ static void gen_stmt(Node *node) {
     println("  jmp %s", cur_cont_label);
     return;
   case ND_GOTO:
-    println("  jmp %s", node->unique_label);
+    println("  jmp %s", cg(node)->unique_label);
     return;
   case ND_GOTO_EXPR:
     gen_expr(node->lhs);
     println("  jmp *%%rax");
     return;
   case ND_LABEL:
-    println("%s:", node->unique_label);
+    println("%s:", cg(node)->unique_label);
     gen_stmt(node->lhs);
     return;
   case ND_RETURN:
@@ -1581,7 +1677,7 @@ static int label_base;  // the counter's stopping point, taken once
 static int label_seq;   // labels handed out since then
 
 static Node *current_switch;
-static Node *cg_labels;  // the labels of the function being shaped
+static NodeArray cg_labels;  // the labels of the function being shaped
 
 static char *new_label(void) {
   return format(".L..%d", label_base + label_seq++);
@@ -1679,7 +1775,7 @@ static Obj *new_lvar(char *name, Type *ty) {
 // a VLA, by its runtime size rather than a compile-time one.
 static Node *scale_rhs(Type *ptr_ty, Node *rhs, Token *tok) {
   if (ptr_ty->base->kind == TY_VLA)
-    return new_binary(ND_MUL, rhs, new_var_node(ptr_ty->base->vla_size, tok), tok);
+    return new_binary(ND_MUL, rhs, new_var_node(cg_type(ptr_ty->base)->vla_size, tok), tok);
   return new_binary(ND_MUL, rhs, new_long(ptr_ty->base->size, tok), tok);
 }
 
@@ -1689,7 +1785,7 @@ static Node *scale_rhs(Type *ptr_ty, Node *rhs, Token *tok) {
 // must emit it as plain machine arithmetic - gen_expr lower a faithful
 // `+`/`-` itself and would scale this one a second time (PLAN B2).
 static Node *mark_lowered(Node *node) {
-  node->is_lowered = true;
+  cg(node)->is_lowered = true;
   return node;
 }
 
@@ -1770,12 +1866,12 @@ static Node *compute_vla_size(Type *ty, Token *tok) {
 
   Node *base_sz;
   if (ty->base->kind == TY_VLA)
-    base_sz = new_var_node(ty->base->vla_size, tok);
+    base_sz = new_var_node(cg_type(ty->base)->vla_size, tok);
   else
     base_sz = new_num(ty->base->size, tok);
 
-  ty->vla_size = new_lvar("", ty_ulong);
-  Node *expr = new_binary(ND_ASSIGN, new_var_node(ty->vla_size, tok),
+  cg_type(ty)->vla_size = new_lvar("", ty_ulong);
+  Node *expr = new_binary(ND_ASSIGN, new_var_node(cg_type(ty)->vla_size, tok),
                           new_binary(ND_MUL, ty->vla_len, base_sz, tok),
                           tok);
   return node ? new_binary(ND_COMMA, node, expr, tok) : expr;
@@ -1785,10 +1881,10 @@ static Node *compute_vla_size(Type *ty, Token *tok) {
 // computed first if this type has not had its size computed yet
 // (e.g. `sizeof(int[n])` with a fresh type).
 static Node *vla_size_expr(Type *ty, Token *tok) {
-  if (ty->vla_size)
-    return new_var_node(ty->vla_size, tok);
+  if (cg_type(ty)->vla_size)
+    return new_var_node(cg_type(ty)->vla_size, tok);
   Node *lhs = compute_vla_size(ty, tok);
-  return new_binary(ND_COMMA, lhs, new_var_node(ty->vla_size, tok), tok);
+  return new_binary(ND_COMMA, lhs, new_var_node(cg_type(ty)->vla_size, tok), tok);
 }
 
 // The target expression of one initializer assignment (PLAN A8.1,
@@ -1931,7 +2027,7 @@ static bool expand_decl(Node *node) {
       // a type that already has its size computed has been here
       // through an earlier declaration of the same type (a typedef
       // shared by two objects), and its dimensions were shaped then.
-      if (!var->ty->vla_size)
+      if (!cg_type(var->ty)->vla_size)
         shape_node(t->vla_len);
       vla_size = compute_vla_size(var->ty, tok);
       break;
@@ -1943,7 +2039,7 @@ static bool expand_decl(Node *node) {
   if (var->ty->kind == TY_VLA) {
     // `var = alloca(<size>)`: the size chain computed just above.
     lowered = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
-                         new_alloca(new_var_node(var->ty->vla_size, tok)),
+                         new_alloca(new_var_node(cg_type(var->ty)->vla_size, tok)),
                          tok);
   } else if (node->init_resolved) {
     // The initializer comma; a pointer to a VLA reaches here too,
@@ -2112,8 +2208,8 @@ static Node *to_assign(Node *node) {
     // operands). The allocation order - break before continue, at the
     // point the enclosing statement was reached - matches what the
     // whole-tree descent would have produced.
-    loop->brk_label = new_label();
-    loop->cont_label = new_label();
+    cg(loop)->brk_label = new_label();
+    cg(loop)->cont_label = new_label();
 
     // `val` already holds the operand as `op` would have it - scaled
     // for an additive operator on a pointer - so the retry loop
@@ -2178,8 +2274,8 @@ static void shape_node(Node *node) {
   case ND_WHILE:
   case ND_DO:
   case ND_FOR: {
-    node->brk_label = new_label();
-    node->cont_label = new_label();
+    cg(node)->brk_label = new_label();
+    cg(node)->cont_label = new_label();
 
     shape_children(node);
 
@@ -2198,7 +2294,7 @@ static void shape_node(Node *node) {
     return;
   }
   case ND_SWITCH: {
-    node->brk_label = new_label();
+    cg(node)->brk_label = new_label();
 
     Node *sw = current_switch;
     current_switch = node;
@@ -2207,7 +2303,7 @@ static void shape_node(Node *node) {
     return;
   }
   case ND_CASE:
-    node->label = new_label();
+    cg(node)->unique_label = new_label();
     shape_node(node->lhs);
 
     // Linked after the body: a case label may sit inside the statement
@@ -2215,10 +2311,10 @@ static void shape_node(Node *node) {
     // the chain is prepended, so this order is what puts the outer case
     // ahead of the buried one in the comparison chain below.
     if (node->is_default) {
-      current_switch->default_case = node;
+      cg(current_switch)->default_case = node;
     } else {
-      node->case_next = current_switch->case_next;
-      current_switch->case_next = node;
+      cg(node)->case_next = cg(current_switch)->case_next;
+      cg(current_switch)->case_next = node;
     }
     return;
   case ND_GOTO:
@@ -2227,9 +2323,8 @@ static void shape_node(Node *node) {
     // Obj, because a label value can sit outside the statement tree.
     return;
   case ND_LABEL:
-    node->unique_label = new_label();
-    node->goto_next = cg_labels;
-    cg_labels = node;
+    cg(node)->unique_label = new_label();
+    nodearray_push(&cg_labels, node);
     shape_node(node->lhs);
     return;
   case ND_ASSIGN:
@@ -2283,7 +2378,7 @@ static void shape_node(Node *node) {
     // assign_lvar_offsets runs.
     shape_children(node);
     if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
-      node->ret_buffer = new_lvar("", node->ty);
+      cg(node)->ret_buffer = new_lvar("", node->ty);
     return;
   case ND_COND:
     // Both spellings keep their shape: the GNU `a ?: b` is emitted
@@ -2307,7 +2402,7 @@ static void shape_node(Node *node) {
       // sit in the declaration's own lowered chain and the descent
       // reaches them there (the declaration annotation set vla_size
       // on exactly those types, which is how the two cases differ).
-      if (!ty->vla_size)
+      if (!cg_type(ty)->vla_size)
         for (Type *t = ty; t; t = t->base)
           if (t->kind == TY_VLA)
             shape_node(t->vla_len);
@@ -2357,13 +2452,17 @@ static void shape_node(Node *node) {
 // allocated, writing the name each one jumps to. The undeclared-label
 // check already ran in sema, so every reference here matched there.
 static void resolve_label_refs(Obj *fn) {
-  for (Node *x = fn->label_gotos; x; x = x->goto_next)
-    for (Node *y = cg_labels; y; y = y->goto_next)
+  for (int i = 0; i < fn->label_gotos.len; i++) {
+    Node *x = fn->label_gotos.data[i];
+    for (int j = 0; j < cg_labels.len; j++) {
+      Node *y = cg_labels.data[j];
       if (!strcmp(x->label, y->label)) {
-        x->unique_label = y->unique_label;
+        cg(x)->unique_label = cg(y)->unique_label;
         break;
       }
-  cg_labels = NULL;
+    }
+  }
+  cg_labels.len = 0;
 }
 
 // Shapes every defined function's body. The walk follows prog, so a
@@ -2426,13 +2525,13 @@ static void assign_lvar_offsets(Obj *prog) {
       }
 
       top = align_to(top, 8);
-      var->offset = top;
+      cg_obj(var)->offset = top;
       top += var->ty->size;
     }
 
     // Assign offsets to pass-by-register parameters and local variables.
     for (Obj *var = fn->locals; var; var = var->next) {
-      if (var->offset)
+      if (obj_offset(var))
         continue;
 
       // AMD64 System V ABI has a special alignment rule for an array of
@@ -2444,10 +2543,10 @@ static void assign_lvar_offsets(Obj *prog) {
 
       bottom += var->ty->size;
       bottom = align_to(bottom, align);
-      var->offset = -bottom;
+      cg_obj(var)->offset = -bottom;
     }
 
-    fn->stack_size = align_to(bottom, 16);
+    cg_obj(fn)->stack_size = align_to(bottom, 16);
   }
 }
 
@@ -2486,7 +2585,7 @@ static void emit_data(Obj *prog) {
       int pos = 0;
       while (pos < var->ty->size) {
         if (rel && rel->offset == pos) {
-          println("  .quad %s%+ld", *rel->label, rel->addend);
+          println("  .quad %s%+ld", rel->label ? rel->label : cg(rel->label_node)->unique_label, rel->addend);
           rel = rel->next;
           pos += 8;
         } else {
@@ -2566,8 +2665,8 @@ static void emit_text(Obj *prog) {
     // Prologue
     println("  push %%rbp");
     println("  mov %%rsp, %%rbp");
-    println("  sub $%d, %%rsp", fn->stack_size);
-    println("  mov %%rsp, %d(%%rbp)", fn->alloca_bottom->offset);
+    println("  sub $%d, %%rsp", obj_stack_size(fn));
+    println("  mov %%rsp, %d(%%rbp)", obj_offset(fn->alloca_bottom));
 
     // Save arg registers if function is variadic
     if (fn->va_area) {
@@ -2579,7 +2678,7 @@ static void emit_text(Obj *prog) {
           gp++;
       }
 
-      int off = fn->va_area->offset;
+      int off = obj_offset(fn->va_area);
 
       // va_elem
       println("  movl $%d, %d(%%rbp)", gp * 8, off);          // gp_offset
@@ -2609,7 +2708,7 @@ static void emit_text(Obj *prog) {
     // Save passed-by-register arguments to the stack
     int gp = 0, fp = 0;
     for (Obj *var = fn->params; var; var = var->next) {
-      if (var->offset > 0)
+      if (obj_offset(var) > 0)
         continue;
 
       Type *ty = var->ty;
@@ -2619,23 +2718,23 @@ static void emit_text(Obj *prog) {
       case TY_UNION:
         assert(ty->size <= 16);
         if (has_flonum(ty, 0, 8, 0))
-          store_fp(fp++, var->offset, MIN(8, ty->size));
+          store_fp(fp++, obj_offset(var), MIN(8, ty->size));
         else
-          store_gp(gp++, var->offset, MIN(8, ty->size));
+          store_gp(gp++, obj_offset(var), MIN(8, ty->size));
 
         if (ty->size > 8) {
           if (has_flonum(ty, 8, 16, 0))
-            store_fp(fp++, var->offset + 8, ty->size - 8);
+            store_fp(fp++, obj_offset(var) + 8, ty->size - 8);
           else
-            store_gp(gp++, var->offset + 8, ty->size - 8);
+            store_gp(gp++, obj_offset(var) + 8, ty->size - 8);
         }
         break;
       case TY_FLOAT:
       case TY_DOUBLE:
-        store_fp(fp++, var->offset, ty->size);
+        store_fp(fp++, obj_offset(var), ty->size);
         break;
       default:
-        store_gp(gp++, var->offset, ty->size);
+        store_gp(gp++, obj_offset(var), ty->size);
       }
     }
 

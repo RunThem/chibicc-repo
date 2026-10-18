@@ -170,31 +170,33 @@ provenance:   chibicc_token_provenance / chibicc_macro_prov_* /
 
 ## 阶段 L1: 公共 Node / Obj 收口(行为不变)
 
-- [ ] **L1.1 codegen per-node 表**:
+- [x] **L1.1 codegen per-node 表**:
   在 `codegen.c` 加指针键的 `CgNode` 表, 接管 `is_lowered` / `brk_label` / `cont_label` /
-  `pass_by_stack` / `ret_buffer` / `case_next` / `default_case`. `pass_by_stack` 若只在
-  `push_args` 内写后即读, 改成局部变量, 不进表. 先保留字段定义, 只改读写点.
+  `pass_by_stack` / `ret_buffer` / `case_next` / `default_case` / ND_CASE 的生成标签;
+  `pass_by_stack` 若只在 `push_args` 内写后即读, 改成局部变量, 不进表. 先保留字段定义,
+  只改读写点.
   验收: 构建; 本机 `-E` / `-dump-tokens` / `-dump-cst` / `-verify-expansions`;
   `make docker-test`; snapshot 为空.
-- [ ] **L1.2 标签值链路**:
-  `Relocation.label`(`char **`)改为 `Node *label_node`; `eval2` / `eval_rval` 的
-  out-param 改为 `Node **`; `write_gvar_data` 记录节点; codegen 发射数据时从表里解析
-  `unique_label`. 这一步之后 `unique_label` 只属于 codegen.
+- [x] **L1.2 标签值链路**:
+  `Relocation.label`(`char **`)拆成 `char *label`(已知符号名)与 `Node *label_node`
+  ([GNU] `&&label`, 由 codegen 在发射时解析); `eval2` / `eval_rval` 的 out-param 改为
+  `LabelRef *`; `write_gvar_data` 记录两者; codegen 发射数据时按 `label` 优先,
+  否则从表里取 `unique_label`. 这一步之后 `unique_label` 只属于 codegen.
   验收: 含 `&&label` 的用例(control / commonsym 相关)通过; snapshot 为空; docker-test.
-- [ ] **L1.3 `goto_next` 出公共面**:
-  sema 的 goto/label 配对检查改用 sema 私有 `NodeLink` 链; codegen 整形遍自己收集
-  `label_gotos` 与 goto 节点. `Node.goto_next` 删除.
+- [x] **L1.3 `goto_next` 出公共面**:
+  sema 的 goto/label 配对检查改用 `NodeArray`; `Obj.label_gotos` 从单链表改为
+  `NodeArray`; codegen 整形遍用自己的 `NodeArray` 收集标签. `Node.goto_next` 删除.
   验收: control 测试; snapshot; docker-test.
-- [ ] **L1.4 Obj 帧字段出公共面**:
-  `Obj.offset` / `stack_size` 进 `codegen.c` 的 `ObjInfo` 表; `va_area` /
-  `alloca_bottom` 不动. 检查 `sema.c` 的 `->offset` 全部是 `Member.offset`(布局结论),
-  不受影响.
+- [x] **L1.4 Obj 帧字段与 Type 的 VLA 槽**:
+  `Obj.offset` / `stack_size` 进 `codegen.c` 的 `CgObj` 表, `Type.vla_size` 进
+  `CgType` 表; `va_area` / `alloca_bottom` 与 `Member.offset` 不动(前者是 sema
+  物化的 ABI 对象, 后者是布局结论).
   验收: snapshot; docker-test.
-- [ ] **L1.5 收口**:
+- [x] **L1.5 收口**:
   从 `chibicc.h` 删除 L1.1-L1.4 的字段与注释; 用 grep 证明公共头无 codegen 字段名
   (`is_lowered` / `brk_label` / `cont_label` / `ret_buffer` / `unique_label` /
   `pass_by_stack` / `case_next` / `default_case` / `goto_next` / `Obj.offset` /
-  `stack_size`). 更新文件头注释.
+  `stack_size` / `Type.vla_size`). 更新文件头注释.
   验收: 编译零告警; docker-test; snapshot 为空; 提交.
 
 ## 阶段 L2: context / arena / 诊断

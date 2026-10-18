@@ -65,23 +65,51 @@
 
 ## L1.1 codegen per-node 表
 
-(待执行)
+- 动作: `codegen.c` 新增指针键的 `CgNode` / `CgType` / `CgObj` 三张表(4096 桶链地址);
+  `is_lowered` / `brk_label` / `cont_label` / `pass_by_stack` / `ret_buffer` /
+  `case_next` / `default_case` / ND_CASE 的生成标签全部改走 `cg(node)`.
+- 说明: ND_CASE 之前借用公共 `Node.label` 存 codegen 分配的名字, 现在存进
+  `cg(node)->unique_label`; `Node.label` 只留拼写名.
+- 验收: 本机 287 次只读通道运行(`-dump-tokens` / `-dump-cst` / `-reconstruct` /
+  `-reconstruct-cst` / `-verify-cst` / `-dump-expansions` / `-verify-expansions`,
+  41 个 `test/*.c` × 7)与基线 `8c1c1d1` 的产物逐字节一致; 本机可编译的 39 个文件的
+  `-S` 汇编也与基线逐字节一致; `make docker-test` EXIT=0; snapshot 为空.
+- 偏差: `pass_by_stack` 仍在表里(它在 `push_args` 的两遍扫描之间需要持久化).
 
 ## L1.2 标签值链路
 
-(待执行)
+- 动作: `Relocation.label`(`char **`)拆成 `char *label`(序列化时已知的符号名)与
+  `Node *label_node`([GNU] `&&label`); sema 的 `eval2` / `eval_rval` out-param 改为
+  文件内私有的 `LabelRef { char *name; Node *node; }`; codegen 发射数据时
+  `rel->label ? rel->label : cg(rel->label_node)->unique_label`.
+- 说明: 原实现把 `&node->unique_label` 或 `&node->var->name` 存进 `char **`, 是
+  sema 写 codegen 字段的唯一硬耦合; 拆开后 sema 不再持有 codegen 槽的地址.
+- 验收: control / commonsym 相关用例; snapshot 为空; docker-test 全绿.
 
 ## L1.3 goto_next 出公共面
 
-(待执行)
+- 动作: sema 的 `gotos` / `labels` 改为 `NodeArray`; `Obj.label_gotos` 从单链表改为
+  `NodeArray`; codegen 的 `cg_labels` 改为私有的 `NodeArray`; `Node.goto_next` 删除.
+- 验收: control 用例; snapshot 为空; docker-test 全绿.
 
-## L1.4 Obj 帧字段出公共面
+## L1.4 Obj 帧字段与 Type 的 VLA 槽
 
-(待执行)
+- 动作: `Obj.offset` / `stack_size` 进 `CgObj` 表; `codegen.c` 的全部读取走
+  `obj_offset()` / `obj_stack_size()`, 赋值写 `cg_obj(...)`; `Type.vla_size` 进
+  `CgType` 表. `Member.offset`(布局结论)、`Relocation.offset`(数据镜像位置)、
+  `va_area` / `alloca_bottom`(sema 物化的 ABI 对象)保持不动.
+- 验收: snapshot 为空; docker-test 全绿.
 
 ## L1.5 公共 Node / Obj 收口
 
-(待执行)
+- 动作: 从 `chibicc.h` 删除上述字段与注释; `Type` 只保留 `vla_len`(维度表达式),
+  `Obj` 只保留 sema 结论; 文件头注释改述"库层只留源码与语义".
+- 验证: `grep 'is_lowered\|brk_label\|cont_label\|pass_by_stack\|ret_buffer\|unique_label\|case_next\|default_case\|goto_next\|vla_size\|stack_size' chibicc.h`
+  无命中; `grep goto_next *.c *.h` 无命中; 构建零新告警.
+- 闸门: `make docker-test` EXIT=0(`.cache/L1-docker-test.log`);
+  `make docker-snapshot-diff` -> `snapshot diff: empty`(`.cache/L1-snapshot.log`).
+- 偏差: 计划只列了 Node 的五个字段与 Obj 的帧字段; 实施时补上了 ND_CASE 的生成标签
+  与 `Type.vla_size`, 它们同样是 codegen 私有状态.
 
 ## L2.1 context 骨架与 facade
 
