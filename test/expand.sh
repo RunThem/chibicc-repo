@@ -148,4 +148,139 @@ exp_verify obj '#define M 1\nint x = M;\n'
 exp_verify nest '#define A 1\n#define B A\nint x = B;\n'
 exp_verify hdr '#include "defs.h"\nint x = M;\n'
 
+# ---- M1.3: 实参层 -----------------------------------------------------------------
+# 普通实参的位置是调用点(实参 token 的拼写位置), 层是它在该次展开里的序号.
+
+# 单个实参: 层为 arg1.
+exp_dump arg '#define F(x) x\nint y = F(7);\n' \
+'T arg.c:2 keyword int -
+T arg.c:2 ident y -
+T arg.c:2 punct = -
+T arg.c:2 num 7 F@arg.c:2:arg1:arg.c:1
+T arg.c:2 punct ; -
+'
+
+# 参数重复出现: 每次替换都带同一个实参层; 宏体里的 `+` 是 body 层.
+exp_dump arg_repeat '#define F(x) x + x\nint y = F(7);\n' \
+'T arg_repeat.c:2 keyword int -
+T arg_repeat.c:2 ident y -
+T arg_repeat.c:2 punct = -
+T arg_repeat.c:2 num 7 F@arg_repeat.c:2:arg1:arg_repeat.c:1
+T arg_repeat.c:1 punct + F@arg_repeat.c:2:body:arg_repeat.c:1
+T arg_repeat.c:2 num 7 F@arg_repeat.c:2:arg1:arg_repeat.c:1
+T arg_repeat.c:2 punct ; -
+'
+
+# 嵌套宏在实参内: 实参层在最前, 内层展开的链作为尾.
+exp_dump arg_nested '#define G 2\n#define F(x) x\nint y = F(G);\n' \
+'T arg_nested.c:3 keyword int -
+T arg_nested.c:3 ident y -
+T arg_nested.c:3 punct = -
+T arg_nested.c:1 num 2 F@arg_nested.c:3:arg1:arg_nested.c:2>G@arg_nested.c:3:body:arg_nested.c:1
+T arg_nested.c:3 punct ; -
+'
+
+# `#` 的产物: 合成字符串 token(@synth), 层归 body.
+exp_dump stringize '#define S(x) #x\nchar *s = S(abc);\n' \
+'T stringize.c:2 keyword char -
+T stringize.c:2 punct * -
+T stringize.c:2 ident s -
+T stringize.c:2 punct = -
+T stringize.c:@synth str "abc" S@stringize.c:2:body:stringize.c:1
+T stringize.c:2 punct ; -
+'
+
+# `#` 拼接多个实参 token: 词间空格进入字符串, dump 的转义规则同 trivia.sh.
+exp_dump stringize_ws '#define S(x) #x\nchar *s = S(a b);\n' \
+'T stringize_ws.c:2 keyword char -
+T stringize_ws.c:2 punct * -
+T stringize_ws.c:2 ident s -
+T stringize_ws.c:2 punct = -
+T stringize_ws.c:@synth str "a\\x20b" S@stringize_ws.c:2:body:stringize_ws.c:1
+T stringize_ws.c:2 punct ; -
+'
+
+# `##` 两侧都是实参: 产物是合成 token, 层归 body(S3c-i).
+exp_dump paste '#define C(a,b) a##b\nint x = C(foo,bar);\n' \
+'T paste.c:2 keyword int -
+T paste.c:2 ident x -
+T paste.c:2 punct = -
+T paste.c:@synth ident foobar C@paste.c:2:body:paste.c:1
+T paste.c:2 punct ; -
+'
+
+# `##` 左侧实参为空: 右侧实参的 token 原样输出, 层是 arg2(S4a-i).
+exp_dump paste_left_empty '#define C(a,b) a##b\nint x = C(,bar);\n' \
+'T paste_left_empty.c:2 keyword int -
+T paste_left_empty.c:2 ident x -
+T paste_left_empty.c:2 punct = -
+T paste_left_empty.c:2 ident bar C@paste_left_empty.c:2:arg2:paste_left_empty.c:1
+T paste_left_empty.c:2 punct ; -
+'
+
+# `##` 右侧是宏体 token: paste 产物归 body(S4b + S3d).
+exp_dump paste_body_rhs '#define C(a) a##x\nint y = C(ba);\n' \
+'T paste_body_rhs.c:2 keyword int -
+T paste_body_rhs.c:2 ident y -
+T paste_body_rhs.c:2 punct = -
+T paste_body_rhs.c:@synth ident bax C@paste_body_rhs.c:2:body:paste_body_rhs.c:1
+T paste_body_rhs.c:2 punct ; -
+'
+
+# `,##__VA_ARGS__` 非空: 逗号归 body, 变参归 arg1(S2b + 普通参数).
+exp_dump va_comma '#define V(...) f(0 ,##__VA_ARGS__)\nint x = V(1);\n' \
+'T va_comma.c:2 keyword int -
+T va_comma.c:2 ident x -
+T va_comma.c:2 punct = -
+T va_comma.c:1 ident f V@va_comma.c:2:body:va_comma.c:1
+T va_comma.c:1 punct ( V@va_comma.c:2:body:va_comma.c:1
+T va_comma.c:1 num 0 V@va_comma.c:2:body:va_comma.c:1
+T va_comma.c:1 punct , V@va_comma.c:2:body:va_comma.c:1
+T va_comma.c:2 num 1 V@va_comma.c:2:arg1:va_comma.c:1
+T va_comma.c:1 punct ) V@va_comma.c:2:body:va_comma.c:1
+T va_comma.c:2 punct ; -
+'
+
+# `,##__VA_ARGS__` 空变参: 逗号与 __VA_ARGS__ 都不产出 token(S2a).
+exp_dump va_comma_empty '#define V(...) f(0 ,##__VA_ARGS__)\nint x = V();\n' \
+'T va_comma_empty.c:2 keyword int -
+T va_comma_empty.c:2 ident x -
+T va_comma_empty.c:2 punct = -
+T va_comma_empty.c:1 ident f V@va_comma_empty.c:2:body:va_comma_empty.c:1
+T va_comma_empty.c:1 punct ( V@va_comma_empty.c:2:body:va_comma_empty.c:1
+T va_comma_empty.c:1 num 0 V@va_comma_empty.c:2:body:va_comma_empty.c:1
+T va_comma_empty.c:1 punct ) V@va_comma_empty.c:2:body:va_comma_empty.c:1
+T va_comma_empty.c:2 punct ; -
+'
+
+# __VA_OPT__ 有变参: 括号内的 token 来自宏体, 归 body(S5a).
+exp_dump va_opt '#define V(...) f(__VA_OPT__(1))\nint x = V(2);\n' \
+'T va_opt.c:2 keyword int -
+T va_opt.c:2 ident x -
+T va_opt.c:2 punct = -
+T va_opt.c:1 ident f V@va_opt.c:2:body:va_opt.c:1
+T va_opt.c:1 punct ( V@va_opt.c:2:body:va_opt.c:1
+T va_opt.c:1 num 1 V@va_opt.c:2:body:va_opt.c:1
+T va_opt.c:1 punct ) V@va_opt.c:2:body:va_opt.c:1
+T va_opt.c:2 punct ; -
+'
+
+# 变参整体是一个实参(标准模型): a 与 b 同属 arg1.
+exp_dump variadic '#define V(...) __VA_ARGS__\nint x = V(a, b);\n' \
+'T variadic.c:2 keyword int -
+T variadic.c:2 ident x -
+T variadic.c:2 punct = -
+T variadic.c:2 ident a V@variadic.c:2:arg1:variadic.c:1
+T variadic.c:2 punct , V@variadic.c:2:arg1:variadic.c:1
+T variadic.c:2 ident b V@variadic.c:2:arg1:variadic.c:1
+T variadic.c:2 punct ; -
+'
+
+exp_verify arg '#define F(x) x\nint y = F(7);\n'
+exp_verify arg_nested '#define G 2\n#define F(x) x\nint y = F(G);\n'
+exp_verify stringize '#define S(x) #x\nchar *s = S(abc);\n'
+exp_verify paste '#define C(a,b) a##b\nint x = C(foo,bar);\n'
+exp_verify va_comma '#define V(...) f(0 ,##__VA_ARGS__)\nint x = V(1);\n'
+exp_verify variadic '#define V(...) __VA_ARGS__\nint x = V(a, b);\n'
+
 echo "expand lock: $n_d dump samples, $n_v verify samples"

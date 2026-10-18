@@ -297,7 +297,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
   `#line` 后的物理行, 头文件定义 + 主文件调用(docker), 空宏.
   验收: 新断言全过; `-E` 与诊断不变; snapshot 为空.
 
-- [ ] **M1.3 实参层**:
+- [x] **M1.3 实参层**:
   `MacroArg` 增序号; `subst` 按"记录写入清单"逐分支挂 body / arg; 普通参数经 `preprocess2`
   预扫描后逐个 prepend.
   测试: 每个实参, 参数重复出现, 嵌套宏在实参内, `#`, `##`(两侧 / 仅一侧 / 空实参),

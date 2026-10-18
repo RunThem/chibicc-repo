@@ -35,6 +35,7 @@ struct MacroArg {
   MacroArg *next;
   char *name;
   bool is_va_args;
+  int index;      // 0-based position in the actual argument list
   Token *tok;
 };
 
@@ -483,11 +484,13 @@ read_macro_args(Token **rest, Token *tok, MacroParam *params, char *va_args_name
   MacroArg *cur = &head;
 
   MacroParam *pp = params;
+  int index = 0;
   for (; pp; pp = pp->next) {
     if (cur != &head)
       tok = skip(tok, ",");
     cur = cur->next = read_macro_arg_one(&tok, tok, false);
     cur->name = pp->name;
+    cur->index = index++;
   }
 
   if (va_args_name) {
@@ -502,6 +505,7 @@ read_macro_args(Token **rest, Token *tok, MacroParam *params, char *va_args_name
     }
     arg->name = va_args_name;;
     arg->is_va_args = true;
+    arg->index = index;
     cur = cur->next = arg;
   } else if (pp) {
     error_tok(start, "too many arguments");
@@ -572,10 +576,18 @@ static bool has_varargs(MacroArg *args) {
   return false;
 }
 
-// Replace func-like macro parameters with given arguments.
-static Token *subst(Token *tok, MacroArg *args) {
+// Replace func-like macro parameters with given arguments. Every token
+// this produces is tagged with the expansion record `e`: body tokens and
+// the synthetic tokens of `#` / `##` as the body layer, argument tokens
+// with the index of the argument they came from. Arguments adjacent to
+// `#` or `##` are not macro-expanded, which is why their provenance is the
+// call site's own chain; ordinary arguments arrive pre-expanded, so the
+// layer this function prepends sits in front of the chain of the token
+// the expansion produced.
+static Token *subst(Token *tok, MacroArg *args, MacroExpansion *e) {
   Token head = {};
   Token *cur = &head;
+  MacroProv *body_base = e->name->prov;
 
   while (tok->kind != TK_EOF) {
     // "#" followed by a parameter is replaced with stringized actuals.
@@ -584,6 +596,7 @@ static Token *subst(Token *tok, MacroArg *args) {
       if (!arg)
         error_tok(tok->next, "'#' is not followed by a macro parameter");
       cur = cur->next = stringize(tok, arg->tok);
+      cur->prov = new_prov(e, -1, body_base);
       tok = tok->next->next;
       continue;
     }
@@ -598,6 +611,7 @@ static Token *subst(Token *tok, MacroArg *args) {
           tok = tok->next->next->next;
         } else {
           cur = cur->next = copy_token(tok);
+          cur->prov = new_prov(e, -1, body_base);
           tok = tok->next->next;
         }
         continue;
@@ -615,14 +629,18 @@ static Token *subst(Token *tok, MacroArg *args) {
       if (arg) {
         if (arg->tok->kind != TK_EOF) {
           *cur = *paste(cur, arg->tok);
-          for (Token *t = arg->tok->next; t->kind != TK_EOF; t = t->next)
+          cur->prov = new_prov(e, -1, body_base);
+          for (Token *t = arg->tok->next; t->kind != TK_EOF; t = t->next) {
             cur = cur->next = copy_token(t);
+            cur->prov = new_prov(e, arg->index, t->prov);
+          }
         }
         tok = tok->next->next;
         continue;
       }
 
       *cur = *paste(cur, tok->next);
+      cur->prov = new_prov(e, -1, body_base);
       tok = tok->next->next;
       continue;
     }
@@ -635,17 +653,22 @@ static Token *subst(Token *tok, MacroArg *args) {
       if (arg->tok->kind == TK_EOF) {
         MacroArg *arg2 = find_arg(args, rhs);
         if (arg2) {
-          for (Token *t = arg2->tok; t->kind != TK_EOF; t = t->next)
+          for (Token *t = arg2->tok; t->kind != TK_EOF; t = t->next) {
             cur = cur->next = copy_token(t);
+            cur->prov = new_prov(e, arg2->index, t->prov);
+          }
         } else {
           cur = cur->next = copy_token(rhs);
+          cur->prov = new_prov(e, -1, body_base);
         }
         tok = rhs->next;
         continue;
       }
 
-      for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next)
+      for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next) {
         cur = cur->next = copy_token(t);
+        cur->prov = new_prov(e, arg->index, t->prov);
+      }
       tok = tok->next;
       continue;
     }
@@ -655,8 +678,10 @@ static Token *subst(Token *tok, MacroArg *args) {
     if (equal(tok, "__VA_OPT__") && equal(tok->next, "(")) {
       MacroArg *arg = read_macro_arg_one(&tok, tok->next->next, true);
       if (has_varargs(args))
-        for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next)
+        for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next) {
           cur = cur->next = t;
+          cur->prov = new_prov(e, -1, body_base);
+        }
       tok = skip(tok, ")");
       continue;
     }
@@ -667,14 +692,17 @@ static Token *subst(Token *tok, MacroArg *args) {
       Token *t = preprocess2(arg->tok);
       t->at_bol = tok->at_bol;
       t->has_space = tok->has_space;
-      for (; t->kind != TK_EOF; t = t->next)
+      for (; t->kind != TK_EOF; t = t->next) {
         cur = cur->next = copy_token(t);
+        cur->prov = new_prov(e, arg->index, t->prov);
+      }
       tok = tok->next;
       continue;
     }
 
     // Handle a non-macro token.
     cur = cur->next = copy_token(tok);
+    cur->prov = new_prov(e, -1, body_base);
     tok = tok->next;
     continue;
   }
@@ -735,12 +763,10 @@ static bool expand_macro(Token **rest, Token *tok) {
   Hideset *hs = hideset_intersection(macro_token->hideset, rparen->hideset);
   hs = hideset_union(hs, new_hideset(m->name));
 
-  Token *body = subst(m->body, args);
+  Token *body = subst(m->body, args, e);
   body = add_hideset(body, hs);
-  for (Token *t = body; t->kind != TK_EOF; t = t->next) {
+  for (Token *t = body; t->kind != TK_EOF; t = t->next)
     t->origin = macro_token;
-    t->prov = new_prov(e, -1, macro_token->prov);
-  }
   *rest = append(body, tok->next);
   (*rest)->at_bol = macro_token->at_bol;
   (*rest)->has_space = macro_token->has_space;

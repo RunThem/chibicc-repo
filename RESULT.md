@@ -165,9 +165,27 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 - 偏差: 无. 运行时实测的 dump 与本步推导的期望逐字节一致(重定义指向旧定义, `#line`
   还原物理行, 头文件定义显示 `./defs.h:1`).
 
-## M1.3 实参层(未开工)
+## M1.3 实参层
 
-待填.
+- 改了什么:
+  - `preprocess.c`: `MacroArg` 增 `index`; `read_macro_args` 按参数顺序赋 0 起序号(变参
+    作为一个实参, 序号为命名参数个数); `subst` 增 `MacroExpansion *e` 参数, 按"记录写入
+    清单"逐分支挂接: `#` 产物 / `##` 与 `,##__VA_ARGS__` 的逗号 / paste 产物 / 空实参时
+    的体 token / `__VA_OPT__` 的体 token / 普通体 token 一律 body 层; 实参 token(含 `##`
+    两侧未展开的实参和预扫描后的普通实参)按 `arg->index` 挂 arg 层. 普通实参的链以
+    `preprocess2` 产物 token 自己的 prov 为尾(嵌套宏链因此保留在实参层之后).
+  - `expand_macro` 的 function-like 输出循环只保留 `origin` 写入; provenance 挂接全部
+    移进 `subst`(M1.2 的临时统一 body 层消失).
+  - `test/expand.sh`: 加 12 个 dump 样本与 6 个 verify 样本, 覆盖每个实参 / 参数重复 /
+    实参内嵌套宏 / `#`(单 token 与多 token) / `##`(两侧, 左侧空, 右侧体 token) /
+    `,##__VA_ARGS__`(非空与空) / `__VA_OPT__` / 变参.
+- 为什么: 实参层是"来自宏体还是第几个实参"的判据; `#` 与 `##` 的实参不预展开, 所以它
+  们的实参层直接接调用点链; 普通实参先经 `preprocess2`, 其产物已经带内层展开的链, 新层
+  按 prepend 规则放到链头(与 PLAN.md 的 A/F 例子一致).
+- 闸门: `snapshot diff: empty`; `make docker-test` EXIT=0; `test/expand.sh`
+  22 个 dump 样本 + 12 个 verify 样本通过(stage1 与 stage2).
+- 偏差: 无. paste 的产物只保留 body 层, 被拼接的操作数 provenance 不留在结果 token 上
+  (PLAN.md 已列为已知限制, 字符级重放靠记录与实参列表).
 
 ## M2.1 内建宏 / 合成 token(未开工)
 
@@ -183,6 +201,7 @@ T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 |---|---|---|
 | `659eadb` | M0.1 | 归档 CST 线, 建立本线计划与记录, 基线闸门全绿 |
 | `922711a` | M1.1 | 记录类型 / 访问器 / 两个只读通道骨架 + test/expand.sh |
+| `d2af2d2` | M1.2 | 对象宏 / 函数宏 body 层与 dump 的完整链 |
 
 ## 终态验收(本线完成时逐项实测)
 
