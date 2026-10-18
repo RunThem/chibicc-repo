@@ -719,6 +719,7 @@ char *get_ident(Token *tok);
 // typedef/tag classification oracle the C grammar requires. sema()
 // consumes the chain.
 Node *parse(Token *tok);
+void parse_init(void);
 
 //
 // sema.c

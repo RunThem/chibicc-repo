@@ -215,7 +215,7 @@ provenance:   chibicc_token_provenance / chibicc_macro_prov_* /
   `macros` / `cond_incl` / `pragma_once` / `include_next_idx` 进 context;
   `init_macros` / `define_macro` 在 `preprocess` 入口按 context 配置执行.
   验收: `-E` 逐字节不变; expand 全绿; docker-test.
-- [ ] **L2.4 parse 作用域**:
+- [x] **L2.4 parse 作用域**:
   `parse.c` 的 `scope` 进 context; typedef/tag oracle 的语义不变.
   验收: 全语料 parse; docker-test.
 - [ ] **L2.5 sema 状态**:

@@ -138,7 +138,12 @@ struct ParseScope {
   HashMap tags;
 };
 
-static ParseScope *scope = &(ParseScope){};
+void parse_init(void) {
+  chibicc_ctx()->scope = chibicc_arena_calloc(1, sizeof(ParseScope));
+}
+
+// The parser's scope stack lives in ChibiccContext (PLAN L2.4).
+#define scope (chibicc_ctx()->scope)
 
 static void enter_scope(void) {
   ParseScope *sc = calloc(1, sizeof(ParseScope));
@@ -2119,6 +2124,7 @@ static bool is_function(Token *tok) {
 // walks, in source order, to declare the objects and analyze the
 // function bodies.
 Node *parse(Token *tok) {
+  parse_init();
   Node head = {};
   Node *cur = &head;
 

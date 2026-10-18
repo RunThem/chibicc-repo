@@ -148,7 +148,11 @@
 
 ## L2.4 parse 作用域
 
-(待执行)
+- 动作: 删除 `parse.c` 的 `static ParseScope *scope`; 新增 `parse_init()`, 在 context
+  的 arena 里建根作用域; `parse()` 入口调用它, 因此同一 context 的第二次 parse 从空作用域
+  开始; 文件内部用 `#define scope (chibicc_ctx()->scope)` 保持原有写法.
+- 验收: 287 次只读通道 + 39 个文件的 `-S` 与基线逐字节一致; 构建零新告警.
+- 偏差: 无.
 
 ## L2.5 sema 状态
 
