@@ -12,6 +12,12 @@
 - 红线: 不新增 `exit()`(驱动器与默认处理器除外); 不新增文件域语义 static; 不改变
   诊断文案与插入符锚点; 不改变 `-E` / trivia / CST 的逐字节输出; 新代码保持 C11 可自举.
 
+## 2026-10-19 计划修订说明
+
+`PLAN.md` 同日修订: L4.1-L4.3 恢复为未完成; 新增 L3.0(CST arena 契约), L3.1b/c/d,
+L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下面 L4 一节记录的
+是当时实际跑过的闸门, 不是阶段 5 的终态验收. 新版计划的第一个执行项是 L3.0.
+
 ## 基线记录(L0.1)
 
 - 开工 HEAD: `8c1c1d1` (Rename expansion_dump.c to provenance.c).
@@ -96,7 +102,7 @@
 
 - 动作: `Obj.offset` / `stack_size` 进 `CgObj` 表; `codegen.c` 的全部读取走
   `obj_offset()` / `obj_stack_size()`, 赋值写 `cg_obj(...)`; `Type.vla_size` 进
-  `CgType` 表. `Member.offset`(布局结论)、`Relocation.offset`(数据镜像位置)、
+  `CgType` 表. `Member.offset`(布局结论), `Relocation.offset`(数据镜像位置),
   `va_area` / `alloca_bottom`(sema 物化的 ABI 对象)保持不动.
 - 验收: snapshot 为空; docker-test 全绿.
 
@@ -199,9 +205,9 @@
 
 ## L2.8 状态收口验证
 
-- 静态审计追加发现并收进 context 的函数域 static: `tokenize_file` 的 `file_no`、
-  `is_keyword` 的关键字 HashMap、`is_typename` 的关键字 HashMap、
-  `include_file` 的 `include_guards` HashMap、`counter_macro` 的 `__COUNTER__` 计数器
+- 静态审计追加发现并收进 context 的函数域 static: `tokenize_file` 的 `file_no`,
+  `is_keyword` 的关键字 HashMap, `is_typename` 的关键字 HashMap,
+  `include_file` 的 `include_guards` HashMap, `counter_macro` 的 `__COUNTER__` 计数器
   (加上 L2.2 的 `search_cache`). 这些都是 arena 分配, 若不迁移会在 reset 后悬垂.
 - 结果: 库层只剩只读表:`read_punct` / `is_keyword` / `is_typename` 的关键字数组与
   `format_date` 的月份名; 没有文件域可变 static, 没有函数域可变 static.
@@ -245,6 +251,9 @@
 - 偏差: provenance 访问器与 `chibicc_reconstruct` 的逐字节断言尚未加入.
 
 ## L4 终态验收
+
+2026-10-19 修订: 本节只是当时跑过的闸门记录. `PLAN.md` 已把 L4.1-L4.3 恢复为未完成,
+因为 L3.1b / L3.2 / L3.3b / L3.4 仍未完成; 阶段 5 的终态验收以 `PLAN.md` 的新口径为准.
 
 - L4.1 全量闸门: `make docker-test` EXIT=0(`.cache/L3-docker-test.log`, 5,036 行,
   stage1 + stage2 + 自举 + 全部通道 + `test/library.sh` 两次通过);
