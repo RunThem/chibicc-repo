@@ -32,6 +32,13 @@ int main() {
   // PLAN A10.2: the recorded selection read from an initializer.
   ASSERT(9, ({ int x = _Generic(1, int: 9, default: 8); x; }));
 
+  // The controlling expression is the promotion's result, not the
+  // narrow operand's type.
+  ASSERT(2, _Generic((char)1 << 2, char: 1, int: 2, default: 3));
+  ASSERT(2, _Generic((short)1 << 2, char: 1, int: 2, default: 3));
+  ASSERT(2, _Generic((unsigned char)1 << 2, char: 1, int: 2, default: 3));
+  ASSERT(2, _Generic(~(char)1, char: 1, int: 2, default: 3));
+
   printf("OK\n");
   return 0;
 }

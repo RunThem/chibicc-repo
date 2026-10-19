@@ -45,6 +45,14 @@ int main() {
 
   ASSERT(0, strcmp(STR(u8"a"), "u8\"a\""));
 
+  // Adjacent u8 and ordinary literals concatenate into a UTF-8 string;
+  // u8 with u/U/L is a constraint violation (locked in diagnostic.sh).
+  ASSERT(0, strcmp(u8"a" u8"b", "ab"));
+  ASSERT(0, strcmp(u8"a" "b", "ab"));
+  ASSERT(0, strcmp("a" u8"b", "ab"));
+  ASSERT(3, sizeof(u8"a" u8"b"));
+  ASSERT(3, sizeof(u8"a" "b"));
+
   ASSERT(2, sizeof(u""));
   ASSERT(10, sizeof(u"\xffzzz"));
   ASSERT(0, memcmp(u"", "\0\0", 2));

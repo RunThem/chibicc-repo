@@ -1216,7 +1216,11 @@ typedef enum {
 } StringKind;
 
 static StringKind getStringKind(Token *tok) {
-  if (!strcmp(tok->loc, "u8"))
+  // `loc` is the first byte of the spelling, not a NUL-terminated
+  // prefix: `u8"..."` continues with the quote, so a strcmp against
+  // "u8" never matches. Check the three bytes that form the prefix.
+  if (tok->len >= 3 && tok->loc[0] == 'u' && tok->loc[1] == '8' &&
+      tok->loc[2] == '"')
     return STR_UTF8;
 
   switch (tok->loc[0]) {

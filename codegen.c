@@ -143,6 +143,13 @@ static int obj_stack_size(Obj *obj) {
   return cg_obj(obj)->stack_size;
 }
 
+// The low `width` bits set. A full-width bit-field would shift by the
+// width, which is UB (and on x86 masks the count, producing a zero
+// mask), so that case is spelled out.
+static unsigned long bitfield_mask(int width) {
+  return width == 64 ? ~0UL : (1UL << width) - 1;
+}
+
 // The innermost enclosing loop's break and continue labels while a
 // body is being emitted (PLAN B1.2a): a break or a continue resolves
 // against them here, where the shaping pass used to bind the label
@@ -999,13 +1006,24 @@ static void gen_expr(Node *node) {
       // from memory and merge it with a new value.
       Member *mem = node->lhs->member;
       println("  mov %%rax, %%rdi");
-      println("  and $%ld, %%rdi", (1L << mem->bit_width) - 1);
+
+      // `and` takes a sign-extended 32-bit immediate. A mask wider than
+      // that (a bit-field of 32 or more bits) has to be materialized in
+      // a register first.
+      long field_mask = (long)bitfield_mask(mem->bit_width);
+      if (field_mask > INT32_MAX || field_mask < INT32_MIN) {
+        println("  mov $%ld, %%r9", field_mask);
+        println("  and %%r9, %%rdi");
+      } else {
+        println("  and $%ld, %%rdi", field_mask);
+      }
+
       println("  shl $%d, %%rdi", mem->bit_offset);
 
       println("  mov (%%rsp), %%rax");
       load(mem->ty);
 
-      long mask = ((1L << mem->bit_width) - 1) << mem->bit_offset;
+      long mask = (long)(bitfield_mask(mem->bit_width) << mem->bit_offset);
       println("  mov $%ld, %%r9", ~mask);
       println("  and %%r9, %%rax");
       println("  or %%rdi, %%rax");

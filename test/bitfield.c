@@ -6,6 +6,13 @@ struct {
   int c : 10;
 } g45 = {1, 2, 3}, g46={};
 
+// A bit-field may use the full width of its type. Both the global
+// initializer path and the assignment path must cover all 64 bits.
+struct bit64u { unsigned long long x : 64; };
+struct bit64s { long long x : 64; };
+struct bit64u g_bit64u = {1};
+struct bit64s g_bit64s = {-1};
+
 int main() {
   ASSERT(4, sizeof(struct {int x:1; }));
   ASSERT(8, sizeof(struct {long x:1; }));
@@ -33,6 +40,17 @@ int main() {
   ASSERT(0, g46.a);
   ASSERT(0, g46.b);
   ASSERT(0, g46.c);
+
+  ASSERT(8, sizeof(struct bit64u));
+  ASSERT(1, (int)g_bit64u.x);
+  ASSERT(-1, (int)g_bit64s.x);
+  ASSERT(1, ({ struct bit64u x = {1}; (int)x.x; }));
+  ASSERT(1, ({ struct bit64u x = {0}; x.x = 1; (int)x.x; }));
+  ASSERT(-1, ({ struct bit64s x; x.x = -1; (int)x.x; }));
+  ASSERT(3, ({ struct { unsigned long long a : 1, b : 63; } x = {0};
+               x.b = 3; (int)x.b; }));
+  ASSERT(0, ({ struct { unsigned long long a : 1, b : 63; } x = {0};
+               x.b = 3; (int)x.a; }));
 
   typedef struct {
     int a : 10;

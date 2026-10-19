@@ -81,6 +81,15 @@ int main() {
   ASSERT(4, sizeof(1?(short)2:(char)3));
   ASSERT(8, sizeof(1?(long)2:(char)3));
 
+  // The integer promotions make a shift or complement of a narrow
+  // operand `int` (C11 6.5.7p3, 6.5.3.3p3).
+  ASSERT(4, sizeof((char)1 << 2));
+  ASSERT(4, sizeof((char)1 >> 2));
+  ASSERT(4, sizeof((short)1 << 2));
+  ASSERT(4, sizeof((unsigned char)1 << 2));
+  ASSERT(4, sizeof(~(char)1));
+  ASSERT(4, sizeof(~(short)1));
+
   ASSERT(1, sizeof(char) << 31 >> 31);
   ASSERT(1, sizeof(char) << 63 >> 63);
 

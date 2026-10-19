@@ -1544,6 +1544,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
 
   while (!equal(tok, "}")) {
     VarAttr attr = {};
+    Token *decl_start = tok;
     Type *basety = declspec(&tok, tok, &attr, specs);
     bool first = true;
 
@@ -1555,6 +1556,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
          basety->kind == TY_TYPEOF) &&
         consume(&tok, tok, ";")) {
       Member *mem = chibicc_arena_calloc(1, sizeof(Member));
+      mem->tok = decl_start;
       mem->ty = basety;
       mem->idx = idx++;
       mem->align_ty = attr.align_ty;
@@ -1570,6 +1572,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
       first = false;
 
       Member *mem = chibicc_arena_calloc(1, sizeof(Member));
+      mem->tok = tok;
       mem->ty = declarator(&tok, tok, basety);
       mem->name = mem->ty->name;
       mem->idx = idx++;

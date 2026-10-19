@@ -16,8 +16,10 @@
 #
 # 覆盖清单: 判定表 A 15 处 + B 4 处 + C 11 处 + D 3 处 = 拆分线终态 parse.c 的全部 33 处
 # error_tok(B/C/D 18 处此后移入 sema.c);
-# 判定表 E 10 处中的 9 处, 另加 e11(R3.1 的语句表达式末语句形状回归锁); f 系列 11 处
-# (A0.1 的 9 处, 夹在降级里的检查; 2026-09-29 基线缺陷修复随修锁定的 f10/f11). 合计 55 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
+# 判定表 E 10 处中的 9 处, 另加 e11(R3.1 的语句表达式末语句形状回归锁); f 系列 12 处
+# (A0.1 的 9 处, 夹在降级里的检查; 2026-09-29 基线缺陷修复随修锁定的 f10/f11;
+# 2026-10-19 审计修复的 f12); g 系列 8 处 (2026-10-19 审计修复: u8 拼接与位域宽度
+# 校验). 合计 64 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
 # symbol" - find_func 只返回 is_function 为真的对象, 该守卫恒假, 当前树中不可达.
 # 另: 文件域 "void x;" 当前被接受(无检查), 亦无用例.
 #
@@ -462,7 +464,7 @@ e11_stmt_expr_decl.c:1: int f(void) { return ({ int x = 1; }); }
                                              ^ statement expression returning void is not supported
 WANT
 
-# ---- f 系列: 夹在降级代码里的检查 (11 处, PLAN A0.1 + 基线缺陷修复) ----
+# ---- f 系列: 夹在降级代码里的检查 (12 处, PLAN A0.1 + 基线缺陷修复) ----
 # 这些诊断的 error_tok 今天位于本线要搬进 codegen 的降级路径上或紧挨着它, 而检查本身
 # 按判据 2 必须留在 sema. 搬运前先把 "文案 + 锚点" 锁住, 否则丢掉或漂移都不会被任何
 # 闸门看见(语料里只有合法 C). 对应关系:
@@ -585,6 +587,94 @@ SNIP
 expect f11_compound_sub_invalid_operands <<'WANT'
 f11_compound_sub_invalid_operands.c:1: void f(int *p) { int i; i -= p; }
                                                                  ^ invalid operands
+WANT
+
+# f12: ND_EXCH's type check used the ND_CAS-only `cas_addr` field as its
+# anchor; the field is NULL for ND_EXCH, so the diagnostic was a crash.
+# The anchor is the left operand.
+snippet f12_exchange_pointer_expected <<'SNIP'
+int f(int a, int b) { return __builtin_atomic_exchange(a, b); }
+SNIP
+
+expect f12_exchange_pointer_expected <<'WANT'
+f12_exchange_pointer_expected.c:1: int f(int a, int b) { return __builtin_atomic_exchange(a, b); }
+                                                                                          ^ pointer expected
+WANT
+
+# ---- g 系列: 2026-10-19 审计修复的新检查 (8 处) ----
+# g01-g04: C11 6.4.5 的字符串字面量拼接约束, u8 不能与 u/U/L 拼接;
+# g05-g08: C11 6.7.2.1p4 的位域宽度约束 (非负, 不超承载类型宽度, 整型).
+
+snippet g01_u8_utf16_concat <<'SNIP'
+char *p = u8"a" u"b";
+SNIP
+
+expect g01_u8_utf16_concat <<'WANT'
+g01_u8_utf16_concat.c:1: char *p = u8"a" u"b";
+                                         ^ unsupported non-standard concatenation of string literals
+WANT
+
+snippet g02_u8_utf32_concat <<'SNIP'
+char *p = u8"a" U"b";
+SNIP
+
+expect g02_u8_utf32_concat <<'WANT'
+g02_u8_utf32_concat.c:1: char *p = u8"a" U"b";
+                                         ^ unsupported non-standard concatenation of string literals
+WANT
+
+snippet g03_u8_wide_concat <<'SNIP'
+char *p = u8"a" L"b";
+SNIP
+
+expect g03_u8_wide_concat <<'WANT'
+g03_u8_wide_concat.c:1: char *p = u8"a" L"b";
+                                        ^ unsupported non-standard concatenation of string literals
+WANT
+
+snippet g04_utf16_u8_concat <<'SNIP'
+char *p = u"a" u8"b";
+SNIP
+
+expect g04_utf16_u8_concat <<'WANT'
+g04_utf16_u8_concat.c:1: char *p = u"a" u8"b";
+                                        ^ unsupported non-standard concatenation of string literals
+WANT
+
+snippet g05_negative_bitfield_width <<'SNIP'
+struct S { int x : -1; }; struct S s;
+SNIP
+
+expect g05_negative_bitfield_width <<'WANT'
+g05_negative_bitfield_width.c:1: struct S { int x : -1; }; struct S s;
+                                                    ^ negative width in bit-field
+WANT
+
+snippet g06_oversized_bitfield_width <<'SNIP'
+struct S { int x : 33; }; struct S s;
+SNIP
+
+expect g06_oversized_bitfield_width <<'WANT'
+g06_oversized_bitfield_width.c:1: struct S { int x : 33; }; struct S s;
+                                                     ^ width of bit-field exceeds its type
+WANT
+
+snippet g07_float_bitfield <<'SNIP'
+struct S { float x : 3; }; struct S s;
+SNIP
+
+expect g07_float_bitfield <<'WANT'
+g07_float_bitfield.c:1: struct S { float x : 3; }; struct S s;
+                                         ^ bit-field has non-integer type
+WANT
+
+snippet g08_pointer_bitfield <<'SNIP'
+struct S { int *x : 3; }; struct S s;
+SNIP
+
+expect g08_pointer_bitfield <<'WANT'
+g08_pointer_bitfield.c:1: struct S { int *x : 3; }; struct S s;
+                                         ^ bit-field has non-integer type
 WANT
 
 fail=""

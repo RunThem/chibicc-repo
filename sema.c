@@ -672,7 +672,21 @@ static void finalize_members(Type *ty) {
 static void eval_bitfield_widths(Type *ty) {
   for (Member *mem = ty->members; mem; mem = mem->next) {
     if (mem->width_expr) {
-      mem->bit_width = eval(mem->width_expr);
+      // C11 6.7.2.1p4: the width is a nonnegative integer constant
+      // expression that does not exceed the width of the member's type.
+      // The mask builders below shift by this value, so an unchecked
+      // width is both UB and a silent miscompile.
+      if (!is_integer(mem->ty))
+        error_tok(mem->tok, "bit-field has non-integer type");
+
+      int64_t width = eval(mem->width_expr);
+      if (width < 0)
+        error_tok(mem->width_expr->tok, "negative width in bit-field");
+      if (width > mem->ty->size * 8)
+        error_tok(mem->width_expr->tok,
+                  "width of bit-field exceeds its type");
+
+      mem->bit_width = width;
       mem->width_expr = NULL;
     }
   }
@@ -1532,7 +1546,8 @@ write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset
         char *loc = buf + offset + mem->offset;
         uint64_t oldval = read_buf(loc, mem->ty->size);
         uint64_t newval = eval(expr);
-        uint64_t mask = (1L << mem->bit_width) - 1;
+        uint64_t mask = mem->bit_width == 64 ? ~0ULL
+                                             : (1ULL << mem->bit_width) - 1;
         uint64_t combined = oldval | ((newval & mask) << mem->bit_offset);
         write_buf(loc, combined, mem->ty->size);
       } else {
@@ -1994,9 +2009,15 @@ void add_type(Node *node) {
     return;
   case ND_BITNOT:
   case ND_SHL:
-  case ND_SHR:
-    node->ty = node->lhs->ty;
+  case ND_SHR: {
+    // C11 6.5.3.3p3 and 6.5.7p3: the integer promotions apply to these
+    // operands, so a narrow left operand makes the result `int`. The
+    // result type is a conclusion consumers read (`sizeof`, `_Generic`),
+    // not just an instruction-selection hint.
+    Type *ty = get_common_type(ty_int, node->lhs->ty);
+    node->ty = ty;
     return;
+  }
   case ND_STRING: {
     // Materialize the literal's anonymous global, created here where
     // the literal is typed (PLAN contract 4). The node keeps its kind
@@ -2184,7 +2205,7 @@ void add_type(Node *node) {
     return;
   case ND_EXCH:
     if (node->lhs->ty->kind != TY_PTR)
-      error_tok(node->cas_addr->tok, "pointer expected");
+      error_tok(node->lhs->tok, "pointer expected");
     node->ty = node->lhs->ty->base;
     return;
   case ND_CAST:

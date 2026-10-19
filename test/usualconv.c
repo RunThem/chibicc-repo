@@ -27,6 +27,12 @@ int main() {
 
   ASSERT(10, (1 ? ret10 : (void *)0)());
 
+  // The shift and complement operands are promoted before the operation,
+  // so the narrow value is not truncated by the outer cast.
+  ASSERT(-256, (char)-1 << 8);
+  ASSERT(1020, (unsigned char)255 << 2);
+  ASSERT(-1, ~(unsigned char)0);
+
   printf("OK\n");
   return 0;
 }
