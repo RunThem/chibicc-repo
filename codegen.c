@@ -2444,13 +2444,16 @@ static void shape_node(Node *node) {
   }
 }
 
-// Pairs the function's collected references (sema's check pass
-// stashed them on Obj.label_gotos) with the labels the descent above
-// allocated, writing the name each one jumps to. The undeclared-label
-// check already ran in sema, so every reference here matched there.
+// Pairs the function's collected references (sema's check pass parked
+// them in the context) with the labels the descent above allocated,
+// writing the name each one jumps to. The undeclared-label check
+// already ran in sema, so every reference here matched there.
 static void resolve_label_refs(Obj *fn) {
-  for (int i = 0; i < fn->label_gotos.len; i++) {
-    Node *x = fn->label_gotos.data[i];
+  NodeArray *refs = sema_label_gotos(fn);
+  if (!refs)
+    return;
+  for (int i = 0; i < refs->len; i++) {
+    Node *x = refs->data[i];
     for (int j = 0; j < cg_labels.len; j++) {
       Node *y = cg_labels.data[j];
       if (!strcmp(x->label, y->label)) {

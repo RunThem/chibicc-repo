@@ -2961,6 +2961,25 @@ static void splice_locals(Obj *fn) {
   }
 }
 
+// The goto and label-value references collected for one function are
+// parked in the context (PLAN L3.1b): they are a sema -> codegen
+// handoff, not a layer-3/4 field of Obj. The parameter is not named
+// `gotos` because sema.c aliases that name to the context slot.
+void sema_store_label_gotos(Obj *fn, NodeArray refs) {
+  LabelGotoList *l = chibicc_arena_calloc(1, sizeof(LabelGotoList));
+  l->fn = fn;
+  l->refs = refs;
+  l->next = chibicc_ctx()->label_gotos;
+  chibicc_ctx()->label_gotos = l;
+}
+
+NodeArray *sema_label_gotos(Obj *fn) {
+  for (LabelGotoList *l = chibicc_ctx()->label_gotos; l; l = l->next)
+    if (l->fn == fn)
+      return &l->refs;
+  return NULL;
+}
+
 static void analyze_function(Obj *fn) {
   // The return conversions read the function being annotated, and a
   // nested definition's analysis runs from inside its host's, so the
@@ -2977,7 +2996,7 @@ static void analyze_function(Obj *fn) {
   // label values that sit outside the statement tree (block-scope
   // static initializers) make this the only chain that reaches them
   // all.
-  fn->label_gotos = gotos;
+  sema_store_label_gotos(fn, gotos);
   gotos = labels = (NodeArray){};
 
   splice_locals(fn);

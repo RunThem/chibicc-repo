@@ -1,6 +1,356 @@
 // Internal umbrella (PLAN L3.1). The public types and declarations live
-// in libchibicc/include/chibicc/chibicc.h; this header is what the
-// implementation includes, and the place internal-only declarations
-// will move to as the public surface is trimmed.
+// under libchibicc/include/chibicc/; this header is what the
+// implementation includes. Everything below the public include is
+// internal to the library: the context layout, the arena, the helper
+// containers, and the phase functions the facade wraps.
 #define CHIBICC_INTERNAL 1
+
+#define _POSIX_C_SOURCE 200809L
+#include <assert.h>
+#include <ctype.h>
+#include <errno.h>
+#include <glob.h>
+#include <libgen.h>
+#include <setjmp.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdnoreturn.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
 #include "chibicc/chibicc.h"
+
+#define MAX(x, y) ((x) < (y) ? (y) : (x))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
+#ifndef __GNUC__
+# define __attribute__(x)
+#endif
+
+//
+// strings.c
+//
+
+typedef struct {
+  Node **data;
+  int capacity;
+  int len;
+} NodeArray;
+
+void strarray_push(StringArray *arr, char *s);
+void nodearray_push(NodeArray *arr, Node *node);
+char *format(char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
+//
+// tokenize.c
+//
+
+noreturn void error(char *fmt, ...) __attribute__((format(printf, 1, 2)));
+noreturn void error_at(char *loc, char *fmt, ...) __attribute__((format(printf, 2, 3)));
+noreturn void error_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void warn_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
+bool equal(Token *tok, char *op);
+Token *skip(Token *tok, char *op);
+bool consume(Token **rest, Token *tok, char *str);
+void convert_pp_tokens(Token *tok);
+File **get_input_files(void);
+File *new_file(char *name, int file_no, char *contents);
+bool is_line_break(char *p);
+int line_break_len(char *p);
+Token *tokenize_string_literal(Token *tok, Type *basety);
+Token *tokenize(File *file);
+Token *tokenize_file(char *filename);
+
+#define unreachable() \
+  error("internal error at %s:%d", __FILE__, __LINE__)
+
+//
+// cst.c
+//
+
+CstNode *cst_parse(Token *tok);
+void cst_reconstruct(CstNode *root, FILE *out);
+void cst_dump(CstNode *root, FILE *out);
+bool cst_verify(CstNode *root, Token *tok);
+
+//
+// preprocess.c
+//
+
+char *search_include_paths(char *filename);
+void init_macros(void);
+void define_macro(char *name, char *buf);
+void undef_macro(char *name);
+Token *preprocess(Token *tok);
+
+MacroProv *token_provenance(Token *tok);
+MacroProv *macro_prov_next(MacroProv *p);
+MacroExpansion *macro_prov_expansion(MacroProv *p);
+int macro_prov_arg_index(MacroProv *p);
+
+Token *macro_expansion_name(MacroExpansion *e);
+Token *macro_expansion_end(MacroExpansion *e);   // rparen; name if none
+char *macro_expansion_macro(MacroExpansion *e);  // the macro's spelling
+Token *macro_expansion_def(MacroExpansion *e);   // #define name; NULL if none
+Token *macro_expansion_arg(MacroExpansion *e, int i);
+int macro_expansion_arg_count(MacroExpansion *e);
+bool macro_expansion_is_builtin(MacroExpansion *e);
+
+//
+// provenance.c
+//
+
+void expansion_dump(Token *tok, FILE *out);
+bool expansion_verify(Token *tok);
+
+//
+// parse.c
+//
+
+// Constructors for the faithful-tree nodes. Defined in parse.c; sema
+// uses them to build the nodes its lowerings introduce. The shapes that
+// only a lowering produces - a bound name, a VLA designator, a numeric
+// literal typed at birth - sema constructs itself.
+Node *new_node(NodeKind kind, Token *tok);
+Node *new_binary(NodeKind kind, Node *lhs, Node *rhs, Token *tok);
+Node *new_unary(NodeKind kind, Node *expr, Token *tok);
+Node *new_num(int64_t val, Token *tok);
+
+// Identifier spelling, used by sema when it declares the objects the
+// parser's declaration records name.
+char *get_ident(Token *tok);
+
+Node *parse(Token *tok);
+void parse_init(void);
+void sema_store_label_gotos(Obj *fn, NodeArray gotos);
+NodeArray *sema_label_gotos(Obj *fn);
+
+//
+// sema.c
+//
+
+Obj *sema(Node *toplevel);
+
+// Parses and evaluates a constant expression. Used by the
+// preprocessor for `#if`; not part of the parse/sema pipeline below.
+int64_t const_expr(Token **rest, Token *tok);
+
+// The parser's conditional-expression entry point (parse.c), which
+// const_expr uses to read the expression it evaluates.
+Node *conditional(Token **rest, Token *tok);
+
+// The type-level tools a consumer needs in order to build nodes that
+// arrive already typed: the annotation entry point, the constructors for
+// the shapes only sema produces, and the conversions that carry sema's
+// decisions.
+void add_type(Node *node);
+Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok);
+void usual_arith_conv(Node **lhs, Node **rhs);
+Type *get_common_type(Type *ty1, Type *ty2);
+Node *new_cast(Node *expr, Type *ty);
+Node *new_long(int64_t val, Token *tok);
+Node *new_ulong(long val, Token *tok);
+Node *new_var_node(Obj *var, Token *tok);
+Node *new_vla_ptr(Obj *var, Token *tok);
+Node *new_alloca(Node *sz);
+
+// The next value the anonymous-name counter would hand out, without
+// consuming it.
+int unique_name_next(void);
+
+//
+// type.c
+//
+
+extern Type *ty_void;
+extern Type *ty_bool;
+
+extern Type *ty_char;
+extern Type *ty_short;
+extern Type *ty_int;
+extern Type *ty_long;
+
+extern Type *ty_uchar;
+extern Type *ty_ushort;
+extern Type *ty_uint;
+extern Type *ty_ulong;
+
+extern Type *ty_float;
+extern Type *ty_double;
+extern Type *ty_ldouble;
+
+bool is_integer(Type *ty);
+bool is_flonum(Type *ty);
+bool is_numeric(Type *ty);
+bool is_compatible(Type *t1, Type *t2);
+Type *copy_type(Type *ty);
+Type *pointer_to(Type *base);
+Type *func_type(Type *return_ty);
+Type *array_of(Type *base, int size);
+Type *vla_of(Type *base, Node *expr);
+Type *array_of_dim(Type *base, Node *dim);
+Type *typeof_placeholder(void);
+Type *enum_type(void);
+Type *struct_type(void);
+
+//
+// codegen.c
+//
+
+void codegen(Obj *prog, FILE *out);
+int align_to(int n, int align);
+
+//
+// unicode.c
+//
+
+int encode_utf8(char *buf, uint32_t c);
+uint32_t decode_utf8(char **new_pos, char *p);
+bool is_ident1(uint32_t c);
+bool is_ident2(uint32_t c);
+int display_width(char *p, int len);
+
+//
+// hashmap.c
+//
+
+typedef struct {
+  char *key;
+  int keylen;
+  void *val;
+} HashEntry;
+
+typedef struct {
+  HashEntry *buckets;
+  int capacity;
+  int used;
+} HashMap;
+
+void *hashmap_get(HashMap *map, char *key);
+void *hashmap_get2(HashMap *map, char *key, int keylen);
+void hashmap_put(HashMap *map, char *key, void *val);
+void hashmap_put2(HashMap *map, char *key, int keylen, void *val);
+void hashmap_delete(HashMap *map, char *key);
+void hashmap_delete2(HashMap *map, char *key, int keylen);
+void hashmap_test(void);
+
+//
+// main.c
+//
+
+bool file_exists(char *path);
+void print_escaped(FILE *out, char *p, int len);
+char *token_kind_name(TokenKind kind);
+
+extern bool opt_fpic;
+extern bool opt_fcommon;
+extern char *base_file;
+
+//
+// context / arena / diagnostics (PLAN L2)
+//
+
+typedef struct JmpFrame JmpFrame;
+typedef struct ArenaBlock ArenaBlock;
+
+// The error boundary: every public entry pushes one, and error_* longjmps
+// to the innermost frame. The driver pushes one around codegen too.
+struct JmpFrame {
+  JmpFrame *prev;
+  jmp_buf buf;
+};
+
+struct ArenaBlock {
+  ArenaBlock *next;
+  size_t used;
+  size_t cap;
+  char *data;
+};
+
+// The goto / label-value references sema's check pass collects, keyed by
+// the function they belong to. The handoff lives in the context, not on
+// the public Obj (PLAN L3.1b).
+typedef struct LabelGotoList LabelGotoList;
+struct LabelGotoList {
+  LabelGotoList *next;
+  Obj *fn;
+  NodeArray refs;
+};
+
+struct CondIncl;
+struct ParseScope;
+struct SemaScope;
+
+struct ChibiccContext {
+  // Arena for everything this translation unit allocates.
+  ArenaBlock *arena;
+
+  // Configuration. Survives reset, owned by malloc, freed by
+  // chibicc_context_free.
+  char **include_paths;
+  int include_paths_len;
+  int include_paths_cap;
+  // Command-line macro operations in order: "D:name=body" or "U:name".
+  char **macro_ops;
+  int macro_ops_len;
+  int macro_ops_cap;
+  ChibiccDiagnosticFn diag_fn;
+  void *diag_user;
+  JmpFrame *jmp_top;
+  bool failed;
+
+  // Per-TU state (PLAN L2.2-L2.5). These were file-scope statics.
+  char *base_file;
+  File *current_file;
+  File **input_files;
+  int input_files_len;
+  int input_files_cap;
+  int next_file_no;
+  bool at_bol;
+  bool has_space;
+
+  HashMap macros;
+  struct CondIncl *cond_incl;
+  HashMap pragma_once;
+  HashMap search_cache;
+  HashMap include_guards;
+  HashMap keyword_map;
+  HashMap typename_map;
+  int counter;
+  int include_next_idx;
+
+  struct ParseScope *scope;
+  struct SemaScope *sema_scope;
+
+  Obj *locals;
+  Obj *globals;
+  Obj *sema_fn;
+  Obj *builtin_alloca;
+  NodeArray gotos;
+  NodeArray labels;
+  LabelGotoList *label_gotos;
+  int loop_depth;
+  int switch_depth;
+  int unique_name_id;
+  bool resolving_body;
+};
+
+extern _Thread_local ChibiccContext *chibicc_active_ctx;
+ChibiccContext *chibicc_ctx(void);
+
+void chibicc_context_activate(ChibiccContext *ctx);
+void chibicc_context_set_base_file(ChibiccContext *ctx, char *path);
+
+void *chibicc_arena_alloc(size_t size, size_t align);
+void *chibicc_arena_calloc(size_t count, size_t size);
+char *chibicc_arena_strdup(char *s);
+char *chibicc_arena_strndup(char *s, size_t n);
+void *chibicc_arena_realloc(void *old, size_t old_size, size_t new_size);

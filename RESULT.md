@@ -241,7 +241,7 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
   EXIT=0(stage1 与 stage2 各跑两次, 无跳过); `make docker-snapshot-diff` ->
   `snapshot diff: empty`; 构建零告警.
 
-## L3.1 公共头拆分
+## L3.1a 公共头路径拆分
 
 - 动作(已完成的部分): `chibicc.h` 移到 `libchibicc/include/chibicc/chibicc.h`;
   根 `chibicc.h` 变为内部 umbrella(`#define CHIBICC_INTERNAL` + include); 构建加
@@ -249,6 +249,36 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 - 偏差: 公共头目前仍是"完整内部头"搬家, 内部函数声明与 `HashMap` / 作用域类型仍在
   公共面; 收窄到 D7 是 L3.1b, 尚未执行. 因此本步只完成了路径与构建边界, 不是最终
   的公共面.
+
+## L3.1b 公共头拆分与 context 不透明化
+
+- 动作: `libchibicc/include/chibicc/` 拆成 9 个头 - umbrella `chibicc.h` 与
+  `context.h` / `diagnostic.h` / `token.h` / `cst.h` / `ast.h` / `sema.h` /
+  `preprocess.h` / `provenance.h`, 每个头只 include 标准头与同目录的公共头.
+  公共面只剩 D7 函数与第 1-4 层 IR 类型(含 `Chibicc*` 别名); `ChibiccContext` 只有
+  前向声明, 完整定义与 `JmpFrame` / `ArenaBlock` / `HashMap` / `NodeArray` 以及
+  `ParseScope` / `SemaScope` / `CondIncl` 的前向声明进根内部 umbrella `chibicc.h`.
+  内部 umbrella 同时承接原公共头里的系统 include, `MAX` / `MIN`, `__attribute__` 兜底,
+  `unreachable()`, 全部内部函数声明与驱动器全局.
+- provenance: 11 个访问器的公共名改为 `chibicc_token_provenance` /
+  `chibicc_macro_prov_*` / `chibicc_macro_expansion_*`, 由 `lib.c` 的薄包装转发到
+  内部同名函数; 它们只读不可变记录, 不设错误边界.
+- `Obj.label_gotos` 的处置: 该字段是 sema -> codegen 的标签引用交接, 不是第 3/4 层
+  字段, 和 `NodeArray` 一起挡在公共面外. 交接改挂 context 的 `LabelGotoList`:
+  `sema_store_label_gotos` 在 sema 侧写入, `sema_label_gotos` 由 codegen 的整形遍
+  读取, `reset` 清空. 公共 `Obj` 因此不再含 `NodeArray`.
+- 验收: 9 个头在 clang 与 gcc 下逐个 `-std=c11 -fsyntax-only -Wall -Wextra` 通过;
+  只 include `<chibicc/chibicc.h>` 的消费者(library.sh)通过; grep 公共头无
+  `HashMap` / `JmpFrame` / `jmp_buf` / `chibicc_arena_*` / `chibicc_context_activate`
+  / `NodeArray` / `ArenaBlock` / `ParseScope` / `SemaScope` / `CondIncl` /
+  `_POSIX_C_SOURCE` / `__attribute__` / `strarray_push`.
+- 行为: 本机 trivia / CST(48 round-trip + 61 dump)/ expand(29 dump)/ 诊断 55 例逐字节
+  通过; `test/library.sh` 两次 `library: ok`; `make docker-test` EXIT=0(stage1 与
+  stage2 的 `test/library.sh` 各跑普通 + ASan 两次); `make docker-snapshot-diff` ->
+  `snapshot diff: empty`. macOS 上 codegen.c 的 5 条 `%lu` / `int64_t` 格式告警是
+  既有问题(行号不在本步改动内, Linux 下不出现).
+- 偏差: 公共短 typedef 与 struct tag 仍在(L3.2a 才改名); `StringArray` 仍在公共面
+  (`Obj.refs` 使用, 计划未列); `chibicc_reconstruct` 仍在驱动器(L3.2a).
 
 ## L3.2 公共函数前缀与 facade 收口
 
@@ -304,4 +334,5 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 | `375eb3d` | L2.5-L2.8 | sema 状态, 诊断回调 + longjmp, arena 分配, 状态审计 |
 | `eeb0c5c` | L3.1a/L3.3a | 公共头路径, `libchibicc.a`, `test/library.sh` |
 | `d7b0060` | 计划修订 | L3.0-L3.5 与必选 L5 线(2026-10-19) |
-| `(本提交)` | L3.0 | CST children 进 arena, reset 循环 + LSan 闸门 |
+| `0bc52d9` | L3.0 | CST children 进 arena, reset 循环 + ASan 分配统计闸门 |
+| `(本提交)` | L3.1b | 9 个公共头, context 不透明, `label_gotos` 交接进 context |

@@ -309,7 +309,7 @@ D7 是唯一清单: 新增公共函数必须先改 D7 与 `test/public-api.sh` �
   类型与声明搬到 `libchibicc/include/chibicc/chibicc.h`; 构建加 `-Ilibchibicc/include`;
   消费者可以只 include `<chibicc/chibicc.h>`.
   验收: `test/library.sh` 用公共路径编译通过; docker-test.
-- [ ] **L3.1b 公共头拆分与 context 不透明化**:
+- [x] **L3.1b 公共头拆分与 context 不透明化**:
   按 D5 拆成 context / diagnostic / token / cst / ast / sema / preprocess / provenance /
   umbrella; 把 `ChibiccContext` 的完整定义, `JmpFrame`, `HashMap`, `NodeArray` 移入
   根内部头; `ParseScope` / `SemaScope` / `CondIncl` 的定义可以留在实现文件, 但它们的

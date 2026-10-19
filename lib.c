@@ -42,13 +42,6 @@ ChibiccContext *chibicc_ctx(void) {
     chibicc_active_ctx = _prev;                                           \
   } while (0)
 
-struct ArenaBlock {
-  ArenaBlock *next;
-  size_t used;
-  size_t cap;
-  char *data;
-};
-
 #define ARENA_BLOCK_SIZE (64 * 1024)
 
 static void *arena_alloc(ChibiccContext *ctx, size_t size, size_t align) {
@@ -223,6 +216,7 @@ static void clear_state(ChibiccContext *ctx) {
   ctx->builtin_alloca = NULL;
   ctx->gotos = (NodeArray){};
   ctx->labels = (NodeArray){};
+  ctx->label_gotos = NULL;
   ctx->loop_depth = 0;
   ctx->switch_depth = 0;
   ctx->unique_name_id = 0;
@@ -341,3 +335,50 @@ bool chibicc_expansion_verify(ChibiccContext *ctx, Token *tok) {
   LEAVE(ctx);
   return r;
 }
+
+// The provenance accessors (PLAN D7). They read immutable records and
+// allocate nothing, so they need no error boundary.
+ChibiccMacroProv *chibicc_token_provenance(ChibiccToken *tok) {
+  return token_provenance(tok);
+}
+
+ChibiccMacroProv *chibicc_macro_prov_next(ChibiccMacroProv *p) {
+  return macro_prov_next(p);
+}
+
+ChibiccMacroExpansion *chibicc_macro_prov_expansion(ChibiccMacroProv *p) {
+  return macro_prov_expansion(p);
+}
+
+int chibicc_macro_prov_arg_index(ChibiccMacroProv *p) {
+  return macro_prov_arg_index(p);
+}
+
+ChibiccToken *chibicc_macro_expansion_name(ChibiccMacroExpansion *e) {
+  return macro_expansion_name(e);
+}
+
+ChibiccToken *chibicc_macro_expansion_end(ChibiccMacroExpansion *e) {
+  return macro_expansion_end(e);
+}
+
+char *chibicc_macro_expansion_macro(ChibiccMacroExpansion *e) {
+  return macro_expansion_macro(e);
+}
+
+ChibiccToken *chibicc_macro_expansion_def(ChibiccMacroExpansion *e) {
+  return macro_expansion_def(e);
+}
+
+ChibiccToken *chibicc_macro_expansion_arg(ChibiccMacroExpansion *e, int i) {
+  return macro_expansion_arg(e, i);
+}
+
+int chibicc_macro_expansion_arg_count(ChibiccMacroExpansion *e) {
+  return macro_expansion_arg_count(e);
+}
+
+bool chibicc_macro_expansion_is_builtin(ChibiccMacroExpansion *e) {
+  return macro_expansion_is_builtin(e);
+}
+
