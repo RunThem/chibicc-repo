@@ -349,7 +349,7 @@ D7 是唯一清单: 新增公共函数必须先改 D7 与 `test/public-api.sh` �
   `libchibicc.so.0`); 用 visibility 或 version script 限制导出; `make clean && make`
   后 `nm -D` 校验.
   验收: `test/library.sh` 能链接 `.so`; `nm -D libchibicc.so` 只含 D7.
-- [ ] **L3.3c stage2 库对象与安装面**:
+- [x] **L3.3c stage2 库对象与安装面**:
   stage2 用 chibicc 重编库对象, 让 `test/library.sh` 链接 stage2 的 `.a`; 新增
   `make install`, `libchibicc.pc`, `CHIBICC_VERSION` / `chibicc_version()`.
   验收: stage2 库对象能链接; `pkg-config --cflags --libs libchibicc` 可用; 安装目录

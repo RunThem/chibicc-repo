@@ -48,6 +48,8 @@ cat > "$tmp/consumer.c" <<'EOF'
 int main(void) {
   char *src = "int x = 1;\n";
   ChibiccContext *ctx = chibicc_context_new();
+  if (!ctx || strcmp(chibicc_version(), CHIBICC_VERSION) != 0)
+    return 1;
 
   ChibiccToken *tok = chibicc_tokenize_buffer(ctx, "<public-api>", src);
   if (!tok)
@@ -142,7 +144,8 @@ chibicc_macro_expansion_arg
 chibicc_macro_expansion_arg_count
 chibicc_macro_expansion_is_builtin
 chibicc_expansion_dump
-chibicc_expansion_verify"
+chibicc_expansion_verify
+chibicc_version"
 
 nm "$root/libchibicc.a" | awk '$2 == "T" { s = $3; sub(/^_/, "", s); print s }' \
   | sort -u > "$tmp/libT"

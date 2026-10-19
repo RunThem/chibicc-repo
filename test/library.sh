@@ -7,8 +7,16 @@ set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cc=${CC:-cc}
+# CHIBICC_LIB selects the archive to link; test-stage2 points it at the
+# stage2 objects (PLAN L3.3c).
+lib=${CHIBICC_LIB:-$root/libchibicc.a}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+
+if [ ! -f "$lib" ]; then
+  echo "library: $lib is missing; run make libchibicc.a" >&2
+  exit 1
+fi
 
 cat > "$tmp/consumer.c" <<'EOF'
 #include <chibicc/chibicc.h>
@@ -127,7 +135,7 @@ int main(void) {
 }
 EOF
 
-"$cc" -std=c11 -I"$root/libchibicc/include" "$tmp/consumer.c" "$root/libchibicc.a" -o "$tmp/consumer"
+"$cc" -std=c11 -I"$root/libchibicc/include" "$tmp/consumer.c" "$lib" -o "$tmp/consumer"
 "$tmp/consumer"
 
 # The same consumer under AddressSanitizer (PLAN L3.0). The reset loop
@@ -135,13 +143,13 @@ EOF
 # the arena accumulates there. LeakSanitizer is deliberately not the
 # gate - it reports only intermittently under Rosetta.
 "$cc" -std=c11 -g -fsanitize=address -fno-omit-frame-pointer \
-  -I"$root/libchibicc/include" "$tmp/consumer.c" "$root/libchibicc.a" \
+  -I"$root/libchibicc/include" "$tmp/consumer.c" "$lib" \
   -o "$tmp/consumer-asan"
 "$tmp/consumer-asan"
 
 # The shared library (PLAN L3.3b, Linux only): the same consumer links
 # against it and runs.
-if [ -f "$root/libchibicc.so" ]; then
+if [ -z "${CHIBICC_LIB:-}" ] && [ -f "$root/libchibicc.so" ]; then
   "$cc" -std=c11 -I"$root/libchibicc/include" "$tmp/consumer.c" \
     -L"$root" -lchibicc -Wl,-rpath,"$root" -o "$tmp/consumer-so"
   "$tmp/consumer-so"

@@ -18,4 +18,10 @@
 #include <chibicc/ast.h>
 #include <chibicc/sema.h>
 
+// The library version (PLAN L3.3c). Only source compatibility is
+// promised: a change to a public struct is a version bump. Keep this in
+// sync with VERSION in the Makefile (test/install.sh checks it).
+#define CHIBICC_VERSION "0.1.0"
+CHIBICC_API const char *chibicc_version(void);
+
 #endif

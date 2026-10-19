@@ -1,5 +1,11 @@
 CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch -Ilibchibicc/include
 
+# Keep VERSION in sync with CHIBICC_VERSION in the public umbrella.
+VERSION=0.1.0
+PREFIX ?= /usr/local
+DESTDIR ?=
+INSTALL ?= install
+
 SRCS=$(wildcard *.c)
 OBJS=$(SRCS:.c=.o)
 LIB_SRCS=$(filter-out main.c codegen.c,$(SRCS))
@@ -62,15 +68,20 @@ test: $(TESTS)
 test-all: test test-stage2
 
 # The public-surface gate (PLAN L3.1d): header self-containment, a
-# consumer that sees only libchibicc/include, and the symbol check.
-check-library: $(CHECK_LIBS)
+# consumer that sees only libchibicc/include, the symbol checks, and the
+# install / pkg-config layout (L3.3c).
+check-library: $(CHECK_LIBS) libchibicc.pc
 	test/library.sh
 	test/public-api.sh
+	test/install.sh
 
 # Stage 2
 
 stage2/chibicc: $(OBJS:%=stage2/%)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+stage2/libchibicc.a: $(LIB_OBJS:%=stage2/%)
+	$(AR) rcs $@ $^
 
 stage2/%.o: chibicc %.c
 	mkdir -p stage2/test
@@ -81,7 +92,7 @@ stage2/test/%.exe: stage2/chibicc test/%.c
 	./stage2/chibicc -Iinclude -Itest -c -o stage2/test/$*.o test/$*.c
 	$(CC) -pthread -o $@ stage2/test/$*.o -xc test/common
 
-test-stage2: libchibicc.a $(TESTS:test/%=stage2/test/%)
+test-stage2: libchibicc.a stage2/libchibicc.a $(TESTS:test/%=stage2/test/%)
 	for i in $(TESTS:test/%=stage2/test/%); do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./stage2/chibicc
 	test/diagnostic.sh ./stage2/chibicc
@@ -89,12 +100,33 @@ test-stage2: libchibicc.a $(TESTS:test/%=stage2/test/%)
 	test/trivia.sh ./stage2/chibicc
 	test/cst.sh ./stage2/chibicc
 	test/expand.sh ./stage2/chibicc
-	test/library.sh
+	CHIBICC_LIB="$(CURDIR)/stage2/libchibicc.a" test/library.sh
+
+# Packaging (PLAN L3.3c).
+
+libchibicc.pc: libchibicc.pc.in
+	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(VERSION)|g' $< > $@
+
+install: all
+	$(INSTALL) -d $(DESTDIR)$(PREFIX)/include/chibicc
+	$(INSTALL) -m 644 $(PUBLIC_HDRS) $(DESTDIR)$(PREFIX)/include/chibicc
+	$(INSTALL) -d $(DESTDIR)$(PREFIX)/lib
+	$(INSTALL) -m 644 libchibicc.a $(DESTDIR)$(PREFIX)/lib
+ifeq ($(shell uname -s),Linux)
+	$(INSTALL) -m 755 libchibicc.so.0 $(DESTDIR)$(PREFIX)/lib
+	ln -sf libchibicc.so.0 $(DESTDIR)$(PREFIX)/lib/libchibicc.so
+endif
+	$(INSTALL) -d $(DESTDIR)$(PREFIX)/lib/pkgconfig
+	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(VERSION)|g' \
+	  libchibicc.pc.in > libchibicc.pc.tmp
+	$(INSTALL) -m 644 libchibicc.pc.tmp \
+	  $(DESTDIR)$(PREFIX)/lib/pkgconfig/libchibicc.pc
+	rm -f libchibicc.pc.tmp
 
 # Misc.
 
 clean:
-	rm -rf chibicc libchibicc.a libchibicc.so libchibicc.so.0 tmp* $(TESTS) test/*.s test/*.exe stage2
+	rm -rf chibicc libchibicc.a libchibicc.so libchibicc.so.0 libchibicc.pc tmp* $(TESTS) test/*.s test/*.exe stage2
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 # Docker (amd64 Linux) 测试环境: 本机是 macOS ARM64, chibicc 生成的 x86-64 代码
@@ -200,4 +232,4 @@ docker-snapshot-ndiff: docker-image
 	@rc=0; diff -ru .cache/.ndtmp/base .cache/.ndtmp/new || rc=1; rm -rf .cache/.ndtmp; \
 	  [ $$rc -eq 0 ] && echo "snapshot ndiff: empty" || { echo "snapshot ndiff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: all test clean test-stage2 test-thirdparty check-library docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff
+.PHONY: all test clean test-stage2 test-thirdparty check-library install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff

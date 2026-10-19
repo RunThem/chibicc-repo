@@ -1,0 +1,10 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libchibicc
+Description: Reusable C front end (tokenize, preprocess, CST, parse, sema)
+Version: @VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lchibicc

@@ -9,6 +9,7 @@
 /libchibicc.a
 /libchibicc.so
 /libchibicc.so.*
+/libchibicc.pc
 /test/*.exe
 /stage2
 

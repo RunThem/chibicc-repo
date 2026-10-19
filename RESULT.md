@@ -374,6 +374,26 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
   构建 `.so`, `make` 与 `check-library` 照常通过; docker-test / snapshot 回归通过.
 - 偏差: 无.
 
+## L3.3c stage2 库对象与安装面
+
+- 版本: 公共 umbrella 定义 `CHIBICC_VERSION "0.1.0"` 与
+  `CHIBICC_API const char *chibicc_version(void)`, `lib.c` 返回宏值; D7 增加到 32 个
+  (`test/public-api.sh` 的清单与消费者断言同步); Makefile 的 `VERSION=0.1.0` 与头保持
+  一致, `test/install.sh` 比较 `pkg-config --modversion` 与头里的宏.
+- stage2: `stage2/libchibicc.a` 由 chibicc 编译的库对象归档; `make test-stage2` 依赖它并
+  以 `CHIBICC_LIB=$PWD/stage2/libchibicc.a` 跑 `test/library.sh`; 脚本在 `CHIBICC_LIB`
+  设置时跳过 `.so` 分支(stage1 的 `.so` 不得混入). `CHIBICC_API` 在 `__chibicc__` 下
+  展开为空(chibicc 不解析前置的 visibility attribute; stage2 只产 `.a`).
+- 安装: `make install PREFIX=... [DESTDIR=...]` 安装 9 个公共头, `libchibicc.a`, Linux 下
+  `libchibicc.so.0` + 符号链接, 以及 `libchibicc.pc`; `.pc` 在 install 时按实际 PREFIX
+  生成, 不复用默认前缀的旧文件. 新增 `test/install.sh` 验证布局(恰好 9 个头),
+  pkg-config 的 cflags / libs / 版本, 并用 pkg-config 参数编译运行一个消费者; 接入
+  `make check-library`.
+- 验收: docker 内 `make check-library` 全绿(含 install / pkg-config / `.so`); stage2 库
+  对象链接后 `test/library.sh` 输出两次 `library: ok`; 本机(macOS 无 pkg-config)install
+  测试跳过 `.pc` 检查后通过; docker-test / snapshot 通过.
+- 偏差: 本机没有 pkg-config, `.pc` 的验证只在 docker 内发生(计划以 docker 为权威).
+
 ## L3.4 库测试定稿
 
 - 动作: `test/library.sh` 用宿主 cc 编译一个只 include 公共头的消费者, 链接
@@ -417,4 +437,5 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 | `8eedb95` | L3.1c/L3.1d | 头文件卫生实测, `test/public-api.sh` + `make check-library` |
 | `aea7638` | L3.2a | 公共类型 / tag 改 Chibicc 前缀, `chibicc_reconstruct` 进库 |
 | `3f0b179` | L3.2b | `.a` 内部符号可见策略, D7 存在性检查 |
-| `(本提交)` | L3.3b | Linux `libchibicc.so`(PIC / 隐藏可见性 / SONAME / 严格 D7 导出) |
+| `85aae33` | L3.3b | Linux `libchibicc.so`(PIC / 隐藏可见性 / SONAME / 严格 D7 导出) |
+| `(本提交)` | L3.3c | stage2 库对象, `make install`, `libchibicc.pc`, 版本 |

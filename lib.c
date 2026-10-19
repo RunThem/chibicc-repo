@@ -6,6 +6,10 @@
 
 _Thread_local ChibiccContext *chibicc_active_ctx;
 
+const char *chibicc_version(void) {
+  return CHIBICC_VERSION;
+}
+
 ChibiccContext *chibicc_ctx(void) {
   return chibicc_active_ctx;
 }
