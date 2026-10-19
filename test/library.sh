@@ -13,6 +13,22 @@ trap 'rm -rf "$tmp"' EXIT
 cat > "$tmp/consumer.c" <<'EOF'
 #include <chibicc/chibicc.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+#if defined(__SANITIZE_ADDRESS__)
+#define HAVE_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define HAVE_ASAN 1
+#endif
+#endif
+
+#ifdef HAVE_ASAN
+// AddressSanitizer's allocator interface: the number of live bytes in
+// the process. It is deterministic, unlike LeakSanitizer (which under
+// Rosetta reports leaks only intermittently).
+extern size_t __sanitizer_get_current_allocated_bytes(void);
+#endif
 
 static int errors;
 
@@ -78,6 +94,33 @@ int main(void) {
   if (!ast || !prog || chibicc_context_failed(ctx) || errors != 1)
     return 1;
 
+  // Every CstNode and every children array is arena memory, so a reset
+  // releases the whole tree (PLAN L3.0). Under ASan the live-byte count
+  // must not grow from iteration to iteration: the pre-fix children
+  // arrays (a bare realloc) leaked about 1.6 KiB per iteration on this
+  // source, while the arena version ends each iteration empty.
+  chibicc_context_reset(ctx);
+#ifdef HAVE_ASAN
+  size_t before = __sanitizer_get_current_allocated_bytes();
+#endif
+  for (int i = 0; i < 64; i++) {
+    Token *t = chibicc_tokenize_buffer(ctx, "<libtest>", src);
+    if (!t)
+      return 1;
+    CstNode *r = chibicc_cst_parse(ctx, t);
+    if (!r || !chibicc_cst_verify(ctx, r, t))
+      return 1;
+    chibicc_context_reset(ctx);
+  }
+#ifdef HAVE_ASAN
+  size_t after = __sanitizer_get_current_allocated_bytes();
+  if (after > before + 32 * 1024) {
+    fprintf(stderr, "library: CST -> reset grew live bytes by %zu\n",
+            after - before);
+    return 1;
+  }
+#endif
+
   chibicc_context_free(ctx);
   puts("library: ok");
   return 0;
@@ -86,3 +129,12 @@ EOF
 
 "$cc" -std=c11 -I"$root/libchibicc/include" "$tmp/consumer.c" "$root/libchibicc.a" -o "$tmp/consumer"
 "$tmp/consumer"
+
+# The same consumer under AddressSanitizer (PLAN L3.0). The reset loop
+# asserts that live bytes do not grow: any CST allocation left outside
+# the arena accumulates there. LeakSanitizer is deliberately not the
+# gate - it reports only intermittently under Rosetta.
+"$cc" -std=c11 -g -fsanitize=address -fno-omit-frame-pointer \
+  -I"$root/libchibicc/include" "$tmp/consumer.c" "$root/libchibicc.a" \
+  -o "$tmp/consumer-asan"
+"$tmp/consumer-asan"

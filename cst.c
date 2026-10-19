@@ -47,9 +47,10 @@ static CstNode *new_cst_node(CstKind kind) {
 
 static void cst_add_child(CstNode *node, CstNode *child) {
   if (node->child_count == node->child_cap) {
+    size_t old_size = sizeof(CstNode *) * node->child_cap;
     node->child_cap = node->child_cap ? node->child_cap * 2 : 8;
-    node->children = realloc(node->children,
-                             sizeof(CstNode *) * node->child_cap);
+    node->children = chibicc_arena_realloc(node->children, old_size,
+                                           sizeof(CstNode *) * node->child_cap);
   }
   node->children[node->child_count++] = child;
 }

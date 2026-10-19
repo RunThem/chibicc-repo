@@ -217,6 +217,30 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
   均输出 `library: ok`); `make docker-snapshot-diff` -> `snapshot diff: empty`
   (`.cache/L3-snapshot.log`); 诊断 55 例 / trivia / CST / expand 全绿.
 
+## L3.0 契约修复(CST arena 与状态簿记)
+
+- 动作: `cst.c` 的 `cst_add_child` 从裸 `realloc` 改走 `chibicc_arena_realloc`(旧容量按
+  字节显式传入), children 数组与 CstNode 同归 context 的 arena, `reset` / `free` 一次释放.
+  分配点审计: 除 `lib.c` 的 arena 与 context 自身实现外, 库层各文件已无裸 `calloc` /
+  `malloc` / `realloc` / `strdup` / `strndup`.
+- 测试: `test/library.sh` 新增 64 轮 "tokenize -> cst_parse -> cst_verify -> reset" 循环;
+  同一消费者再以 `-fsanitize=address` 构建, 用 ASan 的分配器统计
+  `__sanitizer_get_current_allocated_bytes()` 断言循环前后活字节不增长(阈值 32 KiB).
+  这是确定性的"内存上界"闸门: 每轮循环以 reset 结束, arena 应回到空, 任何逃出 arena 的
+  分配都会按轮数线性累积.
+- LSan 不作为闸门的原因: 实测 Apple clang(arm64 macOS)的 ASan 运行时不含 LSan; 而
+  docker 的 amd64/Rosetta 下 LSan 不稳定 - 一个确定泄漏 16 字节的样本连跑 10 次, 有 3 次
+  不报泄漏并返回 0. 因此不引入编译器探测与 `detect_leaks`, 统一用分配器统计; LSan 留给
+  L3.4c 在真 x86-64 上再评估.
+- 负向验证: 用修复前的 `cst.c` 组一个临时静态库, 同一 ASan 消费者报
+  `library: CST -> reset grew live bytes by 102400` 并退出 1(与当时 LSan 报出的
+  104,000 字节 / 1,625 处 direct leak 一致); 修复后的库活字节零增长.
+- 偏差: 计划里的"内存上界"最终没有用 RSS 断言(arena 块与分配器保留策略使 maxrss 阈值
+  在 macOS / Linux 上都易抖动), 而是用 ASan 报告的活字节数, 判据相同且可重复.
+- 验收: 本机 `test/library.sh` 输出两次 `library: ok`(普通 + ASan 统计); `make docker-test`
+  EXIT=0(stage1 与 stage2 各跑两次, 无跳过); `make docker-snapshot-diff` ->
+  `snapshot diff: empty`; 构建零告警.
+
 ## L3.1 公共头拆分
 
 - 动作(已完成的部分): `chibicc.h` 移到 `libchibicc/include/chibicc/chibicc.h`;
@@ -278,4 +302,6 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 | `75158e5` | L2.3 | 预处理器状态与命令行宏进 context |
 | `8f76115` | L2.4 | parser 作用域进 context |
 | `375eb3d` | L2.5-L2.8 | sema 状态, 诊断回调 + longjmp, arena 分配, 状态审计 |
-| (本提交) | L3 | 公共头路径, `libchibicc.a`, `test/library.sh` |
+| `eeb0c5c` | L3.1a/L3.3a | 公共头路径, `libchibicc.a`, `test/library.sh` |
+| `d7b0060` | 计划修订 | L3.0-L3.5 与必选 L5 线(2026-10-19) |
+| `(本提交)` | L3.0 | CST children 进 arena, reset 循环 + LSan 闸门 |

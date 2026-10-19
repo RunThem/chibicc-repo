@@ -298,7 +298,7 @@ D7 是唯一清单: 新增公共函数必须先改 D7 与 `test/public-api.sh` �
 
 ## 阶段 L3: 契约修复 / 公共头 / 命名 / 构建
 
-- [ ] **L3.0 契约修复(CST arena 与状态簿记)**:
+- [x] **L3.0 契约修复(CST arena 与状态簿记)**:
   `cst.c` 的 `cst_add_child` 改走 `chibicc_arena_realloc`(当前 `cst.c:51` 是裸
   `realloc`, `reset` 后泄漏 children 数组); 给 `test/library.sh` 加 "CST -> reset"
   循环与内存上界/LSan 检查. 本修订已把 L4.1-L4.3 恢复为未完成并与 `RESULT.md` 对齐;
