@@ -337,7 +337,21 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 - 偏差: 短 typedef 与 struct tag 仍可见; `chibicc_reconstruct` 仍在 `main.c`;
   `nm` 公共符号清单尚未收窄. 这是 L3.2 的剩余工作.
 
-## L3.3 Makefile 库目标
+## L3.2b 导出白名单与内部符号策略
+
+- 拍板(按计划风险 10 的建议): `.a` 不做源码级重命名, 接受静态库内部符号可见;
+  公共头不声明它们, 文档明确"消费者不得调用内部符号". 理由: 90+ 个内部函数的重命名是
+  纯机械改动, 风险高且不影响 `.so` 的可见性; 真正的公共契约由 `.so` 的可见性控制与
+  D7 白名单承担(L3.3b).
+- 实测基线: `nm libchibicc.a` 的 `T` 符号 131 个, 其中 `chibicc_` 前缀 39 个(31 个
+  D7 + `chibicc_ctx` / `chibicc_context_activate` / `chibicc_context_set_base_file` /
+  5 个 arena 函数), 其余 92 个为无前缀内部函数.
+- `test/public-api.sh`: 新增 "`.a` 中 D7 全部存在" 的检查(`nm` 取 `T`, 去掉 Darwin
+  的前导下划线, 逐个 grep); 消费者侧的内部符号引用检查保留.
+- 验收: 本机与 docker 内 `test/public-api.sh` 通过; `.so` 的严格白名单(`nm -D`)与
+  `-fvisibility=hidden` 留给 L3.3b.
+
+## L3.3a Makefile 库目标
 
 - 动作(已完成的部分): `libchibicc.a` 由除 `main.c` / `codegen.c` 外的全部 `.c`
   构建(含 `lib.c`); `chibicc` 链接 `main.o` + `codegen.o` + 静态库; `make test` 与
@@ -386,4 +400,5 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 | `0bc52d9` | L3.0 | CST children 进 arena, reset 循环 + ASan 分配统计闸门 |
 | `f4415da` | L3.1b | 9 个公共头, context 不透明, `label_gotos` 交接进 context |
 | `8eedb95` | L3.1c/L3.1d | 头文件卫生实测, `test/public-api.sh` + `make check-library` |
-| `(本提交)` | L3.2a | 公共类型 / tag 改 Chibicc 前缀, `chibicc_reconstruct` 进库 |
+| `aea7638` | L3.2a | 公共类型 / tag 改 Chibicc 前缀, `chibicc_reconstruct` 进库 |
+| `(本提交)` | L3.2b | `.a` 内部符号可见策略, D7 存在性检查 |

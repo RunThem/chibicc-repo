@@ -105,3 +105,51 @@ fi
 "$cc" -std=c11 -I"$tmp/pubinc" "$tmp/consumer.c" "$root/libchibicc.a" \
   -o "$tmp/consumer"
 "$tmp/consumer"
+
+# PLAN L3.2b, the .a symbol policy: the library does not rename its
+# internal functions, so a static archive exposes them to whatever links
+# it. Consumers must not call them (the public headers do not declare
+# them), and the documentation states it. What is checked here is the
+# other half: every D7 function is present. The strict export whitelist
+# belongs to the shared library (L3.3b, -fvisibility=hidden).
+d7="chibicc_context_new
+chibicc_context_free
+chibicc_context_reset
+chibicc_context_set_diagnostic
+chibicc_context_failed
+chibicc_context_add_include_path
+chibicc_context_define
+chibicc_context_undef
+chibicc_tokenize_file
+chibicc_tokenize_buffer
+chibicc_reconstruct
+chibicc_preprocess
+chibicc_cst_parse
+chibicc_cst_reconstruct
+chibicc_cst_dump
+chibicc_cst_verify
+chibicc_parse
+chibicc_sema
+chibicc_token_provenance
+chibicc_macro_prov_next
+chibicc_macro_prov_expansion
+chibicc_macro_prov_arg_index
+chibicc_macro_expansion_name
+chibicc_macro_expansion_end
+chibicc_macro_expansion_macro
+chibicc_macro_expansion_def
+chibicc_macro_expansion_arg
+chibicc_macro_expansion_arg_count
+chibicc_macro_expansion_is_builtin
+chibicc_expansion_dump
+chibicc_expansion_verify"
+
+nm "$root/libchibicc.a" | awk '$2 == "T" { s = $3; sub(/^_/, "", s); print s }' \
+  | sort -u > "$tmp/libT"
+for sym in $d7; do
+  if ! grep -qx "$sym" "$tmp/libT"; then
+    echo "public-api: D7 symbol missing from libchibicc.a: $sym" >&2
+    exit 1
+  fi
+done
+echo "public-api: D7 symbols present in libchibicc.a"

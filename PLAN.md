@@ -334,7 +334,7 @@ D7 是唯一清单: 新增公共函数必须先改 D7 与 `test/public-api.sh` �
   typedef 与 `struct Token` / `struct Node` 等 tag 从公共面移走, 公共面只用
   `Chibicc*`, 实现侧用内部别名; `chibicc_reconstruct` 从 `main.c:594` 搬进 `lib.c`.
   验收: 公共头 `grep` 无短 typedef; `test/public-api.sh` 覆盖 reconstruct 逐字节断言.
-- [ ] **L3.2b 导出白名单与内部符号策略**:
+- [x] **L3.2b 导出白名单与内部符号策略**:
   拍板 `.a` 内部符号策略: 源码级统一前缀重命名, 或接受静态库内部符号可见并在文档
   声明. 无论选哪种, `.so` 必须只导出 D7; `test/public-api.sh` 的 `nm` 检查按拍板
   结果实现(`.so` 严格白名单, `.a` 白名单或"D7 全部存在"两种口径).
