@@ -318,13 +318,13 @@ D7 是唯一清单: 新增公共函数必须先改 D7 与 `test/public-api.sh` �
   验收: 每个公共头单独 `cc -std=c11 -fsyntax-only -Wall -Wextra` 通过; 消费者只
   include `<chibicc/chibicc.h>` 能编译; `grep` 证明公共头无 `HashMap` / `JmpFrame` /
   `jmp_buf` / `chibicc_arena_*` / `chibicc_context_activate`.
-- [ ] **L3.1c 公共头卫生**:
+- [x] **L3.1c 公共头卫生**:
   移除公共头里的 `#define _POSIX_C_SOURCE`(改由 Makefile `CFLAGS` 提供), `glob.h` /
   `sys/wait.h` 等驱动器专用 include, `MAX` / `MIN` 宏与 `__attribute__` 兜底; 公共头
   只 include 标准头与彼此.
   验收: 公共头在 `-std=c11` 下独立编译; 消费者先 include `<stdio.h>` 再 include
   公共头也能编译; `grep` 无宏污染.
-- [ ] **L3.1d 公共面自包含闸门**:
+- [x] **L3.1d 公共面自包含闸门**:
   新增 `test/public-api.sh`: 每个公共头单独编译; 用只含公共 include 路径的消费者
   链接 `libchibicc.a`; 断言消费者不引用内部符号. `nm` 白名单在 L3.2b 接入, 避免在
   `.a` 符号策略拍板前就把检查写死.

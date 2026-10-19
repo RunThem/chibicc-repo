@@ -34,6 +34,12 @@ test: $(TESTS)
 
 test-all: test test-stage2
 
+# The public-surface gate (PLAN L3.1d): header self-containment, a
+# consumer that sees only libchibicc/include, and the symbol check.
+check-library: libchibicc.a
+	test/library.sh
+	test/public-api.sh
+
 # Stage 2
 
 stage2/chibicc: $(OBJS:%=stage2/%)
@@ -167,4 +173,4 @@ docker-snapshot-ndiff: docker-image
 	@rc=0; diff -ru .cache/.ndtmp/base .cache/.ndtmp/new || rc=1; rm -rf .cache/.ndtmp; \
 	  [ $$rc -eq 0 ] && echo "snapshot ndiff: empty" || { echo "snapshot ndiff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: test clean test-stage2 test-thirdparty docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff
+.PHONY: test clean test-stage2 test-thirdparty check-library docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff

@@ -280,6 +280,35 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 - 偏差: 公共短 typedef 与 struct tag 仍在(L3.2a 才改名); `StringArray` 仍在公共面
   (`Obj.refs` 使用, 计划未列); `chibicc_reconstruct` 仍在驱动器(L3.2a).
 
+## L3.1c 公共头卫生
+
+- 构造保证: 拆头时公共头只 include 标准头与同目录公共头; `_POSIX_C_SOURCE`,
+  `glob.h` / `sys/wait.h` / `sys/stat.h` 等驱动器用头, `MAX` / `MIN`,
+  `__attribute__` 兜底与 `unreachable()` 全部只在根内部 umbrella.
+- 实测: `grep '^#define' libchibicc/include/chibicc/*.h` 只看到 include guard; 9 个头
+  在 `-std=c11 -fsyntax-only -Wall -Wextra` 下逐个通过(clang 与 gcc); 先 include
+  `<stdio.h>` 再 include umbrella 的消费者通过; 公共头无 `HashMap` / `JmpFrame` /
+  `jmp_buf` / `NodeArray` / `ArenaBlock` / `ParseScope` / `SemaScope` / `CondIncl` /
+  `chibicc_arena_*` / `chibicc_context_activate` / `_POSIX_C_SOURCE`.
+- 偏差: `_POSIX_C_SOURCE` 没有移进 Makefile CFLAGS, 而是留在根内部头. 该宏只影响库实现
+  自己的系统头; 由内部头在 include 系统头之前定义同时覆盖宿主 cc 与 stage2 的 chibicc
+  构建, 消费者完全看不到. D5 的目标(公共头不定义它)已达成.
+
+## L3.1d 公共面自包含闸门
+
+- 新增 `test/public-api.sh` 与 `make check-library`(依赖 `libchibicc.a`):
+  - 只把 `libchibicc/include/chibicc/` 拷进临时目录, 用它编译 9 个公共头的独立翻译
+    单元; 内部头不在搜索路径上, 任何泄漏都会编译失败.
+  - 先 include `<stdio.h>` 再 include umbrella 的样本.
+  - 消费者只用公共 include 路径编译成 `.o`, `nm -u` 断言未定义符号不含内部阶段 /
+    辅助名(`tokenize*` / `parse` / `sema` / `cst_parse` / `error*` / `hashmap_*` /
+    `chibicc_arena_*` / `chibicc_ctx` / `chibicc_context_activate` 等), 再链接
+    `libchibicc.a` 运行.
+- 负向验证: 一个显式声明并调用 `parse()` 的样本对象被 `nm` 检查捕获(`_parse`).
+- 验收: 本机 `make check-library` 通过; docker(amd64/Rosetta)内裸构建 `libchibicc.a`
+  后 `make check-library` 同样通过.
+- 偏差: 计划的库侧 `nm` 白名单(L3.2b)尚未接入, 脚本当前只检查消费者侧的引用.
+
 ## L3.2 公共函数前缀与 facade 收口
 
 - 动作(已完成的部分): D7 的包装函数全部带 `chibicc_` 前缀并在公共头声明; 公共类型
@@ -335,4 +364,5 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 | `eeb0c5c` | L3.1a/L3.3a | 公共头路径, `libchibicc.a`, `test/library.sh` |
 | `d7b0060` | 计划修订 | L3.0-L3.5 与必选 L5 线(2026-10-19) |
 | `0bc52d9` | L3.0 | CST children 进 arena, reset 循环 + ASan 分配统计闸门 |
-| `(本提交)` | L3.1b | 9 个公共头, context 不透明, `label_gotos` 交接进 context |
+| `f4415da` | L3.1b | 9 个公共头, context 不透明, `label_gotos` 交接进 context |
+| `(本提交)` | L3.1c/L3.1d | 头文件卫生实测, `test/public-api.sh` + `make check-library` |
