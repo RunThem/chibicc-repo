@@ -1,6 +1,6 @@
 // Macro expansion provenance (PLAN-provenance.md): every token the
 // preprocessor produces by expanding a macro carries a chain of
-// MacroProv nodes, one per expansion layer, innermost first; a token
+// ChibiccMacroProv nodes, one per expansion layer, innermost first; a token
 // read from the source carries NULL. The records a chain points to are
 // built once per expansion, immutable afterwards, and live as long as
 // the tokens (arena allocation, never freed). Macro, MacroArg and
@@ -14,10 +14,7 @@
 
 #include <chibicc/token.h>
 
-typedef struct MacroExpansion MacroExpansion;
-typedef MacroProv ChibiccMacroProv;
-typedef MacroExpansion ChibiccMacroExpansion;
-
+typedef struct chibicc_macro_expansion ChibiccMacroExpansion;
 ChibiccMacroProv *chibicc_token_provenance(ChibiccToken *tok);
 ChibiccMacroProv *chibicc_macro_prov_next(ChibiccMacroProv *p);
 ChibiccMacroExpansion *chibicc_macro_prov_expansion(ChibiccMacroProv *p);

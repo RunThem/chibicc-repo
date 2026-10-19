@@ -585,20 +585,6 @@ static void print_token_dump(Token *tok) {
   }
 }
 
-// Print the bytes the token stream was tokenized from: the trivia in
-// front of every token plus the token spellings, in raw coordinates (the
-// trailing trivia rides on EOF). On tokenize()'s direct output the two
-// cover the file's raw text byte for byte, so this rebuilds the input
-// text - with no exceptions: the rewrites that used to be pre-passes
-// live in the scan buffer and the map now, not in the coordinates.
-static void reconstruct(Token *tok) {
-  FILE *out = open_file(opt_o ? opt_o : "-");
-
-  for (; tok; tok = tok->next) {
-    fwrite(tok->trivia, 1, tok->trivia_len, out);
-    fwrite(tok->raw_loc, 1, tok->raw_len, out);
-  }
-}
 
 static bool in_std_include_path(char *path) {
   for (int i = 0; i < std_include_paths.len; i++) {
@@ -676,7 +662,7 @@ static int cc1(void) {
     if (opt_dump_tokens)
       print_token_dump(tok);
     if (opt_reconstruct)
-      reconstruct(tok);
+      chibicc_reconstruct(ctx, tok, open_file(opt_o ? opt_o : "-"));
     if (opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
       CstNode *root = chibicc_cst_parse(ctx, tok);
       if (!root)

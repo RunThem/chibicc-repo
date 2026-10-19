@@ -67,23 +67,20 @@ typedef enum {
   CST_PP_NULL,
   CST_PP_IF,
   CST_PP_BRANCH,
-} CstKind;
+} ChibiccCstKind;
 
-typedef struct CstNode CstNode;
-struct CstNode {
-  CstKind kind;
-  Token *tok;          // Set on leaves (CST_TOKEN / CST_EOF)
-  CstNode **children;  // Set on inner nodes
+typedef struct chibicc_cst_node ChibiccCstNode;
+struct chibicc_cst_node {
+  ChibiccCstKind kind;
+  ChibiccToken *tok;          // Set on leaves (CST_TOKEN / CST_EOF)
+  ChibiccCstNode **children;  // Set on inner nodes
   int child_count;
   int child_cap;
 };
 
-typedef CstNode ChibiccCstNode;
-typedef CstKind ChibiccCstKind;
-
-CstNode *chibicc_cst_parse(ChibiccContext *ctx, Token *tok);
-void chibicc_cst_reconstruct(ChibiccContext *ctx, CstNode *root, FILE *out);
-void chibicc_cst_dump(ChibiccContext *ctx, CstNode *root, FILE *out);
-bool chibicc_cst_verify(ChibiccContext *ctx, CstNode *root, Token *tok);
+ChibiccCstNode *chibicc_cst_parse(ChibiccContext *ctx, ChibiccToken *tok);
+void chibicc_cst_reconstruct(ChibiccContext *ctx, ChibiccCstNode *root, FILE *out);
+void chibicc_cst_dump(ChibiccContext *ctx, ChibiccCstNode *root, FILE *out);
+bool chibicc_cst_verify(ChibiccContext *ctx, ChibiccCstNode *root, ChibiccToken *tok);
 
 #endif

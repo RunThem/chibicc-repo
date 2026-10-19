@@ -309,6 +309,26 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
   后 `make check-library` 同样通过.
 - 偏差: 计划的库侧 `nm` 白名单(L3.2b)尚未接入, 脚本当前只检查消费者侧的引用.
 
+## L3.2a 短 typedef / tag 与 reconstruct
+
+- 公共面改名: 全部公共类型改成 `Chibicc` 前缀, struct tag 改成 `struct chibicc_*`
+  (`chibicc_token` / `chibicc_file` / `chibicc_type` / `chibicc_member` / `chibicc_node` /
+  `chibicc_obj` / `chibicc_relocation` / `chibicc_initializer` / `chibicc_init_item` /
+  `chibicc_init_desig` / `chibicc_init_tree` / `chibicc_init_path` / `chibicc_var_attr` /
+  `chibicc_string_array` / `chibicc_cst_node` / `chibicc_hideset` / `chibicc_macro_prov` /
+  `chibicc_macro_expansion` / `chibicc_diagnostic`); 枚举类型改成 `ChibiccTokenKind` /
+  `ChibiccNodeKind` / `ChibiccTypeKind` / `ChibiccCstKind`, 常量保留 TK_ / ND_ / TY_ /
+  CST_ 前缀(D5). 根内部头加 21 个 `typedef ChibiccX X;` 别名, 15k 行实现保持短名.
+- `chibicc_reconstruct` 从 `main.c` 搬进 `lib.c`, 公共声明在 `token.h`; 驱动器的
+  `-reconstruct` 通道改为调用它并传 `open_file(...)` 的流.
+- 测试: `test/library.sh` 与 `test/public-api.sh` 的消费者改用 `Chibicc*` 类型名;
+  `test/public-api.sh` 增加 `chibicc_reconstruct` 的逐字节断言(连续空格 / 注释 /
+  字符串字面量 / tab 的样本, 写入 `tmpfile` 回读比对).
+- 验收: 公共头 grep 短 typedef / tag 为零, tag 全为 `struct chibicc_*`; 本机 trivia /
+  CST / expand / 诊断 55 例 / `test/library.sh` / `test/public-api.sh` 全绿;
+  `make docker-test` EXIT=0; `make docker-snapshot-diff` -> `snapshot diff: empty`.
+- 偏差: `nm` 导出白名单与 `.a` 内部符号策略仍是 L3.2b.
+
 ## L3.2 公共函数前缀与 facade 收口
 
 - 动作(已完成的部分): D7 的包装函数全部带 `chibicc_` 前缀并在公共头声明; 公共类型
@@ -365,4 +385,5 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 | `d7b0060` | 计划修订 | L3.0-L3.5 与必选 L5 线(2026-10-19) |
 | `0bc52d9` | L3.0 | CST children 进 arena, reset 循环 + ASan 分配统计闸门 |
 | `f4415da` | L3.1b | 9 个公共头, context 不透明, `label_gotos` 交接进 context |
-| `(本提交)` | L3.1c/L3.1d | 头文件卫生实测, `test/public-api.sh` + `make check-library` |
+| `8eedb95` | L3.1c/L3.1d | 头文件卫生实测, `test/public-api.sh` + `make check-library` |
+| `(本提交)` | L3.2a | 公共类型 / tag 改 Chibicc 前缀, `chibicc_reconstruct` 进库 |

@@ -28,6 +28,31 @@
 
 #include "chibicc/chibicc.h"
 
+// The public surface uses the Chibicc-prefixed names only (PLAN L3.2a);
+// the implementation keeps the short spellings through these aliases.
+typedef ChibiccToken Token;
+typedef ChibiccFile File;
+typedef ChibiccTokenKind TokenKind;
+typedef ChibiccHideset Hideset;
+typedef ChibiccMacroProv MacroProv;
+typedef ChibiccMacroExpansion MacroExpansion;
+typedef ChibiccCstNode CstNode;
+typedef ChibiccCstKind CstKind;
+typedef ChibiccStringArray StringArray;
+typedef ChibiccObj Obj;
+typedef ChibiccRelocation Relocation;
+typedef ChibiccVarAttr VarAttr;
+typedef ChibiccInitializer Initializer;
+typedef ChibiccInitItem InitItem;
+typedef ChibiccInitDesig InitDesig;
+typedef ChibiccInitTree InitTree;
+typedef ChibiccInitPath InitPath;
+typedef ChibiccType Type;
+typedef ChibiccMember Member;
+typedef ChibiccNode Node;
+typedef ChibiccNodeKind NodeKind;
+typedef ChibiccTypeKind TypeKind;
+
 #define MAX(x, y) ((x) < (y) ? (y) : (x))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 

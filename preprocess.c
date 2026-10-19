@@ -57,7 +57,7 @@ struct Macro {
 // MacroProv per token and layer, prepended so a chain reads innermost
 // first. Both are arena objects that live as long as the tokens. The
 // types are private; chibicc.h exposes accessors over them.
-struct MacroExpansion {
+struct chibicc_macro_expansion {
   Token *name;      // macro name token at the call site
   Token *rparen;    // ')' of a function-like call; NULL otherwise
   Macro *macro;     // definition in force at expansion time
@@ -66,7 +66,7 @@ struct MacroExpansion {
   bool is_builtin;  // produced by a handler (__LINE__ and friends)
 };
 
-struct MacroProv {
+struct chibicc_macro_prov {
   MacroExpansion *exp;
   int arg_index;    // -1: macro body; >= 0: index of the argument
   MacroProv *next;  // the context the invocation itself appeared in
@@ -81,8 +81,7 @@ struct CondIncl {
   bool included;
 };
 
-typedef struct Hideset Hideset;
-struct Hideset {
+struct chibicc_hideset {
   Hideset *next;
   char *name;
 };

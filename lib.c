@@ -276,6 +276,15 @@ Token *chibicc_tokenize_buffer(ChibiccContext *ctx, char *name, char *contents) 
   return tok;
 }
 
+void chibicc_reconstruct(ChibiccContext *ctx, Token *tok, FILE *out) {
+  ENTER_VOID(ctx);
+  for (; tok; tok = tok->next) {
+    fwrite(tok->trivia, 1, tok->trivia_len, out);
+    fwrite(tok->raw_loc, 1, tok->raw_len, out);
+  }
+  LEAVE(ctx);
+}
+
 Token *chibicc_preprocess(ChibiccContext *ctx, Token *tok) {
   ENTER_RET(ctx, NULL);
   Token *r = preprocess(tok);

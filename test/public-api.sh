@@ -42,28 +42,45 @@ EOF
 
 cat > "$tmp/consumer.c" <<'EOF'
 #include <stdio.h>
+#include <string.h>
 #include <chibicc/chibicc.h>
 
 int main(void) {
   char *src = "int x = 1;\n";
   ChibiccContext *ctx = chibicc_context_new();
 
-  Token *tok = chibicc_tokenize_buffer(ctx, "<public-api>", src);
+  ChibiccToken *tok = chibicc_tokenize_buffer(ctx, "<public-api>", src);
   if (!tok)
     return 1;
   tok = chibicc_preprocess(ctx, tok);
   if (!tok)
     return 1;
-  Node *ast = chibicc_parse(ctx, tok);
+  ChibiccNode *ast = chibicc_parse(ctx, tok);
   if (!ast || chibicc_context_failed(ctx))
     return 1;
-  Obj *prog = chibicc_sema(ctx, ast);
+  ChibiccObj *prog = chibicc_sema(ctx, ast);
   if (!prog || chibicc_context_failed(ctx))
     return 1;
 
-  Token *raw = chibicc_tokenize_buffer(ctx, "<public-api>", src);
-  CstNode *root = chibicc_cst_parse(ctx, raw);
+  ChibiccToken *raw = chibicc_tokenize_buffer(ctx, "<public-api>", src);
+  ChibiccCstNode *root = chibicc_cst_parse(ctx, raw);
   if (!root || !chibicc_cst_verify(ctx, root, raw))
+    return 1;
+
+  // chibicc_reconstruct rebuilds the tokenized bytes exactly.
+  char *text = "int  x =  1;  /* c */\n\tchar *s = \"a\";\n";
+  ChibiccToken *t = chibicc_tokenize_buffer(ctx, "<public-api>", text);
+  FILE *f = tmpfile();
+  if (!t || !f)
+    return 1;
+  chibicc_reconstruct(ctx, t, f);
+  fflush(f);
+  rewind(f);
+  char buf[128];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+  if (strcmp(buf, text) != 0)
     return 1;
 
   chibicc_context_free(ctx);

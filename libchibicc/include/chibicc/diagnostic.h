@@ -8,7 +8,7 @@
 // A diagnostic handed to a registered callback. `message` is the
 // formatted text; the default handler additionally prints the source
 // line and the caret from the location it was given.
-typedef struct {
+typedef struct chibicc_diagnostic {
   const char *filename;
   int line;
   int column;

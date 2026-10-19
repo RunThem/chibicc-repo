@@ -11,31 +11,31 @@
 
 #include <chibicc/token.h>
 
-typedef struct Type Type;
-typedef struct Node Node;
-typedef struct Obj Obj;
-typedef struct Member Member;
-typedef struct Relocation Relocation;
-typedef struct Initializer Initializer;
-typedef struct InitItem InitItem;
-typedef struct InitDesig InitDesig;
-typedef struct InitTree InitTree;
-typedef struct InitPath InitPath;
+typedef struct chibicc_type ChibiccType;
+typedef struct chibicc_node ChibiccNode;
+typedef struct chibicc_obj ChibiccObj;
+typedef struct chibicc_member ChibiccMember;
+typedef struct chibicc_relocation ChibiccRelocation;
+typedef struct chibicc_initializer ChibiccInitializer;
+typedef struct chibicc_init_item ChibiccInitItem;
+typedef struct chibicc_init_desig ChibiccInitDesig;
+typedef struct chibicc_init_tree ChibiccInitTree;
+typedef struct chibicc_init_path ChibiccInitPath;
 
 // A growable string array. The library uses it internally; it is part of
-// the public type set because Obj.refs exposes one.
-typedef struct {
+// the public type set because ChibiccObj.refs exposes one.
+typedef struct chibicc_string_array {
   char **data;
   int capacity;
   int len;
-} StringArray;
+} ChibiccStringArray;
 
 // Variable or function
-struct Obj {
-  Obj *next;
+struct chibicc_obj {
+  ChibiccObj *next;
   char *name;    // Variable name
-  Type *ty;      // Type
-  Token *tok;    // representative token
+  ChibiccType *ty;      // ChibiccType
+  ChibiccToken *tok;    // representative token
   bool is_local; // local or global/function
   int align;     // alignment
 
@@ -48,27 +48,27 @@ struct Obj {
   bool is_tentative;
   bool is_tls;
   char *init_data;
-  Relocation *rel;
+  ChibiccRelocation *rel;
 
   // Function
   bool is_inline;
-  Obj *params;
-  Node *body;
-  Obj *locals;
-  Obj *va_area;
-  Obj *alloca_bottom;
+  ChibiccObj *params;
+  ChibiccNode *body;
+  ChibiccObj *locals;
+  ChibiccObj *va_area;
+  ChibiccObj *alloca_bottom;
 
   // Static inline function
   bool is_live;
   bool is_root;
-  StringArray refs;
+  ChibiccStringArray refs;
 };
 
 // Global variable can be initialized either by a constant expression
 // or a pointer to another global variable. This struct represents the
 // latter.
-struct Relocation {
-  Relocation *next;
+struct chibicc_relocation {
+  ChibiccRelocation *next;
   int offset;
 
   // The target of an address constant. A named symbol (a global, a
@@ -78,7 +78,7 @@ struct Relocation {
   // codegen allocates the `.L` name during shaping, so the node is
   // kept here and resolved at emission.
   char *label;
-  Node *label_node;
+  ChibiccNode *label_node;
 
   long addend;
 };
@@ -86,7 +86,7 @@ struct Relocation {
 // Declaration attributes collected by declspec: storage class and
 // _Alignas. The parser fills this in and copies it onto the declaration
 // record nodes; sema consumes it when it declares the object.
-typedef struct {
+typedef struct chibicc_var_attr {
   bool is_typedef;
   bool is_static;
   bool is_extern;
@@ -96,9 +96,9 @@ typedef struct {
   // A `_Alignas(<expr>)` argument, of which `align_ty` is the
   // `_Alignas(<type>)` form. Whichever comes last is the one that
   // counts; sema reads the type form's alignment off a completed type.
-  Node *align_expr;
-  Type *align_ty;
-} VarAttr;
+  ChibiccNode *align_expr;
+  ChibiccType *align_ty;
+} ChibiccVarAttr;
 
 // Faithful initializer record (parse.c): the syntactic shape of an
 // initializer as written - a braced item sequence, a string literal or
@@ -108,37 +108,37 @@ typedef struct {
 // a global variable definition is parsed.
 enum { INIT_LIST, INIT_EXPR, INIT_STR };
 
-struct Initializer {
+struct chibicc_initializer {
   int kind;     // INIT_LIST, INIT_EXPR or INIT_STR
-  Token *tok;   // first token of the initializer source
-  InitItem *items;  // INIT_LIST: braced element sequence
-  Node *expr;       // INIT_EXPR: scalar initialization expression
-  Token *str_tok;   // INIT_STR: string literal token
+  ChibiccToken *tok;   // first token of the initializer source
+  ChibiccInitItem *items;  // INIT_LIST: braced element sequence
+  ChibiccNode *expr;       // INIT_EXPR: scalar initialization expression
+  ChibiccToken *str_tok;   // INIT_STR: string literal token
 
   // Only for the top-level record of an ND_DECL: the `=` that
   // introduced it, which is where sema anchors a diagnostic that
   // rejects the declaration as a whole.
-  Token *eq_tok;
+  ChibiccToken *eq_tok;
 };
 
 // One element of a braced initializer list.
-struct InitItem {
-  InitItem *next;
-  Token *comma_tok;    // the `,` before this element (NULL for the first)
-  InitDesig *desigs;   // designator chain as written (may be NULL)
-  Initializer *init;   // the element value
+struct chibicc_init_item {
+  ChibiccInitItem *next;
+  ChibiccToken *comma_tok;    // the `,` before this element (NULL for the first)
+  ChibiccInitDesig *desigs;   // designator chain as written (may be NULL)
+  ChibiccInitializer *init;   // the element value
 };
 
 // One designator as written: `[expr]`, `[begin ... end]` or `.name`.
 // Index expressions are recorded unevaluated; sema evaluates them.
-struct InitDesig {
-  InitDesig *next;
-  Token *tok;           // `[` or `.`
-  Token *after_begin;   // token after the begin expression (`...` or `]`)
-  Token *rbracket;      // the `]` token
-  Node *begin;          // array designator index
-  Node *end;            // range end (NULL unless `[begin ... end]`)
-  Token *name;          // member designator name
+struct chibicc_init_desig {
+  ChibiccInitDesig *next;
+  ChibiccToken *tok;           // `[` or `.`
+  ChibiccToken *after_begin;   // token after the begin expression (`...` or `]`)
+  ChibiccToken *rbracket;      // the `]` token
+  ChibiccNode *begin;          // array designator index
+  ChibiccNode *end;            // range end (NULL unless `[begin ... end]`)
+  ChibiccToken *name;          // member designator name
 };
 
 // The resolved initializer tree (PLAN A8.1): what a faithful
@@ -148,32 +148,32 @@ struct InitDesig {
 // expansion walks it to build the assignment chain, and sema's
 // file-scope serializer walks it into .data bytes. Since initializers
 // can be nested (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), it is a tree.
-struct InitTree {
-  Type *ty;
+struct chibicc_init_tree {
+  ChibiccType *ty;
   bool is_flexible;
 
   // If it's not an aggregate type and has an initializer,
   // `expr` has an initialization expression.
-  Node *expr;
+  ChibiccNode *expr;
 
   // If it's an initializer for an aggregate type (e.g. array or struct),
   // `children` has initializers for its children.
-  InitTree **children;
+  ChibiccInitTree **children;
 
   // Only one member can be initialized for a union.
   // `mem` is used to clarify which member is initialized.
-  Member *mem;
+  ChibiccMember *mem;
 };
 
 // Designator chain describing the position of an element within a
 // local variable initializer (e.g. `x[1].y[2]`), walked by the
 // consumer's expansion to build the target expression of each
 // assignment.
-struct InitPath {
-  InitPath *next;
+struct chibicc_init_path {
+  ChibiccInitPath *next;
   int idx;
-  Member *member;
-  Obj *var;
+  ChibiccMember *member;
+  ChibiccObj *var;
 };
 
 typedef enum {
@@ -195,15 +195,15 @@ typedef enum {
              // annotated yet
   TY_STRUCT,
   TY_UNION,
-} TypeKind;
+} ChibiccTypeKind;
 
-struct Type {
-  TypeKind kind;
+struct chibicc_type {
+  ChibiccTypeKind kind;
   int size;           // sizeof() value
   int align;          // alignment
   bool is_unsigned;   // unsigned or signed
   bool is_atomic;     // true if _Atomic
-  Type *origin;       // for type compatibility check
+  ChibiccType *origin;       // for type compatibility check
 
   // Pointer-to or array-of type. We intentionally use the same member
   // to represent pointer/array duality in C.
@@ -213,11 +213,11 @@ struct Type {
   // pointer or not. That means in many contexts "array of T" is
   // naturally handled as if it were "pointer to T", as required by
   // the C spec.
-  Type *base;
+  ChibiccType *base;
 
   // Declaration
-  Token *name;
-  Token *name_pos;
+  ChibiccToken *name;
+  ChibiccToken *name_pos;
 
   // Array
   int array_len;
@@ -228,16 +228,16 @@ struct Type {
   // question is answered in the parser; a `typeof(expr)` operand whose
   // type has not been annotated; and the argument of an `aligned`
   // attribute. Each is cleared once consumed.
-  Node *dim_len;
-  Node *typeof_expr;
-  Node *align_expr;
+  ChibiccNode *dim_len;
+  ChibiccNode *typeof_expr;
+  ChibiccNode *align_expr;
 
   // Variable-length array. The runtime size slot codegen creates for
   // it (A7.1) is kept in codegen's private per-type table (PLAN L1).
-  Node *vla_len; // # of elements
+  ChibiccNode *vla_len; // # of elements
 
   // Struct
-  Member *members;
+  ChibiccMember *members;
   bool is_flexible;
   bool is_packed;
   // The member list is complete but sema has not placed the members
@@ -246,22 +246,22 @@ struct Type {
   bool layout_pending;
 
   // Function type
-  Type *return_ty;
-  Type *params;
+  ChibiccType *return_ty;
+  ChibiccType *params;
   bool is_variadic;
   // Enum-constant declaration records a parameter's declspec produced
   // (e.g. `int f(enum E { A } x)`); sema's resolve pass registers them
   // when it completes this function type.
-  Node *spec_decls;
-  Type *next;
+  ChibiccNode *spec_decls;
+  ChibiccType *next;
 };
 
 // Struct member
-struct Member {
-  Member *next;
-  Type *ty;
-  Token *tok; // for error message
-  Token *name;
+struct chibicc_member {
+  ChibiccMember *next;
+  ChibiccType *ty;
+  ChibiccToken *tok; // for error message
+  ChibiccToken *name;
   int idx;
   int align;
   int offset;
@@ -270,8 +270,8 @@ struct Member {
   // is recorded in `align_ty` and the `_Alignas(<expr>)` form in
   // `align_expr`; sema settles the value when the aggregate is laid
   // out. Zero means no `_Alignas`, and the type's own alignment counts.
-  Type *align_ty;
-  Node *align_expr;
+  ChibiccType *align_ty;
+  ChibiccNode *align_expr;
 
   // Bitfield
   bool is_bitfield;
@@ -279,7 +279,7 @@ struct Member {
   int bit_width;
   // The recorded width expression of a bitfield, unevaluated; sema
   // evaluates it into bit_width when the aggregate is laid out.
-  Node *width_expr;
+  ChibiccNode *width_expr;
 };
 
 // AST node
@@ -345,7 +345,7 @@ typedef enum {
                     // lhs. A carrier only; it never reaches codegen.
   ND_TYPES_COMPATIBLE, // "__builtin_types_compatible_p"; sema folds it to 0 or 1
   ND_REG_CLASS,        // "__builtin_reg_class"; sema folds it to its class
-  ND_CAST,      // Type cast. The parser leaves an explicit cast untyped
+  ND_CAST,      // ChibiccType cast. The parser leaves an explicit cast untyped
                 // with its target type in ty_op; sema resolves and types
                 // the node. Casts sema inserts are fully typed at birth
                 // and marked is_implicit.
@@ -374,21 +374,21 @@ typedef enum {
   ND_ASM,       // "asm"
   ND_CAS,       // Atomic compare-and-swap
   ND_EXCH,      // Atomic exchange
-} NodeKind;
+} ChibiccNodeKind;
 
 // AST node type
-struct Node {
-  NodeKind kind; // Node kind
-  Node *next;    // Next node
-  Type *ty;      // Type, e.g. int or pointer to int
-  Token *tok;    // Representative token
+struct chibicc_node {
+  ChibiccNodeKind kind; // ChibiccNode kind
+  ChibiccNode *next;    // Next node
+  ChibiccType *ty;      // ChibiccType, e.g. int or pointer to int
+  ChibiccToken *tok;    // Representative token
 
-  Node *lhs;     // Left-hand side
-  Node *rhs;     // Right-hand side
+  ChibiccNode *lhs;     // Left-hand side
+  ChibiccNode *rhs;     // Right-hand side
 
   // Compound assignment operator for ND_ASSIGN ("+=", "-=", ...).
   // 0 means a plain "=".
-  NodeKind op;
+  ChibiccNodeKind op;
 
   // Increment/decrement for ND_INCDEC: postfix (`i++`) or prefix
   // (`++i`), with an addend of +1 or -1. sema lowers the node to a
@@ -397,14 +397,14 @@ struct Node {
   int addend;
 
   // "if" or "for" statement
-  Node *cond;
-  Node *then;
-  Node *els;
-  Node *init;
-  Node *inc;
+  ChibiccNode *cond;
+  ChibiccNode *then;
+  ChibiccNode *els;
+  ChibiccNode *init;
+  ChibiccNode *inc;
 
   // Block or statement expression
-  Node *body;
+  ChibiccNode *body;
 
   // ND_BLOCK: true for a compound-statement block, which is a lexical
   // scope; the empty statement and the block sema folds a `for`
@@ -422,15 +422,15 @@ struct Node {
   // reads it in constant expressions, and codegen's gen_addr and
   // to_assign read it as the dereference the `->` stands for (PLAN
   // B1.1b - the marker stays on the node, nothing rewrites it away).
-  Member *member;
-  Token *arrow_tok;
+  ChibiccMember *member;
+  ChibiccToken *arrow_tok;
 
   // Function call. func_ty and the conversions on the arguments are
   // sema's (the annotation). The call's codegen-side state - the
   // pass-by-stack marks and the caller-owned return buffer - lives in
   // codegen's private per-node table (PLAN L1).
-  Type *func_ty;
-  Node *args;
+  ChibiccType *func_ty;
+  ChibiccNode *args;
 
   // Goto or labeled statement, or labels-as-values. `label` is the
   // spelled name the parser recorded and the goto/label pairing check
@@ -452,18 +452,18 @@ struct Node {
   // parser), ND_GENERIC_ASSOC, ND_TYPES_COMPATIBLE, ND_REG_CLASS,
   // ND_DECL, ND_GVAR_DECL, ND_FUNCDEF and ND_COMPOUND_LITERAL carry
   // their declared/target/operand type here as well.
-  Type *ty_op;
+  ChibiccType *ty_op;
 
   // ND_TYPES_COMPATIBLE: the second type operand, the first being
   // ty_op. The type predicates take two types and no subexpression.
-  Type *ty_op2;
+  ChibiccType *ty_op2;
 
   // ND_GENERIC: the result expression of the association the controlling
   // expression selects - the conclusion of the selection, recorded on the
   // node so a consumer can read it instead of the node having to *become*
   // it. Written by sema's select_generic; the evaluator, gen_expr and
   // gen_addr read it (A9.1). The node keeps its kind.
-  Node *generic_sel;
+  ChibiccNode *generic_sel;
 
   // ND_CAST: true for a cast sema inserted to carry out an implicit
   // conversion, false for one the source wrote. The parser never sets
@@ -474,25 +474,25 @@ struct Node {
 
   // Declaration record nodes (ND_DECL, ND_GVAR_DECL, ND_FUNCDEF): the
   // storage-class and alignment attributes as the parser read them.
-  VarAttr attr;
+  ChibiccVarAttr attr;
 
   // Declaration record nodes (ND_DECL, ND_GVAR_DECL, ND_FUNCDEF): the
   // declared identifier. The declarator also parks it on the type's
   // `name`, but types are shared (basic-type singletons, tag and
   // typedef types) and that slot is overwritten by the next
   // declarator, long before sema reads the record.
-  Token *name_tok;
+  ChibiccToken *name_tok;
 
   // Enum-constant declaration records that became visible while an
   // expression-context type was parsed (e.g. `sizeof(enum E { A })`).
   // sema's resolve pass evaluates and registers them at this node's
   // position, since the record has no statement-chain slot of its own.
-  Node *spec_decls;
+  ChibiccNode *spec_decls;
 
   // ND_DECL: the faithful initializer record, or NULL if the
   // declarator has no initializer. sema resolves and lowers it to the
   // MEMZERO + assignment comma chain.
-  Initializer *decl_init;
+  ChibiccInitializer *decl_init;
 
   // ND_DECL, ND_GVAR_DECL and ND_COMPOUND_LITERAL: an opaque payload
   // sema's resolve pass parks here - the initializer record resolved
@@ -509,43 +509,33 @@ struct Node {
   // `case <expr> ... <expr>:`, recorded unevaluated; sema's add_type
   // fills in `begin`/`end` from them. `colon_tok` is the `:` that ends
   // the label, where the range check is anchored.
-  Node *begin_expr;
-  Node *end_expr;
-  Token *colon_tok;
+  ChibiccNode *begin_expr;
+  ChibiccNode *end_expr;
+  ChibiccToken *colon_tok;
 
   // "asm" string literal
   char *asm_str;
 
   // Atomic compare-and-swap
-  Node *cas_addr;
-  Node *cas_old;
-  Node *cas_new;
+  ChibiccNode *cas_addr;
+  ChibiccNode *cas_old;
+  ChibiccNode *cas_new;
 
   // Atomic op= operators
-  Obj *atomic_addr;
-  Node *atomic_expr;
+  ChibiccObj *atomic_addr;
+  ChibiccNode *atomic_expr;
 
   // Variable
-  Obj *var;
+  ChibiccObj *var;
 
   // Numeric literal
   int64_t val;
   long double fval;
 };
 
-typedef Type ChibiccType;
-typedef Node ChibiccNode;
-typedef Obj ChibiccObj;
-typedef Member ChibiccMember;
-typedef Relocation ChibiccRelocation;
-typedef Initializer ChibiccInitializer;
-typedef VarAttr ChibiccVarAttr;
-typedef NodeKind ChibiccNodeKind;
-typedef TypeKind ChibiccTypeKind;
-
 // The parser builds the faithful syntax tree and returns the top-level
 // declaration record chain; it makes no semantic decision beyond the
 // typedef/tag classification oracle the C grammar requires.
-Node *chibicc_parse(ChibiccContext *ctx, Token *tok);
+ChibiccNode *chibicc_parse(ChibiccContext *ctx, ChibiccToken *tok);
 
 #endif

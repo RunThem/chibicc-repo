@@ -40,17 +40,17 @@ static void diag(void *user, const ChibiccDiagnostic *d) {
     errors++;
 }
 
-static Node *compile(ChibiccContext *ctx, char *src, Obj **out) {
-  Token *tok = chibicc_tokenize_buffer(ctx, "<libtest>", src);
+static ChibiccNode *compile(ChibiccContext *ctx, char *src, ChibiccObj **out) {
+  ChibiccToken *tok = chibicc_tokenize_buffer(ctx, "<libtest>", src);
   if (!tok)
     return NULL;
   tok = chibicc_preprocess(ctx, tok);
   if (!tok)
     return NULL;
-  Node *ast = chibicc_parse(ctx, tok);
+  ChibiccNode *ast = chibicc_parse(ctx, tok);
   if (chibicc_context_failed(ctx))
     return NULL;
-  Obj *prog = chibicc_sema(ctx, ast);
+  ChibiccObj *prog = chibicc_sema(ctx, ast);
   if (chibicc_context_failed(ctx))
     return NULL;
   *out = prog;
@@ -65,19 +65,19 @@ int main(void) {
   ChibiccContext *ctx = chibicc_context_new();
   chibicc_context_set_diagnostic(ctx, diag, NULL);
 
-  Obj *prog = NULL;
-  Node *ast = compile(ctx, src, &prog);
+  ChibiccObj *prog = NULL;
+  ChibiccNode *ast = compile(ctx, src, &prog);
   if (!ast || !prog)
     return 1;
 
   // The raw stream remains available for the CST channel.
-  Token *raw = chibicc_tokenize_buffer(ctx, "<libtest>", src);
-  CstNode *root = chibicc_cst_parse(ctx, raw);
+  ChibiccToken *raw = chibicc_tokenize_buffer(ctx, "<libtest>", src);
+  ChibiccCstNode *root = chibicc_cst_parse(ctx, raw);
   if (!root || !chibicc_cst_verify(ctx, root, raw))
     return 1;
 
   // A bad input reaches the callback and unwinds instead of exiting.
-  Token *bad = chibicc_tokenize_buffer(ctx, "<libtest>", "int x = ;\n");
+  ChibiccToken *bad = chibicc_tokenize_buffer(ctx, "<libtest>", "int x = ;\n");
   if (!bad)
     return 1;
   bad = chibicc_preprocess(ctx, bad);
@@ -104,10 +104,10 @@ int main(void) {
   size_t before = __sanitizer_get_current_allocated_bytes();
 #endif
   for (int i = 0; i < 64; i++) {
-    Token *t = chibicc_tokenize_buffer(ctx, "<libtest>", src);
+    ChibiccToken *t = chibicc_tokenize_buffer(ctx, "<libtest>", src);
     if (!t)
       return 1;
-    CstNode *r = chibicc_cst_parse(ctx, t);
+    ChibiccCstNode *r = chibicc_cst_parse(ctx, t);
     if (!r || !chibicc_cst_verify(ctx, r, t))
       return 1;
     chibicc_context_reset(ctx);

@@ -329,7 +329,7 @@ D7 是唯一清单: 新增公共函数必须先改 D7 与 `test/public-api.sh` �
   链接 `libchibicc.a`; 断言消费者不引用内部符号. `nm` 白名单在 L3.2b 接入, 避免在
   `.a` 符号策略拍板前就把检查写死.
   验收: 本机与 docker 都通过; 消费者只依赖 D7.
-- [ ] **L3.2a 短 typedef / tag 与 reconstruct(部分完成)**:
+- [x] **L3.2a 短 typedef / tag 与 reconstruct(部分完成)**:
   D7 的包装函数已带 `chibicc_` 前缀, 公共类型已有 `Chibicc*` 别名; 剩余: 把短
   typedef 与 `struct Token` / `struct Node` 等 tag 从公共面移走, 公共面只用
   `Chibicc*`, 实现侧用内部别名; `chibicc_reconstruct` 从 `main.c:594` 搬进 `lib.c`.
