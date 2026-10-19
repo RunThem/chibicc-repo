@@ -17,11 +17,28 @@ static int bare_read(struct BareHolder *h, int i) {
 
 static struct Bare bare_objs[2];
 
+// A forward declaration is completed by its definition; a second
+// definition in the same scope is rejected in diagnostic.sh.
+struct Declared;
+struct Declared { int v; };
+
+// An inner-scope definition shadows an outer tag of the same name.
+struct Shadow { int a; };
+
+static int shadow_size(void) {
+  struct Shadow { double b; };
+  return sizeof(struct Shadow);
+}
+
 // PLAN A10.2: a ten-int return exercises the caller-owned buffer.
 struct RetBuf { int a[10]; };
 struct RetBuf ret_buf(int n) { struct RetBuf b; b.a[0] = n; b.a[9] = n * 2; return b; }
 
 int main() {
+  ASSERT(1, ({ struct Declared d = {1}; d.v; }));
+  ASSERT(4, sizeof(struct Shadow));
+  ASSERT(8, shadow_size());
+
   ASSERT(1, ({ struct {int a; int b;} x; x.a=1; x.b=2; x.a; }));
   ASSERT(2, ({ struct {int a; int b;} x; x.a=1; x.b=2; x.b; }));
   ASSERT(1, ({ struct {char a; int b; char c;} x; x.a=1; x.b=2; x.c=3; x.a; }));

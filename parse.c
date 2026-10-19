@@ -1671,6 +1671,11 @@ static Type *struct_union_decl(Token **rest, Token *tok, Node **specs) {
     // Otherwise, register the struct type.
     Type *ty2 = find_current_tag(tag);
     if (ty2) {
+      // A forward declaration (size -1) is completed here. A second
+      // definition of the same tag in the same scope is a constraint
+      // violation (C11 6.7.2.3p1), not a silent replacement.
+      if (ty2->size >= 0)
+        error_tok(tag, "redefinition of tag");
       *ty2 = *ty;
       ret = ty2;
     } else {

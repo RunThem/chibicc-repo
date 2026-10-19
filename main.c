@@ -570,8 +570,9 @@ static void print_token_dump(Token *tok) {
         q = p + 3;
         kind = "bom";
       } else {
-        assert(isspace(*p));
-        for (q = p; q < end && !is_line_break(q) && q[0] != '\\' && isspace(q[0]); q++)
+        assert(isspace((unsigned char)*p));
+        for (q = p; q < end && !is_line_break(q) && q[0] != '\\' &&
+                    isspace((unsigned char)q[0]); q++)
           ;
         kind = "ws";
       }

@@ -28,7 +28,7 @@ static int from_hex(char c) {
 static uint32_t read_universal_char(char *p, int len) {
   uint32_t c = 0;
   for (int i = 0; i < len; i++) {
-    if (!isxdigit(p[i]))
+    if (!isxdigit((unsigned char)p[i]))
       return 0;
     c = (c << 4) | from_hex(p[i]);
   }
@@ -262,7 +262,7 @@ static int read_punct(char *p) {
     if (startswith(p, kw[i]))
       return strlen(kw[i]);
 
-  return ispunct(*p) ? 1 : 0;
+  return ispunct((unsigned char)*p) ? 1 : 0;
 }
 
 static bool is_keyword(Token *tok) {
@@ -304,11 +304,11 @@ static int read_escaped_char(char **new_pos, char *p) {
   if (*p == 'x') {
     // Read a hexadecimal number.
     p++;
-    if (!isxdigit(*p))
+    if (!isxdigit((unsigned char)*p))
       error_at(p, "invalid hex escape sequence");
 
     int c = 0;
-    for (; isxdigit(*p); p++)
+    for (; isxdigit((unsigned char)*p); p++)
       c = (c << 4) + from_hex(*p);
     *new_pos = p;
     return c;
@@ -455,7 +455,7 @@ static bool convert_pp_int(Token *tok) {
 
   // Read a binary, octal, decimal or hexadecimal number.
   int base = 10;
-  if (!strncasecmp(p, "0x", 2) && isxdigit(p[2])) {
+  if (!strncasecmp(p, "0x", 2) && isxdigit((unsigned char)p[2])) {
     p += 2;
     base = 16;
   } else if (!strncasecmp(p, "0b", 2) && (p[2] == '0' || p[2] == '1')) {
@@ -647,19 +647,20 @@ Token *tokenize(File *file) {
     }
 
     // Skip whitespace characters.
-    if (isspace(*p)) {
+    if (isspace((unsigned char)*p)) {
       p++;
       chibicc_ctx()->has_space = true;
       continue;
     }
 
     // Numeric literal
-    if (isdigit(*p) || (*p == '.' && isdigit(p[1]))) {
+    if (isdigit((unsigned char)*p) ||
+        (*p == '.' && isdigit((unsigned char)p[1]))) {
       char *q = p++;
       for (;;) {
         if (p[0] && p[1] && strchr("eEpP", p[0]) && strchr("+-", p[1]))
           p += 2;
-        else if (isalnum(*p) || *p == '.')
+        else if (isalnum((unsigned char)*p) || *p == '.')
           p++;
         else
           break;

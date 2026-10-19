@@ -1078,8 +1078,9 @@ static void eval_array_desig(InitDesig *d, Type *ty, int *begin, int *end) {
 // returned and the caller re-applies the designator to its subtree.
 static Member *find_init_member(Type *ty, Token *name) {
   for (Member *mem = ty->members; mem; mem = mem->next) {
-    // Anonymous struct member
-    if (mem->ty->kind == TY_STRUCT && !mem->name) {
+    // Anonymous struct or union member
+    if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) &&
+        !mem->name) {
       if (get_struct_member(mem->ty, name))
         return mem;
       continue;
