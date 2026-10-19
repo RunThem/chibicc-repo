@@ -463,6 +463,26 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
   reconstruct 断言. 因此终态验收里"公共头只暴露 D7"与"`nm` 清单一致"两项尚未满足;
   当前交付是可链接的静态库与可用的 context / 阶段 API, 公共头仍是完整内部头的搬家.
 
+## L3.5 阶段闸门
+
+- 2026-10-19 终态实测(HEAD `8584f3e`, 含 L3.4 的修复):
+  - `make docker-test` -> EXIT=0(5,038 行; stage1 + stage2 + 自举; `test/library.sh`
+    在 stage1 与 stage2 各跑两次, 全部 `library: ok`; ASan+UBSan 无报告).
+  - `make docker-snapshot-diff` -> `snapshot diff: empty`.
+  - `make check-library`(本机与 docker)-> 通过; docker 内含 `test/install.sh` 的
+    pkg-config 检查与 `libchibicc.so` 的 D7 白名单.
+  - `make test-stage2` 由 docker-test 覆盖: `stage2/libchibicc.a` 与 `CHIBICC_LIB`
+    链接通过.
+- 结论: L3 完成, 阶段 5 的 L4 闸门可以勾选.
+
+## L4 终态(2026-10-19)
+
+- L4.1 全量闸门: 见 L3.5(同一 HEAD 上 docker-test / snapshot / check-library /
+  test-stage2 全绿). `THIRDPARTY=tinycc` 未跑(可选, 不属于阶段闸门).
+- L4.2 文档: AGENTS.md 的路线图 / 构建与测试 / 现状与代码地图更新到阶段 5 完成;
+  README 增加 libchibicc 用法段落; PLAN.md / RESULT.md 勾选与记录一致.
+- L4.3 提交与推送: 按步骤提交; 推送在本提交后执行.
+
 ## 提交一览
 
 | 提交 | 步骤 | 内容 |
@@ -483,4 +503,5 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 | `3f0b179` | L3.2b | `.a` 内部符号可见策略, D7 存在性检查 |
 | `85aae33` | L3.3b | Linux `libchibicc.so`(PIC / 隐藏可见性 / SONAME / 严格 D7 导出) |
 | `da45230` | L3.3c | stage2 库对象, `make install`, `libchibicc.pc`, 版本 |
-| `(本提交)` | L3.4a-c | reconstruct / provenance / include / define 断言, 负例与多 context, ASan+UBSan |
+| `8584f3e` | L3.4a-c | reconstruct / provenance / include / define, 负例与多 context, ASan+UBSan |
+| `(本提交)` | L3.5 / L4 | 阶段闸门, README 库用法, 阶段 5 收口 |

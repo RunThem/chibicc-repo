@@ -366,7 +366,7 @@ D7 是唯一清单: 新增公共函数必须先改 D7 与 `test/public-api.sh` �
 - [x] **L3.4c ASan/LSan 闸门**:
   宿主 cc 构建 library 消费者时加 `-fsanitize=address,undefined`; 跑 reset 循环与
   CST / parse / sema 路径; 目标是零泄漏零 UB. 这是 L3.0 泄漏回归的长期守卫.
-- [ ] **L3.5 阶段闸门**:
+- [x] **L3.5 阶段闸门**:
   `make docker-test`, `make docker-snapshot-diff`(空), `make check-library`,
   `make test-stage2`; 更新 `RESULT.md` 的本线记录与 `AGENTS.md` 的剩余项.
   验收: 全绿后才把 L4.1-L4.3 勾选, 阶段 5 才算完成.
@@ -377,14 +377,14 @@ D7 是唯一清单: 新增公共函数必须先改 D7 与 `test/public-api.sh` �
 L3.0-L3.5 仍未完成, 且 `RESULT.md` 的终态验收仍列两项未满足, 这里恢复为未完成; 只有当
 L3.5 全绿后才可重新勾选.
 
-- [ ] **L4.1 全量闸门**:
+- [x] **L4.1 全量闸门**:
   `make docker-test`, `make docker-snapshot-diff`(空), `make check-library`,
   `test/library.sh`, `make test-stage2`, 以及一次 `THIRDPARTY=tinycc`(可选, 时间允许时).
-- [ ] **L4.2 文档与代码地图**:
+- [x] **L4.2 文档与代码地图**:
   AGENTS.md 的路线图(阶段 5 完成, 阶段 6 改为必选), 开放决策, 构建与测试(库目标,
   `.so`, install, pkg-config), 现状与代码地图(`lib.c`, 公共头拆分, context, arena)
   全部更新; README 增加库用法段落.
-- [ ] **L4.3 提交与推送**:
+- [x] **L4.3 提交与推送**:
   按步骤提交, 最后 `git push`; 推送前确认工作树干净, 远端为当前分支.
 
 ## 阶段 L5: 产品化验证(原阶段 6, 必选)

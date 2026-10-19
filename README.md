@@ -16,6 +16,46 @@ suites. So, chibicc actually supports a wide variety of C11 features
 and is able to compile hundreds of thousands of lines of real-world C
 code correctly.
 
+## libchibicc: the C front end as a library
+
+This fork turns the front end into a reusable library. `libchibicc`
+exports four layers - the lossless token stream, the lossless concrete
+syntax tree, the faithful syntax-only AST and the sema-annotated tree -
+so formatters, source-to-source tools, linters and analyzers can use
+them without the driver or the x86-64 code generator. The compiler in
+this repository is the reference consumer of the library; see
+`AGENTS.md` for the layer boundaries.
+
+```c
+#include <chibicc/chibicc.h>
+
+ChibiccContext *ctx = chibicc_context_new();
+chibicc_context_set_diagnostic(ctx, on_diagnostic, NULL);
+
+ChibiccToken *tok = chibicc_tokenize_buffer(ctx, "<input>", src);
+tok = chibicc_preprocess(ctx, tok);
+ChibiccNode *ast = chibicc_parse(ctx, tok);
+ChibiccObj *prog = chibicc_sema(ctx, ast);   /* layer 4 */
+/* or: chibicc_cst_parse(ctx, raw) for the lossless CST (layer 2) */
+
+chibicc_context_free(ctx);
+```
+
+One context is one translation unit. `chibicc_context_reset` releases all
+per-translation-unit memory (the arena) while keeping the include paths,
+the command-line macros and the diagnostic callback; every pointer the
+context returned is invalid afterwards. Errors are reported through the
+registered `ChibiccDiagnosticFn` and make the entry return NULL (the
+process does not exit). `chibicc_reconstruct` rebuilds the exact input
+bytes from the token stream.
+
+Build with `make libchibicc.a` (or plain `make`, which also builds
+`libchibicc.so` on Linux), install with `make install PREFIX=...`, or
+use `pkg-config --cflags --libs libchibicc`. The public headers live in
+`libchibicc/include/chibicc/`; include the umbrella
+`<chibicc/chibicc.h>`. The library version is `CHIBICC_VERSION`
+(`chibicc_version()`).
+
 chibicc is developed as the reference implementation for a book I'm
 currently writing about the C compiler and the low-level programming.
 The book covers the vast topic with an incremental approach; in the first
