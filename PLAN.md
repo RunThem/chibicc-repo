@@ -344,7 +344,7 @@ D7 是唯一清单: 新增公共函数必须先改 D7 与 `test/public-api.sh` �
   `chibicc` 链接 `main.o` + `codegen.o` + 静态库; `make test` 与 `make test-stage2`
   跑 `test/library.sh`; docker BOOT 排除本机 `libchibicc.a`.
   验收: `make clean && make`; `test/library.sh` 本机通过; docker 闸门见 L4.
-- [ ] **L3.3b 共享库**:
+- [x] **L3.3b 共享库**:
   Linux `libchibicc.so`(`-fPIC`, `-fvisibility=hidden`, `CHIBICC_API`, SONAME
   `libchibicc.so.0`); 用 visibility 或 version script 限制导出; `make clean && make`
   后 `nm -D` 校验.

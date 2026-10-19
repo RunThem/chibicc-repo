@@ -78,9 +78,9 @@ struct chibicc_cst_node {
   int child_cap;
 };
 
-ChibiccCstNode *chibicc_cst_parse(ChibiccContext *ctx, ChibiccToken *tok);
-void chibicc_cst_reconstruct(ChibiccContext *ctx, ChibiccCstNode *root, FILE *out);
-void chibicc_cst_dump(ChibiccContext *ctx, ChibiccCstNode *root, FILE *out);
-bool chibicc_cst_verify(ChibiccContext *ctx, ChibiccCstNode *root, ChibiccToken *tok);
+CHIBICC_API ChibiccCstNode *chibicc_cst_parse(ChibiccContext *ctx, ChibiccToken *tok);
+CHIBICC_API void chibicc_cst_reconstruct(ChibiccContext *ctx, ChibiccCstNode *root, FILE *out);
+CHIBICC_API void chibicc_cst_dump(ChibiccContext *ctx, ChibiccCstNode *root, FILE *out);
+CHIBICC_API bool chibicc_cst_verify(ChibiccContext *ctx, ChibiccCstNode *root, ChibiccToken *tok);
 
 #endif

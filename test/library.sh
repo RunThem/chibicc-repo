@@ -138,3 +138,11 @@ EOF
   -I"$root/libchibicc/include" "$tmp/consumer.c" "$root/libchibicc.a" \
   -o "$tmp/consumer-asan"
 "$tmp/consumer-asan"
+
+# The shared library (PLAN L3.3b, Linux only): the same consumer links
+# against it and runs.
+if [ -f "$root/libchibicc.so" ]; then
+  "$cc" -std=c11 -I"$root/libchibicc/include" "$tmp/consumer.c" \
+    -L"$root" -lchibicc -Wl,-rpath,"$root" -o "$tmp/consumer-so"
+  "$tmp/consumer-so"
+fi

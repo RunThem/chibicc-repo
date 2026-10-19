@@ -94,8 +94,8 @@ struct chibicc_token {
                     // are the public face)
 };
 
-ChibiccToken *chibicc_tokenize_file(ChibiccContext *ctx, char *path);
-ChibiccToken *chibicc_tokenize_buffer(ChibiccContext *ctx, char *name, char *contents);
+CHIBICC_API ChibiccToken *chibicc_tokenize_file(ChibiccContext *ctx, char *path);
+CHIBICC_API ChibiccToken *chibicc_tokenize_buffer(ChibiccContext *ctx, char *name, char *contents);
 
 // Print the bytes the token stream was tokenized from: the trivia in
 // front of every token plus the token spellings, in raw coordinates (the
@@ -103,6 +103,6 @@ ChibiccToken *chibicc_tokenize_buffer(ChibiccContext *ctx, char *name, char *con
 // cover the file's raw text byte for byte, so this rebuilds the input
 // text - with no exceptions: the rewrites that used to be pre-passes
 // live in the scan buffer and the map now, not in the coordinates.
-void chibicc_reconstruct(ChibiccContext *ctx, ChibiccToken *tok, FILE *out);
+CHIBICC_API void chibicc_reconstruct(ChibiccContext *ctx, ChibiccToken *tok, FILE *out);
 
 #endif

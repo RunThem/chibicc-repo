@@ -356,8 +356,23 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 - 动作(已完成的部分): `libchibicc.a` 由除 `main.c` / `codegen.c` 外的全部 `.c`
   构建(含 `lib.c`); `chibicc` 链接 `main.o` + `codegen.o` + 静态库; `make test` 与
   `make test-stage2` 调用 `test/library.sh`; docker BOOT 排除本机 `libchibicc.a`.
-- 偏差: Linux `libchibicc.so`(PIC / 可见性 / SONAME)与"stage2 用 chibicc 重编库对象"
-  尚未做; 当前 library.sh 链接宿主 cc 构建的静态库.
+- 偏差: 本步当时只做了静态库; `.so` 在 L3.3b 补上, stage2 库对象在 L3.3c 补上.
+
+## L3.3b 共享库
+
+- 动作: `context.h` 定义 `CHIBICC_API`(`__attribute__((visibility("default")))`),
+  31 个 D7 声明全部标注; Makefile 在 Linux 上新增 `%.pic.o`(`-fPIC -fvisibility=hidden`),
+  `libchibicc.so.0`(`-shared`, SONAME `libchibicc.so.0`)与 `libchibicc.so` 符号链接;
+  默认目标 `all` 在 Linux 上同时构建 `chibicc` 与 `.so`(macOS 仍只有 `chibicc`);
+  `clean` 覆盖新产物; docker BOOT 排除本机 `.so`; 普通 `.o` 的依赖补上公共头.
+- 测试: `test/library.sh` 在 `.so` 存在时用同一消费者
+  `-L$root -lchibicc -Wl,-rpath,$root` 链接并运行; `test/public-api.sh` 在 `.so` 存在时用
+  `nm -D --defined-only` 断言导出集合与 D7 完全相同.
+- 验收: docker 内 `make clean && make` 产出 `libchibicc.so -> libchibicc.so.0`,
+  `nm -D --defined-only` 恰好 31 个 `chibicc_*` 符号; `make check-library` 通过(含
+  `.so` 链接与白名单); `test/library.sh` 的 `.so` 分支输出 `library: ok`; 本机 macOS 不
+  构建 `.so`, `make` 与 `check-library` 照常通过; docker-test / snapshot 回归通过.
+- 偏差: 无.
 
 ## L3.4 库测试定稿
 
@@ -401,4 +416,5 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 | `f4415da` | L3.1b | 9 个公共头, context 不透明, `label_gotos` 交接进 context |
 | `8eedb95` | L3.1c/L3.1d | 头文件卫生实测, `test/public-api.sh` + `make check-library` |
 | `aea7638` | L3.2a | 公共类型 / tag 改 Chibicc 前缀, `chibicc_reconstruct` 进库 |
-| `(本提交)` | L3.2b | `.a` 内部符号可见策略, D7 存在性检查 |
+| `3f0b179` | L3.2b | `.a` 内部符号可见策略, D7 存在性检查 |
+| `(本提交)` | L3.3b | Linux `libchibicc.so`(PIC / 隐藏可见性 / SONAME / 严格 D7 导出) |

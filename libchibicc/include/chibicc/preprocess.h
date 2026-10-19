@@ -6,6 +6,6 @@
 
 #include <chibicc/token.h>
 
-ChibiccToken *chibicc_preprocess(ChibiccContext *ctx, ChibiccToken *tok);
+CHIBICC_API ChibiccToken *chibicc_preprocess(ChibiccContext *ctx, ChibiccToken *tok);
 
 #endif

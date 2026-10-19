@@ -153,3 +153,16 @@ for sym in $d7; do
   fi
 done
 echo "public-api: D7 symbols present in libchibicc.a"
+
+# PLAN L3.3b: the shared library must export exactly D7. Only built on
+# Linux.
+if [ -f "$root/libchibicc.so" ]; then
+  nm -D --defined-only "$root/libchibicc.so" | awk '{print $NF}' \
+    | sort -u > "$tmp/soT"
+  printf '%s\n' "$d7" | sort -u > "$tmp/d7"
+  if ! diff -u "$tmp/d7" "$tmp/soT"; then
+    echo "public-api: libchibicc.so exports differ from D7" >&2
+    exit 1
+  fi
+  echo "public-api: libchibicc.so exports exactly D7"
+fi

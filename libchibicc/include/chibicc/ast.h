@@ -536,6 +536,6 @@ struct chibicc_node {
 // The parser builds the faithful syntax tree and returns the top-level
 // declaration record chain; it makes no semantic decision beyond the
 // typedef/tag classification oracle the C grammar requires.
-ChibiccNode *chibicc_parse(ChibiccContext *ctx, ChibiccToken *tok);
+CHIBICC_API ChibiccNode *chibicc_parse(ChibiccContext *ctx, ChibiccToken *tok);
 
 #endif

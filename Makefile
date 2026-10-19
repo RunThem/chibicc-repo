@@ -4,9 +4,22 @@ SRCS=$(wildcard *.c)
 OBJS=$(SRCS:.c=.o)
 LIB_SRCS=$(filter-out main.c codegen.c,$(SRCS))
 LIB_OBJS=$(LIB_SRCS:.c=.o)
+PUBLIC_HDRS=$(wildcard libchibicc/include/chibicc/*.h)
 
 TEST_SRCS=$(wildcard test/*.c)
 TESTS=$(TEST_SRCS:.c=.exe)
+
+# Linux also builds the shared library (PLAN L3.3b); macOS only promises
+# the archive.
+ifeq ($(shell uname -s),Linux)
+ALL=chibicc libchibicc.so
+CHECK_LIBS=libchibicc.a libchibicc.so
+else
+ALL=chibicc
+CHECK_LIBS=libchibicc.a
+endif
+
+all: $(ALL)
 
 # Stage 1
 
@@ -16,7 +29,21 @@ chibicc: libchibicc.a main.o codegen.o
 libchibicc.a: $(LIB_OBJS)
 	$(AR) rcs $@ $^
 
-$(OBJS): chibicc.h
+# The shared library (PLAN L3.3b): Linux only, PIC objects built with
+# hidden visibility, D7 exported through CHIBICC_API. macOS only
+# promises the archive.
+ifeq ($(shell uname -s),Linux)
+libchibicc.so.0: $(LIB_SRCS:.c=.pic.o)
+	$(CC) $(CFLAGS) -shared -Wl,-soname,libchibicc.so.0 -o $@ $^
+
+libchibicc.so: libchibicc.so.0
+	ln -sf libchibicc.so.0 $@
+
+%.pic.o: %.c chibicc.h $(PUBLIC_HDRS)
+	$(CC) $(CFLAGS) -fPIC -fvisibility=hidden -c -o $@ $<
+endif
+
+$(OBJS): chibicc.h $(PUBLIC_HDRS)
 
 test/%.exe: chibicc test/%.c
 	./chibicc -Iinclude -Itest -c -o test/$*.o test/$*.c
@@ -36,7 +63,7 @@ test-all: test test-stage2
 
 # The public-surface gate (PLAN L3.1d): header self-containment, a
 # consumer that sees only libchibicc/include, and the symbol check.
-check-library: libchibicc.a
+check-library: $(CHECK_LIBS)
 	test/library.sh
 	test/public-api.sh
 
@@ -67,7 +94,7 @@ test-stage2: libchibicc.a $(TESTS:test/%=stage2/test/%)
 # Misc.
 
 clean:
-	rm -rf chibicc libchibicc.a tmp* $(TESTS) test/*.s test/*.exe stage2
+	rm -rf chibicc libchibicc.a libchibicc.so libchibicc.so.0 tmp* $(TESTS) test/*.s test/*.exe stage2
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 # Docker (amd64 Linux) 测试环境: 本机是 macOS ARM64, chibicc 生成的 x86-64 代码
@@ -80,7 +107,7 @@ clean:
 THIRDPARTY ?= tinycc libpng git sqlite cpython
 
 # 拷贝源码到容器可写层(排除本机构建产物与 thirdparty 缓存)
-BOOT = mkdir -p /work && tar -C /src --exclude=./.git --exclude=./.cache --exclude=./thirdparty --exclude=./chibicc --exclude=./libchibicc.a --exclude=./stage2 --exclude=./compile_commands.json --exclude=./test/*.exe --exclude="*.o" --exclude="*.s" -cf - . | tar -C /work -xf -
+BOOT = mkdir -p /work && tar -C /src --exclude=./.git --exclude=./.cache --exclude=./thirdparty --exclude=./chibicc --exclude=./libchibicc.a --exclude="./libchibicc.so*" --exclude=./stage2 --exclude=./compile_commands.json --exclude=./test/*.exe --exclude="*.o" --exclude="*.s" -cf - . | tar -C /work -xf -
 
 docker-image:
 	docker build --platform linux/amd64 -t chibicc:amd64 .
@@ -173,4 +200,4 @@ docker-snapshot-ndiff: docker-image
 	@rc=0; diff -ru .cache/.ndtmp/base .cache/.ndtmp/new || rc=1; rm -rf .cache/.ndtmp; \
 	  [ $$rc -eq 0 ] && echo "snapshot ndiff: empty" || { echo "snapshot ndiff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: test clean test-stage2 test-thirdparty check-library docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff
+.PHONY: all test clean test-stage2 test-thirdparty check-library docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff

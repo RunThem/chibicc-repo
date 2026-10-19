@@ -10,6 +10,6 @@
 // Runs semantic analysis over the parser's output: name resolution,
 // type annotation, constant evaluation, aggregate layout, and
 // control-flow binding. Returns the list of global objects for codegen.
-ChibiccObj *chibicc_sema(ChibiccContext *ctx, ChibiccNode *toplevel);
+CHIBICC_API ChibiccObj *chibicc_sema(ChibiccContext *ctx, ChibiccNode *toplevel);
 
 #endif
