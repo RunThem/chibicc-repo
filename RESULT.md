@@ -394,13 +394,57 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
   测试跳过 `.pc` 检查后通过; docker-test / snapshot 通过.
 - 偏差: 本机没有 pkg-config, `.pc` 的验证只在 docker 内发生(计划以 docker 为权威).
 
-## L3.4 库测试定稿
+## L3.4 库测试定稿(修订前的记录)
+
+2026-10-19 修订: 本节的偏差已由 L3.4a-L3.4c 关闭; 内容保留为当时的记录.
 
 - 动作: `test/library.sh` 用宿主 cc 编译一个只 include 公共头的消费者, 链接
   `libchibicc.a`; 覆盖 tokenize buffer -> preprocess -> parse -> sema, CST parse +
   verify, 诊断回调(不写 stderr / 不 exit), 错误后 `reset` 再跑第二个 TU.
 - 本机结果: `library: ok`, EXIT=0.
 - 偏差: provenance 访问器与 `chibicc_reconstruct` 的逐字节断言尚未加入.
+
+## L3.4a library.sh 断言补全
+
+- `test/library.sh` 的消费者新增:
+  - `chibicc_reconstruct`: 含连续空格 / 注释 / 字符串 / tab 的样本写入 `tmpfile` 回读
+    逐字节比对.
+  - provenance 访问器: 在 `F(2)` 的产物 token 上断言链、展开记录、宏名、实参个数 /
+    序号 / 原始实参 token, 以及 `__LINE__` 的内建标记.
+  - `chibicc_tokenize_file` + `chibicc_context_add_include_path`: 头文件只放在 include
+    目录, 输入文件用 `#include "header.h"` 引入, 预处理后找到宏值 7.
+  - `chibicc_context_define` / `_undef`: define 后 `LIBFOO` 展开为 42, undef 后不再是数字.
+- 验收: 本机与 docker 全绿.
+
+## L3.4b 负例与多 context
+
+- 四个错误返回: 缺文件, `#error`, 坏表达式, 未声明名字的 sema 错误; 每个入口返回失败值,
+  回调恰好一次, 进程不退出.
+- 诊断字段: 带位置的诊断断言 `filename` / `line` / `column` / `message` 有效, 位置计数 > 0.
+- 同线程双 context: B 的错误回调里调用 A 的公共入口, 断言 A 仍可用; B 释放后 A 继续编译.
+- 跨线程: 两个线程各自 `chibicc_context_new` 并跑完整管线, 两边都成功.
+- 偏差(有意的可观察变化): `chibicc_tokenize_file` 在文件打不开时由 facade 调
+  `error("cannot open %s: %s", ...)`, 驱动器对缺失输入文件从"静默 exit 1"变成打印一行
+  原因再 exit 1. 这是 D4 "错误全部经诊断回调" 的要求; `test/driver.sh` /
+  `test/diagnostic.sh` 未锁定该场景, 其余输出逐字节不变.
+
+## L3.4c ASan / UBSan 闸门
+
+- `test/library.sh` 用宿主 cc 以 `-fsanitize=address,undefined` 重新编译库源码(除
+  `main.c` / `codegen.c`)成临时归档, 再链接同一个消费者;
+  `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`.
+- 分配统计继续作为泄漏闸门: 64 轮 CST -> reset 的活字节上限, 以及"新建 context 跑完整
+  管线后 free, 活字节回到基线"的独立检查. LSan 仍不启用(Rosetta 下不稳定).
+- 闸门发现并修复两个库层真实缺陷:
+  - `tokenize.c` 的 `equal()` 先按 `tok->len` 做 memcmp, token 比 `op` 长时读过 `op` 的
+    字符串边界(例如 `#include` 对 `"#"`). 改为先比长度再 memcmp; 谓词结果不变,
+    诊断 / `-E` / snapshot 逐字节不变.
+  - `chibicc_arena_calloc` 固定按 8 字节对齐, 而 x86-64 的 `Token` / `Node` 含
+    `long double`, 需要 16 字节; stage2 的 UBSan 报 "member access within misaligned
+    address". 改为 16 字节对齐. macOS arm64 的 `long double` 对齐是 8, 本机 UBSan 不报;
+    docker(amd64) 是权威.
+- 验收: 本机与 docker 的 `make check-library` 在 ASan+UBSan 下零报告; docker-test;
+  snapshot 为空.
 
 ## L4 终态验收
 
@@ -438,4 +482,5 @@ L3.2a/b, L3.3b/c, L3.4a/b/c 与 L3.5; 原阶段 6 改为 L5 必选. 本文件下
 | `aea7638` | L3.2a | 公共类型 / tag 改 Chibicc 前缀, `chibicc_reconstruct` 进库 |
 | `3f0b179` | L3.2b | `.a` 内部符号可见策略, D7 存在性检查 |
 | `85aae33` | L3.3b | Linux `libchibicc.so`(PIC / 隐藏可见性 / SONAME / 严格 D7 导出) |
-| `(本提交)` | L3.3c | stage2 库对象, `make install`, `libchibicc.pc`, 版本 |
+| `da45230` | L3.3c | stage2 库对象, `make install`, `libchibicc.pc`, 版本 |
+| `(本提交)` | L3.4a-c | reconstruct / provenance / include / define 断言, 负例与多 context, ASan+UBSan |

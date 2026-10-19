@@ -354,16 +354,16 @@ D7 是唯一清单: 新增公共函数必须先改 D7 与 `test/public-api.sh` �
   `make install`, `libchibicc.pc`, `CHIBICC_VERSION` / `chibicc_version()`.
   验收: stage2 库对象能链接; `pkg-config --cflags --libs libchibicc` 可用; 安装目录
   只含公共头, `.a` / `.so` 与 `.pc`.
-- [ ] **L3.4a library.sh 断言补全**:
+- [x] **L3.4a library.sh 断言补全**:
   当前覆盖: 只 include 公共头, tokenize buffer -> preprocess -> parse -> sema,
   CST verify, 诊断回调(不写 stderr / 不 exit), 错误后 `reset` 再跑第二个 TU.
   剩余: provenance 访问器与 `chibicc_reconstruct` 的逐字节断言; `tokenize_file` 路径;
   include 路径与 context `define` / `undef`.
-- [ ] **L3.4b 负例与多 context**:
+- [x] **L3.4b 负例与多 context**:
   每个公共入口的错误返回(缺文件, 坏指令, 坏表达式, 坏类型), 回调只收一次且不 exit;
   同线程双 context 嵌套, 跨线程两个 context 并存; error 后 reset 再跑第二个 TU.
   验收: 上述路径全绿; 回调字段的 filename / line / column 有断言.
-- [ ] **L3.4c ASan/LSan 闸门**:
+- [x] **L3.4c ASan/LSan 闸门**:
   宿主 cc 构建 library 消费者时加 `-fsanitize=address,undefined`; 跑 reset 循环与
   CST / parse / sema 路径; 目标是零泄漏零 UB. 这是 L3.0 泄漏回归的长期守卫.
 - [ ] **L3.5 阶段闸门**:

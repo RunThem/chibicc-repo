@@ -85,7 +85,9 @@ void *chibicc_arena_calloc(size_t count, size_t size) {
   size_t n = count * size;
   if (!chibicc_active_ctx)
     return calloc(count, size);
-  void *p = arena_alloc(chibicc_active_ctx, n, 8);
+  // 16, not 8: Token and Node embed a long double, which needs 16-byte
+  // alignment on x86-64 (UBSan found this in L3.4c).
+  void *p = arena_alloc(chibicc_active_ctx, n, 16);
   memset(p, 0, n);
   return p;
 }
@@ -265,6 +267,11 @@ Token *chibicc_tokenize_file(ChibiccContext *ctx, char *path) {
   if (!ctx->base_file)
     ctx->base_file = chibicc_arena_strdup(path);
   Token *tok = tokenize_file(path);
+  // tokenize_file returns NULL only when the file cannot be opened; the
+  // facades report it, so a library consumer never sees a silent NULL
+  // (PLAN D4/L3.4b).
+  if (!tok)
+    error("cannot open %s: %s", path, strerror(errno));
   LEAVE(ctx);
   return tok;
 }

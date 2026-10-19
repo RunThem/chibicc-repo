@@ -184,7 +184,9 @@ char *token_kind_name(TokenKind kind) {
 
 // Consumes the current token if it matches `op`.
 bool equal(Token *tok, char *op) {
-  return memcmp(tok->loc, op, tok->len) == 0 && op[tok->len] == '\0';
+  // The length check comes first: a token longer than `op` must not make
+  // memcmp read past the end of `op` (ASan found this in L3.4c).
+  return (int)strlen(op) == tok->len && memcmp(tok->loc, op, tok->len) == 0;
 }
 
 // Ensure that the current token is `op`.
