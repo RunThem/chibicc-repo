@@ -465,7 +465,12 @@ static bool convert_pp_int(Token *tok) {
     base = 8;
   }
 
+  // strtoul saturates at ULONG_MAX and sets ERANGE on overflow; do not
+  // let an unrepresentable literal silently become ULONG_MAX.
+  errno = 0;
   int64_t val = strtoul(p, &p, base);
+  if (errno == ERANGE)
+    error_tok(tok, "integer literal is too large");
 
   // Read U, L or LL suffixes.
   bool l = false;

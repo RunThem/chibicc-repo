@@ -18,8 +18,9 @@
 # error_tok(B/C/D 18 处此后移入 sema.c);
 # 判定表 E 10 处中的 9 处, 另加 e11(R3.1 的语句表达式末语句形状回归锁); f 系列 12 处
 # (A0.1 的 9 处, 夹在降级里的检查; 2026-09-29 基线缺陷修复随修锁定的 f10/f11;
-# 2026-10-19 审计修复的 f12); g 系列 10 处 (2026-10-19 审计修复: u8 拼接与位域宽度
-# 校验; 2026-10-20 审计修复: struct/union tag 重定义). 合计 66 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
+# 2026-10-19 审计修复的 f12); g 系列 11 处 (2026-10-19 审计修复: u8 拼接与位域宽度
+# 校验; 2026-10-20 审计修复: struct/union tag 重定义; 2026-10-21 审计修复: 整数常量
+# 溢出诊断). 合计 67 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
 # symbol" - find_func 只返回 is_function 为真的对象, 该守卫恒假, 当前树中不可达.
 # 另: 文件域 "void x;" 当前被接受(无检查), 亦无用例.
 #
@@ -601,10 +602,11 @@ f12_exchange_pointer_expected.c:1: int f(int a, int b) { return __builtin_atomic
                                                                                           ^ pointer expected
 WANT
 
-# ---- g 系列: 2026-10-19 审计修复的新检查 (10 处) ----
+# ---- g 系列: 2026-10-19 审计修复的新检查 (11 处) ----
 # g01-g04: C11 6.4.5 的字符串字面量拼接约束, u8 不能与 u/U/L 拼接;
 # g05-g08: C11 6.7.2.1p4 的位域宽度约束 (非负, 不超承载类型宽度, 整型);
-# g09-g10: C11 6.7.2.3p1 的 tag 重定义 (同一作用域只能定义一次).
+# g09-g10: C11 6.7.2.3p1 的 tag 重定义 (同一作用域只能定义一次);
+# g11: 整数常量超出 strtoul 的可表示范围.
 
 snippet g01_u8_utf16_concat <<'SNIP'
 char *p = u8"a" u"b";
@@ -696,6 +698,15 @@ SNIP
 expect g10_tag_kind_mismatch <<'WANT'
 g10_tag_kind_mismatch.c:2: union S { int a; };
                                  ^ redefinition of tag
+WANT
+
+snippet g11_integer_literal_too_large <<'SNIP'
+int x = 18446744073709551616;
+SNIP
+
+expect g11_integer_literal_too_large <<'WANT'
+g11_integer_literal_too_large.c:1: int x = 18446744073709551616;
+                                           ^ integer literal is too large
 WANT
 
 fail=""
