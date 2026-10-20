@@ -544,7 +544,8 @@ static void resolve_type(Type *ty) {
 
     // The operand's type fills this record in rather than replacing it:
     // the parser has already built the rest of the declarator's types on
-    // top of it, and the name it read off the declarator belongs here.
+    // top of it, and a per-parameter name already attached to this
+    // record must survive the replacement (F1).
     add_type(expr);
     resolve_type(expr->ty);
 
@@ -824,6 +825,22 @@ static Obj *new_lvar(char *name, Type *ty) {
   var->next = locals;
   locals = var;
   return var;
+}
+
+// The type of a named object: a per-object copy carrying its name, made
+// after resolve_type completed the type so the flexible and
+// array-completion flags are final. Shared builtin, tag and typedef
+// records are never written (F1). A VLA record is the identity codegen
+// keys its runtime size on, and a typedef'd VLA is shared by the
+// declarations that use it on purpose (A10.2), so it is returned as is;
+// its name slot stays unset.
+static Type *named_type(Type *ty, Token *name_tok) {
+  if (ty->kind == TY_VLA)
+    return ty;
+
+  Type *copy = copy_type(ty);
+  copy->name = name_tok;
+  return copy;
 }
 
 static Obj *new_gvar(char *name, Type *ty) {
@@ -2812,7 +2829,8 @@ static void resolve_node(Node *node) {
       node->var = new_anon_gvar(node->ty_op);
       push_scope(get_ident(node->name_tok))->var = node->var;
     } else {
-      node->var = new_lvar(get_ident(node->name_tok), node->ty_op);
+      node->var = new_lvar(get_ident(node->name_tok),
+                           named_type(node->ty_op, node->name_tok));
       int align = attr_align(&node->attr);
       if (align)
         node->var->align = align;
@@ -2838,7 +2856,8 @@ static void resolve_node(Node *node) {
     resolve_type_exprs(node->ty_op);
     resolve_type(node->ty_op);
 
-    Obj *var = new_gvar(get_ident(node->name_tok), node->ty_op);
+    Obj *var = new_gvar(get_ident(node->name_tok),
+                        named_type(node->ty_op, node->name_tok));
     var->is_definition = !node->attr.is_extern;
     var->is_static = node->attr.is_static;
     var->is_tls = node->attr.is_tls;
@@ -2957,7 +2976,8 @@ static void resolve_function(Node *node) {
   resolve_type_exprs(ty);
   resolve_type(ty);
 
-  Obj *fn = declare_function(get_ident(node->name_tok), ty, &node->attr,
+  Obj *fn = declare_function(get_ident(node->name_tok),
+                             named_type(ty, node->name_tok), &node->attr,
                              node->tok, node->body != NULL);
   node->var = fn;
 

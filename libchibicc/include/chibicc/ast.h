@@ -215,7 +215,9 @@ struct chibicc_type {
   // the C spec.
   ChibiccType *base;
 
-  // Declaration
+  // Declaration. A declarator name is never written into a shared type
+  // record (F1); these fields are filled only on the per-parameter copy
+  // inside a function type, where sema reads them.
   ChibiccToken *name;
   ChibiccToken *name_pos;
 

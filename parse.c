@@ -53,7 +53,17 @@ static Type *typename(Token **rest, Token *tok, Node **specs);
 static Type *enum_specifier(Token **rest, Token *tok, Node **specs);
 static Type *typeof_specifier(Token **rest, Token *tok, Node **specs);
 static Type *type_suffix(Token **rest, Token *tok, Type *ty);
-static Type *declarator(Token **rest, Token *tok, Type *ty);
+
+// The built-in types are shared by every context (type.c), and a tag or
+// typedef type is shared by every declaration that names it. A
+// declarator therefore never writes its name into the type record: the
+// name travels in this per-declaration carrier instead (F1).
+typedef struct {
+  Token *name;     // NULL when the declarator has none
+  Token *name_pos; // where the name would go, for "name omitted"
+} DeclName;
+
+static Type *declarator(Token **rest, Token *tok, Type *ty, DeclName *decl);
 static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr);
 static Initializer *init_record(Token **rest, Token *tok);
 static Node *compound_stmt(Token **rest, Token *tok);
@@ -79,7 +89,7 @@ static Node *funcall(Token **rest, Token *tok, Node *node);
 static Node *unary(Token **rest, Token *tok);
 // The body behind each depth-guarded entry (the wrapper increments
 // parse_depth before calling it).
-static Type *declarator1(Token **rest, Token *tok, Type *ty);
+static Type *declarator1(Token **rest, Token *tok, Type *ty, DeclName *decl);
 static Type *abstract_declarator(Token **rest, Token *tok, Type *ty);
 static Type *abstract_declarator1(Token **rest, Token *tok, Type *ty);
 static Initializer *init_record1(Token **rest, Token *tok);
@@ -520,24 +530,26 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
       break;
     }
 
+    DeclName decl = {};
     Type *ty2 = declspec(&tok, tok, NULL, &specs);
-    ty2 = declarator(&tok, tok, ty2);
-
-    Token *name = ty2->name;
+    ty2 = declarator(&tok, tok, ty2, &decl);
 
     if (ty2->kind == TY_ARRAY) {
       // "array of T" is converted to "pointer to T" only in the parameter
       // context. For example, *argv[] is converted to **argv by this.
       ty2 = pointer_to(ty2->base);
-      ty2->name = name;
     } else if (ty2->kind == TY_FUNC) {
       // Likewise, a function is converted to a pointer to a function
       // only in the parameter context.
       ty2 = pointer_to(ty2);
-      ty2->name = name;
     }
 
-    cur = cur->next = copy_type(ty2);
+    // The parameter record is copied into the function type; its name
+    // lives on that per-parameter copy, where sema reads it.
+    Type *param = copy_type(ty2);
+    param->name = decl.name;
+    param->name_pos = decl.name_pos;
+    cur = cur->next = param;
   }
 
   if (cur == &head)
@@ -601,39 +613,29 @@ static Type *pointers(Token **rest, Token *tok, Type *ty) {
   return ty;
 }
 
-// The built-in types are shared by every context (type.c). A declarator
-// must not write its name into one; it copies the record first.
-static bool is_builtin_type(Type *ty) {
-  return ty == ty_void || ty == ty_bool ||
-         ty == ty_char || ty == ty_short || ty == ty_int || ty == ty_long ||
-         ty == ty_uchar || ty == ty_ushort || ty == ty_uint ||
-         ty == ty_ulong || ty == ty_float || ty == ty_double ||
-         ty == ty_ldouble;
-}
-
 // declarator = pointers ("(" ident ")" | "(" declarator ")" | ident) type-suffix
 //
 // The declarator layer builds the type shape and leaves everything it
 // cannot decide syntactically (array dimensions, typeof operands) as
 // records for sema to complete.
-static Type *declarator(Token **rest, Token *tok, Type *ty) {
+static Type *declarator(Token **rest, Token *tok, Type *ty, DeclName *decl) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
     error_tok(tok, "nesting too deep");
-  Type *node = declarator1(rest, tok, ty);
+  Type *node = declarator1(rest, tok, ty, decl);
   chibicc_ctx()->parse_depth--;
   return node;
 }
 
-static Type *declarator1(Token **rest, Token *tok, Type *ty) {
+static Type *declarator1(Token **rest, Token *tok, Type *ty, DeclName *decl) {
   ty = pointers(&tok, tok, ty);
 
   if (equal(tok, "(")) {
     Token *start = tok;
     Type dummy = {};
-    declarator(&tok, start->next, &dummy);
+    declarator(&tok, start->next, &dummy, NULL);
     tok = skip(tok, ")");
     ty = type_suffix(rest, tok, ty);
-    return declarator(&tok, start->next, ty);
+    return declarator(&tok, start->next, ty, decl);
   }
 
   Token *name = NULL;
@@ -645,16 +647,16 @@ static Type *declarator1(Token **rest, Token *tok, Type *ty) {
   }
 
   ty = type_suffix(rest, tok, ty);
-  if (is_builtin_type(ty))
-    ty = copy_type(ty);
   // A named declaration accepts trailing attributes here. The type
   // meaning is ignored for a named declaration, so a shared type record
   // is never mutated.
   tok = *rest;
   tok = attribute_list(tok, NULL);
   *rest = tok;
-  ty->name = name;
-  ty->name_pos = name_pos;
+  if (decl) {
+    decl->name = name;
+    decl->name_pos = name_pos;
+  }
   return ty;
 }
 
@@ -779,8 +781,9 @@ static Type *typeof_specifier(Token **rest, Token *tok, Node **specs) {
 // declaration = declspec (declarator ("=" initializer)? ("," declarator ("=" initializer)?)*)? ";"
 //
 // Each declarator emits an ND_DECL record anchored at the name it
-// declares: the name rides on the type (Type.name), the storage class
-// and alignment in `attr`, and the initializer stays a faithful record.
+// declares: the name comes from the declarator's local record, the
+// storage class and alignment from `attr`, and the initializer stays a
+// faithful record.
 // The records go straight into the enclosing statement chain - a
 // declaration is not a block in the source, so the block that carries
 // them is the one the source wrote. sema declares the object when it
@@ -796,14 +799,15 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     if (i++ > 0)
       tok = skip(tok, ",");
 
-    Type *ty = declarator(&tok, tok, basety);
-    if (!ty->name)
-      error_tok(ty->name_pos, "variable name omitted");
+    DeclName decl_name = {};
+    Type *ty = declarator(&tok, tok, basety, &decl_name);
+    if (!decl_name.name)
+      error_tok(decl_name.name_pos, "variable name omitted");
 
     // The declared name shadows a typedef of the same name for the rest
     // of the parse - before the initializer is parsed, as the old
     // declaration site did.
-    Token *name = ty->name;
+    Token *name = decl_name.name;
     add_declared_name(name);
 
     Initializer *init = NULL;
@@ -1681,8 +1685,9 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
 
       Member *mem = chibicc_arena_calloc(1, sizeof(Member));
       mem->tok = tok;
-      mem->ty = declarator(&tok, tok, basety);
-      mem->name = mem->ty->name;
+      DeclName decl = {};
+      mem->ty = declarator(&tok, tok, basety, &decl);
+      mem->name = decl.name;
       mem->idx = idx++;
       mem->align_ty = attr.align_ty;
       mem->align_expr = attr.align_expr;
@@ -2196,11 +2201,12 @@ static Node *parse_typedef(Token **rest, Token *tok, Type *basety) {
       tok = skip(tok, ",");
     first = false;
 
-    Type *ty = declarator(&tok, tok, basety);
-    if (!ty->name)
-      error_tok(ty->name_pos, "typedef name omitted");
+    DeclName decl = {};
+    Type *ty = declarator(&tok, tok, basety, &decl);
+    if (!decl.name)
+      error_tok(decl.name_pos, "typedef name omitted");
 
-    Node *node = new_node(ND_TYPEDEF, ty->name);
+    Node *node = new_node(ND_TYPEDEF, decl.name);
     node->ty = ty;
     add_typedef(node);
     cur = cur->next = node;
@@ -2214,15 +2220,16 @@ static Node *parse_typedef(Token **rest, Token *tok, Type *basety) {
 // ND_FUNCDEF record. sema declares the function (checking it against a
 // previous declaration, anchored at `tok`) and analyzes the body.
 static Node *function_def(Token **rest, Token *tok, Type *basety, VarAttr *attr) {
-  Type *ty = declarator(&tok, tok, basety);
-  if (!ty->name)
-    error_tok(ty->name_pos, "function name omitted");
+  DeclName decl = {};
+  Type *ty = declarator(&tok, tok, basety, &decl);
+  if (!decl.name)
+    error_tok(decl.name_pos, "function name omitted");
 
   Node *node = new_node(ND_FUNCDEF, tok);
   node->ty_op = ty;
-  node->name_tok = ty->name;
+  node->name_tok = decl.name;
   node->attr = *attr;
-  add_declared_name(ty->name);
+  add_declared_name(decl.name);
 
   if (consume(&tok, tok, ";")) {
     *rest = tok;
@@ -2257,11 +2264,12 @@ static Node *global_variable(Token **rest, Token *tok, Type *basety, VarAttr *at
       tok = skip(tok, ",");
     first = false;
 
-    Type *ty = declarator(&tok, tok, basety);
-    if (!ty->name)
-      error_tok(ty->name_pos, "variable name omitted");
+    DeclName decl = {};
+    Type *ty = declarator(&tok, tok, basety, &decl);
+    if (!decl.name)
+      error_tok(decl.name_pos, "variable name omitted");
 
-    Token *name = ty->name;
+    Token *name = decl.name;
     add_declared_name(name);
 
     Node *node = new_node(ND_GVAR_DECL, tok);
@@ -2284,7 +2292,7 @@ static bool is_function(Token *tok) {
     return false;
 
   Type dummy = {};
-  Type *ty = declarator(&tok, tok, &dummy);
+  Type *ty = declarator(&tok, tok, &dummy, NULL);
   return ty->kind == TY_FUNC;
 }
 

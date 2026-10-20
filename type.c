@@ -1,8 +1,9 @@
 #include "chibicc.h"
 
-// The built-in types are shared by every context. They are read-only:
-// a declarator copies one before attaching a name (parse.c), so two
-// contexts parsing in different threads never write the same record.
+// The built-in types are shared by every context and are read-only: a
+// declarator never writes its name into a type record (parse.c keeps
+// the name in a per-declaration carrier), so two contexts parsing in
+// different threads never write the same record.
 Type *ty_void = &(Type){TY_VOID, 1, 1};
 Type *ty_bool = &(Type){TY_BOOL, 1, 1};
 

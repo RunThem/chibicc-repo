@@ -92,9 +92,9 @@ static ChibiccToken *find_num(ChibiccToken *tok, long val) {
   return NULL;
 }
 
-// A declaration's type record carries its own name. The built-in types
-// are shared by every context, so the parser must copy one instead of
-// writing the name into the singleton (audit F1).
+// A declared object's type record carries its own name. Shared builtin,
+// tag and typedef records are never written; sema gives each named
+// object a per-object copy after completing the type (audit F1).
 static int check_type_names(ChibiccContext *ctx) {
   ChibiccObj *prog = NULL;
   if (!compile(ctx, "int x; int y;\n", &prog) || !prog)
@@ -112,6 +112,31 @@ static int check_type_names(ChibiccContext *ctx) {
   if (!x->ty->name || x->ty->name->len != 1 || x->ty->name->loc[0] != 'x')
     return 1;
   if (!y->ty->name || y->ty->name->len != 1 || y->ty->name->loc[0] != 'y')
+    return 1;
+
+  // Functions, parameters and locals get their own named copies too.
+  chibicc_context_reset(ctx);
+  prog = NULL;
+  if (!compile(ctx, "int f(int p) { int l; return p + l; }\n", &prog) || !prog)
+    return 1;
+
+  ChibiccObj *fn = NULL;
+  for (ChibiccObj *o = prog; o; o = o->next)
+    if (o->name && strcmp(o->name, "f") == 0)
+      fn = o;
+  if (!fn || !fn->is_function || !fn->ty->name ||
+      fn->ty->name->len != 1 || fn->ty->name->loc[0] != 'f')
+    return 1;
+  if (!fn->params || !fn->params->ty->name ||
+      fn->params->ty->name->len != 1 || fn->params->ty->name->loc[0] != 'p')
+    return 1;
+
+  ChibiccObj *local = NULL;
+  for (ChibiccObj *o = fn->locals; o; o = o->next)
+    if (o->name && strcmp(o->name, "l") == 0)
+      local = o;
+  if (!local || !local->ty->name || local->ty->name->len != 1 ||
+      local->ty->name->loc[0] != 'l')
     return 1;
   return 0;
 }
