@@ -22,6 +22,12 @@ int main() {
   ASSERT(4, ({ enum t { zero, one, two }; enum t y; sizeof(y); }));
   ASSERT(4, file_enum_fn());
   ASSERT(1, C2);
+
+  // The int boundaries are accepted; values beyond them are diagnosed
+  // (C2 audit).
+  ASSERT(1, ({ enum { EMAX = 0x7fffffff }; EMAX == 2147483647; }));
+  ASSERT(1, ({ enum { EMIN = -2147483647 - 1 }; EMIN == -2147483647 - 1; }));
+
   ASSERT(4, ({ TD_E x = TD_A; sizeof(x); }));
 
   {

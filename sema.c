@@ -447,12 +447,19 @@ static void resolve_enum_records(Node *recs) {
       continue;
     }
 
-    int val = 0;
+    // C11 6.7.2.2 requires every enum constant to be representable as
+    // int. The accumulator is int64_t so that an out-of-range value is
+    // diagnosed instead of silently truncated - by the explicit
+    // expression and by the implicit increment alike.
+    int64_t val = 0;
     while (recs && recs->kind == ND_ENUM_CONST && recs->ty_op == ety) {
       if (recs->lhs) {
         resolve_node(recs->lhs);
-        val = (int)eval(recs->lhs);
+        val = eval(recs->lhs);
       }
+      if (val < INT32_MIN || val > INT32_MAX)
+        error_tok(recs->lhs ? recs->lhs->tok : recs->tok,
+                  "enum constant value is out of range for int");
       recs->val = val++;
       recs->ty_op = NULL;
 
