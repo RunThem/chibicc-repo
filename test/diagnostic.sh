@@ -16,11 +16,12 @@
 #
 # 覆盖清单: 判定表 A 15 处 + B 4 处 + C 11 处 + D 3 处 = 拆分线终态 parse.c 的全部 33 处
 # error_tok(B/C/D 18 处此后移入 sema.c);
-# 判定表 E 10 处中的 9 处, 另加 e11(R3.1 的语句表达式末语句形状回归锁); f 系列 12 处
+# 判定表 E 10 处中的 9 处 (e11 随 C5 审计修复撤销: GNU 语句表达式的末语句
+# 不是表达式语句时类型为 void, gcc 接受); f 系列 12 处
 # (A0.1 的 9 处, 夹在降级里的检查; 2026-09-29 基线缺陷修复随修锁定的 f10/f11;
 # 2026-10-19 审计修复的 f12); g 系列 11 处 (2026-10-19 审计修复: u8 拼接与位域宽度
 # 校验; 2026-10-20 审计修复: struct/union tag 重定义; 2026-10-21 审计修复: 整数常量
-# 溢出诊断). 合计 67 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
+# 溢出诊断). 合计 66 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
 # symbol" - find_func 只返回 is_function 为真的对象, 该守卫恒假, 当前树中不可达.
 # 另: 文件域 "void x;" 当前被接受(无检查), 亦无用例.
 #
@@ -450,19 +451,6 @@ SNIP
 expect e10_static_follows_nonstatic <<'WANT'
 e10_static_follows_nonstatic.c:2: static int x();
                                                 ^ static declaration follows a non-static declaration
-WANT
-
-# R3.1: a declaration record is no longer wrapped in a block of its own,
-# so a statement expression whose last statement is a declaration must
-# still be rejected - the record lowers to an expression statement in
-# place, and only the shape as written counts.
-snippet e11_stmt_expr_decl <<'SNIP'
-int f(void) { return ({ int x = 1; }); }
-SNIP
-
-expect e11_stmt_expr_decl <<'WANT'
-e11_stmt_expr_decl.c:1: int f(void) { return ({ int x = 1; }); }
-                                             ^ statement expression returning void is not supported
 WANT
 
 # ---- f 系列: 夹在降级代码里的检查 (12 处, PLAN A0.1 + 基线缺陷修复) ----

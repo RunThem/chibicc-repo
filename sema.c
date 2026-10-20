@@ -1890,6 +1890,9 @@ void add_type(Node *node) {
   // expression statement as written has one: a declaration record is
   // a record here - the consumer expands it later, and the expansion
   // produces no value (PLAN A8.1) - so the faithful shape decides.
+  // Without such a last statement the construct has type void, which
+  // gcc accepts (C5 audit); a void expression is usable wherever no
+  // value is needed.
   Node *stmt_expr_value = NULL;
   if (node->kind == ND_STMT_EXPR) {
     stmt_expr_value = node->body;
@@ -2183,7 +2186,10 @@ void add_type(Node *node) {
       node->ty = stmt_expr_value->lhs->ty;
       return;
     }
-    error_tok(node->tok, "statement expression returning void is not supported");
+    // [GNU] A statement expression whose last statement is not an
+    // expression statement has type void; gcc accepts it, and the
+    // expression is valid wherever no value is needed.
+    node->ty = ty_void;
     return;
   case ND_LABEL_VAL:
     // [GNU] `&&lbl` is matched with the labels of the function by

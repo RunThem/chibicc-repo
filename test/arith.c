@@ -63,6 +63,11 @@ int main() {
   ASSERT(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; a[2]; }));
   ASSERT(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; *p; }));
 
+  // [GNU] A statement expression whose last statement is not an
+  // expression statement has type void (C5 audit).
+  ASSERT(3, ({ int i=0; ({ if (1) i=3; }); i; }));
+  ASSERT(0, ({ int i=0; ({ int j=1; }); i; }));
+
   ASSERT(0, !1);
   ASSERT(0, !2);
   ASSERT(1, !0);
