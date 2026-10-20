@@ -1,5 +1,9 @@
 #include "test.h"
 
+#if __SIZEOF_LONG_DOUBLE__ != 16
+#error "__SIZEOF_LONG_DOUBLE__ does not match sizeof(long double)"
+#endif
+
 int main() {
   ASSERT(1, sizeof(char));
   ASSERT(2, sizeof(short));
@@ -106,6 +110,7 @@ int main() {
   ASSERT(8, sizeof(1.0/2));
 
   ASSERT(16, sizeof(long double));
+  ASSERT(sizeof(long double), __SIZEOF_LONG_DOUBLE__);
 
   ASSERT(1, sizeof(main));
 
