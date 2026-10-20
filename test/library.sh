@@ -304,6 +304,62 @@ static int check_multi_builtin(ChibiccContext *ctx) {
 }
 #endif
 
+// The predefined set can be enumerated and disabled; __SIZEOF_* comes
+// from the type records.
+static int has_predefined(ChibiccContext *ctx, char *name, char *value) {
+  int n = chibicc_context_predefined_count(ctx);
+  for (int i = 0; i < n; i++) {
+    ChibiccPredefinedMacro m = chibicc_context_predefined_at(ctx, i);
+    if (m.name && strcmp(m.name, name) == 0)
+      return value ? (m.value && strcmp(m.value, value) == 0)
+                   : m.value == NULL;
+  }
+  return 0;
+}
+
+static int check_predefined_macros(ChibiccContext *ctx) {
+  if (chibicc_context_predefined_count(ctx) <= 0)
+    return 1;
+  if (!has_predefined(ctx, "__STDC__", "1") ||
+      !has_predefined(ctx, "__SIZEOF_LONG_DOUBLE__", "16") ||
+      !has_predefined(ctx, "__SIZEOF_INT__", "4") ||
+      !has_predefined(ctx, "__FILE__", NULL) ||
+      !has_predefined(ctx, "__DATE__", NULL))
+    return 1;
+
+  chibicc_context_set_predefined_macros(ctx, false);
+  chibicc_context_reset(ctx);
+  if (chibicc_context_predefined_count(ctx) != 0)
+    return 1;
+
+  ChibiccToken *tok =
+      chibicc_tokenize_buffer(ctx, "<predef>", "int x = __STDC__;");
+  if (!tok)
+    return 1;
+  tok = chibicc_preprocess(ctx, tok);
+  if (!tok || find_num(tok, 1) || chibicc_context_failed(ctx))
+    return 1;
+  int found = 0;
+  for (ChibiccToken *t = tok; t && t->kind != TK_EOF; t = t->next)
+    if (t->kind == TK_IDENT && t->len == 8 &&
+        !memcmp(t->loc, "__STDC__", 8))
+      found = 1;
+  if (!found)
+    return 1;
+
+  chibicc_context_set_predefined_macros(ctx, true);
+  chibicc_context_reset(ctx);
+  tok = chibicc_tokenize_buffer(ctx, "<predef>", "int x = __STDC__;");
+  if (!tok)
+    return 1;
+  tok = chibicc_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 1) || chibicc_context_failed(ctx))
+    return 1;
+
+  chibicc_context_reset(ctx);
+  return 0;
+}
+
 // chibicc_reconstruct rebuilds the tokenized bytes exactly.
 static int check_reconstruct(ChibiccContext *ctx) {
   char *text = "int  x =  1;  /* c */\n\tchar *s = \"a\";\n";
@@ -604,6 +660,8 @@ int main(int argc, char **argv) {
   if (check_multi_builtin(ctx))
     return 1;
 #endif
+  if (check_predefined_macros(ctx))
+    return 1;
 
   // The layer-1 reconstruct channel, the provenance accessors, the
   // tokenize_file path with a context include path, and the recorded

@@ -207,6 +207,11 @@ void chibicc_context_undef(ChibiccContext *ctx, char *name) {
   apply_macro_op(ctx, s);
 }
 
+void chibicc_context_set_predefined_macros(ChibiccContext *ctx, bool enabled) {
+  if (ctx)
+    ctx->predefined_macros = enabled;
+}
+
 void chibicc_context_set_diagnostic(ChibiccContext *ctx,
                                     ChibiccDiagnosticFn fn, void *user) {
   ctx->diag_fn = fn;
@@ -241,6 +246,8 @@ static void clear_state(ChibiccContext *ctx) {
   ctx->at_bol = false;
   ctx->has_space = false;
   ctx->macros = (HashMap){};
+  ctx->predefined = NULL;
+  ctx->predefined_len = 0;
   ctx->cond_incl = NULL;
   ctx->pragma_once = (HashMap){};
   ctx->search_cache = (HashMap){};
@@ -270,6 +277,7 @@ static void clear_state(ChibiccContext *ctx) {
 
 ChibiccContext *chibicc_context_new(void) {
   ChibiccContext *ctx = calloc(1, sizeof(ChibiccContext));
+  ctx->predefined_macros = true;
   chibicc_active_ctx = ctx;
   init_macros();
   return ctx;

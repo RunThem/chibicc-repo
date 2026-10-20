@@ -122,6 +122,9 @@ chibicc_context_failed
 chibicc_context_add_include_path
 chibicc_context_define
 chibicc_context_undef
+chibicc_context_set_predefined_macros
+chibicc_context_predefined_count
+chibicc_context_predefined_at
 chibicc_tokenize_file
 chibicc_tokenize_buffer
 chibicc_tokenize_buffer_len

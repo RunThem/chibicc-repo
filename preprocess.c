@@ -1212,54 +1212,130 @@ static char *format_time(struct tm *tm) {
   return format("\"%02d:%02d:%02d\"", tm->tm_hour, tm->tm_min, tm->tm_sec);
 }
 
-void init_macros(void) {
-  // Define predefined macros
-  define_macro("_LP64", "1");
-  define_macro("__C99_MACRO_WITH_VA_ARGS", "1");
-  define_macro("__ELF__", "1");
-  define_macro("__LP64__", "1");
-  define_macro("__SIZEOF_DOUBLE__", "8");
-  define_macro("__SIZEOF_FLOAT__", "4");
-  define_macro("__SIZEOF_INT__", "4");
-  define_macro("__SIZEOF_LONG_DOUBLE__", "16");
-  define_macro("__SIZEOF_LONG_LONG__", "8");
-  define_macro("__SIZEOF_LONG__", "8");
-  define_macro("__SIZEOF_POINTER__", "8");
-  define_macro("__SIZEOF_PTRDIFF_T__", "8");
-  define_macro("__SIZEOF_SHORT__", "2");
-  define_macro("__SIZEOF_SIZE_T__", "8");
-  define_macro("__SIZE_TYPE__", "unsigned long");
-  define_macro("__STDC_HOSTED__", "1");
-  define_macro("__STDC_NO_COMPLEX__", "1");
-  define_macro("__STDC_UTF_16__", "1");
-  define_macro("__STDC_UTF_32__", "1");
-  define_macro("__STDC_VERSION__", "201112L");
-  define_macro("__STDC__", "1");
-  define_macro("__USER_LABEL_PREFIX__", "");
-  define_macro("__alignof__", "_Alignof");
-  define_macro("__amd64", "1");
-  define_macro("__amd64__", "1");
-  define_macro("__chibicc__", "1");
-  define_macro("__const__", "const");
-  define_macro("__gnu_linux__", "1");
-  define_macro("__inline__", "inline");
-  define_macro("__linux", "1");
-  define_macro("__linux__", "1");
-  define_macro("__signed__", "signed");
-  define_macro("__typeof__", "typeof");
-  define_macro("__unix", "1");
-  define_macro("__unix__", "1");
-  define_macro("__volatile__", "volatile");
-  define_macro("__x86_64", "1");
-  define_macro("__x86_64__", "1");
-  define_macro("linux", "1");
-  define_macro("unix", "1");
+typedef enum {
+  SZ_NONE,
+  SZ_DOUBLE,
+  SZ_FLOAT,
+  SZ_INT,
+  SZ_LDOUBLE,
+  SZ_LONG_LONG,
+  SZ_LONG,
+  SZ_POINTER,
+  SZ_PTRDIFF,
+  SZ_SHORT,
+  SZ_SIZE,
+} SizeKind;
 
-  add_builtin("__FILE__", file_macro);
-  add_builtin("__LINE__", line_macro);
-  add_builtin("__COUNTER__", counter_macro);
-  add_builtin("__TIMESTAMP__", timestamp_macro);
-  add_builtin("__BASE_FILE__", base_file_macro);
+typedef enum {
+  PREDEF_MACRO,
+  PREDEF_SIZEOF,
+  PREDEF_BUILTIN,
+  PREDEF_DYNAMIC,
+} PredefKind;
+
+typedef struct {
+  char *name;
+  char *value;
+  SizeKind size;
+  PredefKind kind;
+  macro_handler_fn *handler;
+} PredefinedDef;
+
+static int predefined_size(SizeKind size) {
+  switch (size) {
+  case SZ_DOUBLE: return ty_double->size;
+  case SZ_FLOAT: return ty_float->size;
+  case SZ_INT: return ty_int->size;
+  case SZ_LDOUBLE: return ty_ldouble->size;
+  case SZ_LONG_LONG: return ty_long->size;
+  case SZ_LONG: return ty_long->size;
+  case SZ_POINTER: return ty_ulong->size;
+  case SZ_PTRDIFF: return ty_long->size;
+  case SZ_SHORT: return ty_short->size;
+  case SZ_SIZE: return ty_ulong->size;
+  case SZ_NONE: break;
+  }
+  return 0;
+}
+
+// The predefined set. `value` is the replacement text; the __SIZEOF_*
+// entries derive it from the built-in types, and the builtin/dynamic
+// entries have no replacement text of their own.
+static PredefinedDef predefined_defs[] = {
+  {"_LP64", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__C99_MACRO_WITH_VA_ARGS", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__ELF__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__LP64__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__SIZEOF_DOUBLE__", NULL, SZ_DOUBLE, PREDEF_SIZEOF, NULL},
+  {"__SIZEOF_FLOAT__", NULL, SZ_FLOAT, PREDEF_SIZEOF, NULL},
+  {"__SIZEOF_INT__", NULL, SZ_INT, PREDEF_SIZEOF, NULL},
+  {"__SIZEOF_LONG_DOUBLE__", NULL, SZ_LDOUBLE, PREDEF_SIZEOF, NULL},
+  {"__SIZEOF_LONG_LONG__", NULL, SZ_LONG_LONG, PREDEF_SIZEOF, NULL},
+  {"__SIZEOF_LONG__", NULL, SZ_LONG, PREDEF_SIZEOF, NULL},
+  {"__SIZEOF_POINTER__", NULL, SZ_POINTER, PREDEF_SIZEOF, NULL},
+  {"__SIZEOF_PTRDIFF_T__", NULL, SZ_PTRDIFF, PREDEF_SIZEOF, NULL},
+  {"__SIZEOF_SHORT__", NULL, SZ_SHORT, PREDEF_SIZEOF, NULL},
+  {"__SIZEOF_SIZE_T__", NULL, SZ_SIZE, PREDEF_SIZEOF, NULL},
+  {"__SIZE_TYPE__", "unsigned long", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__STDC_HOSTED__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__STDC_NO_COMPLEX__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__STDC_UTF_16__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__STDC_UTF_32__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__STDC_VERSION__", "201112L", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__STDC__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__USER_LABEL_PREFIX__", "", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__alignof__", "_Alignof", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__amd64", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__amd64__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__chibicc__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__const__", "const", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__gnu_linux__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__inline__", "inline", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__linux", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__linux__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__signed__", "signed", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__typeof__", "typeof", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__unix", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__unix__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__volatile__", "volatile", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__x86_64", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__x86_64__", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"linux", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"unix", "1", SZ_NONE, PREDEF_MACRO, NULL},
+  {"__FILE__", NULL, SZ_NONE, PREDEF_BUILTIN, file_macro},
+  {"__LINE__", NULL, SZ_NONE, PREDEF_BUILTIN, line_macro},
+  {"__COUNTER__", NULL, SZ_NONE, PREDEF_BUILTIN, counter_macro},
+  {"__TIMESTAMP__", NULL, SZ_NONE, PREDEF_BUILTIN, timestamp_macro},
+  {"__BASE_FILE__", NULL, SZ_NONE, PREDEF_BUILTIN, base_file_macro},
+  {"__DATE__", NULL, SZ_NONE, PREDEF_DYNAMIC, NULL},
+  {"__TIME__", NULL, SZ_NONE, PREDEF_DYNAMIC, NULL},
+};
+
+void init_macros(void) {
+  ChibiccContext *ctx = chibicc_ctx();
+  if (!ctx || !ctx->predefined_macros)
+    return;
+
+  int n = sizeof(predefined_defs) / sizeof(*predefined_defs);
+  ctx->predefined_len = n;
+  ctx->predefined = chibicc_arena_calloc(n, sizeof(ChibiccPredefinedMacro));
+
+  for (int i = 0; i < n; i++) {
+    PredefinedDef *d = &predefined_defs[i];
+    ChibiccPredefinedMacro *e = &ctx->predefined[i];
+    e->name = d->name;
+
+    if (d->kind == PREDEF_SIZEOF) {
+      char *value = format("%d", predefined_size(d->size));
+      e->value = value;
+      define_macro(d->name, value);
+    } else if (d->kind == PREDEF_MACRO) {
+      e->value = d->value;
+      define_macro(d->name, d->value);
+    } else if (d->kind == PREDEF_BUILTIN) {
+      add_builtin(d->name, d->handler);
+    }
+  }
 #ifdef CHIBICC_TEST_BUILTINS
   add_builtin("__CHIBICC_MULTI__", multi_macro);
 #endif
@@ -1271,6 +1347,18 @@ void init_macros(void) {
   localtime_r(&now, &tm_buf);
   define_macro("__DATE__", format_date(&tm_buf));
   define_macro("__TIME__", format_time(&tm_buf));
+}
+
+int chibicc_context_predefined_count(ChibiccContext *ctx) {
+  return ctx ? ctx->predefined_len : 0;
+}
+
+ChibiccPredefinedMacro chibicc_context_predefined_at(ChibiccContext *ctx,
+                                                     int index) {
+  ChibiccPredefinedMacro none = {NULL, NULL};
+  if (!ctx || index < 0 || index >= ctx->predefined_len)
+    return none;
+  return ctx->predefined[index];
 }
 
 typedef enum {

@@ -43,4 +43,22 @@ CHIBICC_API void chibicc_context_add_include_path(ChibiccContext *ctx, char *pat
 CHIBICC_API void chibicc_context_define(ChibiccContext *ctx, char *name, char *buf);
 CHIBICC_API void chibicc_context_undef(ChibiccContext *ctx, char *name);
 
+// A predefined macro in the context's set. `value` is the replacement
+// text; it is NULL for token-producing builtins and for the dynamic
+// __DATE__/__TIME__ macros. The strings are owned by the context and
+// invalidated by chibicc_context_reset.
+typedef struct chibicc_predefined_macro {
+  const char *name;
+  const char *value;
+} ChibiccPredefinedMacro;
+
+// The predefined macro set is installed by default. The setter takes
+// effect at the next chibicc_context_reset (disabling it yields a clean
+// environment; the recorded -D/-U operations still apply). The count and
+// at functions enumerate the set installed for the current translation
+// unit (0 entries when it is disabled).
+CHIBICC_API void chibicc_context_set_predefined_macros(ChibiccContext *ctx, bool enabled);
+CHIBICC_API int chibicc_context_predefined_count(ChibiccContext *ctx);
+CHIBICC_API ChibiccPredefinedMacro chibicc_context_predefined_at(ChibiccContext *ctx, int index);
+
 #endif

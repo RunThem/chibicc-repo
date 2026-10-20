@@ -328,6 +328,7 @@ struct ChibiccContext {
   char **macro_ops;
   int macro_ops_len;
   int macro_ops_cap;
+  bool predefined_macros;
   ChibiccDiagnosticFn diag_fn;
   void *diag_user;
   JmpFrame *jmp_top;
@@ -344,6 +345,8 @@ struct ChibiccContext {
   bool has_space;
 
   HashMap macros;
+  ChibiccPredefinedMacro *predefined;
+  int predefined_len;
   struct CondIncl *cond_incl;
   HashMap pragma_once;
   HashMap search_cache;

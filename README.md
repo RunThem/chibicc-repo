@@ -53,6 +53,13 @@ bytes from the token stream.
 length is already known, `chibicc_tokenize_buffer_len` reads exactly that
 many bytes. An embedded NUL is a diagnostic, not a silent truncation.
 
+The predefined macro set is installed by default. After
+`chibicc_context_set_predefined_macros(ctx, false)` and a reset the
+context starts without it; the recorded `-D`/`-U` operations still
+apply. `chibicc_context_predefined_count` and
+`chibicc_context_predefined_at` enumerate the installed set, and the
+`__SIZEOF_*` values are derived from the type records.
+
 Build with `make libchibicc.a` (or plain `make`, which also builds
 `libchibicc.so` on Linux), install with `make install PREFIX=...`, or
 use `pkg-config --cflags --libs libchibicc`. The public headers live in
