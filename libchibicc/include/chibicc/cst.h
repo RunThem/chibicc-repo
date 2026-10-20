@@ -73,9 +73,10 @@ typedef struct chibicc_cst_node ChibiccCstNode;
 struct chibicc_cst_node {
   ChibiccCstKind kind;
   ChibiccToken *tok;          // Set on leaves (CST_TOKEN / CST_EOF)
+  // `children[0..child_count)` are the live children; the array's
+  // capacity is private to cst.c.
   ChibiccCstNode **children;  // Set on inner nodes
   int child_count;
-  int child_cap;
 };
 
 CHIBICC_API ChibiccCstNode *chibicc_cst_parse(ChibiccContext *ctx, ChibiccToken *tok);

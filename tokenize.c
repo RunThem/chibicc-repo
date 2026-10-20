@@ -84,7 +84,7 @@ static noreturn void raise_error(void) {
 // A registered callback gets the structured form instead; the default
 // path below is byte-for-byte what the compiler printed before L2.6.
 static void verror_at(char *filename, char *input, int line_no, char *loc,
-                      int severity, char *fmt, va_list ap) {
+                      ChibiccDiagnosticSeverity severity, char *fmt, va_list ap) {
   ChibiccContext *ctx = chibicc_ctx();
 
   // Find a line containing `loc`.
@@ -127,7 +127,7 @@ void error(char *fmt, ...) {
   ChibiccContext *ctx = chibicc_ctx();
   if (ctx && ctx->diag_fn) {
     char *msg = vformat(fmt, ap);
-    ChibiccDiagnostic d = {NULL, 0, 0, 0, msg};
+    ChibiccDiagnostic d = {NULL, 0, 0, CHIBICC_DIAG_ERROR, msg};
     ctx->diag_fn(ctx->diag_user, &d);
   } else {
     vfprintf(stderr, fmt, ap);
@@ -145,7 +145,7 @@ void error_at(char *loc, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(ctx->current_file->name, ctx->current_file->contents, line_no,
-            loc, 0, fmt, ap);
+            loc, CHIBICC_DIAG_ERROR, fmt, ap);
   va_end(ap);
   raise_error();
 }
@@ -154,7 +154,7 @@ void error_tok(Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc,
-            0, fmt, ap);
+            CHIBICC_DIAG_ERROR, fmt, ap);
   va_end(ap);
   raise_error();
 }
@@ -163,7 +163,7 @@ void warn_tok(Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc,
-            1, fmt, ap);
+            CHIBICC_DIAG_WARNING, fmt, ap);
   va_end(ap);
 }
 

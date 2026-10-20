@@ -63,7 +63,7 @@ static void diag(void *user, const ChibiccDiagnostic *d) {
       diag_fields_ok = 0;
     diag_located++;
   }
-  if (d->severity == 0)
+  if (d->severity == CHIBICC_DIAG_ERROR)
     errors++;
 }
 

@@ -495,9 +495,10 @@ struct chibicc_node {
   ChibiccInitializer *decl_init;
 
   // ND_DECL, ND_GVAR_DECL and ND_COMPOUND_LITERAL: an opaque payload
-  // sema's resolve pass parks here - the initializer record resolved
-  // against the declared type, which also completes the type - for
-  // the annotation pass to consume. Owned by sema.c.
+  // private to sema.c. The resolve pass parks the initializer record
+  // resolved against the declared type here for the annotation pass; it
+  // may be NULL outside a sema run, and a consumer must neither read nor
+  // write it. The public tree does not interpret it.
   void *init_resolved;
 
   // Case

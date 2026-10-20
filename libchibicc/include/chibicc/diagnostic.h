@@ -5,14 +5,21 @@
 #ifndef CHIBICC_DIAGNOSTIC_H
 #define CHIBICC_DIAGNOSTIC_H
 
-// A diagnostic handed to a registered callback. `message` is the
-// formatted text; the default handler additionally prints the source
-// line and the caret from the location it was given.
+typedef enum chibicc_diagnostic_severity {
+  CHIBICC_DIAG_ERROR = 0,
+  CHIBICC_DIAG_WARNING = 1,
+} ChibiccDiagnosticSeverity;
+
+// A diagnostic handed to a registered callback. `filename` and `message`
+// are owned by the context and stay valid until the next
+// chibicc_context_reset; a handler that keeps either past that point
+// must copy it. The default handler additionally prints the source line
+// and the caret from the location it was given.
 typedef struct chibicc_diagnostic {
   const char *filename;
   int line;
   int column;
-  int severity; // 0 = error, 1 = warning
+  ChibiccDiagnosticSeverity severity;
   const char *message;
 } ChibiccDiagnostic;
 

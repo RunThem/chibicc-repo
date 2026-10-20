@@ -50,11 +50,19 @@ static CstNode *new_cst_node(CstKind kind) {
 }
 
 static void cst_add_child(CstNode *node, CstNode *child) {
-  if (node->child_count == node->child_cap) {
-    size_t old_size = sizeof(CstNode *) * node->child_cap;
-    node->child_cap = node->child_cap ? node->child_cap * 2 : 8;
-    node->children = chibicc_arena_realloc(node->children, old_size,
-                                           sizeof(CstNode *) * node->child_cap);
+  // The capacity lives in a size_t header just before `children`; the
+  // public node exposes only child_count and the live entries.
+  size_t cap = node->children ? ((size_t *)node->children)[-1] : 0;
+  if ((size_t)node->child_count == cap) {
+    cap = cap ? cap * 2 : 8;
+    size_t bytes = sizeof(size_t) + cap * sizeof(CstNode *);
+    char *p = chibicc_arena_alloc(bytes, 8);
+    *(size_t *)p = cap;
+    CstNode **children = (CstNode **)(p + sizeof(size_t));
+    if (node->children)
+      memcpy(children, node->children,
+             (size_t)node->child_count * sizeof(CstNode *));
+    node->children = children;
   }
   node->children[node->child_count++] = child;
 }
