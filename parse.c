@@ -42,6 +42,10 @@ static void add_declared_name(Token *tok);
 static void enter_scope(void);
 static void leave_scope(void);
 
+// Bound the parser's recursion: pathological nesting must fail with a
+// diagnostic, not a stack overflow.
+#define MAX_PARSE_DEPTH 512
+
 static bool is_typename(Token *tok);
 static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs);
 static Type *typename(Token **rest, Token *tok, Node **specs);
@@ -72,6 +76,17 @@ static Type *union_decl(Token **rest, Token *tok, Node **specs);
 static Node *postfix(Token **rest, Token *tok);
 static Node *funcall(Token **rest, Token *tok, Node *node);
 static Node *unary(Token **rest, Token *tok);
+// The body behind each depth-guarded entry (the wrapper increments
+// parse_depth before calling it).
+static Type *declarator1(Token **rest, Token *tok, Type *ty);
+static Type *abstract_declarator(Token **rest, Token *tok, Type *ty);
+static Type *abstract_declarator1(Token **rest, Token *tok, Type *ty);
+static Initializer *init_record1(Token **rest, Token *tok);
+static Node *expr1(Token **rest, Token *tok);
+static Node *assign1(Token **rest, Token *tok);
+static Node *conditional1(Token **rest, Token *tok);
+static Node *cast1(Token **rest, Token *tok);
+static Node *unary1(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
 static Node *parse_typedef(Token **rest, Token *tok, Type *basety);
 static bool is_function(Token *tok);
@@ -594,6 +609,14 @@ static bool is_builtin_type(Type *ty) {
 // cannot decide syntactically (array dimensions, typeof operands) as
 // records for sema to complete.
 static Type *declarator(Token **rest, Token *tok, Type *ty) {
+  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(tok, "nesting too deep");
+  Type *node = declarator1(rest, tok, ty);
+  chibicc_ctx()->parse_depth--;
+  return node;
+}
+
+static Type *declarator1(Token **rest, Token *tok, Type *ty) {
   ty = pointers(&tok, tok, ty);
 
   if (equal(tok, "(")) {
@@ -623,6 +646,14 @@ static Type *declarator(Token **rest, Token *tok, Type *ty) {
 
 // abstract-declarator = pointers ("(" abstract-declarator ")")? type-suffix
 static Type *abstract_declarator(Token **rest, Token *tok, Type *ty) {
+  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(tok, "nesting too deep");
+  Type *node = abstract_declarator1(rest, tok, ty);
+  chibicc_ctx()->parse_depth--;
+  return node;
+}
+
+static Type *abstract_declarator1(Token **rest, Token *tok, Type *ty) {
   ty = pointers(&tok, tok, ty);
 
   if (equal(tok, "(")) {
@@ -853,6 +884,14 @@ static InitDesig *designators(Token **rest, Token *tok) {
 // the target type is made here. Brace elision, string expansion,
 // designator application and flexible-array sizing all happen in sema.
 static Initializer *init_record(Token **rest, Token *tok) {
+  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(tok, "nesting too deep");
+  Initializer *node = init_record1(rest, tok);
+  chibicc_ctx()->parse_depth--;
+  return node;
+}
+
+static Initializer *init_record1(Token **rest, Token *tok) {
   Initializer *rec = chibicc_arena_calloc(1, sizeof(Initializer));
   rec->tok = tok;
 
@@ -1167,6 +1206,14 @@ static Node *expr_stmt(Token **rest, Token *tok) {
 
 // expr = assign ("," expr)?
 static Node *expr(Token **rest, Token *tok) {
+  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(tok, "nesting too deep");
+  Node *node = expr1(rest, tok);
+  chibicc_ctx()->parse_depth--;
+  return node;
+}
+
+static Node *expr1(Token **rest, Token *tok) {
   Node *node = assign(&tok, tok);
 
   if (equal(tok, ","))
@@ -1183,6 +1230,14 @@ static Node *expr(Token **rest, Token *tok) {
 // A compound assignment keeps its operator in `op`; sema rewrites it to
 // the read-modify-write form (handling the bitfield and atomic cases).
 static Node *assign(Token **rest, Token *tok) {
+  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(tok, "nesting too deep");
+  Node *node = assign1(rest, tok);
+  chibicc_ctx()->parse_depth--;
+  return node;
+}
+
+static Node *assign1(Token **rest, Token *tok) {
   Node *node = conditional(&tok, tok);
 
   if (equal(tok, "="))
@@ -1254,6 +1309,14 @@ static Node *assign(Token **rest, Token *tok) {
 
 // conditional = logor ("?" expr? ":" conditional)?
 Node *conditional(Token **rest, Token *tok) {
+  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(tok, "nesting too deep");
+  Node *node = conditional1(rest, tok);
+  chibicc_ctx()->parse_depth--;
+  return node;
+}
+
+static Node *conditional1(Token **rest, Token *tok) {
   Node *cond = logor(&tok, tok);
 
   if (!equal(tok, "?")) {
@@ -1460,6 +1523,14 @@ static Node *mul(Token **rest, Token *tok) {
 
 // cast = "(" type-name ")" cast | unary
 static Node *cast(Token **rest, Token *tok) {
+  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(tok, "nesting too deep");
+  Node *node = cast1(rest, tok);
+  chibicc_ctx()->parse_depth--;
+  return node;
+}
+
+static Node *cast1(Token **rest, Token *tok) {
   if (equal(tok, "(") && is_typename(tok->next)) {
     Token *start = tok;
     Node *specs = NULL;
@@ -1489,6 +1560,14 @@ static Node *cast(Token **rest, Token *tok) {
 //       | "&&" ident
 //       | postfix
 static Node *unary(Token **rest, Token *tok) {
+  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(tok, "nesting too deep");
+  Node *node = unary1(rest, tok);
+  chibicc_ctx()->parse_depth--;
+  return node;
+}
+
+static Node *unary1(Token **rest, Token *tok) {
   if (equal(tok, "+"))
     return cast(rest, tok->next);
 

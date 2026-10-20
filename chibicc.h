@@ -353,6 +353,7 @@ struct ChibiccContext {
   int counter;
   int include_next_idx;
   int include_count;
+  int parse_depth;
 
   struct ParseScope *scope;
   struct SemaScope *sema_scope;

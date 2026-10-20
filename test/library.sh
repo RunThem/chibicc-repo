@@ -150,6 +150,41 @@ static int check_include_depth(ChibiccContext *ctx, char *path) {
   return 0;
 }
 
+// Pathological nesting must fail with a diagnostic instead of
+// overflowing the parser stack.
+static int check_parse_depth(ChibiccContext *ctx) {
+  char *prefix = "int f(void) { return ";
+  size_t n = 2000, plen = strlen(prefix), i = plen;
+  char *src = malloc(plen + 2 * n + 8);
+  if (!src)
+    return 1;
+  memcpy(src, prefix, plen);
+  for (size_t j = 0; j < n; j++)
+    src[i++] = '(';
+  src[i++] = '1';
+  for (size_t j = 0; j < n; j++)
+    src[i++] = ')';
+  src[i++] = ';';
+  src[i++] = '}';
+  src[i++] = '\n';
+  src[i] = '\0';
+
+  int before = errors;
+  ChibiccToken *tok = chibicc_tokenize_buffer(ctx, "<deep>", src);
+  free(src);
+  if (!tok)
+    return 1;
+  tok = chibicc_preprocess(ctx, tok);
+  if (!tok)
+    return 1;
+  if (chibicc_parse(ctx, tok) != NULL)
+    return 1;
+  if (!chibicc_context_failed(ctx) || errors != before + 1)
+    return 1;
+  chibicc_context_reset(ctx);
+  return 0;
+}
+
 // chibicc_reconstruct rebuilds the tokenized bytes exactly.
 static int check_reconstruct(ChibiccContext *ctx) {
   char *text = "int  x =  1;  /* c */\n\tchar *s = \"a\";\n";
@@ -439,6 +474,8 @@ int main(int argc, char **argv) {
   if (argc > 3 && check_nul_file(ctx, argv[3]))
     return 1;
   if (argc > 4 && check_include_depth(ctx, argv[4]))
+    return 1;
+  if (check_parse_depth(ctx))
     return 1;
 
   // The layer-1 reconstruct channel, the provenance accessors, the

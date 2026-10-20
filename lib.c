@@ -250,6 +250,7 @@ static void clear_state(ChibiccContext *ctx) {
   ctx->counter = 0;
   ctx->include_next_idx = 0;
   ctx->include_count = 0;
+  ctx->parse_depth = 0;
   ctx->scope = NULL;
   ctx->sema_scope = NULL;
   ctx->locals = NULL;
