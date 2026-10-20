@@ -45,6 +45,10 @@ uint32_t decode_utf8(char **new_pos, char *p) {
   uint32_t c;
 
   if ((unsigned char)*p >= 0b11110000) {
+    // Valid four-byte leads stop at F4; F5..FF cannot encode a code
+    // point and would otherwise alias a valid range.
+    if ((unsigned char)*p > 0b11110100)
+      error_at(start, "invalid UTF-8 sequence");
     len = 4;
     c = *p & 0b111;
   } else if ((unsigned char)*p >= 0b11100000) {
@@ -62,6 +66,13 @@ uint32_t decode_utf8(char **new_pos, char *p) {
       error_at(start, "invalid UTF-8 sequence");
     c = (c << 6) | (p[i] & 0b111111);
   }
+
+  // Reject an overlong form (the shortest form for each length starts at
+  // 0x80, 0x800 and 0x10000), a UTF-16 surrogate, and a code point above
+  // the Unicode maximum.
+  static uint32_t min[] = {0, 0, 0x80, 0x800, 0x10000};
+  if (c < min[len] || (c >= 0xD800 && c <= 0xDFFF) || c > 0x10FFFF)
+    error_at(start, "invalid UTF-8 sequence");
 
   *new_pos = p + len;
   return c;

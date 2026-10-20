@@ -51,11 +51,13 @@ extern size_t __sanitizer_get_current_allocated_bytes(void);
 static int errors;
 static int diag_fields_ok = 1;
 static int diag_located;
+static const char *last_message;
 
 static void diag(void *user, const ChibiccDiagnostic *d) {
   (void)user;
   if (!d->message || !*d->message)
     diag_fields_ok = 0;
+  last_message = d->message;
   if (d->filename) {
     if (d->line <= 0 || d->column <= 0)
       diag_fields_ok = 0;
@@ -235,6 +237,55 @@ static int check_cst_depth(ChibiccContext *ctx) {
   }
   free(src);
   return rc;
+}
+
+// decode_utf8 rejects overlong forms, surrogates and code points above
+// U+10FFFF, and accepts the shortest-form boundaries on both sides.
+static int check_utf8(ChibiccContext *ctx) {
+  struct {
+    unsigned char bytes[8];
+    int len;
+  } bad[] = {
+    {{'u', '"', 0xC0, 0x80, '"'}, 5},
+    {{'u', '"', 0xE0, 0x80, 0x80, '"'}, 6},
+    {{'u', '"', 0xF0, 0x80, 0x80, 0x80, '"'}, 7},
+    {{'u', '"', 0xED, 0xA0, 0x80, '"'}, 6},
+    {{'u', '"', 0xF4, 0x90, 0x80, 0x80, '"'}, 7},
+    {{'u', '"', 0xF5, 0x80, 0x80, 0x80, '"'}, 7},
+    {{'u', '"', 0xF8, 0xBF, 0xBF, 0xBF, '"'}, 7},
+  };
+  for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
+    int before = errors;
+    ChibiccToken *tok = chibicc_tokenize_buffer_len(
+        ctx, "<bad-utf8>", (char *)bad[i].bytes, bad[i].len);
+    if (tok || !chibicc_context_failed(ctx) || errors != before + 1 ||
+        !last_message || strcmp(last_message, "invalid UTF-8 sequence") != 0)
+      return 1;
+    chibicc_context_reset(ctx);
+  }
+
+  struct {
+    unsigned char bytes[8];
+    int len;
+  } good[] = {
+    {{'u', '"', 0xC2, 0x80, '"'}, 5},                // U+0080
+    {{'u', '"', 0xDF, 0xBF, '"'}, 5},                // U+07FF
+    {{'u', '"', 0xE0, 0xA0, 0x80, '"'}, 6},          // U+0800
+    {{'u', '"', 0xED, 0x9F, 0xBF, '"'}, 6},          // U+D7FF
+    {{'u', '"', 0xEE, 0x80, 0x80, '"'}, 6},          // U+E000
+    {{'u', '"', 0xEF, 0xBF, 0xBF, '"'}, 6},          // U+FFFF
+    {{'u', '"', 0xF0, 0x90, 0x80, 0x80, '"'}, 7},    // U+10000
+    {{'u', '"', 0xF4, 0x8F, 0xBF, 0xBF, '"'}, 7},    // U+10FFFF
+  };
+  for (size_t i = 0; i < sizeof(good) / sizeof(*good); i++) {
+    int before = errors;
+    ChibiccToken *tok = chibicc_tokenize_buffer_len(
+        ctx, "<ok-utf8>", (char *)good[i].bytes, good[i].len);
+    if (!tok || chibicc_context_failed(ctx) || errors != before)
+      return 1;
+    chibicc_context_reset(ctx);
+  }
+  return 0;
 }
 
 // chibicc_reconstruct rebuilds the tokenized bytes exactly.
@@ -530,6 +581,8 @@ int main(int argc, char **argv) {
   if (check_parse_depth(ctx))
     return 1;
   if (check_cst_depth(ctx))
+    return 1;
+  if (check_utf8(ctx))
     return 1;
 
   // The layer-1 reconstruct channel, the provenance accessors, the
