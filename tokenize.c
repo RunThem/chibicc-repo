@@ -780,11 +780,19 @@ Token *tokenize(File *file) {
 // text is returned exactly as it is on disk: the rewrites that used to
 // happen here (a synthesized final newline, the BOM skip) moved into
 // make_scan_buffer, which can remember them in raw coordinates.
-static char *read_file(char *path, int *len) {
+static char *read_file(char *path, size_t *len) {
+  ChibiccContext *ctx = chibicc_active_ctx;
   FILE *fp;
 
   if (strcmp(path, "-") == 0) {
-    // By convention, read from stdin if a given filename is "-".
+    // By convention, read from stdin if a given filename is "-". stdin
+    // cannot be rewound and its EOF flag is sticky, so the first read is
+    // cached in the context: a second tokenize of the same stream then
+    // sees the same text instead of a silently empty one (C12).
+    if (ctx && ctx->stdin_text) {
+      *len = ctx->stdin_len;
+      return ctx->stdin_text;
+    }
     fp = stdin;
   } else {
     fp = fopen(path, "r");
@@ -799,7 +807,7 @@ static char *read_file(char *path, int *len) {
   // Read the entire file.
   for (;;) {
     char buf2[4096];
-    int n = fread(buf2, 1, sizeof(buf2), fp);
+    size_t n = fread(buf2, 1, sizeof(buf2), fp);
     if (n == 0)
       break;
     fwrite(buf2, 1, n, out);
@@ -809,16 +817,32 @@ static char *read_file(char *path, int *len) {
     fclose(fp);
 
   fflush(out);
-  *len = buflen;
+
+  // The lexer keeps offsets in int; a larger file would be truncated
+  // silently, so refuse it instead (C12).
+  if (buflen > INT32_MAX) {
+    fclose(out);
+    free(buf);
+    error("file too large: %s", path);
+  }
+
+  // fputc below grows the memstream's length by the terminator; keep the
+  // text length itself for the callers and the stdin cache.
+  size_t data_len = buflen;
+  *len = data_len;
   fputc('\0', out);
   fclose(out);
 
   // The memstream buffer is malloc-owned; move the text into the arena
   // so a context reset releases it with everything else.
-  if (chibicc_active_ctx) {
-    char *copy = chibicc_arena_alloc(buflen + 1, 1);
-    memcpy(copy, buf, buflen + 1);
+  if (ctx) {
+    char *copy = chibicc_arena_alloc(data_len + 1, 1);
+    memcpy(copy, buf, data_len + 1);
     free(buf);
+    if (strcmp(path, "-") == 0) {
+      ctx->stdin_text = copy;
+      ctx->stdin_len = data_len;
+    }
     return copy;
   }
   return buf;
@@ -983,13 +1007,13 @@ static char *make_scan_buffer(char *raw, int len, int **map_out, int **lines_out
 }
 
 Token *tokenize_file(char *path) {
-  int raw_len;
+  size_t raw_len;
   char *raw = read_file(path, &raw_len);
   if (!raw)
     return NULL;
 
   int *map, *lines;
-  char *contents = make_scan_buffer(raw, raw_len, &map, &lines);
+  char *contents = make_scan_buffer(raw, (int)raw_len, &map, &lines);
 
   // Save the filename for assembler .file directive.
   int file_no = chibicc_ctx()->next_file_no++;

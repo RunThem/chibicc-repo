@@ -25,6 +25,7 @@ printf '#define H 7\n' > "$tmp/inc/header.h"
 printf '#include "header.h"\nint x = H;\n' > "$tmp/input.c"
 printf 'int a;\000int b;\n' > "$tmp/nul.c"
 printf '#include "self.h"\n' > "$tmp/self.h"
+printf 'int stdin_a;\nint stdin_b;\n' > "$tmp/stdin.c"
 
 cat > "$tmp/consumer.c" <<'EOF'
 #include <chibicc/chibicc.h>
@@ -150,6 +151,30 @@ static int check_include_depth(ChibiccContext *ctx, char *path) {
     return 1;
   chibicc_context_reset(ctx);
   return 0;
+}
+
+// The first "-" read is cached: a second tokenize of stdin sees the same
+// text instead of the sticky EOF's empty stream (C12).
+static int check_stdin_twice(ChibiccContext *ctx, const char *path) {
+  if (!freopen(path, "r", stdin))
+    return 1;
+
+  ChibiccToken *a = chibicc_tokenize_file(ctx, "-");
+  ChibiccToken *b = chibicc_tokenize_file(ctx, "-");
+  if (!a || !b)
+    return 1;
+
+  int n = 0;
+  while (a->kind != TK_EOF && b->kind != TK_EOF &&
+         a->len == b->len && !memcmp(a->loc, b->loc, a->len)) {
+    a = a->next;
+    b = b->next;
+    n++;
+  }
+
+  int ok = a->kind == TK_EOF && b->kind == TK_EOF && n > 0;
+  chibicc_context_reset(ctx);
+  return ok ? 0 : 1;
 }
 
 // Pathological nesting must fail with a diagnostic instead of
@@ -650,6 +675,8 @@ int main(int argc, char **argv) {
     return 1;
   if (argc > 4 && check_include_depth(ctx, argv[4]))
     return 1;
+  if (argc > 5 && check_stdin_twice(ctx, argv[5]))
+    return 1;
   if (check_parse_depth(ctx))
     return 1;
   if (check_cst_depth(ctx))
@@ -723,7 +750,7 @@ int main(int argc, char **argv) {
 EOF
 
 "$cc" -std=c11 -pthread -I"$root/libchibicc/include" "$tmp/consumer.c" "$lib" -o "$tmp/consumer"
-"$tmp/consumer" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h"
+"$tmp/consumer" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
 
 # The sanitizer gate (PLAN L3.0/L3.4c). The library sources themselves are
 # rebuilt with ASan and UBSan, so the coverage reaches CST, parse, sema and
@@ -744,12 +771,12 @@ ar rcs "$tmp/libchibicc-asan.a" $asan_objs
   "$tmp/libchibicc-asan.a" -o "$tmp/consumer-asan"
 ASAN_OPTIONS=detect_leaks=0 \
   UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-  "$tmp/consumer-asan" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h"
+  "$tmp/consumer-asan" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
 
 # The shared library (PLAN L3.3b, Linux only): the same consumer links
 # against it and runs.
 if [ -z "${CHIBICC_LIB:-}" ] && [ -f "$root/libchibicc.so" ]; then
   "$cc" -std=c11 -pthread -I"$root/libchibicc/include" "$tmp/consumer.c" \
     -L"$root" -lchibicc -Wl,-rpath,"$root" -o "$tmp/consumer-so"
-  "$tmp/consumer-so" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h"
+  "$tmp/consumer-so" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
 fi

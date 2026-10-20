@@ -278,6 +278,8 @@ static void clear_state(ChibiccContext *ctx) {
   ctx->input_files_len = 0;
   ctx->input_files_cap = 0;
   ctx->next_file_no = 0;
+  ctx->stdin_text = NULL;
+  ctx->stdin_len = 0;
   ctx->at_bol = false;
   ctx->has_space = false;
   ctx->macros = (HashMap){};

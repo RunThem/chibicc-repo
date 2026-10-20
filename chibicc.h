@@ -343,6 +343,11 @@ struct ChibiccContext {
   int input_files_len;
   int input_files_cap;
   int next_file_no;
+
+  // The text of the first "-" read, so a second tokenize of stdin sees
+  // the same input instead of the sticky EOF's empty stream (C12).
+  char *stdin_text;
+  size_t stdin_len;
   bool at_bol;
   bool has_space;
 
