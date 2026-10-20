@@ -92,6 +92,7 @@ static HashEntry *get_or_insert_entry(HashMap *map, char *key, int keylen) {
     if (ent->key == TOMBSTONE) {
       ent->key = key;
       ent->keylen = keylen;
+      map->ndeleted--;
       return ent;
     }
 
@@ -129,8 +130,18 @@ void hashmap_delete(HashMap *map, char *key) {
 
 void hashmap_delete2(HashMap *map, char *key, int keylen) {
   HashEntry *ent = get_entry(map, key, keylen);
-  if (ent)
-    ent->key = TOMBSTONE;
+  if (!ent)
+    return;
+
+  ent->key = TOMBSTONE;
+  map->ndeleted++;
+
+  // Tombstones lengthen every probe until the next rehash, and `used`
+  // alone would only reach the insert watermark after more inserts. Once
+  // they outnumber the live entries, rebuild now so a delete-heavy
+  // stretch cannot leave the table half dead (C8).
+  if (map->ndeleted > map->used - map->ndeleted)
+    rehash(map);
 }
 
 void hashmap_test(void) {
@@ -161,5 +172,20 @@ void hashmap_test(void) {
     hashmap_put(map, format("key %d", i), (void *)(size_t)i);
 
   assert(hashmap_get(map, "no such key") == NULL);
+
+  // Delete-heavy traffic must not leave tombstones behind: once they
+  // outnumber the live entries the table rehashes (C8).
+  HashMap *tomb = chibicc_arena_calloc(1, sizeof(HashMap));
+  for (int i = 0; i < 1000; i++)
+    hashmap_put(tomb, format("t %d", i), (void *)(size_t)i);
+  for (int i = 0; i < 900; i++)
+    hashmap_delete(tomb, format("t %d", i));
+  assert(tomb->ndeleted <= tomb->used - tomb->ndeleted);
+  assert(hashmap_get(tomb, "t 0") == NULL);
+  assert((size_t)hashmap_get(tomb, "t 999") == 999);
+  hashmap_put(tomb, "t 0", (void *)123);
+  assert((size_t)hashmap_get(tomb, "t 0") == 123);
+  assert((size_t)hashmap_get(tomb, "t 999") == 999);
+
   printf("OK\n");
 }
