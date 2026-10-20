@@ -49,6 +49,10 @@ registered `ChibiccDiagnosticFn` and make the entry return NULL (the
 process does not exit). `chibicc_reconstruct` rebuilds the exact input
 bytes from the token stream.
 
+`chibicc_tokenize_buffer` takes a NUL-terminated string; when the input
+length is already known, `chibicc_tokenize_buffer_len` reads exactly that
+many bytes. An embedded NUL is a diagnostic, not a silent truncation.
+
 Build with `make libchibicc.a` (or plain `make`, which also builds
 `libchibicc.so` on Linux), install with `make install PREFIX=...`, or
 use `pkg-config --cflags --libs libchibicc`. The public headers live in

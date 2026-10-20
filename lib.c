@@ -48,6 +48,32 @@ ChibiccContext *chibicc_ctx(void) {
 
 #define ARENA_BLOCK_SIZE (64 * 1024)
 
+#ifdef CHIBICC_DEBUG_ARENA
+// One allocation per object for the sanitizer gate: the bump arena hides
+// intra-block overflows from AddressSanitizer's redzones. test/library.sh
+// enables this in its ASan round.
+static void *arena_alloc(ChibiccContext *ctx, size_t size, size_t align) {
+  (void)align;
+  if (!ctx)
+    return calloc(1, size ? size : 1);
+  if (size == 0)
+    size = 1;
+
+  ArenaBlock *b = calloc(1, sizeof(ArenaBlock));
+  if (!b)
+    return NULL;
+  b->data = malloc(size);
+  if (!b->data) {
+    free(b);
+    return NULL;
+  }
+  b->cap = size;
+  b->used = size;
+  b->next = ctx->arena;
+  ctx->arena = b;
+  return b->data;
+}
+#else
 static void *arena_alloc(ChibiccContext *ctx, size_t size, size_t align) {
   if (!ctx)
     return calloc(1, size ? size : 1);
@@ -76,6 +102,7 @@ static void *arena_alloc(ChibiccContext *ctx, size_t size, size_t align) {
   b->used = start + size;
   return p;
 }
+#endif
 
 void *chibicc_arena_alloc(size_t size, size_t align) {
   return arena_alloc(chibicc_active_ctx, size, align);
@@ -284,15 +311,32 @@ Token *chibicc_tokenize_file(ChibiccContext *ctx, char *path) {
   return tok;
 }
 
-Token *chibicc_tokenize_buffer(ChibiccContext *ctx, char *name, char *contents) {
+Token *chibicc_tokenize_buffer_len(ChibiccContext *ctx, char *name,
+                                   char *contents, int len) {
   ENTER_RET(ctx, NULL);
+  if (len < 0)
+    error("invalid buffer length");
   if (!ctx->base_file)
     ctx->base_file = chibicc_arena_strdup(name);
-  char *copy = chibicc_arena_strdup(contents);
-  File *file = new_file(chibicc_arena_strdup(name), 0, copy);
+
+  char *copy = chibicc_arena_alloc((size_t)len + 1, 1);
+  memcpy(copy, contents, len);
+  copy[len] = '\0';
+
+  File *file = new_file_len(chibicc_arena_strdup(name), 0, copy, len);
+  char *nul = memchr(copy, 0, len);
+  if (nul) {
+    ctx->current_file = file;
+    error_at(nul, "NUL byte in source file");
+  }
+
   Token *tok = tokenize(file);
   LEAVE(ctx);
   return tok;
+}
+
+Token *chibicc_tokenize_buffer(ChibiccContext *ctx, char *name, char *contents) {
+  return chibicc_tokenize_buffer_len(ctx, name, contents, (int)strlen(contents));
 }
 
 void chibicc_reconstruct(ChibiccContext *ctx, Token *tok, FILE *out) {

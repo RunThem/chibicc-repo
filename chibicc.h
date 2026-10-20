@@ -88,6 +88,7 @@ bool consume(Token **rest, Token *tok, char *str);
 void convert_pp_tokens(Token *tok);
 File **get_input_files(void);
 File *new_file(char *name, int file_no, char *contents);
+File *new_file_len(char *name, int file_no, char *contents, int len);
 bool is_line_break(char *p);
 int line_break_len(char *p);
 Token *tokenize_string_literal(Token *tok, Type *basety);

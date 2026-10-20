@@ -97,6 +97,10 @@ struct chibicc_token {
 CHIBICC_API ChibiccToken *chibicc_tokenize_file(ChibiccContext *ctx, char *path);
 CHIBICC_API ChibiccToken *chibicc_tokenize_buffer(ChibiccContext *ctx, char *name, char *contents);
 
+// Like chibicc_tokenize_buffer, but reads exactly `len` bytes. An
+// embedded NUL is a diagnostic rather than a silent truncation.
+CHIBICC_API ChibiccToken *chibicc_tokenize_buffer_len(ChibiccContext *ctx, char *name, char *contents, int len);
+
 // Print the bytes the token stream was tokenized from: the trivia in
 // front of every token plus the token spellings, in raw coordinates (the
 // trailing trivia rides on EOF). On tokenize()'s direct output the two

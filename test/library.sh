@@ -23,6 +23,7 @@ fi
 mkdir -p "$tmp/inc"
 printf '#define H 7\n' > "$tmp/inc/header.h"
 printf '#include "header.h"\nint x = H;\n' > "$tmp/input.c"
+printf 'int a;\000int b;\n' > "$tmp/nul.c"
 
 cat > "$tmp/consumer.c" <<'EOF'
 #include <chibicc/chibicc.h>
@@ -108,6 +109,28 @@ static int check_type_names(ChibiccContext *ctx) {
     return 1;
   if (!y->ty->name || y->ty->name->len != 1 || y->ty->name->loc[0] != 'y')
     return 1;
+  return 0;
+}
+
+// A NUL byte is diagnosed, not silently truncated: once with an explicit
+// length and once through a real file.
+static int check_nul_buffer(ChibiccContext *ctx) {
+  int before = errors;
+  if (chibicc_tokenize_buffer_len(ctx, "<nul>", "int a;\0int b;", 13) != NULL)
+    return 1;
+  if (!chibicc_context_failed(ctx) || errors != before + 1)
+    return 1;
+  chibicc_context_reset(ctx);
+  return 0;
+}
+
+static int check_nul_file(ChibiccContext *ctx, char *path) {
+  int before = errors;
+  if (chibicc_tokenize_file(ctx, path) != NULL)
+    return 1;
+  if (!chibicc_context_failed(ctx) || errors != before + 1)
+    return 1;
+  chibicc_context_reset(ctx);
   return 0;
 }
 
@@ -395,6 +418,11 @@ int main(int argc, char **argv) {
     return 1;
   chibicc_context_reset(ctx);
 
+  if (check_nul_buffer(ctx))
+    return 1;
+  if (argc > 3 && check_nul_file(ctx, argv[3]))
+    return 1;
+
   // The layer-1 reconstruct channel, the provenance accessors, the
   // tokenize_file path with a context include path, and the recorded
   // macro operations (PLAN L3.4a).
@@ -455,7 +483,7 @@ int main(int argc, char **argv) {
 EOF
 
 "$cc" -std=c11 -pthread -I"$root/libchibicc/include" "$tmp/consumer.c" "$lib" -o "$tmp/consumer"
-"$tmp/consumer" "$tmp/input.c" "$tmp/inc"
+"$tmp/consumer" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c"
 
 # The sanitizer gate (PLAN L3.0/L3.4c). The library sources themselves are
 # rebuilt with ASan and UBSan, so the coverage reaches CST, parse, sema and
@@ -466,7 +494,7 @@ asan_objs=
 for src in "$root"/*.c; do
   base=$(basename "$src" .c)
   case $base in main|codegen) continue;; esac
-  "$cc" -std=c11 -g -Wall -Wno-switch -fsanitize=address,undefined -fno-omit-frame-pointer \
+  "$cc" -std=c11 -g -Wall -Wno-switch -DCHIBICC_DEBUG_ARENA -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$root/libchibicc/include" -c "$src" -o "$tmp/asan/$base.o"
   asan_objs="$asan_objs $tmp/asan/$base.o"
 done
@@ -476,12 +504,12 @@ ar rcs "$tmp/libchibicc-asan.a" $asan_objs
   "$tmp/libchibicc-asan.a" -o "$tmp/consumer-asan"
 ASAN_OPTIONS=detect_leaks=0 \
   UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-  "$tmp/consumer-asan" "$tmp/input.c" "$tmp/inc"
+  "$tmp/consumer-asan" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c"
 
 # The shared library (PLAN L3.3b, Linux only): the same consumer links
 # against it and runs.
 if [ -z "${CHIBICC_LIB:-}" ] && [ -f "$root/libchibicc.so" ]; then
   "$cc" -std=c11 -pthread -I"$root/libchibicc/include" "$tmp/consumer.c" \
     -L"$root" -lchibicc -Wl,-rpath,"$root" -o "$tmp/consumer-so"
-  "$tmp/consumer-so" "$tmp/input.c" "$tmp/inc"
+  "$tmp/consumer-so" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c"
 fi

@@ -124,6 +124,7 @@ chibicc_context_define
 chibicc_context_undef
 chibicc_tokenize_file
 chibicc_tokenize_buffer
+chibicc_tokenize_buffer_len
 chibicc_reconstruct
 chibicc_preprocess
 chibicc_cst_parse

@@ -275,9 +275,26 @@ static char *quote_string(char *str) {
   return buf;
 }
 
+// tokenize() leaves current_file pointing at the nested file. Restore
+// the caller's file so error_at's implicit current_file still matches
+// the loc it is given.
+static Token *tokenize_nested(File *file) {
+  File *save = chibicc_ctx()->current_file;
+  Token *tok = tokenize(file);
+  chibicc_ctx()->current_file = save;
+  return tok;
+}
+
+static Token *tokenize_file_nested(char *path) {
+  File *save = chibicc_ctx()->current_file;
+  Token *tok = tokenize_file(path);
+  chibicc_ctx()->current_file = save;
+  return tok;
+}
+
 static Token *new_str_token(char *str, Token *tmpl) {
   char *buf = quote_string(str);
-  return tokenize(new_file(tmpl->file->name, tmpl->file->file_no, buf));
+  return tokenize_nested(new_file(tmpl->file->name, tmpl->file->file_no, buf));
 }
 
 // Copy all tokens until the next newline, terminate them with
@@ -297,7 +314,7 @@ static Token *copy_line(Token **rest, Token *tok) {
 
 static Token *new_num_token(int val, Token *tmpl) {
   char *buf = format("%d\n", val);
-  return tokenize(new_file(tmpl->file->name, tmpl->file->file_no, buf));
+  return tokenize_nested(new_file(tmpl->file->name, tmpl->file->file_no, buf));
 }
 
 static Token *read_const_expr(Token **rest, Token *tok) {
@@ -564,7 +581,7 @@ static Token *paste(Token *lhs, Token *rhs) {
   char *buf = format("%.*s%.*s", lhs->len, lhs->loc, rhs->len, rhs->loc);
 
   // Tokenize the resulting string.
-  Token *tok = tokenize(new_file(lhs->file->name, lhs->file->file_no, buf));
+  Token *tok = tokenize_nested(new_file(lhs->file->name, lhs->file->file_no, buf));
   if (tok->next->kind != TK_EOF)
     error_tok(lhs, "pasting forms '%s', an invalid token", buf);
   return tok;
@@ -904,7 +921,7 @@ static Token *include_file(Token *tok, char *path, Token *filename_tok) {
   if (guard_name && hashmap_get(&macros, guard_name))
     return tok;
 
-  Token *tok2 = tokenize_file(path);
+  Token *tok2 = tokenize_file_nested(path);
   if (!tok2)
     error_tok(filename_tok, "%s: cannot open file: %s", path, strerror(errno));
 
@@ -1090,7 +1107,7 @@ static Token *preprocess2(Token *tok) {
 }
 
 void define_macro(char *name, char *buf) {
-  Token *tok = tokenize(new_file("<built-in>", 1, buf));
+  Token *tok = tokenize_nested(new_file("<built-in>", 1, buf));
   add_macro(name, true, tok);
 }
 

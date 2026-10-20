@@ -823,7 +823,7 @@ File **get_input_files(void) {
   return chibicc_ctx()->input_files;
 }
 
-File *new_file(char *name, int file_no, char *contents) {
+File *new_file_len(char *name, int file_no, char *contents, int len) {
   File *file = chibicc_arena_calloc(1, sizeof(File));
   file->name = name;
   file->display_name = name;
@@ -835,7 +835,6 @@ File *new_file(char *name, int file_no, char *contents) {
   // count. (tokenize_file replaces these tables with the ones
   // make_scan_buffer builds.)
   file->raw = contents;
-  int len = strlen(contents);
   file->map = chibicc_arena_calloc(len + 2, sizeof(int));
   file->lines = chibicc_arena_calloc(len + 2, sizeof(int));
 
@@ -847,6 +846,10 @@ File *new_file(char *name, int file_no, char *contents) {
       line++;
   }
   return file;
+}
+
+File *new_file(char *name, int file_no, char *contents) {
+  return new_file_len(name, file_no, contents, strlen(contents));
 }
 
 // True if p starts a line break: '\n', '\r\n' or '\r'.
@@ -883,7 +886,11 @@ static char *make_scan_buffer(char *raw, int len, int **map_out, int **lines_out
   memcpy(text, raw, len);
   if (len == 0 || raw[len - 1] != '\n')
     text[len] = '\n';
-  int n = strlen(text);
+  // The raw length, plus the synthesized final newline. Never strlen:
+  // the raw text may contain a NUL, which tokenize_file diagnoses.
+  int n = len;
+  if (len == 0 || raw[len - 1] != '\n')
+    n++;
 
   int i = 0;        // position in `text`
   int j = 0;        // position in `buf`
@@ -987,6 +994,14 @@ Token *tokenize_file(char *path) {
   file->raw = raw;
   file->map = map;
   file->lines = lines;
+
+  // A NUL byte would silently end the token stream. The scan buffer now
+  // contains it (make_scan_buffer no longer stops at strlen), so report
+  // the first one before tokenizing.
+  if (memchr(raw, 0, raw_len)) {
+    chibicc_ctx()->current_file = file;
+    error_at(memchr(contents, 0, raw_len + 2), "NUL byte in source file");
+  }
 
   // Save the filename for assembler .file directive.
   ChibiccContext *ctx = chibicc_ctx();
