@@ -59,6 +59,7 @@ test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./chibicc
 	test/diagnostic.sh ./chibicc
+	test/warning.sh ./chibicc
 	test/shape.sh ./chibicc
 	test/trivia.sh ./chibicc
 	test/cst.sh ./chibicc
@@ -96,6 +97,7 @@ test-stage2: libchibicc.a stage2/libchibicc.a $(TESTS:test/%=stage2/test/%)
 	for i in $(TESTS:test/%=stage2/test/%); do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./stage2/chibicc
 	test/diagnostic.sh ./stage2/chibicc
+	test/warning.sh ./stage2/chibicc
 	test/shape.sh ./stage2/chibicc
 	test/trivia.sh ./stage2/chibicc
 	test/cst.sh ./stage2/chibicc

@@ -1217,8 +1217,8 @@ static void resolve_array_cont(InitTree *init, int i, InitItem **cursor) {
 }
 
 // Resolve a braced array initializer, designated items included.
-// Elements past the end of the array are silently dropped, as the
-// parser used to skip them.
+// Elements past the end of the array have no target; each one is
+// diagnosed and dropped (C11 6.7.9 constrains the excess).
 static void resolve_array1(Initializer *rec, InitTree *init) {
   int i = 0;
   InitItem *cursor = rec->items;
@@ -1239,6 +1239,7 @@ static void resolve_array1(Initializer *rec, InitTree *init) {
     if (i < init->ty->array_len) {
       resolve_item(&cursor, init->children[i]);
     } else {
+      warn_tok(it->init->tok, "excess elements in array initializer");
       cursor = it->next;
     }
     i++;

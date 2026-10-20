@@ -66,7 +66,7 @@
 ## 构建与测试
 
 - `make` - 构建 `chibicc` 二进制(纯 C11, 无外部依赖; CFLAGS 定义在 Makefile 中).
-- `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 最后依次运行 `test/driver.sh ./chibicc`(命令行选项检查), `test/diagnostic.sh ./chibicc`(诊断锁定 67 例逐字节), `test/shape.sh ./chibicc`(发射形状回归锁 33 段), `test/trivia.sh ./chibicc`(trivia 通道: -dump-tokens / -reconstruct / -E 与行号锚点锁定), `test/cst.sh ./chibicc`(CST 通道: -dump-cst / -reconstruct-cst / -verify-cst, 全量 round-trip 与树形 dump)与 `test/expand.sh ./chibicc`(provenance 通道: -dump-expansions / -verify-expansions, 样本断言与全量语料校验).
+- `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 最后依次运行 `test/driver.sh ./chibicc`(命令行选项检查), `test/diagnostic.sh ./chibicc`(诊断锁定 67 例逐字节), `test/warning.sh ./chibicc`(警告锁定: 数组 excess elements), `test/shape.sh ./chibicc`(发射形状回归锁 33 段), `test/trivia.sh ./chibicc`(trivia 通道: -dump-tokens / -reconstruct / -E 与行号锚点锁定), `test/cst.sh ./chibicc`(CST 通道: -dump-cst / -reconstruct-cst / -verify-cst, 全量 round-trip 与树形 dump)与 `test/expand.sh ./chibicc`(provenance 通道: -dump-expansions / -verify-expansions, 样本断言与全量语料校验).
 - `make test-stage2` - 自举检查: 用 chibicc 编译它自己, 再重跑全部测试.
 - `make test-all` - 以上两项合计. `make clean` 用于清理.
 - 单独运行某个特性测试: `make test/sizeof.exe && ./test/sizeof.exe`(模式规则会自动处理).
@@ -115,5 +115,5 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 - 每个特性对应一个 `test/<feature>.c`; 测试使用 `test/test.h` 中的 `ASSERT(expected, expr)`(打印表达式与结果, 失败即退出), 并链接 `test/common` 以获得 `assert()` 辅助函数与共享符号. 新测试加到对应的特性文件里; 仅在必要时才扩展 `test/test.h`/`test/common`.
 - CST 的测试在 `test/cst.sh`: 48 个语料文件 + 15 个边界样本的逐字节 round-trip, `-verify-cst` 的叶子序列检查(48 个语料文件), 61 个 dump 样本(覆盖全部 55 个 `CstKind`)与相应重建, 305 项断言, 由 `make test` 与 `make test-stage2` 各跑一遍. 忠实 AST 用打印/结构断言; 阶段改造期间用汇编快照 diff 防行为回归.
 - provenance 的测试在 `test/expand.sh`: 29 个 `-dump-expansions` 样本(每个 `subst` 分支至少一个; 链逐字节锁定), 3 个只锁链形状的样本(`__DATE__` / `__TIMESTAMP__` 的取值不稳定, 宽字符串重扫沿用既有的 `line_no = 0`), 17 个 `-verify-expansions` 样本, 以及 48 个语料文件的全量校验(本机缺 Linux 系统头时探测跳过, docker 内为权威). `subst` 新增分支必须同时更新 `PLAN.md` 的记录清单与本脚本.
-- `test/diagnostic.sh` 逐字节锁定诊断文案与插入符锚点(67 例); `test/shape.sh` 锁定发射形状(33 段: 每个片段用 `$chibicc -S` 汇编后断言助记符序列 `want` / 整行正则 `wantline` / 不得出现的形 `absent`). 两者都由 `make test` 与 `make test-stage2` 调用, 即自举出的编译器也要过一遍; 改 codegen 的发射形时必须同步更新 shape.sh 的对应片段.
+- `test/diagnostic.sh` 逐字节锁定诊断文案与插入符锚点(67 例); `test/warning.sh` 逐字节锁定警告文案与插入符(数组初始化器的 excess elements, 每个超额元素一条), 编译必须成功; `test/shape.sh` 锁定发射形状(33 段: 每个片段用 `$chibicc -S` 汇编后断言助记符序列 `want` / 整行正则 `wantline` / 不得出现的形 `absent`). 两者都由 `make test` 与 `make test-stage2` 调用, 即自举出的编译器也要过一遍; 改 codegen 的发射形时必须同步更新 shape.sh 的对应片段.
 - `test/thirdparty/*.sh` 用 chibicc 构建真实项目(git, sqlite, libpng, cpython, tinycc) - 很慢, 仅限 Linux, 不属于 `make test`.
