@@ -908,7 +908,15 @@ static char *detect_include_guard(Token *tok) {
   return NULL;
 }
 
-static Token *include_file(Token *tok, char *path, Token *filename_tok) {
+// A file that includes itself through differently spelled paths cannot
+// be stopped by the guard/pragma-once maps, and one file can pull in an
+// unbounded number of headers. Bound both; a real translation unit stays
+// well below either limit.
+#define MAX_INCLUDE_DEPTH 200
+#define MAX_INCLUDE_COUNT 10000
+
+static Token *include_file(Token *tok, char *path, Token *filename_tok,
+                           File *parent) {
   // Check for "#pragma once"
   if (hashmap_get(&pragma_once, path))
     return tok;
@@ -921,9 +929,15 @@ static Token *include_file(Token *tok, char *path, Token *filename_tok) {
   if (guard_name && hashmap_get(&macros, guard_name))
     return tok;
 
+  if (parent->include_depth >= MAX_INCLUDE_DEPTH)
+    error_tok(filename_tok, "include depth exceeded");
+  if (++ctx->include_count > MAX_INCLUDE_COUNT)
+    error_tok(filename_tok, "too many includes");
+
   Token *tok2 = tokenize_file_nested(path);
   if (!tok2)
     error_tok(filename_tok, "%s: cannot open file: %s", path, strerror(errno));
+  tok2->file->include_depth = parent->include_depth + 1;
 
   guard_name = detect_include_guard(tok2);
   if (guard_name)
@@ -980,13 +994,14 @@ static Token *preprocess2(Token *tok) {
       if (filename[0] != '/' && is_dquote) {
         char *path = format("%s/%s", dirname(chibicc_arena_strdup(start->file->name)), filename);
         if (file_exists(path)) {
-          tok = include_file(tok, path, start->next->next);
+          tok = include_file(tok, path, start->next->next, start->file);
           continue;
         }
       }
 
       char *path = search_include_paths(filename);
-      tok = include_file(tok, path ? path : filename, start->next->next);
+      tok = include_file(tok, path ? path : filename, start->next->next,
+                         start->file);
       continue;
     }
 
@@ -994,7 +1009,8 @@ static Token *preprocess2(Token *tok) {
       bool ignore;
       char *filename = read_include_filename(&tok, tok->next, &ignore);
       char *path = search_include_next(filename);
-      tok = include_file(tok, path ? path : filename, start->next->next);
+      tok = include_file(tok, path ? path : filename, start->next->next,
+                         start->file);
       continue;
     }
 

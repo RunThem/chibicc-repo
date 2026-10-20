@@ -24,6 +24,7 @@ mkdir -p "$tmp/inc"
 printf '#define H 7\n' > "$tmp/inc/header.h"
 printf '#include "header.h"\nint x = H;\n' > "$tmp/input.c"
 printf 'int a;\000int b;\n' > "$tmp/nul.c"
+printf '#include "self.h"\n' > "$tmp/self.h"
 
 cat > "$tmp/consumer.c" <<'EOF'
 #include <chibicc/chibicc.h>
@@ -127,6 +128,21 @@ static int check_nul_buffer(ChibiccContext *ctx) {
 static int check_nul_file(ChibiccContext *ctx, char *path) {
   int before = errors;
   if (chibicc_tokenize_file(ctx, path) != NULL)
+    return 1;
+  if (!chibicc_context_failed(ctx) || errors != before + 1)
+    return 1;
+  chibicc_context_reset(ctx);
+  return 0;
+}
+
+// A file that includes itself through differently spelled paths defeats
+// the guard/pragma-once maps; the depth bound stops it.
+static int check_include_depth(ChibiccContext *ctx, char *path) {
+  int before = errors;
+  ChibiccToken *tok = chibicc_tokenize_file(ctx, path);
+  if (!tok)
+    return 1;
+  if (chibicc_preprocess(ctx, tok) != NULL)
     return 1;
   if (!chibicc_context_failed(ctx) || errors != before + 1)
     return 1;
@@ -422,6 +438,8 @@ int main(int argc, char **argv) {
     return 1;
   if (argc > 3 && check_nul_file(ctx, argv[3]))
     return 1;
+  if (argc > 4 && check_include_depth(ctx, argv[4]))
+    return 1;
 
   // The layer-1 reconstruct channel, the provenance accessors, the
   // tokenize_file path with a context include path, and the recorded
@@ -483,7 +501,7 @@ int main(int argc, char **argv) {
 EOF
 
 "$cc" -std=c11 -pthread -I"$root/libchibicc/include" "$tmp/consumer.c" "$lib" -o "$tmp/consumer"
-"$tmp/consumer" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c"
+"$tmp/consumer" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h"
 
 # The sanitizer gate (PLAN L3.0/L3.4c). The library sources themselves are
 # rebuilt with ASan and UBSan, so the coverage reaches CST, parse, sema and
@@ -504,12 +522,12 @@ ar rcs "$tmp/libchibicc-asan.a" $asan_objs
   "$tmp/libchibicc-asan.a" -o "$tmp/consumer-asan"
 ASAN_OPTIONS=detect_leaks=0 \
   UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-  "$tmp/consumer-asan" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c"
+  "$tmp/consumer-asan" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h"
 
 # The shared library (PLAN L3.3b, Linux only): the same consumer links
 # against it and runs.
 if [ -z "${CHIBICC_LIB:-}" ] && [ -f "$root/libchibicc.so" ]; then
   "$cc" -std=c11 -pthread -I"$root/libchibicc/include" "$tmp/consumer.c" \
     -L"$root" -lchibicc -Wl,-rpath,"$root" -o "$tmp/consumer-so"
-  "$tmp/consumer-so" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c"
+  "$tmp/consumer-so" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h"
 fi

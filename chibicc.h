@@ -352,6 +352,7 @@ struct ChibiccContext {
   HashMap typename_map;
   int counter;
   int include_next_idx;
+  int include_count;
 
   struct ParseScope *scope;
   struct SemaScope *sema_scope;

@@ -31,6 +31,10 @@ typedef struct chibicc_file {
   char *name;
   int file_no;
 
+  // 0 for a top-level file or a buffer; one more than the including
+  // file for a file opened by #include.
+  int include_depth;
+
   // `raw` is the text as read. `contents` is the buffer the lexer scans:
   // a derivative of `raw` with line breaks canonicalized to '\n', a
   // backslash before a line break removed together with it, universal
