@@ -448,17 +448,29 @@ static void run_subprocess(char **argv) {
     fprintf(stderr, "\n");
   }
 
-  if (fork() == 0) {
+  pid_t pid = fork();
+  if (pid < 0)
+    error("fork failed: %s", strerror(errno));
+
+  if (pid == 0) {
     // Child process. Run a new command.
     execvp(argv[0], argv);
     fprintf(stderr, "exec failed: %s: %s\n", argv[0], strerror(errno));
     _exit(1);
   }
 
-  // Wait for the child process to finish.
+  // Wait for this child only - another child of the host must not be
+  // reaped here - and decode the status instead of treating the raw
+  // wait word as an exit code (C11). EINTR is retried, not mistaken for
+  // the end of the wait.
   int status;
-  while (wait(&status) > 0);
-  if (status != 0)
+  while (waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR)
+      error("waitpid failed: %s", strerror(errno));
+  }
+
+  // A signal death is a failure just like a nonzero exit status.
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
     exit(1);
 }
 

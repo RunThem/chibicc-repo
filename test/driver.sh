@@ -233,6 +233,11 @@ check 'hashmap'
 $chibicc -arena-test
 check 'arena'
 
+# A child's failure status reaches the driver (waitpid + WIFEXITED decode).
+$chibicc -S -o $tmp/no-such-dir/out.s $tmp/empty.c 2>/dev/null
+[ $? -ne 0 ]
+check 'subprocess failure status'
+
 # -M
 echo '#include "out2.h"' > $tmp/out.c
 echo '#include "out3.h"' >> $tmp/out.c
