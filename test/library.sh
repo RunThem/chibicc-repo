@@ -185,6 +185,58 @@ static int check_parse_depth(ChibiccContext *ctx) {
   return 0;
 }
 
+// The CST parser is total: a pathologically deep span falls back to
+// unparsed, flat groups and still verifies leaf-for-leaf against the
+// token stream.
+static int cst_depth_case(ChibiccContext *ctx, char *src) {
+  ChibiccToken *raw = chibicc_tokenize_buffer(ctx, "<cst-deep>", src);
+  if (!raw)
+    return 1;
+  ChibiccCstNode *root = chibicc_cst_parse(ctx, raw);
+  if (!root || !chibicc_cst_verify(ctx, root, raw) ||
+      chibicc_context_failed(ctx))
+    return 1;
+  chibicc_context_reset(ctx);
+  return 0;
+}
+
+static int check_cst_depth(ChibiccContext *ctx) {
+  size_t n = 2000, i;
+  char *src = malloc(2 * n + 64);
+  if (!src)
+    return 1;
+
+  i = 0;
+  memcpy(src + i, "int f(void) { return ", 21);
+  i += 21;
+  for (size_t j = 0; j < n; j++)
+    src[i++] = '(';
+  src[i++] = '1';
+  for (size_t j = 0; j < n; j++)
+    src[i++] = ')';
+  src[i++] = ';';
+  src[i++] = '}';
+  src[i++] = '\n';
+  src[i] = '\0';
+  int rc = cst_depth_case(ctx, src);
+
+  if (rc == 0) {
+    i = 0;
+    memcpy(src + i, "int f(void) {", 13);
+    i += 13;
+    for (size_t j = 0; j < n; j++)
+      src[i++] = '{';
+    for (size_t j = 0; j < n; j++)
+      src[i++] = '}';
+    src[i++] = '}';
+    src[i++] = '\n';
+    src[i] = '\0';
+    rc = cst_depth_case(ctx, src);
+  }
+  free(src);
+  return rc;
+}
+
 // chibicc_reconstruct rebuilds the tokenized bytes exactly.
 static int check_reconstruct(ChibiccContext *ctx) {
   char *text = "int  x =  1;  /* c */\n\tchar *s = \"a\";\n";
@@ -476,6 +528,8 @@ int main(int argc, char **argv) {
   if (argc > 4 && check_include_depth(ctx, argv[4]))
     return 1;
   if (check_parse_depth(ctx))
+    return 1;
+  if (check_cst_depth(ctx))
     return 1;
 
   // The layer-1 reconstruct channel, the provenance accessors, the
