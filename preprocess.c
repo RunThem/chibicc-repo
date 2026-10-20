@@ -1205,10 +1205,13 @@ void init_macros(void) {
   add_builtin("__TIMESTAMP__", timestamp_macro);
   add_builtin("__BASE_FILE__", base_file_macro);
 
+  // localtime returns a process-global buffer; contexts may be created
+  // in different threads (context.h), so use the reentrant form.
   time_t now = time(NULL);
-  struct tm *tm = localtime(&now);
-  define_macro("__DATE__", format_date(tm));
-  define_macro("__TIME__", format_time(tm));
+  struct tm tm_buf;
+  localtime_r(&now, &tm_buf);
+  define_macro("__DATE__", format_date(&tm_buf));
+  define_macro("__TIME__", format_time(&tm_buf));
 }
 
 typedef enum {

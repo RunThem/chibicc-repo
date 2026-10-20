@@ -578,6 +578,16 @@ static Type *pointers(Token **rest, Token *tok, Type *ty) {
   return ty;
 }
 
+// The built-in types are shared by every context (type.c). A declarator
+// must not write its name into one; it copies the record first.
+static bool is_builtin_type(Type *ty) {
+  return ty == ty_void || ty == ty_bool ||
+         ty == ty_char || ty == ty_short || ty == ty_int || ty == ty_long ||
+         ty == ty_uchar || ty == ty_ushort || ty == ty_uint ||
+         ty == ty_ulong || ty == ty_float || ty == ty_double ||
+         ty == ty_ldouble;
+}
+
 // declarator = pointers ("(" ident ")" | "(" declarator ")" | ident) type-suffix
 //
 // The declarator layer builds the type shape and leaves everything it
@@ -604,6 +614,8 @@ static Type *declarator(Token **rest, Token *tok, Type *ty) {
   }
 
   ty = type_suffix(rest, tok, ty);
+  if (is_builtin_type(ty))
+    ty = copy_type(ty);
   ty->name = name;
   ty->name_pos = name_pos;
   return ty;
@@ -739,10 +751,9 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     if (!ty->name)
       error_tok(ty->name_pos, "variable name omitted");
 
-    // The name goes on the shared type only until the next declarator
-    // overwrites it, and the declared name shadows a typedef of the
-    // same name for the rest of the parse - both before the
-    // initializer is parsed, as the old declaration site did.
+    // The declared name shadows a typedef of the same name for the rest
+    // of the parse - before the initializer is parsed, as the old
+    // declaration site did.
     Token *name = ty->name;
     add_declared_name(name);
 

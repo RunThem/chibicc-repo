@@ -82,6 +82,10 @@ void *chibicc_arena_alloc(size_t size, size_t align) {
 }
 
 void *chibicc_arena_calloc(size_t count, size_t size) {
+  // The arena path multiplies by hand; fail instead of wrapping to a
+  // small allocation that memset would then overflow.
+  if (size && count > SIZE_MAX / size)
+    return NULL;
   size_t n = count * size;
   if (!chibicc_active_ctx)
     return calloc(count, size);
@@ -122,6 +126,10 @@ static void config_push(char ***arr, int *len, int *cap, char *s) {
   if (*len + 1 >= *cap) {
     int ncap = *cap ? *cap * 2 : 8;
     char **n = realloc(*arr, sizeof(char *) * ncap);
+    // On OOM keep the old array and capacity; the caller's string is
+    // not stored. A void configuration setter has no report path.
+    if (!n)
+      return;
     *arr = n;
     *cap = ncap;
   }

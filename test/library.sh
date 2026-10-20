@@ -87,6 +87,30 @@ static ChibiccToken *find_num(ChibiccToken *tok, long val) {
   return NULL;
 }
 
+// A declaration's type record carries its own name. The built-in types
+// are shared by every context, so the parser must copy one instead of
+// writing the name into the singleton (audit F1).
+static int check_type_names(ChibiccContext *ctx) {
+  ChibiccObj *prog = NULL;
+  if (!compile(ctx, "int x; int y;\n", &prog) || !prog)
+    return 1;
+
+  ChibiccObj *x = NULL, *y = NULL;
+  for (ChibiccObj *o = prog; o; o = o->next) {
+    if (o->name && strcmp(o->name, "x") == 0)
+      x = o;
+    if (o->name && strcmp(o->name, "y") == 0)
+      y = o;
+  }
+  if (!x || !y)
+    return 1;
+  if (!x->ty->name || x->ty->name->len != 1 || x->ty->name->loc[0] != 'x')
+    return 1;
+  if (!y->ty->name || y->ty->name->len != 1 || y->ty->name->loc[0] != 'y')
+    return 1;
+  return 0;
+}
+
 // chibicc_reconstruct rebuilds the tokenized bytes exactly.
 static int check_reconstruct(ChibiccContext *ctx) {
   char *text = "int  x =  1;  /* c */\n\tchar *s = \"a\";\n";
@@ -365,6 +389,11 @@ int main(int argc, char **argv) {
   ast = compile(ctx, src, &prog);
   if (!ast || !prog || chibicc_context_failed(ctx) || errors != 1)
     return 1;
+
+  chibicc_context_reset(ctx);
+  if (check_type_names(ctx))
+    return 1;
+  chibicc_context_reset(ctx);
 
   // The layer-1 reconstruct channel, the provenance accessors, the
   // tokenize_file path with a context include path, and the recorded
