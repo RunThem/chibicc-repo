@@ -54,6 +54,15 @@ echo 'int y;' > $tmp/bar.c
 [ -f $tmp/foo.s ] && [ -f $tmp/bar.s ]
 check 'multiple input files'
 
+# -o with multiple inputs and -c/-S/-E is rejected. The -S/-E operands
+# must be combined logically; a bitwise or is only accidentally equal.
+! $chibicc -c -o $tmp/out $tmp/foo.c $tmp/bar.c 2>/dev/null
+check 'multiple inputs with -o and -c'
+! $chibicc -S -o $tmp/out $tmp/foo.c $tmp/bar.c 2>/dev/null
+check 'multiple inputs with -o and -S'
+! $chibicc -E -o $tmp/out $tmp/foo.c $tmp/bar.c 2>/dev/null
+check 'multiple inputs with -o and -E'
+
 # Run linker
 rm -f $tmp/foo
 echo 'int main() { return 0; }' | $chibicc -o $tmp/foo -xc -xc -
