@@ -47,6 +47,7 @@ static void leave_scope(void);
 #define MAX_PARSE_DEPTH 512
 
 static bool is_typename(Token *tok);
+static Token *attribute_list(Token *tok, Type *ty);
 static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs);
 static Type *typename(Token **rest, Token *tok, Node **specs);
 static Type *enum_specifier(Token **rest, Token *tok, Node **specs);
@@ -303,7 +304,14 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
   int counter = 0;
   bool is_atomic = false;
 
-  while (is_typename(tok)) {
+  while (is_typename(tok) || equal(tok, "__attribute__")) {
+    // Declaration and function attributes are accepted in any specifier
+    // position; the ones without a type meaning are ignored.
+    if (equal(tok, "__attribute__")) {
+      tok = attribute_list(tok, NULL);
+      continue;
+    }
+
     // Handle storage class specifiers.
     if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern") ||
         equal(tok, "inline") || equal(tok, "_Thread_local") || equal(tok, "__thread")) {
@@ -639,6 +647,12 @@ static Type *declarator1(Token **rest, Token *tok, Type *ty) {
   ty = type_suffix(rest, tok, ty);
   if (is_builtin_type(ty))
     ty = copy_type(ty);
+  // A named declaration accepts trailing attributes here. The type
+  // meaning is ignored for a named declaration, so a shared type record
+  // is never mutated.
+  tok = *rest;
+  tok = attribute_list(tok, NULL);
+  *rest = tok;
   ty->name = name;
   ty->name_pos = name_pos;
   return ty;
@@ -665,7 +679,11 @@ static Type *abstract_declarator1(Token **rest, Token *tok, Type *ty) {
     return abstract_declarator(&tok, start->next, ty);
   }
 
-  return type_suffix(rest, tok, ty);
+  ty = type_suffix(rest, tok, ty);
+  tok = *rest;
+  tok = attribute_list(tok, NULL);
+  *rest = tok;
+  return ty;
 }
 
 // type-name = declspec abstract-declarator
@@ -1685,7 +1703,44 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
   ty->members = head.next;
 }
 
-// attribute = ("__attribute__" "(" "(" "packed" ")" ")")*
+// attribute = ("__attribute__" "(" "(" attribute ("," attribute)* ")" ")")*
+//
+// `packed` and `aligned` are applied when a type record is given; the
+// known declaration/function attributes are recognized and ignored.
+static Token *skip_attribute_args(Token *tok) {
+  if (!equal(tok, "("))
+    return tok;
+
+  int depth = 0;
+  for (; tok->kind != TK_EOF; tok = tok->next) {
+    if (equal(tok, "(")) {
+      depth++;
+    } else if (equal(tok, ")")) {
+      if (--depth == 0)
+        return tok->next;
+    }
+  }
+  error_tok(tok, "unclosed attribute");
+  return tok;
+}
+
+static bool is_ignored_attribute(Token *tok) {
+  static char *names[] = {
+    "unused", "used", "noreturn", "format", "format_arg", "visibility",
+    "deprecated", "warn_unused_result", "nonnull", "returns_nonnull",
+    "malloc", "pure", "const", "always_inline", "noinline", "section",
+    "weak", "alias", "constructor", "destructor", "may_alias", "mode",
+    "fallthrough", "nodiscard", "access", "alloc_size", "hot", "cold",
+    "gnu_inline", "sentinel", "nothrow", "leaf", "returns_twice",
+    "artificial", "error", "warning",
+    NULL,
+  };
+  for (int i = 0; names[i]; i++)
+    if (equal(tok, names[i]))
+      return true;
+  return false;
+}
+
 static Token *attribute_list(Token *tok, Type *ty) {
   while (consume(&tok, tok, "__attribute__")) {
     tok = skip(tok, "(");
@@ -1699,16 +1754,33 @@ static Token *attribute_list(Token *tok, Type *ty) {
       first = false;
 
       if (consume(&tok, tok, "packed")) {
-        ty->is_packed = true;
+        if (ty)
+          ty->is_packed = true;
         continue;
       }
 
       if (consume(&tok, tok, "aligned")) {
-        tok = skip(tok, "(");
-        // The alignment is a constant expression, so it is recorded and
-        // sema evaluates it when the type is completed.
-        ty->align_expr = conditional(&tok, tok);
-        tok = skip(tok, ")");
+        // The alignment is a constant expression. It is applied only when
+        // the attribute is attached to a type definition; declaration
+        // positions pass NULL so the shared type records stay read-only.
+        if (consume(&tok, tok, "(")) {
+          if (ty)
+            ty->align_expr = conditional(&tok, tok);
+          else
+            (void)conditional(&tok, tok);
+          tok = skip(tok, ")");
+        }
+        continue;
+      }
+
+      if (equal(tok, "cleanup")) {
+        warn_tok(tok, "cleanup attribute is ignored");
+        tok = skip_attribute_args(tok->next);
+        continue;
+      }
+
+      if (is_ignored_attribute(tok)) {
+        tok = skip_attribute_args(tok->next);
         continue;
       }
 
