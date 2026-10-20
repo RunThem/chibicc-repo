@@ -6,7 +6,7 @@
 # 该形态", 不是"旧树形消失"的证明 - .s 里看不见 DEREF/FOR 这类树形, 树形的消失
 # 由源码层核对证明(整形遍不再含对应 case, 见 PLAN.md 阶段 B 段与 RESULT.md 各步).
 #
-# 断言按步增量添加, 覆盖清单(共 33 段):
+# 断言按步增量添加, 覆盖清单(共 34 段):
 #   b11a 下标(读/写/交换写法/VLA/多级)      - PLAN B1.1a
 #   b11b 箭头成员/点成员/展平匿名链/复合赋值 - PLAN B1.1b
 #   b11c 整数/无符号/浮点/长双精度 的 > 与 >= - PLAN B1.1c
@@ -16,6 +16,7 @@
 #   b12b 声明的初始化链                      - PLAN B1.2b
 #   b2   加法缩放的十种落点(读/交换写法/减/ptr-ptr 除法/纯整数负例/混合转换/
 #        VLA 基址/复合赋值/自增自减/指示符初始化) - PLAN B2
+#   c7   data 发射宽度(quad/long/short 成批) - C7 审计修复
 #
 # 用法: test/shape.sh ./chibicc (由 make test 与 make test-stage2 调用)
 
@@ -297,6 +298,16 @@ SNIP
 want b2_designator imul add
 
 # ---- 汇总 ----------------------------------------------------------------
+# C7: data 发射按 8/4/2/1 字节宽度成批, 不再是逐字节 .byte. 15 字节
+# 初始化器恰好降成 quad + long + short + byte 四条.
+snippet c7_data_widths <<'SNIP'
+char b15[15] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+SNIP
+wantline c7_data_widths '^  \.quad 0x'
+wantline c7_data_widths '^  \.long 0x'
+wantline c7_data_widths '^  \.short 0x'
+wantline c7_data_widths '^  \.byte 15$'
+
 fail=""
 count=0
 for n in $names; do

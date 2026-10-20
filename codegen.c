@@ -2606,8 +2606,34 @@ static void emit_data(Obj *prog) {
           println("  .quad %s%+ld", rel->label ? rel->label : cg(rel->label_node)->unique_label, rel->addend);
           rel = rel->next;
           pos += 8;
+          continue;
+        }
+
+        // Emit a run of plain bytes in the widest directive that fits,
+        // stopping at the next relocation. The only target is
+        // little-endian x86-64, so a run packs into the directive's
+        // value byte by byte (C7; this used to be one .byte per byte).
+        int len = (rel ? rel->offset : var->ty->size) - pos;
+        uint64_t val = 0;
+
+        if (len >= 8) {
+          for (int i = 0; i < 8; i++)
+            val |= (uint64_t)(unsigned char)var->init_data[pos + i] << (i * 8);
+          println("  .quad 0x%llx", (unsigned long long)val);
+          pos += 8;
+        } else if (len >= 4) {
+          for (int i = 0; i < 4; i++)
+            val |= (uint64_t)(unsigned char)var->init_data[pos + i] << (i * 8);
+          println("  .long 0x%x", (unsigned)val);
+          pos += 4;
+        } else if (len >= 2) {
+          for (int i = 0; i < 2; i++)
+            val |= (uint64_t)(unsigned char)var->init_data[pos + i] << (i * 8);
+          println("  .short 0x%x", (unsigned)val);
+          pos += 2;
         } else {
-          println("  .byte %d", var->init_data[pos++]);
+          println("  .byte %d", (unsigned char)var->init_data[pos]);
+          pos++;
         }
       }
       continue;
