@@ -140,13 +140,48 @@ char *chibicc_arena_strndup(char *s, size_t n) {
   return p;
 }
 
+// Reallocate in the arena. The old block is not reclaimed - the arena
+// frees only when the context is reset - so a geometric growth keeps
+// the dead capacity alive and peaks at about twice the final size; that
+// is the arena trade-off, not a leak. Every byte past `old_size` in the
+// returned block is zeroed, so a caller may rely on a clean tail (C9).
 void *chibicc_arena_realloc(void *old, size_t old_size, size_t new_size) {
-  if (!chibicc_active_ctx)
-    return realloc(old, new_size);
+  size_t kept = old ? (old_size < new_size ? old_size : new_size) : 0;
+
+  if (!chibicc_active_ctx) {
+    void *p = realloc(old, new_size);
+    if (!p)
+      return NULL;
+    if (new_size > kept)
+      memset((char *)p + kept, 0, new_size - kept);
+    return p;
+  }
+
   void *p = arena_alloc(chibicc_active_ctx, new_size, 8);
-  if (old && old_size)
-    memcpy(p, old, old_size < new_size ? old_size : new_size);
+  if (kept)
+    memcpy(p, old, kept);
+  if (new_size > kept)
+    memset((char *)p + kept, 0, new_size - kept);
   return p;
+}
+
+// Verifies the realloc contract with an active context: the tail is
+// zeroed and the old bytes are preserved.
+void chibicc_arena_test(void) {
+  char *p = chibicc_arena_calloc(4, 1);
+  p[0] = 1;
+  p[3] = 4;
+
+  char *q = chibicc_arena_realloc(p, 4, 16);
+  assert(q[0] == 1 && q[3] == 4);
+  for (int i = 4; i < 16; i++)
+    assert(q[i] == 0);
+
+  char *r = chibicc_arena_realloc(NULL, 0, 8);
+  for (int i = 0; i < 8; i++)
+    assert(r[i] == 0);
+
+  printf("OK\n");
 }
 
 static void config_push(char ***arr, int *len, int *cap, char *s) {

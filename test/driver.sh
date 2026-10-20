@@ -230,6 +230,9 @@ check '.so'
 $chibicc -hashmap-test
 check 'hashmap'
 
+$chibicc -arena-test
+check 'arena'
+
 # -M
 echo '#include "out2.h"' > $tmp/out.c
 echo '#include "out3.h"' >> $tmp/out.c

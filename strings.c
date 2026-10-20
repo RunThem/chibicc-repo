@@ -11,8 +11,6 @@ void strarray_push(StringArray *arr, char *s) {
     arr->data = chibicc_arena_realloc(arr->data, sizeof(char *) * oldcap,
                                       sizeof(char *) * oldcap * 2);
     arr->capacity = oldcap * 2;
-    for (int i = arr->len; i < arr->capacity; i++)
-      arr->data[i] = NULL;
   }
 
   arr->data[arr->len++] = s;
@@ -29,8 +27,6 @@ void nodearray_push(NodeArray *arr, Node *node) {
     arr->data = chibicc_arena_realloc(arr->data, sizeof(Node *) * oldcap,
                                       sizeof(Node *) * oldcap * 2);
     arr->capacity = oldcap * 2;
-    for (int i = arr->len; i < arr->capacity; i++)
-      arr->data[i] = NULL;
   }
 
   arr->data[arr->len++] = node;

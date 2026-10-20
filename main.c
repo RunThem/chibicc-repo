@@ -359,6 +359,13 @@ static void parse_args(int argc, char **argv) {
       exit(0);
     }
 
+    if (!strcmp(argv[i], "-arena-test")) {
+      ChibiccContext *ctx = chibicc_context_new();
+      chibicc_arena_test();
+      chibicc_context_free(ctx);
+      exit(0);
+    }
+
     // These options are ignored for now.
     if (!strncmp(argv[i], "-O", 2) ||
         !strncmp(argv[i], "-W", 2) ||
