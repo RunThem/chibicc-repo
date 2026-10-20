@@ -288,6 +288,22 @@ static int check_utf8(ChibiccContext *ctx) {
   return 0;
 }
 
+#ifdef CHIBICC_TEST_BUILTINS
+// A builtin handler that produces two tokens must keep both (B8).
+static int check_multi_builtin(ChibiccContext *ctx) {
+  ChibiccToken *tok =
+      chibicc_tokenize_buffer(ctx, "<multi>", "int x = __CHIBICC_MULTI__;");
+  if (!tok)
+    return 1;
+  tok = chibicc_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 1) || !find_num(tok, 2) ||
+      chibicc_context_failed(ctx))
+    return 1;
+  chibicc_context_reset(ctx);
+  return 0;
+}
+#endif
+
 // chibicc_reconstruct rebuilds the tokenized bytes exactly.
 static int check_reconstruct(ChibiccContext *ctx) {
   char *text = "int  x =  1;  /* c */\n\tchar *s = \"a\";\n";
@@ -584,6 +600,10 @@ int main(int argc, char **argv) {
     return 1;
   if (check_utf8(ctx))
     return 1;
+#ifdef CHIBICC_TEST_BUILTINS
+  if (check_multi_builtin(ctx))
+    return 1;
+#endif
 
   // The layer-1 reconstruct channel, the provenance accessors, the
   // tokenize_file path with a context include path, and the recorded
@@ -656,12 +676,12 @@ asan_objs=
 for src in "$root"/*.c; do
   base=$(basename "$src" .c)
   case $base in main|codegen) continue;; esac
-  "$cc" -std=c11 -g -Wall -Wno-switch -DCHIBICC_DEBUG_ARENA -fsanitize=address,undefined -fno-omit-frame-pointer \
+  "$cc" -std=c11 -g -Wall -Wno-switch -DCHIBICC_DEBUG_ARENA -DCHIBICC_TEST_BUILTINS -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$root/libchibicc/include" -c "$src" -o "$tmp/asan/$base.o"
   asan_objs="$asan_objs $tmp/asan/$base.o"
 done
 ar rcs "$tmp/libchibicc-asan.a" $asan_objs
-"$cc" -std=c11 -pthread -g -fsanitize=address,undefined \
+"$cc" -std=c11 -pthread -g -DCHIBICC_TEST_BUILTINS -fsanitize=address,undefined \
   -fno-omit-frame-pointer -I"$root/libchibicc/include" "$tmp/consumer.c" \
   "$tmp/libchibicc-asan.a" -o "$tmp/consumer-asan"
 ASAN_OPTIONS=detect_leaks=0 \

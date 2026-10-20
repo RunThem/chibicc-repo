@@ -317,6 +317,17 @@ static Token *new_num_token(int val, Token *tmpl) {
   return tokenize_nested(new_file(tmpl->file->name, tmpl->file->file_no, buf));
 }
 
+#ifdef CHIBICC_TEST_BUILTINS
+// A B8 regression hook: a builtin that produces two tokens. Only
+// test/library.sh's ASan round builds it.
+static Token *multi_macro(Token *tmpl) {
+  Token *t1 = new_num_token(1, tmpl);
+  Token *t2 = new_num_token(2, tmpl);
+  t1->next = t2;
+  return t1;
+}
+#endif
+
 static Token *read_const_expr(Token **rest, Token *tok) {
   tok = copy_line(rest, tok);
 
@@ -745,7 +756,19 @@ static bool expand_macro(Token **rest, Token *tok) {
     Token *body = m->handler(tok);
     for (Token *t = body; t->kind != TK_EOF; t = t->next)
       t->prov = new_prov(e, -1, tok->prov);
-    body->next = tok->next;
+
+    // A handler may produce more than one token; splice after the last
+    // one, not after the head, so none is dropped. An empty body expands
+    // to nothing (B8).
+    if (body->kind == TK_EOF) {
+      *rest = tok->next;
+      return true;
+    }
+
+    Token *tail = body;
+    while (tail->next->kind != TK_EOF)
+      tail = tail->next;
+    tail->next = tok->next;
     *rest = body;
     return true;
   }
@@ -1237,6 +1260,9 @@ void init_macros(void) {
   add_builtin("__COUNTER__", counter_macro);
   add_builtin("__TIMESTAMP__", timestamp_macro);
   add_builtin("__BASE_FILE__", base_file_macro);
+#ifdef CHIBICC_TEST_BUILTINS
+  add_builtin("__CHIBICC_MULTI__", multi_macro);
+#endif
 
   // localtime returns a process-global buffer; contexts may be created
   // in different threads (context.h), so use the reentrant form.
