@@ -393,8 +393,20 @@ static void mark_live(Obj *var) {
   }
 }
 
-// Remove redundant tentative definitions.
+// Remove redundant tentative definitions. Two declarations of the same
+// name without an initializer are one definition, so exactly one of them
+// survives; a tentative definition that has a real definition to attach
+// to is dropped. The lookups are hash maps - a scan of the whole list per
+// tentative declaration made this quadratic (C6).
 static void scan_globals(void) {
+  char real_tag, kept_tag;
+  HashMap reals = {};
+  HashMap kept = {};
+
+  for (Obj *var = globals; var; var = var->next)
+    if (var->is_definition && !var->is_tentative)
+      hashmap_put(&reals, var->name, &real_tag);
+
   Obj head;
   Obj *cur = &head;
 
@@ -404,16 +416,13 @@ static void scan_globals(void) {
       continue;
     }
 
-    // Find another definition of the same identifier.
-    Obj *var2 = globals;
-    for (; var2; var2 = var2->next)
-      if (var != var2 && var2->is_definition && !strcmp(var->name, var2->name))
-        break;
+    // A real definition of this name exists, or one tentative
+    // definition of it already survived.
+    if (hashmap_get(&reals, var->name) || hashmap_get(&kept, var->name))
+      continue;
 
-    // If there's another definition, the tentative definition
-    // is redundant
-    if (!var2)
-      cur = cur->next = var;
+    hashmap_put(&kept, var->name, &kept_tag);
+    cur = cur->next = var;
   }
 
   cur->next = NULL;

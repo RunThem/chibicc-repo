@@ -3,6 +3,11 @@
 int g1, g2[4];
 static int g3 = 3;
 
+// Two tentative definitions are one definition; the scanner keeps exactly
+// one of them (both used to be dropped, leaving the symbol undefined).
+int tent_dup;
+int tent_dup;
+
 int main() {
   ASSERT(3, ({ int a; a=3; a; }));
   ASSERT(3, ({ int a=3; a; }));
@@ -36,6 +41,8 @@ int main() {
 
   ASSERT(4, sizeof(g1));
   ASSERT(16, sizeof(g2));
+  tent_dup = 5;
+  ASSERT(5, tent_dup);
 
   ASSERT(1, ({ char x=1; x; }));
   ASSERT(1, ({ char x=1; char y=2; x; }));
