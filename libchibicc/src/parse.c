@@ -71,6 +71,7 @@ static Node *stmt(Token **rest, Token *tok);
 static Node *expr_stmt(Token **rest, Token *tok);
 static Node *expr(Token **rest, Token *tok);
 static Node *assign(Token **rest, Token *tok);
+#if !CHIBICC_PRATT_PARSE_FEATURE
 static Node *logor(Token **rest, Token *tok);
 static Node *logand(Token **rest, Token *tok);
 static Node *bitor(Token **rest, Token *tok);
@@ -81,10 +82,15 @@ static Node *relational(Token **rest, Token *tok);
 static Node *shift(Token **rest, Token *tok);
 static Node *add(Token **rest, Token *tok);
 static Node *mul(Token **rest, Token *tok);
+#endif
+#if !CHIBICC_PRATT_PARSE_FEATURE
 static Node *cast(Token **rest, Token *tok);
+#endif
 static Type *struct_decl(Token **rest, Token *tok, Node **specs);
 static Type *union_decl(Token **rest, Token *tok, Node **specs);
+#if !CHIBICC_PRATT_PARSE_FEATURE
 static Node *postfix(Token **rest, Token *tok);
+#endif
 static Node *funcall(Token **rest, Token *tok, Node *node);
 static Node *unary(Token **rest, Token *tok);
 // The body behind each depth-guarded entry (the wrapper increments
@@ -93,11 +99,15 @@ static Type *declarator1(Token **rest, Token *tok, Type *ty, DeclName *decl);
 static Type *abstract_declarator(Token **rest, Token *tok, Type *ty);
 static Type *abstract_declarator1(Token **rest, Token *tok, Type *ty);
 static Initializer *init_record1(Token **rest, Token *tok);
+#if !CHIBICC_PRATT_PARSE_FEATURE
 static Node *expr1(Token **rest, Token *tok);
 static Node *assign1(Token **rest, Token *tok);
 static Node *conditional1(Token **rest, Token *tok);
+#endif
+#if !CHIBICC_PRATT_PARSE_FEATURE
 static Node *cast1(Token **rest, Token *tok);
 static Node *unary1(Token **rest, Token *tok);
+#endif
 static Node *primary(Token **rest, Token *tok);
 static Node *parse_typedef(Token **rest, Token *tok, Type *basety);
 static bool is_function(Token *tok);
@@ -1226,6 +1236,7 @@ static Node *expr_stmt(Token **rest, Token *tok) {
   return node;
 }
 
+#if !CHIBICC_PRATT_PARSE_FEATURE
 // expr = assign ("," expr)?
 static Node *expr(Token **rest, Token *tok) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
@@ -1542,7 +1553,9 @@ static Node *mul(Token **rest, Token *tok) {
     return node;
   }
 }
+#endif // !CHIBICC_PRATT_PARSE_FEATURE
 
+#if !CHIBICC_PRATT_PARSE_FEATURE
 // cast = "(" type-name ")" cast | unary
 static Node *cast(Token **rest, Token *tok) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
@@ -1642,6 +1655,7 @@ static Node *unary1(Token **rest, Token *tok) {
 
   return postfix(rest, tok);
 }
+#endif // !CHIBICC_PRATT_PARSE_FEATURE
 
 // struct-members = (declspec declarator (","  declarator)* ";")*
 //
@@ -1890,6 +1904,7 @@ static Node *struct_ref(Node *node, Token *tok, Token *arrow) {
   return mem;
 }
 
+#if !CHIBICC_PRATT_PARSE_FEATURE
 // postfix = "(" type-name ")" "{" initializer-list "}"
 //         = ident "(" func-args ")" postfix-tail*
 //         | primary postfix-tail*
@@ -1974,6 +1989,7 @@ static Node *postfix(Token **rest, Token *tok) {
     return node;
   }
 }
+#endif // !CHIBICC_PRATT_PARSE_FEATURE
 
 // funcall = (assign ("," assign)*)? ")"
 //
@@ -2187,6 +2203,457 @@ static Node *primary(Token **rest, Token *tok) {
 
   error_tok(tok, "expected an expression");
 }
+
+#if CHIBICC_PRATT_PARSE_FEATURE
+//
+// The Pratt expression parser (PLAN-pratt-parse).
+//
+// One loop replaces the per-precedence cascade: infix_bp() turns the
+// current token into an operator and a binding power, and expr_bp() keeps
+// consuming while the operator binds tighter than min_bp (left
+// associative: rbp == lbp; right associative: rbp == lbp - 1). The three
+// entry points keep the old names and meanings: expr allows comma, assign
+// allows assignment, conditional allows neither. The prefix forms are in
+// expr_nud; the postfix forms are the led section of the loop below.
+enum {
+  BP_COMMA = 1,
+  BP_ASSIGN = 2,
+  BP_COND = 3,
+  BP_LOGOR = 4,
+  BP_LOGAND = 5,
+  BP_BITOR = 6,
+  BP_BITXOR = 7,
+  BP_BITAND = 8,
+  BP_EQUALITY = 9,
+  BP_RELATIONAL = 10,
+  BP_SHIFT = 11,
+  BP_ADD = 12,
+  BP_MUL = 13,
+  BP_CAST = 14,
+  BP_POSTFIX = 15,
+};
+
+// The infix operator at tok, if any: its node kind, the compound
+// assignment operator (ND_NULL_EXPR for a plain "=" or a non-assignment),
+// and its binding powers.
+static bool infix_bp(Token *tok, NodeKind *kind, NodeKind *assign_op,
+                     int *lbp, int *rbp) {
+  *assign_op = ND_NULL_EXPR;
+
+  if (equal(tok, ",")) {
+    // The cascade built `a, (b, c)`: expr1 parses the rest with expr.
+    // Keep that right-nested shape; comma is not associative in the tree.
+    *kind = ND_COMMA;
+    *lbp = BP_COMMA;
+    *rbp = BP_COMMA - 1;
+    return true;
+  }
+
+  if (equal(tok, "=")) {
+    *kind = ND_ASSIGN;
+    *lbp = BP_ASSIGN;
+    *rbp = BP_ASSIGN - 1;
+    return true;
+  }
+
+  if (equal(tok, "+=")) {
+    *kind = ND_ASSIGN;
+    *assign_op = ND_ADD;
+    *lbp = BP_ASSIGN;
+    *rbp = BP_ASSIGN - 1;
+    return true;
+  }
+
+  if (equal(tok, "-=")) {
+    *kind = ND_ASSIGN;
+    *assign_op = ND_SUB;
+    *lbp = BP_ASSIGN;
+    *rbp = BP_ASSIGN - 1;
+    return true;
+  }
+
+  if (equal(tok, "*=")) {
+    *kind = ND_ASSIGN;
+    *assign_op = ND_MUL;
+    *lbp = BP_ASSIGN;
+    *rbp = BP_ASSIGN - 1;
+    return true;
+  }
+
+  if (equal(tok, "/=")) {
+    *kind = ND_ASSIGN;
+    *assign_op = ND_DIV;
+    *lbp = BP_ASSIGN;
+    *rbp = BP_ASSIGN - 1;
+    return true;
+  }
+
+  if (equal(tok, "%=")) {
+    *kind = ND_ASSIGN;
+    *assign_op = ND_MOD;
+    *lbp = BP_ASSIGN;
+    *rbp = BP_ASSIGN - 1;
+    return true;
+  }
+
+  if (equal(tok, "&=")) {
+    *kind = ND_ASSIGN;
+    *assign_op = ND_BITAND;
+    *lbp = BP_ASSIGN;
+    *rbp = BP_ASSIGN - 1;
+    return true;
+  }
+
+  if (equal(tok, "|=")) {
+    *kind = ND_ASSIGN;
+    *assign_op = ND_BITOR;
+    *lbp = BP_ASSIGN;
+    *rbp = BP_ASSIGN - 1;
+    return true;
+  }
+
+  if (equal(tok, "^=")) {
+    *kind = ND_ASSIGN;
+    *assign_op = ND_BITXOR;
+    *lbp = BP_ASSIGN;
+    *rbp = BP_ASSIGN - 1;
+    return true;
+  }
+
+  if (equal(tok, "<<=")) {
+    *kind = ND_ASSIGN;
+    *assign_op = ND_SHL;
+    *lbp = BP_ASSIGN;
+    *rbp = BP_ASSIGN - 1;
+    return true;
+  }
+
+  if (equal(tok, ">>=")) {
+    *kind = ND_ASSIGN;
+    *assign_op = ND_SHR;
+    *lbp = BP_ASSIGN;
+    *rbp = BP_ASSIGN - 1;
+    return true;
+  }
+
+  if (equal(tok, "?")) {
+    *kind = ND_COND;
+    *lbp = BP_COND;
+    *rbp = BP_COND - 1;
+    return true;
+  }
+
+  if (equal(tok, "||")) {
+    *kind = ND_LOGOR;
+    *lbp = *rbp = BP_LOGOR;
+    return true;
+  }
+
+  if (equal(tok, "&&")) {
+    *kind = ND_LOGAND;
+    *lbp = *rbp = BP_LOGAND;
+    return true;
+  }
+
+  if (equal(tok, "|")) {
+    *kind = ND_BITOR;
+    *lbp = *rbp = BP_BITOR;
+    return true;
+  }
+
+  if (equal(tok, "^")) {
+    *kind = ND_BITXOR;
+    *lbp = *rbp = BP_BITXOR;
+    return true;
+  }
+
+  if (equal(tok, "&")) {
+    *kind = ND_BITAND;
+    *lbp = *rbp = BP_BITAND;
+    return true;
+  }
+
+  if (equal(tok, "==")) {
+    *kind = ND_EQ;
+    *lbp = *rbp = BP_EQUALITY;
+    return true;
+  }
+
+  if (equal(tok, "!=")) {
+    *kind = ND_NE;
+    *lbp = *rbp = BP_EQUALITY;
+    return true;
+  }
+
+  if (equal(tok, "<")) {
+    *kind = ND_LT;
+    *lbp = *rbp = BP_RELATIONAL;
+    return true;
+  }
+
+  if (equal(tok, "<=")) {
+    *kind = ND_LE;
+    *lbp = *rbp = BP_RELATIONAL;
+    return true;
+  }
+
+  if (equal(tok, ">")) {
+    *kind = ND_GT;
+    *lbp = *rbp = BP_RELATIONAL;
+    return true;
+  }
+
+  if (equal(tok, ">=")) {
+    *kind = ND_GE;
+    *lbp = *rbp = BP_RELATIONAL;
+    return true;
+  }
+
+  if (equal(tok, "<<")) {
+    *kind = ND_SHL;
+    *lbp = *rbp = BP_SHIFT;
+    return true;
+  }
+
+  if (equal(tok, ">>")) {
+    *kind = ND_SHR;
+    *lbp = *rbp = BP_SHIFT;
+    return true;
+  }
+
+  if (equal(tok, "+")) {
+    *kind = ND_ADD;
+    *lbp = *rbp = BP_ADD;
+    return true;
+  }
+
+  if (equal(tok, "-")) {
+    *kind = ND_SUB;
+    *lbp = *rbp = BP_ADD;
+    return true;
+  }
+
+  if (equal(tok, "*")) {
+    *kind = ND_MUL;
+    *lbp = *rbp = BP_MUL;
+    return true;
+  }
+
+  if (equal(tok, "/")) {
+    *kind = ND_DIV;
+    *lbp = *rbp = BP_MUL;
+    return true;
+  }
+
+  if (equal(tok, "%")) {
+    *kind = ND_MOD;
+    *lbp = *rbp = BP_MUL;
+    return true;
+  }
+
+  return false;
+}
+
+static Node *expr_bp(Token **rest, Token *tok, int min_bp);
+
+// The prefix (nud) forms: a cast or compound literal (the `(` type-name
+// lookahead), the unary operators, labels-as-values, then the shared
+// primary parser for everything atomic. Unary `+` is transparent and
+// builds no node, exactly as the cascade did.
+static Node *expr_nud(Token **rest, Token *tok) {
+  if (equal(tok, "(") && is_typename(tok->next)) {
+    Token *start = tok;
+    Node *specs = NULL;
+    Type *ty = typename(&tok, tok->next, &specs);
+    tok = skip(tok, ")");
+
+    // A compound literal. Kept faithful, with the type and the
+    // initializer record on the node; sema materializes the object.
+    if (equal(tok, "{")) {
+      Node *node = new_node(ND_COMPOUND_LITERAL, start);
+      node->ty_op = ty;
+      node->spec_decls = specs;
+      node->decl_init = init_record(rest, tok);
+      return node;
+    }
+
+    // A cast the source wrote: untyped, with the target type recorded
+    // for sema. is_implicit stays false (new_cast sets it for the casts
+    // sema inserts).
+    Node *node = new_node(ND_CAST, start);
+    node->lhs = expr_bp(rest, tok, BP_CAST);
+    node->ty_op = ty;
+    node->spec_decls = specs;
+    return node;
+  }
+
+  if (equal(tok, "+"))
+    return expr_bp(rest, tok->next, BP_CAST);
+
+  if (equal(tok, "-"))
+    return new_unary(ND_NEG, expr_bp(rest, tok->next, BP_CAST), tok);
+
+  if (equal(tok, "&"))
+    return new_unary(ND_ADDR, expr_bp(rest, tok->next, BP_CAST), tok);
+
+  if (equal(tok, "*"))
+    return new_unary(ND_DEREF, expr_bp(rest, tok->next, BP_CAST), tok);
+
+  if (equal(tok, "!"))
+    return new_unary(ND_NOT, expr_bp(rest, tok->next, BP_CAST), tok);
+
+  if (equal(tok, "~"))
+    return new_unary(ND_BITNOT, expr_bp(rest, tok->next, BP_CAST), tok);
+
+  if (equal(tok, "++")) {
+    Node *node = new_node(ND_INCDEC, tok);
+    node->lhs = expr_bp(rest, tok->next, BP_CAST);
+    node->addend = 1;
+    return node;
+  }
+
+  if (equal(tok, "--")) {
+    Node *node = new_node(ND_INCDEC, tok);
+    node->lhs = expr_bp(rest, tok->next, BP_CAST);
+    node->addend = -1;
+    return node;
+  }
+
+  // [GNU] labels-as-values. Checked before any infix interpretation, so
+  // `&&label` is not a binary `&&`.
+  if (equal(tok, "&&")) {
+    Node *node = new_node(ND_LABEL_VAL, tok);
+    node->label = get_ident(tok->next);
+    *rest = tok->next->next;
+    return node;
+  }
+
+  return primary(rest, tok);
+}
+
+// The one expression loop. The depth gate counts here and only here in
+// the Pratt build; the entry wrappers below do not add a frame.
+static Node *expr_bp(Token **rest, Token *tok, int min_bp) {
+  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(tok, "nesting too deep");
+
+  Node *node = expr_nud(rest, tok);
+
+  for (;;) {
+    Token *op = *rest;
+    NodeKind kind;
+    NodeKind assign_op;
+    int lbp;
+    int rbp;
+
+    // The postfix (led) forms bind tighter than every infix operator:
+    // call, subscript, member access and postfix increment/decrement.
+    if (min_bp < BP_POSTFIX) {
+      if (equal(op, "(")) {
+        node = funcall(rest, op->next, node);
+        continue;
+      }
+
+      if (equal(op, "[")) {
+        Token *idx = op->next;
+        Node *subscript = new_node(ND_SUBSCRIPT, op);
+        subscript->lhs = node;
+        subscript->rhs = expr(&idx, idx);
+        *rest = skip(idx, "]");
+        node = subscript;
+        continue;
+      }
+
+      if (equal(op, ".")) {
+        node = struct_ref(node, op->next, NULL);
+        *rest = op->next->next;
+        continue;
+      }
+
+      if (equal(op, "->")) {
+        node = struct_ref(node, op->next, op);
+        *rest = op->next->next;
+        continue;
+      }
+
+      if (equal(op, "++")) {
+        Node *incdec = new_node(ND_INCDEC, op);
+        incdec->lhs = node;
+        incdec->is_post = true;
+        incdec->addend = 1;
+        node = incdec;
+        *rest = op->next;
+        continue;
+      }
+
+      if (equal(op, "--")) {
+        Node *incdec = new_node(ND_INCDEC, op);
+        incdec->lhs = node;
+        incdec->is_post = true;
+        incdec->addend = -1;
+        node = incdec;
+        *rest = op->next;
+        continue;
+      }
+    }
+
+    if (!infix_bp(op, &kind, &assign_op, &lbp, &rbp) || lbp <= min_bp)
+      break;
+
+    if (kind == ND_COND) {
+      Node *cond = new_node(ND_COND, op);
+
+      if (equal(op->next, ":")) {
+        // [GNU] `a ?: b`: only cond and els, with is_elvis set.
+        cond->is_elvis = true;
+        cond->cond = node;
+        cond->els = expr_bp(rest, op->next->next, BP_COND - 1);
+        node = cond;
+        continue;
+      }
+
+      Token *mid = NULL;
+      cond->cond = node;
+      cond->then = expr_bp(&mid, op->next, 0);
+      Token *colon = skip(mid, ":");
+      cond->els = expr_bp(rest, colon, BP_COND - 1);
+      node = cond;
+      continue;
+    }
+
+    if (kind == ND_ASSIGN) {
+      Node *rhs = expr_bp(rest, op->next, rbp);
+      Node *assign = new_binary(ND_ASSIGN, node, rhs, op);
+      assign->op = assign_op;
+      node = assign;
+      continue;
+    }
+
+    node = new_binary(kind, node, expr_bp(rest, op->next, rbp), op);
+  }
+
+  chibicc_ctx()->parse_depth--;
+  return node;
+}
+
+// primary's `sizeof expr` and `_Alignof expr` forms parse their operand
+// through the old `unary` name; in the Pratt build that is the cast layer.
+static Node *unary(Token **rest, Token *tok) {
+  return expr_bp(rest, tok, BP_CAST);
+}
+
+static Node *expr(Token **rest, Token *tok) {
+  return expr_bp(rest, tok, 0);
+}
+
+static Node *assign(Token **rest, Token *tok) {
+  return expr_bp(rest, tok, BP_ASSIGN - 1);
+}
+
+Node *conditional(Token **rest, Token *tok) {
+  return expr_bp(rest, tok, BP_COND - 1);
+}
+#endif // CHIBICC_PRATT_PARSE_FEATURE
 
 // Parses typedef declarators into ND_TYPEDEF records. The name also
 // goes into the typedef-name oracle immediately: the grammar needs it

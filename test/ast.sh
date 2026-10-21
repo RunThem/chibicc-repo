@@ -1226,6 +1226,126 @@ ND_FUNCDEF @a78_invalid_ident.c:1:13 "{" ty_op=func(int) name="f" attr=none
         ND_NUM @a78_invalid_ident.c:1:32 "1" val=1
 WANT
 
+snippet a79_comma_three <<'SNIP'
+int f(int a, int b, int c) { return a, b, c; }
+SNIP
+
+expect a79_comma_three <<'WANT'
+ND_FUNCDEF @a79_comma_three.c:1:28 "{" ty_op=func(int) name="f" attr=none
+  ND_BLOCK @a79_comma_three.c:1:30 "return" is_scope_block=1
+    ND_RETURN @a79_comma_three.c:1:30 "return"
+      ND_COMMA @a79_comma_three.c:1:38 ","
+        ND_IDENT @a79_comma_three.c:1:37 "a"
+        ND_COMMA @a79_comma_three.c:1:41 ","
+          ND_IDENT @a79_comma_three.c:1:40 "b"
+          ND_IDENT @a79_comma_three.c:1:43 "c"
+WANT
+
+snippet a80_cond_assign_else <<'SNIP'
+int f(int a, int b, int c, int d) { return a ? b : c = d; }
+SNIP
+
+expect a80_cond_assign_else <<'WANT'
+ND_FUNCDEF @a80_cond_assign_else.c:1:35 "{" ty_op=func(int) name="f" attr=none
+  ND_BLOCK @a80_cond_assign_else.c:1:37 "return" is_scope_block=1
+    ND_RETURN @a80_cond_assign_else.c:1:37 "return"
+      ND_ASSIGN @a80_cond_assign_else.c:1:54 "="
+        ND_COND @a80_cond_assign_else.c:1:46 "?"
+          ND_IDENT @a80_cond_assign_else.c:1:44 "a"
+          ND_IDENT @a80_cond_assign_else.c:1:48 "b"
+          ND_IDENT @a80_cond_assign_else.c:1:52 "c"
+        ND_IDENT @a80_cond_assign_else.c:1:56 "d"
+WANT
+
+snippet a81_cond_assign_mid <<'SNIP'
+int f(int a, int b, int c, int d) { return a ? b = c : d; }
+SNIP
+
+expect a81_cond_assign_mid <<'WANT'
+ND_FUNCDEF @a81_cond_assign_mid.c:1:35 "{" ty_op=func(int) name="f" attr=none
+  ND_BLOCK @a81_cond_assign_mid.c:1:37 "return" is_scope_block=1
+    ND_RETURN @a81_cond_assign_mid.c:1:37 "return"
+      ND_COND @a81_cond_assign_mid.c:1:46 "?"
+        ND_IDENT @a81_cond_assign_mid.c:1:44 "a"
+        ND_ASSIGN @a81_cond_assign_mid.c:1:50 "="
+          ND_IDENT @a81_cond_assign_mid.c:1:48 "b"
+          ND_IDENT @a81_cond_assign_mid.c:1:52 "c"
+        ND_IDENT @a81_cond_assign_mid.c:1:56 "d"
+WANT
+
+snippet a82_cast_postfix <<'SNIP'
+int f(int a) { return (int)a++ + (long)a--; }
+SNIP
+
+expect a82_cast_postfix <<'WANT'
+ND_FUNCDEF @a82_cast_postfix.c:1:14 "{" ty_op=func(int) name="f" attr=none
+  ND_BLOCK @a82_cast_postfix.c:1:16 "return" is_scope_block=1
+    ND_RETURN @a82_cast_postfix.c:1:16 "return"
+      ND_ADD @a82_cast_postfix.c:1:32 "+"
+        ND_CAST @a82_cast_postfix.c:1:23 "(" ty_op=int
+          ND_INCDEC @a82_cast_postfix.c:1:29 "++" is_post=1 addend=1
+            ND_IDENT @a82_cast_postfix.c:1:28 "a"
+        ND_CAST @a82_cast_postfix.c:1:34 "(" ty_op=long
+          ND_INCDEC @a82_cast_postfix.c:1:41 "--" is_post=1 addend=-1
+            ND_IDENT @a82_cast_postfix.c:1:40 "a"
+WANT
+
+snippet a83_postfix_chain <<'SNIP'
+struct S { int m; };
+int f(struct S *p, int a[2][3]) { return p[0].m + a[1][2]++; }
+SNIP
+
+expect a83_postfix_chain <<'WANT'
+ND_FUNCDEF @a83_postfix_chain.c:2:33 "{" ty_op=func(int) name="f" attr=none
+  ND_BLOCK @a83_postfix_chain.c:2:35 "return" is_scope_block=1
+    ND_RETURN @a83_postfix_chain.c:2:35 "return"
+      ND_ADD @a83_postfix_chain.c:2:49 "+"
+        ND_MEMBER @a83_postfix_chain.c:2:47 "m"
+          ND_SUBSCRIPT @a83_postfix_chain.c:2:43 "["
+            ND_IDENT @a83_postfix_chain.c:2:42 "p"
+            ND_NUM @a83_postfix_chain.c:2:44 "0" val=0
+        ND_INCDEC @a83_postfix_chain.c:2:58 "++" is_post=1 addend=1
+          ND_SUBSCRIPT @a83_postfix_chain.c:2:55 "["
+            ND_SUBSCRIPT @a83_postfix_chain.c:2:52 "["
+              ND_IDENT @a83_postfix_chain.c:2:51 "a"
+              ND_NUM @a83_postfix_chain.c:2:53 "1" val=1
+            ND_NUM @a83_postfix_chain.c:2:56 "2" val=2
+WANT
+
+snippet a84_unary_chain <<'SNIP'
+int f(int a) { return - -a + !!a + ~-a; }
+SNIP
+
+expect a84_unary_chain <<'WANT'
+ND_FUNCDEF @a84_unary_chain.c:1:14 "{" ty_op=func(int) name="f" attr=none
+  ND_BLOCK @a84_unary_chain.c:1:16 "return" is_scope_block=1
+    ND_RETURN @a84_unary_chain.c:1:16 "return"
+      ND_ADD @a84_unary_chain.c:1:34 "+"
+        ND_ADD @a84_unary_chain.c:1:28 "+"
+          ND_NEG @a84_unary_chain.c:1:23 "-"
+            ND_NEG @a84_unary_chain.c:1:25 "-"
+              ND_IDENT @a84_unary_chain.c:1:26 "a"
+          ND_NOT @a84_unary_chain.c:1:30 "!"
+            ND_NOT @a84_unary_chain.c:1:31 "!"
+              ND_IDENT @a84_unary_chain.c:1:32 "a"
+        ND_BITNOT @a84_unary_chain.c:1:36 "~"
+          ND_NEG @a84_unary_chain.c:1:37 "-"
+            ND_IDENT @a84_unary_chain.c:1:38 "a"
+WANT
+
+snippet a85_string_expr <<'SNIP'
+int f(void) { return "hi"[0]; }
+SNIP
+
+expect a85_string_expr <<'WANT'
+ND_FUNCDEF @a85_string_expr.c:1:13 "{" ty_op=func(int) name="f" attr=none
+  ND_BLOCK @a85_string_expr.c:1:15 "return" is_scope_block=1
+    ND_RETURN @a85_string_expr.c:1:15 "return"
+      ND_SUBSCRIPT @a85_string_expr.c:1:26 "["
+        ND_STRING @a85_string_expr.c:1:22 "\"hi\""
+        ND_NUM @a85_string_expr.c:1:27 "0" val=0
+WANT
+
 fail=""
 count=0
 for n in $names; do
