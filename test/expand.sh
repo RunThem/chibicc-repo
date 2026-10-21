@@ -1,5 +1,5 @@
 #!/bin/bash
-# 宏展开 provenance 测试 (PLAN.md M1.1-M2.2, 路线图阶段 5 的前置).
+# 宏展开 provenance 测试 (plans/PLAN.md M1.1-M2.2, 路线图阶段 5 的前置).
 #
 # 两个只读通道:
 #   -dump-expansions   - preprocess() 之后每个非 EOF token 一行:
@@ -127,7 +127,7 @@ T line.c:2 num 1 M@line.c:3:body:line.c:2
 T line.c:3 punct ; -
 '
 
-# 空宏: 不产生 token, 因而不出现记录(PLAN.md 判据 1 的已知限制).
+# 空宏: 不产生 token, 因而不出现记录(plans/PLAN.md 判据 1 的已知限制).
 exp_dump empty_macro '#define E\nE\nint x;\n' \
 'T empty_macro.c:3 keyword int -
 T empty_macro.c:3 ident x -
@@ -180,7 +180,7 @@ T arg_nested.c:1 num 2 F@arg_nested.c:3:arg1:arg_nested.c:2>G@arg_nested.c:3:bod
 T arg_nested.c:3 punct ; -
 '
 
-# PLAN.md 的规范例子: 外层宏体里的调用, 实参也来自外层宏体. `1` 先由 A 的宏体
+# plans/PLAN.md 的规范例子: 外层宏体里的调用, 实参也来自外层宏体. `1` 先由 A 的宏体
 # 产生, 再作为 F 的实参被消费, 所以链是 [F arg1, A body].
 exp_dump nested_call '#define A F(1)\n#define F(x) x\nA\n' \
 'T nested_call.c:1 num 1 F@nested_call.c:1:arg1:nested_call.c:2>A@nested_call.c:3:body:nested_call.c:1

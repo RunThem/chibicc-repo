@@ -676,7 +676,7 @@ static Token *append_tokens(Token *tok1, Token *tok2) {
 static int cc1(void) {
   // -dump-tokens, -reconstruct and the CST channels work on the raw stream
   // of the base file: the trivia contract, and the CST built on it, cover
-  // tokenize()'s direct output, before preprocessing (PLAN.md 判据 3).
+  // tokenize()'s direct output, before preprocessing (plans/PLAN.md 判据 3).
   if (opt_dump_tokens || opt_reconstruct ||
       opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
     Token *tok = must_tokenize_file(base_file);
@@ -731,7 +731,7 @@ static int cc1(void) {
     return 1;
 
   // The provenance channels read the preprocessed stream and stop there:
-  // no object file, no assembler, no linker (PLAN.md 判据 5).
+  // no object file, no assembler, no linker (plans/PLAN.md 判据 5).
   if (opt_dump_expansions || opt_verify_expansions) {
     if (opt_dump_expansions)
       chibicc_expansion_dump(ctx, tok, open_file(opt_o ? opt_o : "-"));

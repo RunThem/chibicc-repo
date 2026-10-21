@@ -1,4 +1,4 @@
-// Read-only macro-expansion provenance channels (PLAN.md, 判据 5).
+// Read-only macro-expansion provenance channels (plans/PLAN.md, 判据 5).
 //
 // -dump-expansions prints one line per non-EOF token of the preprocessed
 // stream:
@@ -14,7 +14,7 @@
 // (builtins, -D definitions). A pasted macro name makes a call position
 // synthetic; it prints as @synth like any other synthetic token.
 //
-// -verify-expansions checks the chain invariants of RESULT.md (I1-I3)
+// -verify-expansions checks the chain invariants of plans/RESULT.md (I1-I3)
 // and prints at most one message on stderr: exit 0 on success, 1 on the
 // first violation. It never calls error() (判据 4), so the channel can
 // run over a broken stream without taking the process down. This is the

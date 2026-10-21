@@ -1,4 +1,4 @@
-// Layer 3: the faithful syntax tree (PLAN-faithful.md). The parser keeps
+// Layer 3: the faithful syntax tree (plans/PLAN-faithful.md). The parser keeps
 // every written form distinct and makes no semantic decision; layer 4
 // (sema.h) binds names, computes types and records its conclusions on
 // these nodes.

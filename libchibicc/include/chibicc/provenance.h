@@ -1,4 +1,4 @@
-// Macro expansion provenance (PLAN-provenance.md): every token the
+// Macro expansion provenance (plans/PLAN-provenance.md): every token the
 // preprocessor produces by expanding a macro carries a chain of
 // ChibiccMacroProv nodes, one per expansion layer, innermost first; a token
 // read from the source carries NULL. The records a chain points to are
@@ -28,7 +28,7 @@ CHIBICC_API ChibiccToken *chibicc_macro_expansion_arg(ChibiccMacroExpansion *e, 
 CHIBICC_API int chibicc_macro_expansion_arg_count(ChibiccMacroExpansion *e);
 CHIBICC_API bool chibicc_macro_expansion_is_builtin(ChibiccMacroExpansion *e);
 
-// The read-only provenance channels (PLAN.md 判据 5). The dump prints one
+// The read-only provenance channels (plans/PLAN.md 判据 5). The dump prints one
 // line per non-EOF token of the preprocessed stream; the verifier checks
 // every chain and returns false at the first violation. Neither touches
 // the compilation path.

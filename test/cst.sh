@@ -1,5 +1,5 @@
 #!/bin/bash
-# CST 无损测试 (PLAN.md 阶段 C1): 第 2 层(预处理前的 lossless 具体语法树).
+# CST 无损测试 (plans/PLAN.md 阶段 C1): 第 2 层(预处理前的 lossless 具体语法树).
 #
 # CST 只走三个只读通道, 不接编译路径:
 #   -reconstruct-cst - 按叶子序输出 trivia + 拼写, 逐字节重建输入文件

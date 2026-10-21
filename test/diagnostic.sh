@@ -7,7 +7,7 @@
 #
 # 用途: 忠实层收尾线(R2)要把大量检查从 parse 移入 sema, codegen 直连线(A)要把降级从 sema
 # 移入 codegen, 移动时 "文案 + 锚点" 必须保真; 保真时本测试不修改即通过, 若锚点 token 需要
-# 重新指定, 须在同一提交内更新期望并在 RESULT.md 的偏差记录中说明.
+# 重新指定, 须在同一提交内更新期望并在 plans/RESULT.md 的偏差记录中说明.
 #
 # 已锁定的 4.2c 诊断时机规范(拆分线偏差, 由本测试拍板为标准):
 #   - "too many arguments" 锚定调用右括号 (ND_FUNCALL.tok);
@@ -492,10 +492,10 @@ WANT
 # (锚第一个 a), chibicc 自举出的 stage2 先求 rhs(锚第二个 a) - 因为 codegen 的整数二元运算
 # 是 `gen_expr(rhs); push; gen_expr(lhs); pop`(rhs 先). 于是同一份期望在 make test 与
 # make test-stage2 里必然有一个失败. 该路径改用正向锁: `int *q = &s.x + 1;` 发 `.quad s+4`,
-# 由汇编快照闸门看住(A10.2 补用例). 详见 RESULT.md 的基线记录.
+# 由汇编快照闸门看住(A10.2 补用例). 详见 plans/RESULT.md 的基线记录.
 # 曾不可锁(2026-09-29 修复): f10/f11 的路径在守卫补上之前是崩溃而非诊断 - "1 - p" 在
 # new_sub 的 VLA 分支上解引用 NULL 直接段错误(上游 07f9010 起), 用户拍板后单起提交修复,
-# 详见 RESULT.md 的基线缺陷记录.
+# 详见 plans/RESULT.md 的基线缺陷记录.
 
 snippet f01_assign_to_array <<'SNIP'
 int main() { int a[2]; a = 0; }

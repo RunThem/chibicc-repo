@@ -1,5 +1,5 @@
 #!/bin/bash
-# trivia 保留测试 (PLAN.md 阶段 T1-T3): token 流的 trivia 通道与文本级保真.
+# trivia 保留测试 (plans/PLAN.md 阶段 T1-T3): token 流的 trivia 通道与文本级保真.
 #
 # 本线不改任何既有输出的行为, 所以第一段锁的是现状: -E 的归一化(丢注释, 折空白,
 # 续行拼接, 补末行换行, 丢 BOM)在本线所有步上逐字节保持. 第二段锁 -dump-tokens:
@@ -174,7 +174,7 @@ exp_dump mixed_deep '\xef\xbb\xbf/* a \\\r\n b */ int x\r\n = 1 +\\\n2 ;  // tai
 # 全量: test/*.c 与 include/*.h 的每个文件重建后与原文件逐字节相同. T1.2 的例外
 # 清单(三处续行文件与 test/unicode.c)随 T2.1 清零: 坐标换到原始文本后, CRLF /
 # 孤立 CR / BOM / 末行换行 / 续行 / universal chars 都按原样重建, 这里不再有 skip;
-# 若将来出现例外, 必须与 PLAN.md 的账本对账.
+# 若将来出现例外, 必须与 plans/PLAN.md 的账本对账.
 n_rt=0
 
 for f in test/*.c include/*.h; do

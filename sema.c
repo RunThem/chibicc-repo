@@ -22,7 +22,7 @@
 //    no tree shape: everything the older lines called lowering -
 //    pointer scaling, compound assignment and inc/dec round trips,
 //    the call, subscript, member, string, VLA, initializer and
-//    declaration shaping - is codegen's shaping pass (PLAN.md, the
+//    declaration shaping - is codegen's shaping pass (plans/PLAN.md, the
 //    codegen-direct line). The control-flow checks (stray
 //    break/continue/case/default, undeclared labels) run as a
 //    descent of their own; the label allocation and the control-flow

@@ -1,6 +1,6 @@
 #include "chibicc.h"
 
-// Lossless concrete syntax tree over the raw token stream (PLAN.md stage
+// Lossless concrete syntax tree over the raw token stream (plans/PLAN.md stage
 // C1/C2/C3). Every token of the input becomes one leaf, in order; the
 // leaves' trivia and spellings rebuild the input file byte for byte.
 //
@@ -37,7 +37,7 @@
 // decide falls back to the skeleton rather than guessing.
 //
 // The lossless contract does not depend on the shape: the parser is
-// total, never reports a diagnostic and never exits (RESULT.md I1-I6).
+// total, never reports a diagnostic and never exits (plans/RESULT.md I1-I6).
 
 // Bound the CST parser's recursion. A deeper span becomes a flat,
 // unparsed group; every token stays, so reconstruction remains lossless.

@@ -52,7 +52,7 @@ struct Macro {
   macro_handler_fn *handler;
 };
 
-// Provenance records (PLAN.md): one MacroExpansion per expansion, built
+// Provenance records (plans/PLAN.md): one MacroExpansion per expansion, built
 // once and shared read-only by every token that expansion produced; one
 // MacroProv per token and layer, prepended so a chain reads innermost
 // first. Both are arena objects that live as long as the tokens. The
@@ -128,7 +128,7 @@ static Token *new_eof(Token *tok) {
 
 // Prepend one provenance layer. The tail is the chain the invocation's
 // own text already carried, so chains are built by prepending only and
-// shared tails are never mutated (PLAN.md, "挂接规则").
+// shared tails are never mutated (plans/PLAN.md, "挂接规则").
 static MacroProv *new_prov(MacroExpansion *exp, int arg_index, MacroProv *next) {
   MacroProv *p = chibicc_arena_calloc(1, sizeof(MacroProv));
   p->exp = exp;

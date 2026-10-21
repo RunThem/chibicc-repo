@@ -1,7 +1,7 @@
 // This file turns the annotated tree into x86-64 assembly - and hosts
 // the shaping pass, the part of the old pipeline that rewrote the
 // faithful tree into the shapes the emitter understands. The pass runs
-// once per function before anything is assigned or emitted (PLAN.md's
+// once per function before anything is assigned or emitted (plans/PLAN.md's
 // codegen-direct line moved its pieces here step by step), under six
 // invariants (plan contract 3):
 //
