@@ -64,6 +64,7 @@ test: $(TESTS)
 	test/diagnostic.sh ./chibicc
 	test/warning.sh ./chibicc
 	test/shape.sh ./chibicc
+	test/ast.sh ./chibicc
 	test/trivia.sh ./chibicc
 	test/cst.sh ./chibicc
 	test/expand.sh ./chibicc
@@ -106,6 +107,7 @@ test-stage2: libchibicc.a stage2/libchibicc.a $(TESTS:test/%=stage2/test/%)
 	test/diagnostic.sh ./stage2/chibicc
 	test/warning.sh ./stage2/chibicc
 	test/shape.sh ./stage2/chibicc
+	test/ast.sh ./stage2/chibicc
 	test/trivia.sh ./stage2/chibicc
 	test/cst.sh ./stage2/chibicc
 	test/expand.sh ./stage2/chibicc

@@ -25,6 +25,7 @@ static bool opt_reconstruct_cst;
 static bool opt_verify_cst;
 static bool opt_dump_expansions;
 static bool opt_verify_expansions;
+static bool opt_dump_ast;
 static bool opt_static;
 static bool opt_shared;
 static char *opt_MF;
@@ -211,6 +212,11 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-verify-expansions")) {
       opt_verify_expansions = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-dump-ast")) {
+      opt_dump_ast = true;
       continue;
     }
 
@@ -673,6 +679,444 @@ static Token *append_tokens(Token *tok1, Token *tok2) {
   return tok1;
 }
 
+//
+// -dump-ast: the faithful syntax tree, before sema sees it.
+//
+// A read-only driver channel (PLAN-pratt-parse 4.5). The text is
+// deterministic: no addresses, no map iteration and a fixed field
+// order, so two builds that parse the same source to the same shape
+// print byte-for-byte identical dumps. A token a macro expansion
+// produced prints as @synth: its location is the macro body or a
+// synthesized buffer, not the source position of the expression.
+//
+
+static char *ast_node_kind_name(NodeKind kind) {
+  switch (kind) {
+  case ND_NULL_EXPR:       return "ND_NULL_EXPR";
+  case ND_ADD:             return "ND_ADD";
+  case ND_SUB:             return "ND_SUB";
+  case ND_MUL:             return "ND_MUL";
+  case ND_DIV:             return "ND_DIV";
+  case ND_NEG:             return "ND_NEG";
+  case ND_MOD:             return "ND_MOD";
+  case ND_BITAND:          return "ND_BITAND";
+  case ND_BITOR:           return "ND_BITOR";
+  case ND_BITXOR:          return "ND_BITXOR";
+  case ND_SHL:             return "ND_SHL";
+  case ND_SHR:             return "ND_SHR";
+  case ND_EQ:              return "ND_EQ";
+  case ND_NE:              return "ND_NE";
+  case ND_LT:              return "ND_LT";
+  case ND_LE:              return "ND_LE";
+  case ND_GT:              return "ND_GT";
+  case ND_GE:              return "ND_GE";
+  case ND_ASSIGN:          return "ND_ASSIGN";
+  case ND_INCDEC:          return "ND_INCDEC";
+  case ND_SUBSCRIPT:       return "ND_SUBSCRIPT";
+  case ND_COND:            return "ND_COND";
+  case ND_COMMA:           return "ND_COMMA";
+  case ND_MEMBER:          return "ND_MEMBER";
+  case ND_ADDR:            return "ND_ADDR";
+  case ND_DEREF:           return "ND_DEREF";
+  case ND_NOT:             return "ND_NOT";
+  case ND_BITNOT:          return "ND_BITNOT";
+  case ND_LOGAND:          return "ND_LOGAND";
+  case ND_LOGOR:           return "ND_LOGOR";
+  case ND_RETURN:          return "ND_RETURN";
+  case ND_IF:              return "ND_IF";
+  case ND_FOR:             return "ND_FOR";
+  case ND_WHILE:           return "ND_WHILE";
+  case ND_DO:              return "ND_DO";
+  case ND_SWITCH:          return "ND_SWITCH";
+  case ND_CASE:            return "ND_CASE";
+  case ND_BLOCK:           return "ND_BLOCK";
+  case ND_GOTO:            return "ND_GOTO";
+  case ND_BREAK:           return "ND_BREAK";
+  case ND_CONTINUE:        return "ND_CONTINUE";
+  case ND_GOTO_EXPR:       return "ND_GOTO_EXPR";
+  case ND_LABEL:           return "ND_LABEL";
+  case ND_LABEL_VAL:       return "ND_LABEL_VAL";
+  case ND_FUNCALL:         return "ND_FUNCALL";
+  case ND_EXPR_STMT:       return "ND_EXPR_STMT";
+  case ND_STMT_EXPR:       return "ND_STMT_EXPR";
+  case ND_IDENT:           return "ND_IDENT";
+  case ND_VAR:             return "ND_VAR";
+  case ND_VLA_PTR:         return "ND_VLA_PTR";
+  case ND_NUM:             return "ND_NUM";
+  case ND_STRING:          return "ND_STRING";
+  case ND_SIZEOF:          return "ND_SIZEOF";
+  case ND_ALIGNOF:         return "ND_ALIGNOF";
+  case ND_GENERIC:         return "ND_GENERIC";
+  case ND_GENERIC_ASSOC:   return "ND_GENERIC_ASSOC";
+  case ND_TYPES_COMPATIBLE: return "ND_TYPES_COMPATIBLE";
+  case ND_REG_CLASS:       return "ND_REG_CLASS";
+  case ND_CAST:            return "ND_CAST";
+  case ND_MEMZERO:         return "ND_MEMZERO";
+  case ND_DECL:            return "ND_DECL";
+  case ND_GVAR_DECL:       return "ND_GVAR_DECL";
+  case ND_FUNCDEF:         return "ND_FUNCDEF";
+  case ND_TYPEDEF:         return "ND_TYPEDEF";
+  case ND_ENUM_CONST:      return "ND_ENUM_CONST";
+  case ND_COMPOUND_LITERAL: return "ND_COMPOUND_LITERAL";
+  case ND_ASM:             return "ND_ASM";
+  case ND_CAS:             return "ND_CAS";
+  case ND_EXCH:            return "ND_EXCH";
+  }
+  return "ND_UNKNOWN";
+}
+
+static char *ast_type_kind_name(TypeKind kind) {
+  switch (kind) {
+  case TY_VOID:    return "void";
+  case TY_BOOL:    return "bool";
+  case TY_CHAR:    return "char";
+  case TY_SHORT:   return "short";
+  case TY_INT:     return "int";
+  case TY_LONG:    return "long";
+  case TY_FLOAT:   return "float";
+  case TY_DOUBLE:  return "double";
+  case TY_LDOUBLE: return "ldouble";
+  case TY_ENUM:    return "enum";
+  case TY_PTR:     return "ptr";
+  case TY_FUNC:    return "func";
+  case TY_ARRAY:   return "array";
+  case TY_VLA:     return "vla";
+  case TY_TYPEOF:  return "typeof";
+  case TY_STRUCT:  return "struct";
+  case TY_UNION:   return "union";
+  }
+  return "type?";
+}
+
+// The source-written part of a type: its kind, the base/return chain and,
+// for an array, the declared length. Sizes, offsets and addresses are
+// sema/codegen conclusions and are deliberately not printed.
+static void ast_type_sig(FILE *out, Type *ty) {
+  if (!ty) {
+    fputc('-', out);
+    return;
+  }
+
+  if (ty->is_atomic)
+    fputs("atomic(", out);
+
+  if (ty->is_unsigned &&
+      (ty->kind == TY_CHAR || ty->kind == TY_SHORT ||
+       ty->kind == TY_INT || ty->kind == TY_LONG))
+    fputc('u', out);
+
+  switch (ty->kind) {
+  case TY_PTR:
+    fputs("ptr(", out);
+    ast_type_sig(out, ty->base);
+    fputc(')', out);
+    break;
+  case TY_ARRAY:
+    fprintf(out, "array(%d,", ty->array_len);
+    ast_type_sig(out, ty->base);
+    fputc(')', out);
+    break;
+  case TY_VLA:
+    fputs("vla(", out);
+    ast_type_sig(out, ty->base);
+    fputc(')', out);
+    break;
+  case TY_FUNC:
+    fputs("func(", out);
+    ast_type_sig(out, ty->return_ty);
+    fputc(')', out);
+    break;
+  default:
+    fputs(ast_type_kind_name(ty->kind), out);
+    break;
+  }
+
+  if (ty->is_atomic)
+    fputc(')', out);
+}
+
+static void ast_quoted(FILE *out, char *p, int len) {
+  fputc('"', out);
+  for (int i = 0; i < len; i++) {
+    switch (p[i]) {
+    case '\n': fputs("\\n", out); break;
+    case '\t': fputs("\\t", out); break;
+    case '\r': fputs("\\r", out); break;
+    case '\\': fputs("\\\\", out); break;
+    case '"':  fputs("\\\"", out); break;
+    default:   fputc(p[i], out); break;
+    }
+  }
+  fputc('"', out);
+}
+
+static void ast_span(FILE *out, Token *tok) {
+  if (!tok) {
+    fputs("@-", out);
+    return;
+  }
+
+  if (tok->prov) {
+    fputs("@synth", out);
+    return;
+  }
+
+  char *line = tok->loc;
+  while (line > tok->file->contents && line[-1] != '\n')
+    line--;
+  fprintf(out, "@%s:%d:%d", tok->file->name, tok->line_no,
+          (int)(tok->loc - line) + 1);
+}
+
+static void ast_token(FILE *out, Token *tok) {
+  if (!tok) {
+    fputs("@- \"\"", out);
+    return;
+  }
+  ast_span(out, tok);
+  fputc(' ', out);
+  ast_quoted(out, tok->loc, tok->len);
+}
+
+static void ast_indent(FILE *out, int depth) {
+  for (int i = 0; i < depth; i++)
+    fputs("  ", out);
+}
+
+static void ast_fields(FILE *out, Node *node) {
+  switch (node->kind) {
+  case ND_ASSIGN:
+    if (node->op)
+      fprintf(out, " op=%s", ast_node_kind_name(node->op));
+    break;
+  case ND_INCDEC:
+    fprintf(out, " is_post=%d addend=%d", node->is_post, node->addend);
+    break;
+  case ND_COND:
+    if (node->is_elvis)
+      fputs(" is_elvis=1", out);
+    break;
+  case ND_MEMBER:
+    if (node->arrow_tok)
+      fputs(" arrow=1", out);
+    break;
+  case ND_GOTO:
+  case ND_LABEL:
+  case ND_LABEL_VAL:
+    if (node->label) {
+      fputs(" label=", out);
+      ast_quoted(out, node->label, strlen(node->label));
+    }
+    break;
+  case ND_BLOCK:
+    if (node->is_scope_block)
+      fputs(" is_scope_block=1", out);
+    break;
+  case ND_CAST:
+    if (node->is_implicit)
+      fputs(" is_implicit=1", out);
+    break;
+  case ND_CASE:
+    if (node->is_default)
+      fputs(" default=1", out);
+    break;
+  case ND_NUM:
+    if (node->ty && is_flonum(node->ty))
+      fprintf(out, " fval=%La", node->fval);
+    else
+      fprintf(out, " val=%lld", (long long)node->val);
+    break;
+  case ND_ASM:
+    if (node->asm_str) {
+      fputs(" asm_str=", out);
+      ast_quoted(out, node->asm_str, strlen(node->asm_str));
+    }
+    break;
+  default:
+    break;
+  }
+
+  if (node->ty_op) {
+    fputs(" ty_op=", out);
+    ast_type_sig(out, node->ty_op);
+  }
+
+  if (node->ty_op2) {
+    fputs(" ty_op2=", out);
+    ast_type_sig(out, node->ty_op2);
+  }
+
+  if (node->name_tok) {
+    fputs(" name=", out);
+    ast_quoted(out, node->name_tok->loc, node->name_tok->len);
+  }
+
+  // The declaration attributes the parser read. Frozen into the dump so
+  // a storage-class or alignment drift is visible without sema.
+  if (node->kind == ND_DECL || node->kind == ND_GVAR_DECL ||
+      node->kind == ND_FUNCDEF) {
+    char *sep = "";
+    fputs(" attr=", out);
+    if (node->attr.is_typedef) {
+      fputs("typedef", out);
+      sep = ",";
+    }
+    if (node->attr.is_static) {
+      fprintf(out, "%sstatic", sep);
+      sep = ",";
+    }
+    if (node->attr.is_extern) {
+      fprintf(out, "%sextern", sep);
+      sep = ",";
+    }
+    if (node->attr.is_inline) {
+      fprintf(out, "%sinline", sep);
+      sep = ",";
+    }
+    if (node->attr.is_tls) {
+      fprintf(out, "%stls", sep);
+      sep = ",";
+    }
+    if (!*sep)
+      fputs("none", out);
+    if (node->attr.align)
+      fprintf(out, " align=%d", node->attr.align);
+    if (node->attr.align_ty) {
+      fputs(" align_ty=", out);
+      ast_type_sig(out, node->attr.align_ty);
+    }
+    if (node->attr.align_expr)
+      fputs(" align=expr", out);
+  }
+}
+
+static char *ast_init_kind_name(int kind) {
+  switch (kind) {
+  case INIT_LIST: return "LIST";
+  case INIT_EXPR: return "EXPR";
+  case INIT_STR:  return "STR";
+  }
+  return "?";
+}
+
+static void ast_node(FILE *out, Node *node, int depth);
+static void ast_initializer(FILE *out, Initializer *init, int depth);
+
+static void ast_chain(FILE *out, Node *node, int depth) {
+  for (; node; node = node->next)
+    ast_node(out, node, depth);
+}
+
+static void ast_initializer(FILE *out, Initializer *init, int depth) {
+  if (!init)
+    return;
+
+  ast_indent(out, depth);
+  fprintf(out, "INIT kind=%s ", ast_init_kind_name(init->kind));
+  ast_span(out, init->tok);
+  if (init->eq_tok) {
+    fputs(" eq=", out);
+    ast_span(out, init->eq_tok);
+  }
+  fputc('\n', out);
+
+  if (init->kind == INIT_EXPR) {
+    if (init->expr)
+      ast_node(out, init->expr, depth + 1);
+    return;
+  }
+
+  if (init->kind == INIT_STR) {
+    ast_indent(out, depth + 1);
+    fputs("STR ", out);
+    ast_token(out, init->str_tok);
+    fputc('\n', out);
+    return;
+  }
+
+  for (InitItem *item = init->items; item; item = item->next) {
+    ast_indent(out, depth + 1);
+    fputs("ITEM", out);
+    if (item->comma_tok) {
+      fputs(" comma=", out);
+      ast_span(out, item->comma_tok);
+    }
+    fputc('\n', out);
+
+    for (InitDesig *d = item->desigs; d; d = d->next) {
+      ast_indent(out, depth + 2);
+      fputs("DESIG", out);
+      if (d->name) {
+        fputs(" name=", out);
+        ast_quoted(out, d->name->loc, d->name->len);
+        fputc(' ', out);
+        ast_span(out, d->tok);
+      } else {
+        fputs(" idx ", out);
+        ast_span(out, d->tok);
+      }
+      fputc('\n', out);
+      if (d->begin)
+        ast_node(out, d->begin, depth + 3);
+      if (d->end)
+        ast_node(out, d->end, depth + 3);
+    }
+
+    ast_initializer(out, item->init, depth + 2);
+  }
+}
+
+static void ast_node(FILE *out, Node *node, int depth) {
+  if (!node)
+    return;
+
+  ast_indent(out, depth);
+  fprintf(out, "%s ", ast_node_kind_name(node->kind));
+  ast_token(out, node->tok);
+  ast_fields(out, node);
+  fputc('\n', out);
+
+  if (node->lhs)
+    ast_node(out, node->lhs, depth + 1);
+  if (node->rhs)
+    ast_node(out, node->rhs, depth + 1);
+  if (node->cond)
+    ast_node(out, node->cond, depth + 1);
+  if (node->then)
+    ast_node(out, node->then, depth + 1);
+  if (node->els)
+    ast_node(out, node->els, depth + 1);
+  if (node->init)
+    ast_chain(out, node->init, depth + 1);
+  if (node->inc)
+    ast_node(out, node->inc, depth + 1);
+  if (node->body)
+    ast_chain(out, node->body, depth + 1);
+  if (node->args)
+    ast_chain(out, node->args, depth + 1);
+  if (node->spec_decls)
+    ast_chain(out, node->spec_decls, depth + 1);
+  if (node->begin_expr)
+    ast_node(out, node->begin_expr, depth + 1);
+  if (node->end_expr)
+    ast_node(out, node->end_expr, depth + 1);
+  if (node->cas_addr)
+    ast_node(out, node->cas_addr, depth + 1);
+  if (node->cas_old)
+    ast_node(out, node->cas_old, depth + 1);
+  if (node->cas_new)
+    ast_node(out, node->cas_new, depth + 1);
+  if (node->decl_init)
+    ast_initializer(out, node->decl_init, depth + 1);
+  if ((node->kind == ND_DECL || node->kind == ND_GVAR_DECL ||
+       node->kind == ND_FUNCDEF) && node->attr.align_expr)
+    ast_node(out, node->attr.align_expr, depth + 1);
+}
+
+static void print_ast_dump(Node *node) {
+  ast_chain(open_file(opt_o ? opt_o : "-"), node, 0);
+}
+
 static int cc1(void) {
   // -dump-tokens, -reconstruct and the CST channels work on the raw stream
   // of the base file: the trivia contract, and the CST built on it, cover
@@ -756,6 +1200,14 @@ static int cc1(void) {
   Node *ast = chibicc_parse(ctx, tok);
   if (ctx->failed)
     return 1;
+
+  // The AST shape channel stops between layer 3 and layer 4: no sema,
+  // no object file, no assembler.
+  if (opt_dump_ast) {
+    print_ast_dump(ast);
+    return 0;
+  }
+
   Obj *prog = chibicc_sema(ctx, ast);
   if (ctx->failed)
     return 1;
@@ -964,7 +1416,7 @@ int main(int argc, char **argv) {
     // or run a provenance channel)
     if (opt_E || opt_M || opt_dump_tokens || opt_reconstruct ||
         opt_dump_cst || opt_reconstruct_cst || opt_verify_cst ||
-        opt_dump_expansions || opt_verify_expansions) {
+        opt_dump_expansions || opt_verify_expansions || opt_dump_ast) {
       run_cc1(argc, argv, input, NULL);
       continue;
     }
