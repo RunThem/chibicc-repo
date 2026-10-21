@@ -274,9 +274,6 @@ void hashmap_put(HashMap *map, char *key, void *val);
 void hashmap_put2(HashMap *map, char *key, int keylen, void *val);
 void hashmap_delete(HashMap *map, char *key);
 void hashmap_delete2(HashMap *map, char *key, int keylen);
-void hashmap_test(void);
-void chibicc_arena_test(void);
-bool sema_state_test(void);
 
 //
 // Shared helpers (strings.c / tokenize.c)

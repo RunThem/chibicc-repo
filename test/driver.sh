@@ -227,15 +227,6 @@ echo 'void foo(); void bar(); int main() { foo(); bar(); }' > $tmp/main.c
 $chibicc -o $tmp/foo $tmp/main.c $tmp/foo.so
 check '.so'
 
-$chibicc -hashmap-test
-check 'hashmap'
-
-$chibicc -arena-test
-check 'arena'
-
-$chibicc -sema-state-test
-check 'sema-state'
-
 # A child's failure status reaches the driver (waitpid + WIFEXITED decode).
 $chibicc -S -o $tmp/no-such-dir/out.s $tmp/empty.c 2>/dev/null
 [ $? -ne 0 ]

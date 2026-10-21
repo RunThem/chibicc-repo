@@ -92,6 +92,7 @@ test: $(TESTS)
 	test/cst.sh ./chibicc
 	test/expand.sh ./chibicc
 	test/library.sh
+	test/self-test.sh
 
 pratt/test/%.exe: chibicc-pratt test/%.c
 	mkdir -p pratt/test
@@ -109,6 +110,7 @@ test-pratt: $(PRATT_TESTS)
 	test/cst.sh ./chibicc-pratt
 	test/expand.sh ./chibicc-pratt
 	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/library.sh
+	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/self-test.sh
 
 test-both: test test-pratt
 
@@ -167,6 +169,7 @@ test-stage2: libchibicc.a stage2/libchibicc.a $(TESTS:test/%=stage2/test/%)
 	test/cst.sh ./stage2/chibicc
 	test/expand.sh ./stage2/chibicc
 	CHIBICC_LIB="$(CURDIR)/stage2/libchibicc.a" test/library.sh
+	CHIBICC_LIB="$(CURDIR)/stage2/libchibicc.a" test/self-test.sh
 
 # Stage 2 of the Pratt build: chibicc-pratt compiles the same sources with
 # the feature on, so the self-hosted compiler exercises the Pratt path.
@@ -200,6 +203,7 @@ test-stage2-pratt: libchibicc.a stage2-pratt/libchibicc.a $(TESTS:test/%=stage2-
 	test/cst.sh ./stage2-pratt/chibicc
 	test/expand.sh ./stage2-pratt/chibicc
 	CHIBICC_LIB="$(CURDIR)/stage2-pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/library.sh
+	CHIBICC_LIB="$(CURDIR)/stage2-pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/self-test.sh
 
 # Packaging (PLAN L3.3c).
 

@@ -165,25 +165,6 @@ void *chibicc_arena_realloc(void *old, size_t old_size, size_t new_size) {
   return p;
 }
 
-// Verifies the realloc contract with an active context: the tail is
-// zeroed and the old bytes are preserved.
-void chibicc_arena_test(void) {
-  char *p = chibicc_arena_calloc(4, 1);
-  p[0] = 1;
-  p[3] = 4;
-
-  char *q = chibicc_arena_realloc(p, 4, 16);
-  assert(q[0] == 1 && q[3] == 4);
-  for (int i = 4; i < 16; i++)
-    assert(q[i] == 0);
-
-  char *r = chibicc_arena_realloc(NULL, 0, 8);
-  for (int i = 0; i < 8; i++)
-    assert(r[i] == 0);
-
-  printf("OK\n");
-}
-
 static void config_push(char ***arr, int *len, int *cap, char *s) {
   if (*len + 1 >= *cap) {
     int ncap = *cap ? *cap * 2 : 8;
