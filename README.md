@@ -24,7 +24,9 @@ syntax tree, the faithful syntax-only AST and the sema-annotated tree -
 so formatters, source-to-source tools, linters and analyzers can use
 them without the driver or the x86-64 code generator. The compiler in
 this repository is the reference consumer of the library; see
-`AGENTS.md` for the layer boundaries.
+`AGENTS.md` for the layer boundaries. Detailed documentation - the
+design, each layer's product, API usage and the current limitations -
+is under `docs/` (start at `docs/README.md`).
 
 ```c
 #include <chibicc/chibicc.h>
