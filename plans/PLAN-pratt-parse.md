@@ -368,6 +368,12 @@ tinycc 是本线唯一必选的真实项目闸门, 同时覆盖 AST 与发射. �
 - 深度偏移接受并记录在 `RESULT-pratt-parse.md` 的偏差 5.
 - 旧路径永久保留; 删除需另开线决策.
 
+2026-10-21 follow-up (用户拍板): 两套实现的逗号都改为左结合, 即 `a, b, c` 建
+`(a, b), c`. 旧 `expr1` 改为循环, Pratt 的 `rbp = BP_COMMA`; 默认构建的
+`-dump-ast` 逗号形状随之改变, 汇编只移动了一处 `.loc` 行 (ndiff 为空), 基线
+按 Makefile 说明重置. `test/ast.sh` 的 a79 已重新冻结. 详见
+`RESULT-pratt-parse.md` 的 follow-up 一节.
+
 ## 10. 记录
 
 - 本文件是执行计划; 开工后每步的实测, diff 计数与偏差写入 `RESULT-pratt-parse.md`.

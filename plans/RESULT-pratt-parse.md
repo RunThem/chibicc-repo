@@ -61,9 +61,10 @@
 
 - 具名 `BP_COMMA` 到 `BP_POSTFIX`; `infix_bp`; `expr_bp`; 三个入口
   `expr` / `assign` / `conditional` 改调 `expr_bp(0 / 1 / 2)`. 旧 `expr` 到 `mul` 保护.
-- 发现并修正一处形状偏差: 计划表把逗号列为左结合, 但旧 `expr1` 的右操作数是 `expr`,
-  树是 `a,(b,c)`. `test/control.c` 的 `assert(a, 1, 2, 3)` dump 暴露该差异; 改为
-  `rbp = BP_COMMA - 1`, 与旧树逐字节一致.
+- 发现一处形状偏差: 计划表把逗号列为左结合, 但旧 `expr1` 的右操作数是 `expr`,
+  树是 `a,(b,c)`. `test/control.c` 的 `assert(a, 1, 2, 3)` dump 暴露该差异. 第一次
+  实现为与旧树一致的右嵌套; 2026-10-21 用户拍板两套实现统一改为左结合, 旧 `expr1`
+  改为循环, Pratt 取 `rbp = BP_COMMA`. 详见下方 follow-up 一节.
 - 局部证据 (macOS): 39 个可预处理语料文件的 AST 与 `-S` 全部相同 (2 个因缺 pthread.h
   跳过, docker 内 41 个全过); ast.sh 78 例; 诊断 68 例.
 
@@ -105,11 +106,35 @@
   在修复后重跑绿.
 - 判据 1-7 的对照见下节.
 
+## 2026-10-21 follow-up - 逗号统一左结合
+
+用户在本线完成后拍板: 两套实现都调整为左结合, 不再保留旧树的右嵌套.
+
+- 改动: `expr1` 从"右侧递归 `expr`"改为 `while` 循环 (每次用 `assign`), Pratt 的逗号
+  从 `rbp = BP_COMMA - 1` 改为 `rbp = BP_COMMA`.
+- `test/ast.sh` 重新冻结: 只有 a79 的三逗号用例的期望树变化 (现在是
+  `ND_COMMA(ND_COMMA(a,b),c)`), 85 例在两模式逐字节通过.
+- 本机: 诊断 68 例两模式逐字节不变; 39 个可预处理语料文件的 AST 与 `-S` 两模式相同;
+  400 个随机表达式 0 差异.
+- 快照: raw diff 只有 `control.s` 一处, 一行 `.loc 1 23` 在 `mov $1, %rax` 前后移动
+  (行号相同, 指令序列相同); `snapshot ndiff: empty`. 这是有意的 AST 形状变化, 按
+  Makefile 的说明重置基线 (`make docker-snapshot`), 重置后 raw diff 为空.
+- 闸门 (follow-up 改动后):
+  - `make docker-test-both`: exit 0 (四轮 ast.sh 85 例, 含 a79 的新左结合期望).
+  - `make docker-test-pratt`: exit 0.
+  - `make docker-pratt-ab`: exit 0; corpus 41 个文件 AST 与 `-S` 相同; tinycc 10 个
+    TU / 10 个 `.s` 相同, 两套测试通过; 墙钟 1:31.58.
+  - `docker-snapshot-diff` (重置基线前): 唯一 hunk 是 `control.s` 的一行 `.loc 1 23`
+    在 `mov $1, %rax` 前后移动, 指令序列相同; `docker-snapshot-ndiff: empty`; 按
+    Makefile 的说明 `make docker-snapshot` 重置基线后, `docker-snapshot-diff: empty`.
+  - `make check-library check-library-pratt` (本机): exit 0.
+- 判据 1 的"默认路径"现在指汇编/诊断/运行行为, 不包括用户要求改变的 AST 逗号形状.
+
 ## 判据对照
 
 | 判据 | 证据 |
 |---|---|
-| 1 默认路径零变化 | `docker-snapshot-diff` 空; 默认构建 diagnostic 68 / warning / shape 34 / trivia / cst / expand / library 全绿; `libchibicc.a` 公共面不变 (`check-library` 默认通过) |
+| 1 默认路径零变化 | `docker-snapshot-diff` 空; 默认构建 diagnostic 68 / warning / shape 34 / trivia / cst / expand / library 全绿; `libchibicc.a` 公共面不变 (`check-library` 默认通过). 唯一的默认 AST 形状变化是逗号改为左结合 (2026-10-21 用户决策), ast.sh 已重新冻结; 汇编不变 |
 | 2 AST 等价 | corpus 41 文件 `-dump-ast` 相同; tinycc 10 个 `$(CC)` TU 相同; ast.sh 85 例两模式相同并冻结; 400 随机表达式 0 差异; dump 在 sema 前早退 |
 | 3 发射等价 | corpus 41 文件 `-S` 相同; tinycc 同组 TU `-S` 相同; 两个 tinycc 构建各自通过 `$make CC=cc test`; `docker-test-both` 含两模式自举 |
 | 4 旧路径可回退 | 默认 `make` 仍编译旧级联; 旧函数内容未改, 只在保护块内; `make clean && make` 不依赖 Pratt 产物 |
@@ -119,10 +144,11 @@
 
 ## 偏差与说明
 
-1. **逗号结合性**: 计划 4.3 表写左结合 (`rbp = lbp`). 旧树的逗号是右嵌套 (`expr1` 的
-   右操作数是 `expr`), AST 等价要求保留该形状. Pratt 取 `rbp = BP_COMMA - 1`; 语义不变
-   (逗号求值仍是左到右), 但树与旧路径一致. 不采用计划的左结合, 因为判据 2 要求逐字节
-   相同.
+1. **逗号结合性 (2026-10-21 follow-up)**: 计划 4.3 表写左结合 (`rbp = lbp`), 旧树却是
+   右嵌套 (`expr1` 的右操作数是 `expr`). 用户在本线完成后拍板: 两套实现统一改为左结合,
+   即 `a, b, c` 建 `(a, b), c`. 旧 `expr1` 改为 `while` 循环, Pratt 的 `rbp = BP_COMMA`;
+   语言语义与求值顺序不变, 默认构建的汇编预期不变, 但 `-dump-ast` 的逗号树形状改变.
+   `test/ast.sh` 已重新冻结 (只有 a79 的三逗号用例变化), 两个模式继续逐字节一致.
 2. **`-dump-ast` 字段是计划的超集**: 除计划列出的字段外, 还打印声明记录的 `name=` /
    `attr=` / `align_ty=` / `align=expr`, 以及字符串字面量作为表达式的用例. 这些是
    parse 会写且对等价性有用的字段; 不打印 sema 私有字段 (`init_resolved`, `var`,

@@ -1234,11 +1234,11 @@ expect a79_comma_three <<'WANT'
 ND_FUNCDEF @a79_comma_three.c:1:28 "{" ty_op=func(int) name="f" attr=none
   ND_BLOCK @a79_comma_three.c:1:30 "return" is_scope_block=1
     ND_RETURN @a79_comma_three.c:1:30 "return"
-      ND_COMMA @a79_comma_three.c:1:38 ","
-        ND_IDENT @a79_comma_three.c:1:37 "a"
-        ND_COMMA @a79_comma_three.c:1:41 ","
+      ND_COMMA @a79_comma_three.c:1:41 ","
+        ND_COMMA @a79_comma_three.c:1:38 ","
+          ND_IDENT @a79_comma_three.c:1:37 "a"
           ND_IDENT @a79_comma_three.c:1:40 "b"
-          ND_IDENT @a79_comma_three.c:1:43 "c"
+        ND_IDENT @a79_comma_three.c:1:43 "c"
 WANT
 
 snippet a80_cond_assign_else <<'SNIP'

@@ -1249,8 +1249,12 @@ static Node *expr(Token **rest, Token *tok) {
 static Node *expr1(Token **rest, Token *tok) {
   Node *node = assign(&tok, tok);
 
-  if (equal(tok, ","))
-    return new_binary(ND_COMMA, node, expr(rest, tok->next), tok);
+  // Comma is left-associative: `a, b, c` is `(a, b), c`, the shape the C
+  // grammar gives. Both parsers build this shape.
+  while (equal(tok, ",")) {
+    Token *start = tok;
+    node = new_binary(ND_COMMA, node, assign(&tok, tok->next), start);
+  }
 
   *rest = tok;
   return node;
@@ -2241,11 +2245,11 @@ static bool infix_bp(Token *tok, NodeKind *kind, NodeKind *assign_op,
   *assign_op = ND_NULL_EXPR;
 
   if (equal(tok, ",")) {
-    // The cascade built `a, (b, c)`: expr1 parses the rest with expr.
-    // Keep that right-nested shape; comma is not associative in the tree.
+    // Comma is left-associative, as the C grammar says and as the
+    // cascade's expr1 now builds it: `a, b, c` is `(a, b), c`.
     *kind = ND_COMMA;
     *lbp = BP_COMMA;
-    *rbp = BP_COMMA - 1;
+    *rbp = BP_COMMA;
     return true;
   }
 
