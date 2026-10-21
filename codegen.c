@@ -35,7 +35,7 @@
 // are marked as such in chibicc.h. Everything below is the emitter:
 // no optimization passes, by design.
 
-#include "chibicc.h"
+#include "driver.h"
 
 #define GP_MAX 6
 #define FP_MAX 8

@@ -1,4 +1,4 @@
-CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch -Ilibchibicc/include
+CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch -Ilibchibicc/include -Ilibchibicc/src
 
 # Keep VERSION in sync with CHIBICC_VERSION in the public umbrella.
 VERSION=0.1.0
@@ -6,10 +6,12 @@ PREFIX ?= /usr/local
 DESTDIR ?=
 INSTALL ?= install
 
-SRCS=$(wildcard *.c)
-OBJS=$(SRCS:.c=.o)
-LIB_SRCS=$(filter-out main.c codegen.c,$(SRCS))
+LIB_DIR=libchibicc/src
+LIB_SRCS=$(wildcard $(LIB_DIR)/*.c)
 LIB_OBJS=$(LIB_SRCS:.c=.o)
+LIB_HDR=$(LIB_DIR)/chibicc.h
+DRIVER_SRCS=main.c codegen.c
+DRIVER_OBJS=$(DRIVER_SRCS:.c=.o)
 PUBLIC_HDRS=$(wildcard libchibicc/include/chibicc/*.h)
 
 TEST_SRCS=$(wildcard test/*.c)
@@ -29,8 +31,8 @@ all: $(ALL)
 
 # Stage 1
 
-chibicc: libchibicc.a main.o codegen.o
-	$(CC) $(CFLAGS) -o $@ main.o codegen.o libchibicc.a $(LDFLAGS)
+chibicc: libchibicc.a $(DRIVER_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(DRIVER_OBJS) libchibicc.a $(LDFLAGS)
 
 libchibicc.a: $(LIB_OBJS)
 	$(AR) rcs $@ $^
@@ -45,11 +47,12 @@ libchibicc.so.0: $(LIB_SRCS:.c=.pic.o)
 libchibicc.so: libchibicc.so.0
 	ln -sf libchibicc.so.0 $@
 
-%.pic.o: %.c chibicc.h $(PUBLIC_HDRS)
+%.pic.o: %.c $(LIB_HDR) $(PUBLIC_HDRS)
 	$(CC) $(CFLAGS) -fPIC -fvisibility=hidden -c -o $@ $<
 endif
 
-$(OBJS): chibicc.h $(PUBLIC_HDRS)
+$(LIB_OBJS) $(DRIVER_OBJS): $(LIB_HDR) $(PUBLIC_HDRS)
+$(DRIVER_OBJS): driver.h
 
 test/%.exe: chibicc test/%.c
 	./chibicc -Iinclude -Itest -c -o test/$*.o test/$*.c
@@ -78,15 +81,19 @@ check-library: $(CHECK_LIBS) libchibicc.pc
 
 # Stage 2
 
-stage2/chibicc: $(OBJS:%=stage2/%)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+STAGE2_LIB_OBJS=$(LIB_SRCS:$(LIB_DIR)/%.c=stage2/$(LIB_DIR)/%.o)
 
-stage2/libchibicc.a: $(LIB_OBJS:%=stage2/%)
+stage2/chibicc: stage2/libchibicc.a $(DRIVER_OBJS:%=stage2/%)
+	$(CC) $(CFLAGS) -o $@ $(DRIVER_OBJS:%=stage2/%) stage2/libchibicc.a $(LDFLAGS)
+
+stage2/libchibicc.a: $(STAGE2_LIB_OBJS)
 	$(AR) rcs $@ $^
 
-stage2/%.o: chibicc %.c
-	mkdir -p stage2/test
-	./chibicc -Ilibchibicc/include -c -o $(@D)/$*.o $*.c
+stage2/%.o: %.c chibicc $(LIB_HDR) $(PUBLIC_HDRS)
+	mkdir -p $(@D)
+	./chibicc -Ilibchibicc/include -Ilibchibicc/src -c -o $@ $<
+
+stage2/main.o stage2/codegen.o: driver.h
 
 stage2/test/%.exe: stage2/chibicc test/%.c
 	mkdir -p stage2/test

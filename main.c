@@ -1,4 +1,4 @@
-#include "chibicc.h"
+#include "driver.h"
 
 typedef enum {
   FILE_NONE, FILE_C, FILE_ASM, FILE_OBJ, FILE_AR, FILE_DSO,

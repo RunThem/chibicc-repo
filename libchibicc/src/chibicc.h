@@ -229,10 +229,9 @@ Type *enum_type(void);
 Type *struct_type(void);
 
 //
-// codegen.c
+// strings.c
 //
 
-void codegen(Obj *prog, FILE *out);
 int align_to(int n, int align);
 
 //
@@ -273,16 +272,12 @@ void chibicc_arena_test(void);
 bool sema_state_test(void);
 
 //
-// main.c
+// Shared helpers (strings.c / tokenize.c)
 //
 
 bool file_exists(char *path);
 void print_escaped(FILE *out, char *p, int len);
 char *token_kind_name(TokenKind kind);
-
-extern bool opt_fpic;
-extern bool opt_fcommon;
-extern char *base_file;
 
 //
 // context / arena / diagnostics (PLAN L2)

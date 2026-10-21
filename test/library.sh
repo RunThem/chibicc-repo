@@ -783,11 +783,10 @@ EOF
 # deliberately not the gate - it reports only intermittently under Rosetta.
 mkdir -p "$tmp/asan"
 asan_objs=
-for src in "$root"/*.c; do
+for src in "$root"/libchibicc/src/*.c; do
   base=$(basename "$src" .c)
-  case $base in main|codegen) continue;; esac
   "$cc" -std=c11 -g -Wall -Wno-switch -DCHIBICC_DEBUG_ARENA -DCHIBICC_TEST_BUILTINS -fsanitize=address,undefined -fno-omit-frame-pointer \
-    -I"$root/libchibicc/include" -c "$src" -o "$tmp/asan/$base.o"
+    -I"$root/libchibicc/include" -I"$root/libchibicc/src" -c "$src" -o "$tmp/asan/$base.o"
   asan_objs="$asan_objs $tmp/asan/$base.o"
 done
 ar rcs "$tmp/libchibicc-asan.a" $asan_objs
