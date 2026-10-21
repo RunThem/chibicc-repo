@@ -51,6 +51,10 @@ L3.5 -> L4 -> L5.
 `PLAN-cst.md` / `RESULT-cst.md`; provenance 线(本线的前置)见 `PLAN-provenance.md` /
 `RESULT-provenance.md`. 本线从 provenance 线终态 `8c1c1d1` 起步.
 
+附加线: 表达式 Pratt 解析线(默认路径不变, 附加特性宏 `CHIBICC_PRATT_PARSE_FEATURE`)
+已完成, 见 `plans/PLAN-pratt-parse.md` / `plans/RESULT-pratt-parse.md`; 它与本文件
+的 L3/L5 互不依赖, 共享同一棵树与同一套闸门.
+
 新会话恢复方法: 通读 AGENTS.md -> 查看本文件勾选状态 -> `git log --oneline` 确认最后完成
 的步骤 -> 从第一个未勾选项继续; 开工前先跑 L0.1 的闸门复验. 行号一律以函数名为准.
 

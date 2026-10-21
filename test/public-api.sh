@@ -9,11 +9,14 @@ set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cc=${CC:-cc}
+# CHIBICC_LIB selects the archive to inspect; the Pratt gate points it at
+# pratt/libchibicc.a, whose public surface must be the same.
+lib=${CHIBICC_LIB:-$root/libchibicc.a}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-if [ ! -f "$root/libchibicc.a" ]; then
-  echo "public-api: $root/libchibicc.a is missing; run make libchibicc.a" >&2
+if [ ! -f "$lib" ]; then
+  echo "public-api: $lib is missing; run make libchibicc.a" >&2
   exit 1
 fi
 
@@ -104,7 +107,7 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 
-"$cc" -std=c11 -I"$tmp/pubinc" "$tmp/consumer.c" "$root/libchibicc.a" \
+"$cc" -std=c11 -I"$tmp/pubinc" "$tmp/consumer.c" "$lib" \
   -o "$tmp/consumer"
 "$tmp/consumer"
 
@@ -151,7 +154,7 @@ chibicc_expansion_dump
 chibicc_expansion_verify
 chibicc_version"
 
-nm "$root/libchibicc.a" | awk '$2 == "T" { s = $3; sub(/^_/, "", s); print s }' \
+nm "$lib" | awk '$2 == "T" { s = $3; sub(/^_/, "", s); print s }' \
   | sort -u > "$tmp/libT"
 for sym in $d7; do
   if ! grep -qx "$sym" "$tmp/libT"; then
@@ -162,8 +165,9 @@ done
 echo "public-api: D7 symbols present in libchibicc.a"
 
 # PLAN L3.3b: the shared library must export exactly D7. Only built on
-# Linux.
-if [ -f "$root/libchibicc.so" ]; then
+# Linux, and only inspected for the default archive (the Pratt build has
+# no shared library).
+if [ -z "${CHIBICC_LIB:-}" ] && [ -f "$root/libchibicc.so" ]; then
   nm -D --defined-only "$root/libchibicc.so" | awk '{print $NF}' \
     | sort -u > "$tmp/soT"
   printf '%s\n' "$d7" | sort -u > "$tmp/d7"

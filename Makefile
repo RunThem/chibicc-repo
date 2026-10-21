@@ -127,6 +127,14 @@ check-library: $(CHECK_LIBS) libchibicc.pc
 	test/public-api.sh
 	test/install.sh
 
+# The same public-surface and consumer gates against the Pratt archive.
+# The headers and the D7 set are mode-independent; this proves the archive
+# built with CHIBICC_PRATT_PARSE_FEATURE=1 still satisfies them. install.sh
+# is about the installed layout and is run once by check-library.
+check-library-pratt: pratt/libchibicc.a libchibicc.pc
+	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/library.sh
+	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" test/public-api.sh
+
 # Stage 2
 
 STAGE2_LIB_OBJS=$(LIB_SRCS:$(LIB_DIR)/%.c=stage2/$(LIB_DIR)/%.o)
@@ -353,4 +361,4 @@ docker-snapshot-ndiff: docker-image
 	@rc=0; diff -ru .cache/.ndtmp/base .cache/.ndtmp/new || rc=1; rm -rf .cache/.ndtmp; \
 	  [ $$rc -eq 0 ] && echo "snapshot ndiff: empty" || { echo "snapshot ndiff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: all test clean test-stage2 test-thirdparty check-library install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff test-pratt test-both test-ab test-stage2-pratt docker-test-both docker-test-pratt docker-pratt-ab docker-pratt-tinycc
+.PHONY: all test clean test-stage2 test-thirdparty check-library check-library-pratt install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff test-pratt test-both test-ab test-stage2-pratt docker-test-both docker-test-pratt docker-pratt-ab docker-pratt-tinycc
