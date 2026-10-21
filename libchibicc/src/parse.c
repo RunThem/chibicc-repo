@@ -2237,224 +2237,69 @@ enum {
   BP_POSTFIX = 15,
 };
 
+// The binding-power table: one row per infix spelling. The comma row is
+// left-associative (rbp == lbp), assignment rows are right-associative
+// (rbp == lbp - 1), and ?: has its own branch in expr_bp. A linear scan
+// is enough here; there are fewer than forty spellings and this is not a
+// hot loop.
+typedef struct {
+  char *op;
+  NodeKind kind;
+  NodeKind assign_op;
+  int lbp;
+  int rbp;
+} InfixOp;
+
+static const InfixOp infix_ops[] = {
+  {",",   ND_COMMA,  ND_NULL_EXPR, BP_COMMA,      BP_COMMA},
+  {"=",   ND_ASSIGN, ND_NULL_EXPR, BP_ASSIGN,     BP_ASSIGN - 1},
+  {"+=",  ND_ASSIGN, ND_ADD,       BP_ASSIGN,     BP_ASSIGN - 1},
+  {"-=",  ND_ASSIGN, ND_SUB,       BP_ASSIGN,     BP_ASSIGN - 1},
+  {"*=",  ND_ASSIGN, ND_MUL,       BP_ASSIGN,     BP_ASSIGN - 1},
+  {"/=",  ND_ASSIGN, ND_DIV,       BP_ASSIGN,     BP_ASSIGN - 1},
+  {"%=",  ND_ASSIGN, ND_MOD,       BP_ASSIGN,     BP_ASSIGN - 1},
+  {"&=",  ND_ASSIGN, ND_BITAND,    BP_ASSIGN,     BP_ASSIGN - 1},
+  {"|=",  ND_ASSIGN, ND_BITOR,     BP_ASSIGN,     BP_ASSIGN - 1},
+  {"^=",  ND_ASSIGN, ND_BITXOR,    BP_ASSIGN,     BP_ASSIGN - 1},
+  {"<<=", ND_ASSIGN, ND_SHL,       BP_ASSIGN,     BP_ASSIGN - 1},
+  {">>=", ND_ASSIGN, ND_SHR,       BP_ASSIGN,     BP_ASSIGN - 1},
+  {"?",   ND_COND,   ND_NULL_EXPR, BP_COND,       BP_COND - 1},
+  {"||",  ND_LOGOR,  ND_NULL_EXPR, BP_LOGOR,      BP_LOGOR},
+  {"&&",  ND_LOGAND, ND_NULL_EXPR, BP_LOGAND,     BP_LOGAND},
+  {"|",   ND_BITOR,  ND_NULL_EXPR, BP_BITOR,      BP_BITOR},
+  {"^",   ND_BITXOR, ND_NULL_EXPR, BP_BITXOR,     BP_BITXOR},
+  {"&",   ND_BITAND, ND_NULL_EXPR, BP_BITAND,     BP_BITAND},
+  {"==",  ND_EQ,     ND_NULL_EXPR, BP_EQUALITY,   BP_EQUALITY},
+  {"!=",  ND_NE,     ND_NULL_EXPR, BP_EQUALITY,   BP_EQUALITY},
+  {"<",   ND_LT,     ND_NULL_EXPR, BP_RELATIONAL, BP_RELATIONAL},
+  {"<=",  ND_LE,     ND_NULL_EXPR, BP_RELATIONAL, BP_RELATIONAL},
+  {">",   ND_GT,     ND_NULL_EXPR, BP_RELATIONAL, BP_RELATIONAL},
+  {">=",  ND_GE,     ND_NULL_EXPR, BP_RELATIONAL, BP_RELATIONAL},
+  {"<<",  ND_SHL,    ND_NULL_EXPR, BP_SHIFT,      BP_SHIFT},
+  {">>",  ND_SHR,    ND_NULL_EXPR, BP_SHIFT,      BP_SHIFT},
+  {"+",   ND_ADD,    ND_NULL_EXPR, BP_ADD,        BP_ADD},
+  {"-",   ND_SUB,    ND_NULL_EXPR, BP_ADD,        BP_ADD},
+  {"*",   ND_MUL,    ND_NULL_EXPR, BP_MUL,        BP_MUL},
+  {"/",   ND_DIV,    ND_NULL_EXPR, BP_MUL,        BP_MUL},
+  {"%",   ND_MOD,    ND_NULL_EXPR, BP_MUL,        BP_MUL},
+};
+
 // The infix operator at tok, if any: its node kind, the compound
 // assignment operator (ND_NULL_EXPR for a plain "=" or a non-assignment),
 // and its binding powers.
 static bool infix_bp(Token *tok, NodeKind *kind, NodeKind *assign_op,
                      int *lbp, int *rbp) {
-  *assign_op = ND_NULL_EXPR;
+  int n = sizeof(infix_ops) / sizeof(*infix_ops);
 
-  if (equal(tok, ",")) {
-    // Comma is left-associative, as the C grammar says and as the
-    // cascade's expr1 now builds it: `a, b, c` is `(a, b), c`.
-    *kind = ND_COMMA;
-    *lbp = BP_COMMA;
-    *rbp = BP_COMMA;
+  for (int i = 0; i < n; i++) {
+    if (!equal(tok, infix_ops[i].op))
+      continue;
+    *kind = infix_ops[i].kind;
+    *assign_op = infix_ops[i].assign_op;
+    *lbp = infix_ops[i].lbp;
+    *rbp = infix_ops[i].rbp;
     return true;
   }
-
-  if (equal(tok, "=")) {
-    *kind = ND_ASSIGN;
-    *lbp = BP_ASSIGN;
-    *rbp = BP_ASSIGN - 1;
-    return true;
-  }
-
-  if (equal(tok, "+=")) {
-    *kind = ND_ASSIGN;
-    *assign_op = ND_ADD;
-    *lbp = BP_ASSIGN;
-    *rbp = BP_ASSIGN - 1;
-    return true;
-  }
-
-  if (equal(tok, "-=")) {
-    *kind = ND_ASSIGN;
-    *assign_op = ND_SUB;
-    *lbp = BP_ASSIGN;
-    *rbp = BP_ASSIGN - 1;
-    return true;
-  }
-
-  if (equal(tok, "*=")) {
-    *kind = ND_ASSIGN;
-    *assign_op = ND_MUL;
-    *lbp = BP_ASSIGN;
-    *rbp = BP_ASSIGN - 1;
-    return true;
-  }
-
-  if (equal(tok, "/=")) {
-    *kind = ND_ASSIGN;
-    *assign_op = ND_DIV;
-    *lbp = BP_ASSIGN;
-    *rbp = BP_ASSIGN - 1;
-    return true;
-  }
-
-  if (equal(tok, "%=")) {
-    *kind = ND_ASSIGN;
-    *assign_op = ND_MOD;
-    *lbp = BP_ASSIGN;
-    *rbp = BP_ASSIGN - 1;
-    return true;
-  }
-
-  if (equal(tok, "&=")) {
-    *kind = ND_ASSIGN;
-    *assign_op = ND_BITAND;
-    *lbp = BP_ASSIGN;
-    *rbp = BP_ASSIGN - 1;
-    return true;
-  }
-
-  if (equal(tok, "|=")) {
-    *kind = ND_ASSIGN;
-    *assign_op = ND_BITOR;
-    *lbp = BP_ASSIGN;
-    *rbp = BP_ASSIGN - 1;
-    return true;
-  }
-
-  if (equal(tok, "^=")) {
-    *kind = ND_ASSIGN;
-    *assign_op = ND_BITXOR;
-    *lbp = BP_ASSIGN;
-    *rbp = BP_ASSIGN - 1;
-    return true;
-  }
-
-  if (equal(tok, "<<=")) {
-    *kind = ND_ASSIGN;
-    *assign_op = ND_SHL;
-    *lbp = BP_ASSIGN;
-    *rbp = BP_ASSIGN - 1;
-    return true;
-  }
-
-  if (equal(tok, ">>=")) {
-    *kind = ND_ASSIGN;
-    *assign_op = ND_SHR;
-    *lbp = BP_ASSIGN;
-    *rbp = BP_ASSIGN - 1;
-    return true;
-  }
-
-  if (equal(tok, "?")) {
-    *kind = ND_COND;
-    *lbp = BP_COND;
-    *rbp = BP_COND - 1;
-    return true;
-  }
-
-  if (equal(tok, "||")) {
-    *kind = ND_LOGOR;
-    *lbp = *rbp = BP_LOGOR;
-    return true;
-  }
-
-  if (equal(tok, "&&")) {
-    *kind = ND_LOGAND;
-    *lbp = *rbp = BP_LOGAND;
-    return true;
-  }
-
-  if (equal(tok, "|")) {
-    *kind = ND_BITOR;
-    *lbp = *rbp = BP_BITOR;
-    return true;
-  }
-
-  if (equal(tok, "^")) {
-    *kind = ND_BITXOR;
-    *lbp = *rbp = BP_BITXOR;
-    return true;
-  }
-
-  if (equal(tok, "&")) {
-    *kind = ND_BITAND;
-    *lbp = *rbp = BP_BITAND;
-    return true;
-  }
-
-  if (equal(tok, "==")) {
-    *kind = ND_EQ;
-    *lbp = *rbp = BP_EQUALITY;
-    return true;
-  }
-
-  if (equal(tok, "!=")) {
-    *kind = ND_NE;
-    *lbp = *rbp = BP_EQUALITY;
-    return true;
-  }
-
-  if (equal(tok, "<")) {
-    *kind = ND_LT;
-    *lbp = *rbp = BP_RELATIONAL;
-    return true;
-  }
-
-  if (equal(tok, "<=")) {
-    *kind = ND_LE;
-    *lbp = *rbp = BP_RELATIONAL;
-    return true;
-  }
-
-  if (equal(tok, ">")) {
-    *kind = ND_GT;
-    *lbp = *rbp = BP_RELATIONAL;
-    return true;
-  }
-
-  if (equal(tok, ">=")) {
-    *kind = ND_GE;
-    *lbp = *rbp = BP_RELATIONAL;
-    return true;
-  }
-
-  if (equal(tok, "<<")) {
-    *kind = ND_SHL;
-    *lbp = *rbp = BP_SHIFT;
-    return true;
-  }
-
-  if (equal(tok, ">>")) {
-    *kind = ND_SHR;
-    *lbp = *rbp = BP_SHIFT;
-    return true;
-  }
-
-  if (equal(tok, "+")) {
-    *kind = ND_ADD;
-    *lbp = *rbp = BP_ADD;
-    return true;
-  }
-
-  if (equal(tok, "-")) {
-    *kind = ND_SUB;
-    *lbp = *rbp = BP_ADD;
-    return true;
-  }
-
-  if (equal(tok, "*")) {
-    *kind = ND_MUL;
-    *lbp = *rbp = BP_MUL;
-    return true;
-  }
-
-  if (equal(tok, "/")) {
-    *kind = ND_DIV;
-    *lbp = *rbp = BP_MUL;
-    return true;
-  }
-
-  if (equal(tok, "%")) {
-    *kind = ND_MOD;
-    *lbp = *rbp = BP_MUL;
-    return true;
-  }
-
   return false;
 }
 

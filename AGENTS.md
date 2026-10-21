@@ -109,7 +109,7 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 
 ## 设计原则
 
-- 可读性优先于巧妙. 路线图内的阶段化重构是本项目明确授权的工作; 除此之外不做顺手的"改进", 不重组无关代码, 不用宏/高阶函数合并解析器里有意的重复. 表达式层的显式豁免: 允许一个绑定力表加一个 `expr_bp` 循环(`libchibicc/src/parse.c`, `CHIBICC_PRATT_PARSE_FEATURE`); 分派使用 `if` / `switch` 与具名 `BP_*` 常量, 不使用函数指针数组, 语句与声明层继续沿用每产生式一个函数; 旧级联保留在 `#if !CHIBICC_PRATT_PARSE_FEATURE` 下, 两个模式必须同时通过全部闸门.
+- 可读性优先于巧妙. 路线图内的阶段化重构是本项目明确授权的工作; 除此之外不做顺手的"改进", 不重组无关代码, 不用宏/高阶函数合并解析器里有意的重复. 表达式层的显式豁免: 允许一个只读绑定力表 (`InfixOp`) 加一个 `expr_bp` 循环(`libchibicc/src/parse.c`, `CHIBICC_PRATT_PARSE_FEATURE`); 中缀分派用该表加线性查找, 前缀/后缀仍是 `if` 分支, 具名 `BP_*` 常量, 不使用函数指针数组, 语句与声明层继续沿用每产生式一个函数; 旧级联保留在 `#if !CHIBICC_PRATT_PARSE_FEATURE` 下, 两个模式必须同时通过全部闸门.
 - 内存: 一律 `calloc` 的 arena 式分配, 从不逐对象 `free`; 库语境下生命周期按"一个 context 一个翻译单元一个 arena"设计, 整体 reset 已落地为 `chibicc_context_new/free/reset`(`libchibicc/src/lib.c`). 简单但慢的算法是可接受的设计.
 - codegen 中没有优化 pass - 这是故意的, 保留.
 - `include/` 存放 chibicc 自带的自举头文件(`stddef.h`, `stdarg.h`, `stdbool.h`, `float.h`, `stdalign.h`, `stdatomic.h`, `stdnoreturn.h`), 通过 `-Iinclude` 使用, 保持不变.

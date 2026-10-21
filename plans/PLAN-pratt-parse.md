@@ -374,6 +374,10 @@ tinycc 是本线唯一必选的真实项目闸门, 同时覆盖 AST 与发射. �
 按 Makefile 说明重置. `test/ast.sh` 的 a79 已重新冻结. 详见
 `RESULT-pratt-parse.md` 的 follow-up 一节.
 
+2026-10-21 follow-up 2 (用户): `infix_bp` 的 if 链改为只读 `InfixOp` 绑定力表加
+线性查找, 前缀/后缀仍是 `if`, 不使用函数指针数组. 行为与 AST 不变, 默认快照仍为空;
+详见 `RESULT-pratt-parse.md`.
+
 ## 10. 记录
 
 - 本文件是执行计划; 开工后每步的实测, diff 计数与偏差写入 `RESULT-pratt-parse.md`.

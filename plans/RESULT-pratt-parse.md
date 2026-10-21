@@ -130,6 +130,26 @@
   - `make check-library check-library-pratt` (本机): exit 0.
 - 判据 1 的"默认路径"现在指汇编/诊断/运行行为, 不包括用户要求改变的 AST 逗号形状.
 
+## 2026-10-21 follow-up 2 - infix_bp 改为只读表
+
+用户指出 `infix_bp` 全是 `if`, 询问 Pratt 能否查表. 可以, 而且只读表比 if 链更贴近
+"绑定力表"的本意.
+
+- 改动: 新增只读 `typedef struct { char *op; NodeKind kind; NodeKind assign_op;
+  int lbp; int rbp; } InfixOp` 与 `static const InfixOp infix_ops[]` (31 行, 每个
+  中缀拼写一行); `infix_bp` 改为线性查找. 前缀/后缀的 `if` 分支不变, 不使用函数
+  指针数组. 语义与表项一一对应: 逗号 `rbp == lbp`, 赋值 `rbp == lbp - 1`, `?:` 仍由
+  `expr_bp` 的 ND_COND 分支处理.
+- 规模: `parse.c` 该处 -210 / +55 行; 只有 Pratt 保护块内的代码变化, 默认构建的
+  预处理结果不变.
+- 证据: ast.sh 85 例两模式逐字节相同; 诊断 68 例两模式相同; 39 个本机语料文件
+  AST 与 `-S` 相同; 400 个随机表达式 0 差异; `docker-test-pratt` exit 0 (含
+  stage2-pratt 与 ASan library 闸门); `docker-pratt-ab` exit 0 (41 文件, tinycc
+  10 个 TU / 10 个 `.s`, 两套测试); `docker-snapshot-diff` 为空 (默认构建不变);
+  `check-library-pratt` exit 0.
+- 该表只有 `const` 数据, 不是可变静态状态; 判据 6 的 "无新 static" 仍按可变状态
+  解释, 表本身不跨 context 保存任何 per-run 信息.
+
 ## 判据对照
 
 | 判据 | 证据 |
@@ -139,7 +159,7 @@
 | 3 发射等价 | corpus 41 文件 `-S` 相同; tinycc 同组 TU `-S` 相同; 两个 tinycc 构建各自通过 `$make CC=cc test`; `docker-test-both` 含两模式自举 |
 | 4 旧路径可回退 | 默认 `make` 仍编译旧级联; 旧函数内容未改, 只在保护块内; `make clean && make` 不依赖 Pratt 产物 |
 | 5 忠实层不破坏 | `ND_ASSIGN.op` / `is_elvis` / `ND_INCDEC` / `arrow_tok` / `ND_CAST.ty_op` / `ND_SUBSCRIPT` / `ND_GT` / `ND_GE` / `ND_COMPOUND_LITERAL` 的字段在 ast.sh 与两模式 A/B 中锁定; 一元 + 仍不建节点; 表达式不建类型, 不绑名, 不求值; 诊断锚点由 diagnostic.sh 逐字节锁定 |
-| 6 无新 exit / static | Pratt 块 grep 无 `exit(` 与静态变量; 深度计数走 `chibicc_ctx()->parse_depth`; 只有 `error_tok` |
+| 6 无新 exit / static | Pratt 块 grep 无 `exit(` 与可变静态状态; 唯一的文件域 `static const InfixOp infix_ops[]` 是只读绑定力表, 不是 per-run state; 深度计数走 `chibicc_ctx()->parse_depth`; 只有 `error_tok` |
 | 7 形态锁先于重写 | P1 在 P3 之前落地并跑绿; P1 提交 86686a0 早于 P2/P3+P4 |
 
 ## 偏差与说明
