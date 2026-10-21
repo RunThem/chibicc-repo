@@ -6,6 +6,9 @@
 /tmp*
 /thirdparty
 /chibicc
+/chibicc-pratt
+/pratt
+/stage2-pratt
 /libchibicc.a
 /libchibicc.so
 /libchibicc.so.*

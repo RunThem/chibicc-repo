@@ -53,6 +53,13 @@ typedef ChibiccNode Node;
 typedef ChibiccNodeKind NodeKind;
 typedef ChibiccTypeKind TypeKind;
 
+// The Pratt expression parser (PLAN-pratt-parse). 0 keeps the cascaded
+// expression functions; 1 compiles the Pratt implementation instead.
+// The default build is the old path; `make chibicc-pratt` passes 1.
+#ifndef CHIBICC_PRATT_PARSE_FEATURE
+#define CHIBICC_PRATT_PARSE_FEATURE 0
+#endif
+
 #define MAX(x, y) ((x) < (y) ? (y) : (x))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 

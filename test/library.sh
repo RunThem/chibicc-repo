@@ -8,8 +8,12 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cc=${CC:-cc}
 # CHIBICC_LIB selects the archive to link; test-stage2 points it at the
-# stage2 objects (PLAN L3.3c).
+# stage2 objects (PLAN L3.3c). CHIBICC_PRATT_PARSE_FEATURE must match the
+# parser the archive was built with, so the ASan rebuild compiles the same
+# expression parser.
 lib=${CHIBICC_LIB:-$root/libchibicc.a}
+pratt=${CHIBICC_PRATT_PARSE_FEATURE:-0}
+pratt_flag="-DCHIBICC_PRATT_PARSE_FEATURE=$pratt"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -774,7 +778,7 @@ int main(int argc, char **argv) {
 }
 EOF
 
-"$cc" -std=c11 -pthread -I"$root/libchibicc/include" "$tmp/consumer.c" "$lib" -o "$tmp/consumer"
+"$cc" -std=c11 -pthread $pratt_flag -I"$root/libchibicc/include" "$tmp/consumer.c" "$lib" -o "$tmp/consumer"
 "$tmp/consumer" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
 
 # The sanitizer gate (PLAN L3.0/L3.4c). The library sources themselves are
@@ -785,12 +789,12 @@ mkdir -p "$tmp/asan"
 asan_objs=
 for src in "$root"/libchibicc/src/*.c; do
   base=$(basename "$src" .c)
-  "$cc" -std=c11 -g -Wall -Wno-switch -DCHIBICC_DEBUG_ARENA -DCHIBICC_TEST_BUILTINS -fsanitize=address,undefined -fno-omit-frame-pointer \
+  "$cc" -std=c11 -g -Wall -Wno-switch $pratt_flag -DCHIBICC_DEBUG_ARENA -DCHIBICC_TEST_BUILTINS -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$root/libchibicc/include" -I"$root/libchibicc/src" -c "$src" -o "$tmp/asan/$base.o"
   asan_objs="$asan_objs $tmp/asan/$base.o"
 done
 ar rcs "$tmp/libchibicc-asan.a" $asan_objs
-"$cc" -std=c11 -pthread -g -DCHIBICC_TEST_BUILTINS -fsanitize=address,undefined \
+"$cc" -std=c11 -pthread -g $pratt_flag -DCHIBICC_TEST_BUILTINS -fsanitize=address,undefined \
   -fno-omit-frame-pointer -I"$root/libchibicc/include" "$tmp/consumer.c" \
   "$tmp/libchibicc-asan.a" -o "$tmp/consumer-asan"
 ASAN_OPTIONS=detect_leaks=0 \
@@ -800,7 +804,7 @@ ASAN_OPTIONS=detect_leaks=0 \
 # The shared library (PLAN L3.3b, Linux only): the same consumer links
 # against it and runs.
 if [ -z "${CHIBICC_LIB:-}" ] && [ -f "$root/libchibicc.so" ]; then
-  "$cc" -std=c11 -pthread -I"$root/libchibicc/include" "$tmp/consumer.c" \
+  "$cc" -std=c11 -pthread $pratt_flag -I"$root/libchibicc/include" "$tmp/consumer.c" \
     -L"$root" -lchibicc -Wl,-rpath,"$root" -o "$tmp/consumer-so"
   "$tmp/consumer-so" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
 fi
