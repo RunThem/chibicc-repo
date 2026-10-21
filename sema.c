@@ -163,21 +163,37 @@ struct SemaScope {
   HashMap vars;
 };
 
-// The resolve pass derives this scope stack from the tree structure, so
-// it lives entirely within sema; the parser keeps a separate stack of
-// its own for the typedef/tag classification the C grammar needs. The
-// stack lives in ChibiccContext (PLAN L2.5).
-static void sema_init(void) {
-  ChibiccContext *ctx = chibicc_ctx();
-  ctx->sema_scope = chibicc_arena_calloc(1, sizeof(Scope));
+// Zeroes the sema-owned context fields. It allocates nothing: the
+// context reset calls it after releasing the arena, and sema_init calls
+// it before creating the root scope. Keeping the whole set in one place
+// is what lets a repeated chibicc_sema without a reset start from the
+// same state as a reset one (the audit's label_gotos / unique_name_id
+// omission).
+void sema_state_clear(ChibiccContext *ctx) {
+  ctx->sema_scope = NULL;
   ctx->locals = NULL;
+  ctx->globals = NULL;
   ctx->sema_fn = NULL;
   ctx->builtin_alloca = NULL;
   ctx->gotos = (NodeArray){};
   ctx->labels = (NodeArray){};
+  ctx->label_gotos = NULL;
   ctx->loop_depth = 0;
   ctx->switch_depth = 0;
+  ctx->unique_name_id = 0;
   ctx->resolving_body = false;
+}
+
+// The resolve pass derives this scope stack from the tree structure, so
+// it lives entirely within sema; the parser keeps a separate stack of
+// its own for the typedef/tag classification the C grammar needs. The
+// stack lives in ChibiccContext (PLAN L2.5).
+//
+// A run starts with the fields cleared and a fresh root scope.
+static void sema_init(void) {
+  ChibiccContext *ctx = chibicc_ctx();
+  sema_state_clear(ctx);
+  ctx->sema_scope = chibicc_arena_calloc(1, sizeof(Scope));
 }
 
 #define scope (chibicc_ctx()->sema_scope)
@@ -852,6 +868,17 @@ static Obj *new_gvar(char *name, Type *ty) {
   return var;
 }
 
+// A built-in declaration is registered in the file scope like any other
+// object, but it is not linked into the globals list: codegen never
+// emits it, and leaving it out keeps that list the plain result of the
+// current TU instead of something sema() has to detach afterwards.
+static Obj *new_builtin_gvar(char *name, Type *ty) {
+  Obj *var = new_var(name, ty);
+  var->is_static = true;
+  var->is_definition = true;
+  return var;
+}
+
 // The anonymous names of hidden objects - string literal globals,
 // static locals and the control-flow labels sema allocates - come
 // from this one counter.
@@ -932,7 +959,7 @@ static void begin_function(Obj *fn, Type *ty) {
 static void declare_builtin_functions(void) {
   Type *ty = func_type(pointer_to(ty_void));
   ty->params = copy_type(ty_int);
-  builtin_alloca = new_gvar("alloca", ty);
+  builtin_alloca = new_builtin_gvar("alloca", ty);
   builtin_alloca->is_definition = false;
 }
 
@@ -3077,9 +3104,6 @@ static void analyze_function(Obj *fn) {
 Obj *sema(Node *toplevel) {
   sema_init();
   declare_builtin_functions();
-  // `alloca` is only a declaration for the VLA lowering to call; the
-  // list codegen walks starts after it.
-  globals = NULL;
 
   for (Node *n = toplevel; n; n = n->next) {
     switch (n->kind) {
@@ -3105,4 +3129,85 @@ Obj *sema(Node *toplevel) {
   // definitions.
   finalize_globals();
   return globals;
+}
+
+// Runs two small translation units through the public facades without a
+// context reset and checks that the second run starts from clean sema
+// state: label_gotos holds one entry per function of the current run,
+// unique_name_id restarts at zero, and the returned globals list is the
+// current TU's. Before the shared reset, the first TU's two entries
+// stayed in the list and the counter kept its value.
+bool sema_state_test(void) {
+  char *first =
+    "int f(void) { char *s = \"x\"; goto a; a: return s[0]; }\n"
+    "int g(void) { goto b; b: return 2; }\n";
+  char *second = "int h(void) { goto c; c: return 3; }\n";
+
+  ChibiccContext *ctx = chibicc_context_new();
+  bool ok = true;
+
+  for (int round = 0; round < 2 && ok; round++) {
+    char *src = round ? second : first;
+    ChibiccToken *tok = chibicc_tokenize_buffer(ctx, "<sema-state>", src);
+    if (tok)
+      tok = chibicc_preprocess(ctx, tok);
+    ChibiccNode *ast = tok ? chibicc_parse(ctx, tok) : NULL;
+    ChibiccObj *prog = ast ? chibicc_sema(ctx, ast) : NULL;
+    if (!prog) {
+      ok = false;
+      break;
+    }
+
+    int n = 0;
+    for (LabelGotoList *l = ctx->label_gotos; l; l = l->next)
+      n++;
+
+    if (round == 0) {
+      if (n != 2) {
+        fprintf(stderr, "sema-state: first TU has %d goto lists, want 2\n", n);
+        ok = false;
+      }
+    } else {
+      if (n != 1) {
+        fprintf(stderr, "sema-state: second TU has %d goto lists, want 1\n", n);
+        ok = false;
+      }
+
+      // Only the current TU's objects may be in the list: its function
+      // and the anonymous strings begin_function creates for __func__
+      // and __FUNCTION__.
+      int anon = 0;
+      int fn_named = 0;
+      for (ChibiccObj *o = prog; o; o = o->next) {
+        if (!strcmp(o->name, "h"))
+          fn_named++;
+        else if (!strncmp(o->name, ".L..", 4))
+          anon++;
+        else {
+          fprintf(stderr, "sema-state: stale global %s\n", o->name);
+          ok = false;
+          break;
+        }
+      }
+
+      if (ok && fn_named != 1) {
+        fprintf(stderr, "sema-state: second globals list has no h\n");
+        ok = false;
+      }
+
+      // The counter restarted at zero and counted exactly this TU's
+      // anonymous objects (the field name is a macro alias for the
+      // active context's field, which this test created and owns).
+      if (ok && unique_name_id != anon) {
+        fprintf(stderr, "sema-state: unique_name_id is %d, anon is %d\n",
+                unique_name_id, anon);
+        ok = false;
+      }
+    }
+  }
+
+  chibicc_context_free(ctx);
+  if (ok)
+    printf("OK\n");
+  return ok;
 }

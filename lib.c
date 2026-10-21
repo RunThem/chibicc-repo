@@ -296,18 +296,7 @@ static void clear_state(ChibiccContext *ctx) {
   ctx->include_count = 0;
   ctx->parse_depth = 0;
   ctx->scope = NULL;
-  ctx->sema_scope = NULL;
-  ctx->locals = NULL;
-  ctx->globals = NULL;
-  ctx->sema_fn = NULL;
-  ctx->builtin_alloca = NULL;
-  ctx->gotos = (NodeArray){};
-  ctx->labels = (NodeArray){};
-  ctx->label_gotos = NULL;
-  ctx->loop_depth = 0;
-  ctx->switch_depth = 0;
-  ctx->unique_name_id = 0;
-  ctx->resolving_body = false;
+  sema_state_clear(ctx);
   ctx->failed = false;
   ctx->jmp_top = NULL;
 }

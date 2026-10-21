@@ -366,6 +366,9 @@ static void parse_args(int argc, char **argv) {
       exit(0);
     }
 
+    if (!strcmp(argv[i], "-sema-state-test"))
+      exit(sema_state_test() ? 0 : 1);
+
     // These options are ignored for now.
     if (!strncmp(argv[i], "-O", 2) ||
         !strncmp(argv[i], "-W", 2) ||

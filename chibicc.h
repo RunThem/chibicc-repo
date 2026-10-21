@@ -158,6 +158,7 @@ Node *parse(Token *tok);
 void parse_init(void);
 void sema_store_label_gotos(Obj *fn, NodeArray gotos);
 NodeArray *sema_label_gotos(Obj *fn);
+void sema_state_clear(ChibiccContext *ctx);
 
 //
 // sema.c
@@ -269,6 +270,7 @@ void hashmap_delete(HashMap *map, char *key);
 void hashmap_delete2(HashMap *map, char *key, int keylen);
 void hashmap_test(void);
 void chibicc_arena_test(void);
+bool sema_state_test(void);
 
 //
 // main.c
