@@ -15,11 +15,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 # gettext: git 的 msgfmt
 # perl: git 的测试套件(prove)
 # tcl: sqlite 的测试套件
+# libreadline-dev: sqlite shell/readline 交互支持
 # autoconf/automake/pkg-config/libffi-dev: cpython 的 autoreconf 与 configure
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential git ca-certificates file \
       zlib1g-dev libssl-dev libcurl4-openssl-dev libexpat1-dev \
-      gettext perl tcl \
+      gettext perl tcl libreadline-dev libtool \
       autoconf automake pkg-config libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
