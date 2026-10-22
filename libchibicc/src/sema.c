@@ -507,6 +507,20 @@ static void resolve_type(Type *ty) {
 
   switch (ty->kind) {
   case TY_PTR:
+    // A pointer's own layout is its own: the size and alignment do not
+    // depend on the target, and C lets the target stay incomplete. An
+    // aggregate target is deliberately not laid out from here. Doing so
+    // would place it while the aggregate that owns this pointer may
+    // still be mid-layout, and a target that holds that aggregate by
+    // value would then size it from its not-yet-placed members; the
+    // point of use resolves the target instead (resolve_member, a
+    // sizeof/alignof operand, a dereference). An array or function
+    // target still has to be settled: it carries an element size and a
+    // pending dimension or parameter types of its own.
+    if (ty->base && ty->base->kind != TY_STRUCT &&
+        ty->base->kind != TY_UNION)
+      resolve_type(ty->base);
+    break;
   case TY_VLA:
     resolve_type(ty->base);
     break;
@@ -526,7 +540,12 @@ static void resolve_type(Type *ty) {
     // sema's job, done on first sight of the completed type. An
     // aggregate's own members are placed before an outer one consumes
     // their sizes, because the member types are resolved first.
-    if (ty->layout_pending) {
+    //
+    // A definition still waiting for its members to be placed has size
+    // 0; one that is only forward-declared has size -1 and nothing to
+    // place. The flag is left set in that case so the completion of the
+    // tag (a later definition) still gets its layout.
+    if (ty->layout_pending && ty->size >= 0) {
       ty->layout_pending = false;
       if (ty->kind == TY_STRUCT)
         layout_struct(ty);
@@ -1772,6 +1791,11 @@ static void resolve_member(Node *node) {
     error_tok(operand->tok, "not a struct nor a union");
   }
 
+  // The access needs the members placed. A bare `struct S {...};`
+  // definition carries no declaration record, so nothing has laid the
+  // type out yet when the first access arrives through a pointer.
+  resolve_type(ty);
+
   bool flattened = false;
   Node *cur = operand;
   for (;;) {
@@ -2118,9 +2142,11 @@ void add_type(Node *node) {
     if (!ty) {
       add_type(node->lhs);
       ty = node->lhs->ty;
-    } else {
-      resolve_type(ty);
     }
+    // The operand's type is read for its size, so the layout has to be
+    // complete; a struct reached through a dereference is not placed by
+    // the pointer rules alone.
+    resolve_type(ty);
 
     node->ty = ty_ulong;
     if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
@@ -2240,6 +2266,10 @@ void add_type(Node *node) {
       error_tok(node->tok, "dereferencing a void pointer");
 
     node->ty = node->lhs->ty->base;
+    // A struct or union read through a pointer is used by value from
+    // here on (`*p = x`, a struct argument), and that needs its members
+    // placed; the pointer rules deliberately leave the target alone.
+    resolve_type(node->ty);
     return;
   case ND_STMT_EXPR:
     if (stmt_expr_value) {

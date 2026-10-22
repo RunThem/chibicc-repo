@@ -156,6 +156,20 @@ int main() {
   ASSERT(8, ({ struct RetBuf b; b = ret_buf(4); b.a[9]; }));
   ASSERT(15, (ret_buf(5).a[9] + ret_buf(3).a[0] + 2));
 
+  // An outer definition with no declarator records nothing for the
+  // resolve pass, and an inner aggregate that points back at it must not
+  // drag the outer layout through the pointer: that lays the outer out
+  // while it is still being placed, sizes the inner member as 0, and
+  // lets the two members overlap.
+  ASSERT(24, ({ struct BackO; struct BackI { struct BackO *back; int a; };
+                struct BackO { struct BackI in; int z; }; sizeof(struct BackO); }));
+  ASSERT(16, ({ struct BackO2; struct BackI2 { struct BackO2 *back; int a; };
+                struct BackO2 { struct BackI2 in; int z; }; struct BackO2 o;
+                (int)((char *)&o.z - (char *)&o); }));
+  ASSERT(9, ({ struct BackO3; struct BackI3 { struct BackO3 *back; int a; };
+               struct BackO3 { struct BackI3 in; int z; }; struct BackO3 o;
+               o.in.back = &o; o.z = 9; o.in.back->z; }));
+
   printf("OK\n");
   return 0;
 }
