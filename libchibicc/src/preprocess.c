@@ -1445,7 +1445,7 @@ static void join_adjacent_string_literals(Token *tok) {
     }
 
     *tok1 = *copy_token(tok1);
-    tok1->ty = array_of(tok1->ty->base, len);
+    tok1->ty = array_of(chibicc_ctx(), tok1->ty->base, len);
     tok1->str = buf;
     tok1->next = tok2;
     tok1 = tok2;

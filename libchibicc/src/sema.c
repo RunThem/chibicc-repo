@@ -144,7 +144,7 @@ Node *new_cast(Node *expr, Type *ty) {
   node->kind = ND_CAST;
   node->tok = expr->tok;
   node->lhs = expr;
-  node->ty = copy_type(ty);
+  node->ty = copy_type(chibicc_ctx(), ty);
   node->is_implicit = true;
   return node;
 }
@@ -713,7 +713,7 @@ static void finalize_members(Type *ty) {
   for (Member *mem = ty->members; mem; mem = mem->next)
     last = mem;
   if (last && last->ty->kind == TY_ARRAY && last->ty->array_len < 0) {
-    last->ty = array_of(last->ty->base, 0);
+    last->ty = array_of(chibicc_ctx(), last->ty->base, 0);
     ty->is_flexible = true;
   }
 }
@@ -873,7 +873,7 @@ static Type *named_type(Type *ty, Token *name_tok) {
   if (ty->kind == TY_VLA)
     return ty;
 
-  Type *copy = copy_type(ty);
+  Type *copy = copy_type(chibicc_ctx(), ty);
   copy->name = name_tok;
   return copy;
 }
@@ -956,28 +956,28 @@ static void begin_function(Obj *fn, Type *ty) {
   // as the hidden first parameter.
   Type *rty = ty->return_ty;
   if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
-    new_lvar("", pointer_to(rty));
+    new_lvar("", pointer_to(chibicc_ctx(), rty));
 
   fn->params = locals;
 
   if (ty->is_variadic)
-    fn->va_area = new_lvar("__va_area__", array_of(ty_char, 136));
-  fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(ty_char));
+    fn->va_area = new_lvar("__va_area__", array_of(chibicc_ctx(), ty_char, 136));
+  fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(chibicc_ctx(), ty_char));
 
   // [https://www.sigbus.info/n1570#6.4.2.2p1] "__func__" is
   // automatically defined as a local variable containing
   // the current function name.
   push_scope("__func__")->var =
-    new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
+    new_string_literal(fn->name, array_of(chibicc_ctx(), ty_char, strlen(fn->name) + 1));
 
   // [GNU] __FUNCTION__ is yet another name of __func__.
   push_scope("__FUNCTION__")->var =
-    new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
+    new_string_literal(fn->name, array_of(chibicc_ctx(), ty_char, strlen(fn->name) + 1));
 }
 
 static void declare_builtin_functions(void) {
-  Type *ty = func_type(pointer_to(ty_void));
-  ty->params = copy_type(ty_int);
+  Type *ty = func_type(chibicc_ctx(), pointer_to(chibicc_ctx(), ty_void));
+  ty->params = copy_type(chibicc_ctx(), ty_int);
   builtin_alloca = new_builtin_gvar("alloca", ty);
   builtin_alloca->is_definition = false;
 }
@@ -1113,7 +1113,7 @@ static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
 }
 
 static Type *copy_struct_type(Type *ty) {
-  ty = copy_type(ty);
+  ty = copy_type(chibicc_ctx(), ty);
 
   Member head = {};
   Member *cur = &head;
@@ -1472,7 +1472,7 @@ static void resolve_value(Initializer *rec, InitTree *init, InitItem **cursor) {
 
   if (ty->kind == TY_ARRAY && rec->kind == INIT_STR) {
     if (init->is_flexible)
-      *init = *new_resolved_init(array_of(ty->base, rec->str_tok->ty->array_len), false);
+      *init = *new_resolved_init(array_of(chibicc_ctx(), ty->base, rec->str_tok->ty->array_len), false);
     resolve_string(rec, init);
     return;
   }
@@ -1485,7 +1485,7 @@ static void resolve_value(Initializer *rec, InitTree *init, InitItem **cursor) {
       int len = (rec->kind == INIT_LIST) ? count_flex_list(rec->items, ty)
                                          : count_flex(rec, cursor, ty);
       *cursor = save;
-      *init = *new_resolved_init(array_of(ty->base, len), false);
+      *init = *new_resolved_init(array_of(chibicc_ctx(), ty->base, len), false);
     }
 
     if (rec->kind == INIT_LIST) {
@@ -1701,12 +1701,12 @@ static void serialize_gvar(Node *node) {
 
 Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->base)
-    return pointer_to(ty1->base);
+    return pointer_to(chibicc_ctx(), ty1->base);
 
   if (ty1->kind == TY_FUNC)
-    return pointer_to(ty1);
+    return pointer_to(chibicc_ctx(), ty1);
   if (ty2->kind == TY_FUNC)
-    return pointer_to(ty2);
+    return pointer_to(chibicc_ctx(), ty2);
 
   if (ty1->kind == TY_LDOUBLE || ty2->kind == TY_LDOUBLE)
     return ty_ldouble;
@@ -1848,9 +1848,9 @@ static void select_generic(Node *node) {
 
   Type *ty = node->cond->ty;
   if (ty->kind == TY_FUNC)
-    ty = pointer_to(ty);
+    ty = pointer_to(chibicc_ctx(), ty);
   else if (ty->kind == TY_ARRAY)
-    ty = pointer_to(ty->base);
+    ty = pointer_to(chibicc_ctx(), ty->base);
 
   Node *sel = NULL;
   for (Node *assoc = node->args; assoc; assoc = assoc->next) {
@@ -2221,9 +2221,9 @@ void add_type(Node *node) {
 
     Type *ty = node->lhs->ty;
     if (ty->kind == TY_ARRAY)
-      node->ty = pointer_to(ty->base);
+      node->ty = pointer_to(chibicc_ctx(), ty->base);
     else
-      node->ty = pointer_to(ty);
+      node->ty = pointer_to(chibicc_ctx(), ty);
     return;
   }
   case ND_SUBSCRIPT: {
@@ -2288,7 +2288,7 @@ void add_type(Node *node) {
     // static initializer holds one, and only the evaluator reaches it.
     // The type annotation makes this run exactly once per node.
     nodearray_push(chibicc_ctx(), &gotos, node);
-    node->ty = pointer_to(ty_void);
+    node->ty = pointer_to(chibicc_ctx(), ty_void);
     return;
   case ND_CAS:
     add_type(node->cas_addr);

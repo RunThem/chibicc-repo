@@ -225,15 +225,15 @@ bool is_integer(Type *ty);
 bool is_flonum(Type *ty);
 bool is_numeric(Type *ty);
 bool is_compatible(Type *t1, Type *t2);
-Type *copy_type(Type *ty);
-Type *pointer_to(Type *base);
-Type *func_type(Type *return_ty);
-Type *array_of(Type *base, int size);
-Type *vla_of(Type *base, Node *expr);
-Type *array_of_dim(Type *base, Node *dim);
-Type *typeof_placeholder(void);
-Type *enum_type(void);
-Type *struct_type(void);
+Type *copy_type(ChibiccContext *ctx, Type *ty);
+Type *pointer_to(ChibiccContext *ctx, Type *base);
+Type *func_type(ChibiccContext *ctx, Type *return_ty);
+Type *array_of(ChibiccContext *ctx, Type *base, int size);
+Type *vla_of(ChibiccContext *ctx, Type *base, Node *expr);
+Type *array_of_dim(ChibiccContext *ctx, Type *base, Node *dim);
+Type *typeof_placeholder(ChibiccContext *ctx);
+Type *enum_type(ChibiccContext *ctx);
+Type *struct_type(ChibiccContext *ctx);
 
 //
 // strings.c

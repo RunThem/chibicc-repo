@@ -362,7 +362,7 @@ static Token *read_string_literal(char *start, char *quote, int raw_trivia) {
   }
 
   Token *tok = new_token(TK_STR, start, end + 1, raw_trivia);
-  tok->ty = array_of(ty_char, len + 1);
+  tok->ty = array_of(chibicc_ctx(), ty_char, len + 1);
   tok->str = buf;
   return tok;
 }
@@ -398,7 +398,7 @@ static Token *read_utf16_string_literal(char *start, char *quote, int raw_trivia
   }
 
   Token *tok = new_token(TK_STR, start, end + 1, raw_trivia);
-  tok->ty = array_of(ty_ushort, len + 1);
+  tok->ty = array_of(chibicc_ctx(), ty_ushort, len + 1);
   tok->str = (char *)buf;
   return tok;
 }
@@ -420,7 +420,7 @@ static Token *read_utf32_string_literal(char *start, char *quote, Type *ty, int 
   }
 
   Token *tok = new_token(TK_STR, start, end + 1, raw_trivia);
-  tok->ty = array_of(ty, len + 1);
+  tok->ty = array_of(chibicc_ctx(), ty, len + 1);
   tok->str = (char *)buf;
   return tok;
 }

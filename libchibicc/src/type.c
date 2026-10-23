@@ -21,8 +21,8 @@ Type *ty_float = &(Type){TY_FLOAT, 4, 4};
 Type *ty_double = &(Type){TY_DOUBLE, 8, 8};
 Type *ty_ldouble = &(Type){TY_LDOUBLE, 16, 16};
 
-static Type *new_type(TypeKind kind, int size, int align) {
-  Type *ty = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Type));
+static Type *new_type(ChibiccContext *ctx, TypeKind kind, int size, int align) {
+  Type *ty = chibicc_arena_calloc(ctx, 1, sizeof(Type));
   ty->kind = kind;
   ty->size = size;
   ty->align = align;
@@ -91,29 +91,29 @@ bool is_compatible(Type *t1, Type *t2) {
   return false;
 }
 
-Type *copy_type(Type *ty) {
-  Type *ret = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Type));
+Type *copy_type(ChibiccContext *ctx, Type *ty) {
+  Type *ret = chibicc_arena_calloc(ctx, 1, sizeof(Type));
   *ret = *ty;
   ret->origin = ty;
   return ret;
 }
 
-Type *pointer_to(Type *base) {
-  Type *ty = new_type(TY_PTR, 8, 8);
+Type *pointer_to(ChibiccContext *ctx, Type *base) {
+  Type *ty = new_type(ctx, TY_PTR, 8, 8);
   ty->base = base;
   ty->is_unsigned = true;
   return ty;
 }
 
-Type *func_type(Type *return_ty) {
+Type *func_type(ChibiccContext *ctx, Type *return_ty) {
   // The C spec disallows sizeof(<function type>), but
   // GCC allows that and the expression is evaluated to 1.
-  Type *ty = new_type(TY_FUNC, 1, 1);
+  Type *ty = new_type(ctx, TY_FUNC, 1, 1);
   ty->return_ty = return_ty;
   return ty;
 }
 
-Type *array_of(Type *base, int len) {
+Type *array_of(ChibiccContext *ctx, Type *base, int len) {
   // A negative length asks for an incomplete array, and a negative base
   // size means the element type has no size yet - a dimension the parser
   // left for sema to decide is one way to get there. The product of the
@@ -123,14 +123,14 @@ Type *array_of(Type *base, int len) {
   if (size >= 0 && (base->size < 0 || len < 0))
     size = -1;
 
-  Type *ty = new_type(TY_ARRAY, size, base->align);
+  Type *ty = new_type(ctx, TY_ARRAY, size, base->align);
   ty->base = base;
   ty->array_len = len;
   return ty;
 }
 
-Type *vla_of(Type *base, Node *len) {
-  Type *ty = new_type(TY_VLA, 8, 8);
+Type *vla_of(ChibiccContext *ctx, Type *base, Node *len) {
+  Type *ty = new_type(ctx, TY_VLA, 8, 8);
   ty->base = base;
   ty->vla_len = len;
   return ty;
@@ -139,8 +139,8 @@ Type *vla_of(Type *base, Node *len) {
 // An array whose dimension the parser could not decide: `dim` is the
 // length expression, which sema evaluates into a length - or, when it is
 // not a constant expression, turns the type into a VLA.
-Type *array_of_dim(Type *base, Node *dim) {
-  Type *ty = array_of(base, -1);
+Type *array_of_dim(ChibiccContext *ctx, Type *base, Node *dim) {
+  Type *ty = array_of(ctx, base, -1);
   ty->dim_len = dim;
   return ty;
 }
@@ -148,14 +148,14 @@ Type *array_of_dim(Type *base, Node *dim) {
 // The type of a `typeof(expr)`, until sema annotates the operand and
 // fills this record in. Its size is negative like an incomplete type's,
 // so that a record nobody completed is rejected rather than measured.
-Type *typeof_placeholder(void) {
-  return new_type(TY_TYPEOF, -1, 1);
+Type *typeof_placeholder(ChibiccContext *ctx) {
+  return new_type(ctx, TY_TYPEOF, -1, 1);
 }
 
-Type *enum_type(void) {
-  return new_type(TY_ENUM, 4, 4);
+Type *enum_type(ChibiccContext *ctx) {
+  return new_type(ctx, TY_ENUM, 4, 4);
 }
 
-Type *struct_type(void) {
-  return new_type(TY_STRUCT, 0, 1);
+Type *struct_type(ChibiccContext *ctx) {
+  return new_type(ctx, TY_STRUCT, 0, 1);
 }

@@ -508,7 +508,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
   }
 
   if (is_atomic) {
-    ty = copy_type(ty);
+    ty = copy_type(chibicc_ctx(), ty);
     ty->is_atomic = true;
   }
 
@@ -521,7 +521,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
 static Type *func_params(Token **rest, Token *tok, Type *ty) {
   if (equal(tok, "void") && equal(tok->next, ")")) {
     *rest = tok->next->next;
-    return func_type(ty);
+    return func_type(chibicc_ctx(), ty);
   }
 
   Type head = {};
@@ -547,16 +547,16 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     if (ty2->kind == TY_ARRAY) {
       // "array of T" is converted to "pointer to T" only in the parameter
       // context. For example, *argv[] is converted to **argv by this.
-      ty2 = pointer_to(ty2->base);
+      ty2 = pointer_to(chibicc_ctx(), ty2->base);
     } else if (ty2->kind == TY_FUNC) {
       // Likewise, a function is converted to a pointer to a function
       // only in the parameter context.
-      ty2 = pointer_to(ty2);
+      ty2 = pointer_to(chibicc_ctx(), ty2);
     }
 
     // The parameter record is copied into the function type; its name
     // lives on that per-parameter copy, where sema reads it.
-    Type *param = copy_type(ty2);
+    Type *param = copy_type(chibicc_ctx(), ty2);
     param->name = decl.name;
     param->name_pos = decl.name_pos;
     cur = cur->next = param;
@@ -565,7 +565,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
   if (cur == &head)
     is_variadic = true;
 
-  ty = func_type(ty);
+  ty = func_type(chibicc_ctx(), ty);
   ty->params = head.next;
   ty->is_variadic = is_variadic;
   // Enum constants a parameter's declspec defined (e.g.
@@ -583,7 +583,7 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
 
   if (equal(tok, "]")) {
     ty = type_suffix(rest, tok->next, ty);
-    return array_of(ty, -1);
+    return array_of(chibicc_ctx(), ty, -1);
   }
 
   Node *expr = conditional(&tok, tok);
@@ -594,7 +594,7 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
   // on whether the length expression is a constant expression - a
   // semantic question. The expression is recorded here and sema decides
   // the type when it resolves the declarator (see resolve_type).
-  return array_of_dim(ty, expr);
+  return array_of_dim(chibicc_ctx(), ty, expr);
 }
 
 // type-suffix = "(" func-params
@@ -614,7 +614,7 @@ static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
 // pointers = ("*" ("const" | "volatile" | "restrict")*)*
 static Type *pointers(Token **rest, Token *tok, Type *ty) {
   while (consume(&tok, tok, "*")) {
-    ty = pointer_to(ty);
+    ty = pointer_to(chibicc_ctx(), ty);
     while (equal(tok, "const") || equal(tok, "volatile") || equal(tok, "restrict") ||
            equal(tok, "__restrict") || equal(tok, "__restrict__"))
       tok = tok->next;
@@ -723,7 +723,7 @@ static bool consume_end(Token **rest, Token *tok) {
 //
 // enum-list      = ident ("=" num)? ("," ident ("=" num)?)* ","?
 static Type *enum_specifier(Token **rest, Token *tok, Node **specs) {
-  Type *ty = enum_type();
+  Type *ty = enum_type(chibicc_ctx());
 
   // Read a struct tag.
   Token *tag = NULL;
@@ -781,7 +781,7 @@ static Type *typeof_specifier(Token **rest, Token *tok, Node **specs) {
     // What type an expression has is not a syntax question, so the
     // operand is recorded in a placeholder the declarator builds on;
     // sema annotates the expression and fills the record in.
-    ty = typeof_placeholder();
+    ty = typeof_placeholder(chibicc_ctx());
     ty->typeof_expr = expr(&tok, tok);
   }
   *rest = skip(tok, ")");
@@ -1824,7 +1824,7 @@ static Token *attribute_list(Token *tok, Type *ty) {
 
 // struct-union-decl = attribute? ident? ("{" struct-members)?
 static Type *struct_union_decl(Token **rest, Token *tok, Node **specs) {
-  Type *ty = struct_type();
+  Type *ty = struct_type(chibicc_ctx());
   tok = attribute_list(tok, ty);
 
   // Read a tag.

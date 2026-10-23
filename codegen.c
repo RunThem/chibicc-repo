@@ -2143,7 +2143,7 @@ static Node *to_assign(Node *node) {
   if (node->lhs->kind == ND_MEMBER) {
     Node *operand = node->lhs->lhs;
     bool arrow = node->lhs->arrow_tok;
-    Obj *var = new_lvar("", pointer_to(arrow ? operand->ty->base : operand->ty));
+    Obj *var = new_lvar("", pointer_to(chibicc_ctx(), arrow ? operand->ty->base : operand->ty));
     Node *addr = arrow ? operand : new_unary(ND_ADDR, operand, tok);
 
     Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
@@ -2190,7 +2190,7 @@ static Node *to_assign(Node *node) {
     Node head = {};
     Node *cur = &head;
 
-    Obj *addr = new_lvar("", pointer_to(node->lhs->ty));
+    Obj *addr = new_lvar("", pointer_to(chibicc_ctx(), node->lhs->ty));
     Obj *val = new_lvar("", rhs->ty);
     Obj *old = new_lvar("", node->lhs->ty);
     Obj *new = new_lvar("", node->lhs->ty);
@@ -2253,7 +2253,7 @@ static Node *to_assign(Node *node) {
   }
 
   // Convert `A op= B` to ``tmp = &A, *tmp = *tmp op B`.
-  Obj *var = new_lvar("", pointer_to(node->lhs->ty));
+  Obj *var = new_lvar("", pointer_to(chibicc_ctx(), node->lhs->ty));
 
   Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
                            new_unary(ND_ADDR, node->lhs, tok), tok);
