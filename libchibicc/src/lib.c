@@ -318,7 +318,7 @@ Token *chibicc_tokenize_file(ChibiccContext *ctx, char *path) {
   ENTER_RET(ctx, NULL);
   if (!ctx->base_file)
     ctx->base_file = chibicc_arena_strdup(ctx, path);
-  Token *tok = tokenize_file(path);
+  Token *tok = tokenize_file(ctx, path);
   // tokenize_file returns NULL only when the file cannot be opened; the
   // facades report it, so a library consumer never sees a silent NULL
   // (PLAN D4/L3.4b).
@@ -340,14 +340,14 @@ Token *chibicc_tokenize_buffer_len(ChibiccContext *ctx, char *name,
   memcpy(copy, contents, len);
   copy[len] = '\0';
 
-  File *file = new_file_len(chibicc_arena_strdup(ctx, name), 0, copy, len);
+  File *file = new_file_len(ctx, chibicc_arena_strdup(ctx, name), 0, copy, len);
   char *nul = memchr(copy, 0, len);
   if (nul) {
     ctx->current_file = file;
     error_at(ctx, nul, "NUL byte in source file");
   }
 
-  Token *tok = tokenize(file);
+  Token *tok = tokenize(ctx, file);
   LEAVE(ctx);
   return tok;
 }

@@ -280,21 +280,21 @@ static char *quote_string(char *str) {
 // the loc it is given.
 static Token *tokenize_nested(File *file) {
   File *save = chibicc_ctx()->current_file;
-  Token *tok = tokenize(file);
+  Token *tok = tokenize(chibicc_ctx(), file);
   chibicc_ctx()->current_file = save;
   return tok;
 }
 
 static Token *tokenize_file_nested(char *path) {
   File *save = chibicc_ctx()->current_file;
-  Token *tok = tokenize_file(path);
+  Token *tok = tokenize_file(chibicc_ctx(), path);
   chibicc_ctx()->current_file = save;
   return tok;
 }
 
 static Token *new_str_token(char *str, Token *tmpl) {
   char *buf = quote_string(str);
-  return tokenize_nested(new_file(tmpl->file->name, tmpl->file->file_no, buf));
+  return tokenize_nested(new_file(chibicc_ctx(), tmpl->file->name, tmpl->file->file_no, buf));
 }
 
 // Copy all tokens until the next newline, terminate them with
@@ -314,7 +314,7 @@ static Token *copy_line(Token **rest, Token *tok) {
 
 static Token *new_num_token(int val, Token *tmpl) {
   char *buf = format(chibicc_ctx(), "%d\n", val);
-  return tokenize_nested(new_file(tmpl->file->name, tmpl->file->file_no, buf));
+  return tokenize_nested(new_file(chibicc_ctx(), tmpl->file->name, tmpl->file->file_no, buf));
 }
 
 #ifdef CHIBICC_TEST_BUILTINS
@@ -347,7 +347,7 @@ static Token *read_const_expr(Token **rest, Token *tok) {
       tok = tok->next;
 
       if (has_paren)
-        tok = skip(tok, ")");
+        tok = skip(chibicc_ctx(), tok, ")");
 
       cur = cur->next = new_num_token(m ? 1 : 0, start);
       continue;
@@ -383,7 +383,7 @@ static long eval_const_expr(Token **rest, Token *tok) {
   }
 
   // Convert pp-numbers to regular numbers
-  convert_pp_tokens(expr);
+  convert_pp_tokens(chibicc_ctx(), expr);
 
   Token *rest2;
   long val = const_expr(&rest2, expr);
@@ -423,11 +423,11 @@ static MacroParam *read_macro_params(Token **rest, Token *tok, char **va_args_na
 
   while (!equal(tok, ")")) {
     if (cur != &head)
-      tok = skip(tok, ",");
+      tok = skip(chibicc_ctx(), tok, ",");
 
     if (equal(tok, "...")) {
       *va_args_name = "__VA_ARGS__";
-      *rest = skip(tok->next, ")");
+      *rest = skip(chibicc_ctx(), tok->next, ")");
       return head.next;
     }
 
@@ -436,7 +436,7 @@ static MacroParam *read_macro_params(Token **rest, Token *tok, char **va_args_na
 
     if (equal(tok->next, "...")) {
       *va_args_name = chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len);
-      *rest = skip(tok->next->next, ")");
+      *rest = skip(chibicc_ctx(), tok->next->next, ")");
       return head.next;
     }
 
@@ -516,7 +516,7 @@ read_macro_args(Token **rest, Token *tok, MacroParam *params, char *va_args_name
   int index = 0;
   for (; pp; pp = pp->next) {
     if (cur != &head)
-      tok = skip(tok, ",");
+      tok = skip(chibicc_ctx(), tok, ",");
     cur = cur->next = read_macro_arg_one(&tok, tok, false);
     cur->name = pp->name;
     cur->index = index++;
@@ -529,7 +529,7 @@ read_macro_args(Token **rest, Token *tok, MacroParam *params, char *va_args_name
       arg->tok = new_eof(tok);
     } else {
       if (pp != params)
-        tok = skip(tok, ",");
+        tok = skip(chibicc_ctx(), tok, ",");
       arg = read_macro_arg_one(&tok, tok, true);
     }
     arg->name = va_args_name;;
@@ -540,7 +540,7 @@ read_macro_args(Token **rest, Token *tok, MacroParam *params, char *va_args_name
     error_tok(chibicc_ctx(), start, "too many arguments");
   }
 
-  skip(tok, ")");
+  skip(chibicc_ctx(), tok, ")");
   *rest = tok;
   return head.next;
 }
@@ -592,7 +592,7 @@ static Token *paste(Token *lhs, Token *rhs) {
   char *buf = format(chibicc_ctx(), "%.*s%.*s", lhs->len, lhs->loc, rhs->len, rhs->loc);
 
   // Tokenize the resulting string.
-  Token *tok = tokenize_nested(new_file(lhs->file->name, lhs->file->file_no, buf));
+  Token *tok = tokenize_nested(new_file(chibicc_ctx(), lhs->file->name, lhs->file->file_no, buf));
   if (tok->next->kind != TK_EOF)
     error_tok(chibicc_ctx(), lhs, "pasting forms '%s', an invalid token", buf);
   return tok;
@@ -711,7 +711,7 @@ static Token *subst(Token *tok, MacroArg *args, MacroExpansion *e) {
           cur = cur->next = t;
           cur->prov = new_prov(e, -1, body_base);
         }
-      tok = skip(tok, ")");
+      tok = skip(chibicc_ctx(), tok, ")");
       continue;
     }
 
@@ -1146,7 +1146,7 @@ static Token *preprocess2(Token *tok) {
 }
 
 void define_macro(char *name, char *buf) {
-  Token *tok = tokenize_nested(new_file("<built-in>", 1, buf));
+  Token *tok = tokenize_nested(new_file(chibicc_ctx(), "<built-in>", 1, buf));
   add_macro(name, true, tok);
 }
 
@@ -1413,7 +1413,7 @@ static void join_adjacent_string_literals(Token *tok) {
           // The re-scan replaces the whole token (and does not set
           // line_no); the provenance belongs to the source token.
           MacroProv *prov = t->prov;
-          *t = *tokenize_string_literal(t, basety);
+          *t = *tokenize_string_literal(chibicc_ctx(), t, basety);
           t->prov = prov;
         }
 
@@ -1457,7 +1457,7 @@ Token *preprocess(Token *tok) {
   tok = preprocess2(tok);
   if (cond_incl)
     error_tok(chibicc_ctx(), cond_incl->tok, "unterminated conditional directive");
-  convert_pp_tokens(tok);
+  convert_pp_tokens(chibicc_ctx(), tok);
   join_adjacent_string_literals(tok);
 
   for (Token *t = tok; t; t = t->next)

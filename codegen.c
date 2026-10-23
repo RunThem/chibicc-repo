@@ -2804,7 +2804,7 @@ static void emit_text(Obj *prog) {
 void codegen(Obj *prog, FILE *out) {
   output_file = out;
 
-  File **files = get_input_files();
+  File **files = get_input_files(chibicc_ctx());
   for (int i = 0; files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
 

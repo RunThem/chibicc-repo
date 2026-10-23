@@ -44,7 +44,7 @@ void expansion_dump(Token *tok, FILE *out) {
   for (; tok->kind != TK_EOF; tok = tok->next) {
     fputs("T ", out);
     print_pos(out, tok);
-    fprintf(out, " %s ", token_kind_name(tok->kind));
+    fprintf(out, " %s ", token_kind_name(chibicc_ctx(), tok->kind));
     print_escaped(out, tok->loc, tok->len);
 
     MacroProv *prov = token_provenance(tok);

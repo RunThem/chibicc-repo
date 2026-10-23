@@ -90,17 +90,17 @@ noreturn void error_at(ChibiccContext *ctx, char *loc, char *fmt, ...) __attribu
 noreturn void error_tok(ChibiccContext *ctx, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
 void warn_tok(ChibiccContext *ctx, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
 bool equal(Token *tok, char *op);
-Token *skip(Token *tok, char *op);
+Token *skip(ChibiccContext *ctx, Token *tok, char *op);
 bool consume(Token **rest, Token *tok, char *str);
-void convert_pp_tokens(Token *tok);
-File **get_input_files(void);
-File *new_file(char *name, int file_no, char *contents);
-File *new_file_len(char *name, int file_no, char *contents, int len);
+void convert_pp_tokens(ChibiccContext *ctx, Token *tok);
+File **get_input_files(ChibiccContext *ctx);
+File *new_file(ChibiccContext *ctx, char *name, int file_no, char *contents);
+File *new_file_len(ChibiccContext *ctx, char *name, int file_no, char *contents, int len);
 bool is_line_break(char *p);
 int line_break_len(char *p);
-Token *tokenize_string_literal(Token *tok, Type *basety);
-Token *tokenize(File *file);
-Token *tokenize_file(char *filename);
+Token *tokenize_string_literal(ChibiccContext *ctx, Token *tok, Type *basety);
+Token *tokenize(ChibiccContext *ctx, File *file);
+Token *tokenize_file(ChibiccContext *ctx, char *filename);
 
 #define unreachable() \
   error(chibicc_ctx(), "internal error at %s:%d", __FILE__, __LINE__)
@@ -281,7 +281,7 @@ void hashmap_delete2(ChibiccContext *ctx, HashMap *map, char *key, int keylen);
 
 bool file_exists(char *path);
 void print_escaped(FILE *out, char *p, int len);
-char *token_kind_name(TokenKind kind);
+char *token_kind_name(ChibiccContext *ctx, TokenKind kind);
 
 //
 // context / arena / diagnostics (PLAN L2)

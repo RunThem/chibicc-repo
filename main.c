@@ -595,7 +595,7 @@ static void print_token_dump(Token *tok) {
     }
 
     print_dump_line(out, "T", tok->line_no, tok->raw_loc - raw,
-                    token_kind_name(tok->kind), tok->raw_loc, tok->raw_len);
+                    token_kind_name(ctx, tok->kind), tok->raw_loc, tok->raw_len);
   }
 }
 
@@ -630,7 +630,7 @@ static void print_dependencies(void) {
   else
     fprintf(out, "%s:", quote_makefile(replace_extn(base_file, ".o")));
 
-  File **files = get_input_files();
+  File **files = get_input_files(ctx);
 
   for (int i = 0; files[i]; i++) {
     if (opt_MMD && in_std_include_path(files[i]->name))

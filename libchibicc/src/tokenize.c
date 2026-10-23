@@ -165,7 +165,7 @@ void warn_tok(ChibiccContext *ctx, Token *tok, char *fmt, ...) {
 
 // The dump name of a token kind. Lives here, not in the driver, so the
 // provenance channel can use it without main.c.
-char *token_kind_name(TokenKind kind) {
+char *token_kind_name(ChibiccContext *ctx, TokenKind kind) {
   switch (kind) {
   case TK_IDENT:   return "ident";
   case TK_PUNCT:   return "punct";
@@ -186,9 +186,9 @@ bool equal(Token *tok, char *op) {
 }
 
 // Ensure that the current token is `op`.
-Token *skip(Token *tok, char *op) {
+Token *skip(ChibiccContext *ctx, Token *tok, char *op) {
   if (!equal(tok, op))
-    error_tok(chibicc_ctx(), tok, "expected '%s'", op);
+    error_tok(ctx, tok, "expected '%s'", op);
   return tok->next;
 }
 
@@ -203,25 +203,25 @@ bool consume(Token **rest, Token *tok, char *str) {
 
 // Create a new token. `raw_trivia` is the raw offset where the bytes
 // skipped in front of this token start (see Token.trivia).
-static Token *new_token(TokenKind kind, char *start, char *end, int raw_trivia) {
-  Token *tok = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Token));
+static Token *new_token(ChibiccContext *ctx, TokenKind kind, char *start, char *end, int raw_trivia) {
+  Token *tok = chibicc_arena_calloc(ctx, 1, sizeof(Token));
   tok->kind = kind;
   tok->loc = start;
   tok->len = end - start;
 
-  int raw_start = raw_off(chibicc_ctx()->current_file, start);
-  tok->trivia = chibicc_ctx()->current_file->raw + raw_trivia;
+  int raw_start = raw_off(ctx->current_file, start);
+  tok->trivia = ctx->current_file->raw + raw_trivia;
   tok->trivia_len = raw_start - raw_trivia;
-  tok->raw_loc = chibicc_ctx()->current_file->raw + raw_start;
+  tok->raw_loc = ctx->current_file->raw + raw_start;
   tok->raw_len = start == end ? 0 :
-    raw_end_of(chibicc_ctx()->current_file, end - chibicc_ctx()->current_file->contents - 1) - raw_start;
+    raw_end_of(ctx->current_file, end - ctx->current_file->contents - 1) - raw_start;
 
-  tok->file = chibicc_ctx()->current_file;
-  tok->filename = chibicc_ctx()->current_file->display_name;
-  tok->at_bol = chibicc_ctx()->at_bol;
-  tok->has_space = chibicc_ctx()->has_space;
+  tok->file = ctx->current_file;
+  tok->filename = ctx->current_file->display_name;
+  tok->at_bol = ctx->at_bol;
+  tok->has_space = ctx->has_space;
 
-  chibicc_ctx()->at_bol = chibicc_ctx()->has_space = false;
+  ctx->at_bol = ctx->has_space = false;
   return tok;
 }
 
@@ -261,8 +261,7 @@ static int read_punct(char *p) {
   return ispunct((unsigned char)*p) ? 1 : 0;
 }
 
-static bool is_keyword(Token *tok) {
-  ChibiccContext *ctx = chibicc_ctx();
+static bool is_keyword(ChibiccContext *ctx, Token *tok) {
   HashMap *map = &ctx->keyword_map;
 
   if (map->capacity == 0) {
@@ -278,13 +277,13 @@ static bool is_keyword(Token *tok) {
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
-      hashmap_put(chibicc_ctx(), map, kw[i], (void *)1);
+      hashmap_put(ctx, map, kw[i], (void *)1);
   }
 
   return hashmap_get2(map, tok->loc, tok->len);
 }
 
-static int read_escaped_char(char **new_pos, char *p) {
+static int read_escaped_char(ChibiccContext *ctx, char **new_pos, char *p) {
   if ('0' <= *p && *p <= '7') {
     // Read an octal number.
     int c = *p++ - '0';
@@ -301,7 +300,7 @@ static int read_escaped_char(char **new_pos, char *p) {
     // Read a hexadecimal number.
     p++;
     if (!isxdigit((unsigned char)*p))
-      error_at(chibicc_ctx(), p, "invalid hex escape sequence");
+      error_at(ctx, p, "invalid hex escape sequence");
 
     int c = 0;
     for (; isxdigit((unsigned char)*p); p++)
@@ -338,31 +337,31 @@ static int read_escaped_char(char **new_pos, char *p) {
 }
 
 // Find a closing double-quote.
-static char *string_literal_end(char *p) {
+static char *string_literal_end(ChibiccContext *ctx, char *p) {
   char *start = p;
   for (; *p != '"'; p++) {
     if (*p == '\n' || *p == '\0')
-      error_at(chibicc_ctx(), start, "unclosed string literal");
+      error_at(ctx, start, "unclosed string literal");
     if (*p == '\\')
       p++;
   }
   return p;
 }
 
-static Token *read_string_literal(char *start, char *quote, int raw_trivia) {
-  char *end = string_literal_end(quote + 1);
-  char *buf = chibicc_arena_calloc(chibicc_ctx(), 1, end - quote);
+static Token *read_string_literal(ChibiccContext *ctx, char *start, char *quote, int raw_trivia) {
+  char *end = string_literal_end(ctx, quote + 1);
+  char *buf = chibicc_arena_calloc(ctx, 1, end - quote);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
     if (*p == '\\')
-      buf[len++] = read_escaped_char(&p, p + 1);
+      buf[len++] = read_escaped_char(ctx, &p, p + 1);
     else
       buf[len++] = *p++;
   }
 
-  Token *tok = new_token(TK_STR, start, end + 1, raw_trivia);
-  tok->ty = array_of(chibicc_ctx(), ty_char, len + 1);
+  Token *tok = new_token(ctx, TK_STR, start, end + 1, raw_trivia);
+  tok->ty = array_of(ctx, ty_char, len + 1);
   tok->str = buf;
   return tok;
 }
@@ -374,14 +373,14 @@ static Token *read_string_literal(char *start, char *quote, int raw_trivia) {
 // equal to or larger than that are encoded in 4 bytes. Each 2 bytes
 // in the 4 byte sequence is called "surrogate", and a 4 byte sequence
 // is called a "surrogate pair".
-static Token *read_utf16_string_literal(char *start, char *quote, int raw_trivia) {
-  char *end = string_literal_end(quote + 1);
-  uint16_t *buf = chibicc_arena_calloc(chibicc_ctx(), 2, end - start);
+static Token *read_utf16_string_literal(ChibiccContext *ctx, char *start, char *quote, int raw_trivia) {
+  char *end = string_literal_end(ctx, quote + 1);
+  uint16_t *buf = chibicc_arena_calloc(ctx, 2, end - start);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
     if (*p == '\\') {
-      buf[len++] = read_escaped_char(&p, p + 1);
+      buf[len++] = read_escaped_char(ctx, &p, p + 1);
       continue;
     }
 
@@ -397,8 +396,8 @@ static Token *read_utf16_string_literal(char *start, char *quote, int raw_trivia
     }
   }
 
-  Token *tok = new_token(TK_STR, start, end + 1, raw_trivia);
-  tok->ty = array_of(chibicc_ctx(), ty_ushort, len + 1);
+  Token *tok = new_token(ctx, TK_STR, start, end + 1, raw_trivia);
+  tok->ty = array_of(ctx, ty_ushort, len + 1);
   tok->str = (char *)buf;
   return tok;
 }
@@ -407,46 +406,46 @@ static Token *read_utf16_string_literal(char *start, char *quote, int raw_trivia
 //
 // UTF-32 is a fixed-width encoding for Unicode. Each code point is
 // encoded in 4 bytes.
-static Token *read_utf32_string_literal(char *start, char *quote, Type *ty, int raw_trivia) {
-  char *end = string_literal_end(quote + 1);
-  uint32_t *buf = chibicc_arena_calloc(chibicc_ctx(), 4, end - quote);
+static Token *read_utf32_string_literal(ChibiccContext *ctx, char *start, char *quote, Type *ty, int raw_trivia) {
+  char *end = string_literal_end(ctx, quote + 1);
+  uint32_t *buf = chibicc_arena_calloc(ctx, 4, end - quote);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
     if (*p == '\\')
-      buf[len++] = read_escaped_char(&p, p + 1);
+      buf[len++] = read_escaped_char(ctx, &p, p + 1);
     else
       buf[len++] = decode_utf8(&p, p);
   }
 
-  Token *tok = new_token(TK_STR, start, end + 1, raw_trivia);
-  tok->ty = array_of(chibicc_ctx(), ty, len + 1);
+  Token *tok = new_token(ctx, TK_STR, start, end + 1, raw_trivia);
+  tok->ty = array_of(ctx, ty, len + 1);
   tok->str = (char *)buf;
   return tok;
 }
 
-static Token *read_char_literal(char *start, char *quote, Type *ty, int raw_trivia) {
+static Token *read_char_literal(ChibiccContext *ctx, char *start, char *quote, Type *ty, int raw_trivia) {
   char *p = quote + 1;
   if (*p == '\0')
-    error_at(chibicc_ctx(), start, "unclosed char literal");
+    error_at(ctx, start, "unclosed char literal");
 
   int c;
   if (*p == '\\')
-    c = read_escaped_char(&p, p + 1);
+    c = read_escaped_char(ctx, &p, p + 1);
   else
     c = decode_utf8(&p, p);
 
   char *end = strchr(p, '\'');
   if (!end)
-    error_at(chibicc_ctx(), p, "unclosed char literal");
+    error_at(ctx, p, "unclosed char literal");
 
-  Token *tok = new_token(TK_NUM, start, end + 1, raw_trivia);
+  Token *tok = new_token(ctx, TK_NUM, start, end + 1, raw_trivia);
   tok->val = c;
   tok->ty = ty;
   return tok;
 }
 
-static bool convert_pp_int(Token *tok) {
+static bool convert_pp_int(ChibiccContext *ctx, Token *tok) {
   char *p = tok->loc;
 
   // Read a binary, octal, decimal or hexadecimal number.
@@ -466,7 +465,7 @@ static bool convert_pp_int(Token *tok) {
   errno = 0;
   int64_t val = strtoul(p, &p, base);
   if (errno == ERANGE)
-    error_tok(chibicc_ctx(), tok, "integer literal is too large");
+    error_tok(ctx, tok, "integer literal is too large");
 
   // Read U, L or LL suffixes.
   bool l = false;
@@ -536,9 +535,9 @@ static bool convert_pp_int(Token *tok) {
 // token after preprocessing.
 //
 // This function converts a pp-number token to a regular number token.
-static void convert_pp_number(Token *tok) {
+static void convert_pp_number(ChibiccContext *ctx, Token *tok) {
   // Try to parse as an integer constant.
-  if (convert_pp_int(tok))
+  if (convert_pp_int(ctx, tok))
     return;
 
   // If it's not an integer, it must be a floating point constant.
@@ -557,19 +556,19 @@ static void convert_pp_number(Token *tok) {
   }
 
   if (tok->loc + tok->len != end)
-    error_tok(chibicc_ctx(), tok, "invalid numeric constant");
+    error_tok(ctx, tok, "invalid numeric constant");
 
   tok->kind = TK_NUM;
   tok->fval = val;
   tok->ty = ty;
 }
 
-void convert_pp_tokens(Token *tok) {
+void convert_pp_tokens(ChibiccContext *ctx, Token *tok) {
   for (Token *t = tok; t->kind != TK_EOF; t = t->next) {
-    if (is_keyword(t))
+    if (is_keyword(ctx, t))
       t->kind = TK_KEYWORD;
     else if (t->kind == TK_PP_NUM)
-      convert_pp_number(t);
+      convert_pp_number(ctx, t);
   }
 }
 
@@ -579,23 +578,23 @@ static void add_line_numbers(Token *tok) {
     tok->line_no = tok->file->lines[raw_off(tok->file, tok->loc)];
 }
 
-Token *tokenize_string_literal(Token *tok, Type *basety) {
+Token *tokenize_string_literal(ChibiccContext *ctx, Token *tok, Type *basety) {
   // The re-scan needs the raw coordinates of the token it replaces, so
   // scan against the file that token belongs to (the running
   // `current_file` is whichever file was tokenized last). The `file` and
   // `filename` fields are restored afterwards: they used to be the stale
   // ones, and that pre-existing behavior is kept for now.
-  File *save = chibicc_ctx()->current_file;
-  chibicc_ctx()->current_file = tok->file;
+  File *save = ctx->current_file;
+  ctx->current_file = tok->file;
 
   Token *t;
   if (basety->size == 2)
-    t = read_utf16_string_literal(tok->loc, tok->loc, tok->trivia - tok->file->raw);
+    t = read_utf16_string_literal(ctx, tok->loc, tok->loc, tok->trivia - tok->file->raw);
   else
-    t = read_utf32_string_literal(tok->loc, tok->loc, basety,
+    t = read_utf32_string_literal(ctx, tok->loc, tok->loc, basety,
                                   tok->trivia - tok->file->raw);
 
-  chibicc_ctx()->current_file = save;
+  ctx->current_file = save;
   t->file = save;
   t->filename = save->display_name;
   t->next = tok->next;
@@ -603,8 +602,8 @@ Token *tokenize_string_literal(Token *tok, Type *basety) {
 }
 
 // Tokenize a given string and returns new tokens.
-Token *tokenize(File *file) {
-  chibicc_ctx()->current_file = file;
+Token *tokenize(ChibiccContext *ctx, File *file) {
+  ctx->current_file = file;
 
   char *p = file->contents;
 
@@ -616,8 +615,8 @@ Token *tokenize(File *file) {
   Token head = {};
   Token *cur = &head;
 
-  chibicc_ctx()->at_bol = true;
-  chibicc_ctx()->has_space = false;
+  ctx->at_bol = true;
+  ctx->has_space = false;
 
   while (*p) {
     // Skip line comments.
@@ -625,7 +624,7 @@ Token *tokenize(File *file) {
       p += 2;
       while (*p != '\n')
         p++;
-      chibicc_ctx()->has_space = true;
+      ctx->has_space = true;
       continue;
     }
 
@@ -633,24 +632,24 @@ Token *tokenize(File *file) {
     if (startswith(p, "/*")) {
       char *q = strstr(p + 2, "*/");
       if (!q)
-        error_at(chibicc_ctx(), p, "unclosed block comment");
+        error_at(ctx, p, "unclosed block comment");
       p = q + 2;
-      chibicc_ctx()->has_space = true;
+      ctx->has_space = true;
       continue;
     }
 
     // Skip newline.
     if (*p == '\n') {
       p++;
-      chibicc_ctx()->at_bol = true;
-      chibicc_ctx()->has_space = false;
+      ctx->at_bol = true;
+      ctx->has_space = false;
       continue;
     }
 
     // Skip whitespace characters.
     if (isspace((unsigned char)*p)) {
       p++;
-      chibicc_ctx()->has_space = true;
+      ctx->has_space = true;
       continue;
     }
 
@@ -666,14 +665,14 @@ Token *tokenize(File *file) {
         else
           break;
       }
-      cur = cur->next = new_token(TK_PP_NUM, q, p, raw_trivia);
+      cur = cur->next = new_token(ctx, TK_PP_NUM, q, p, raw_trivia);
       raw_trivia = raw_end(cur);
       continue;
     }
 
     // String literal
     if (*p == '"') {
-      cur = cur->next = read_string_literal(p, p, raw_trivia);
+      cur = cur->next = read_string_literal(ctx, p, p, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -681,7 +680,7 @@ Token *tokenize(File *file) {
 
     // UTF-8 string literal
     if (startswith(p, "u8\"")) {
-      cur = cur->next = read_string_literal(p, p + 2, raw_trivia);
+      cur = cur->next = read_string_literal(ctx, p, p + 2, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -689,7 +688,7 @@ Token *tokenize(File *file) {
 
     // UTF-16 string literal
     if (startswith(p, "u\"")) {
-      cur = cur->next = read_utf16_string_literal(p, p + 1, raw_trivia);
+      cur = cur->next = read_utf16_string_literal(ctx, p, p + 1, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -697,7 +696,7 @@ Token *tokenize(File *file) {
 
     // Wide string literal
     if (startswith(p, "L\"")) {
-      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_int, raw_trivia);
+      cur = cur->next = read_utf32_string_literal(ctx, p, p + 1, ty_int, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -705,7 +704,7 @@ Token *tokenize(File *file) {
 
     // UTF-32 string literal
     if (startswith(p, "U\"")) {
-      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_uint, raw_trivia);
+      cur = cur->next = read_utf32_string_literal(ctx, p, p + 1, ty_uint, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -713,7 +712,7 @@ Token *tokenize(File *file) {
 
     // Character literal
     if (*p == '\'') {
-      cur = cur->next = read_char_literal(p, p, ty_int, raw_trivia);
+      cur = cur->next = read_char_literal(ctx, p, p, ty_int, raw_trivia);
       cur->val = (char)cur->val;
       p += cur->len;
       raw_trivia = raw_end(cur);
@@ -722,7 +721,7 @@ Token *tokenize(File *file) {
 
     // UTF-16 character literal
     if (startswith(p, "u'")) {
-      cur = cur->next = read_char_literal(p, p + 1, ty_ushort, raw_trivia);
+      cur = cur->next = read_char_literal(ctx, p, p + 1, ty_ushort, raw_trivia);
       cur->val &= 0xffff;
       p += cur->len;
       raw_trivia = raw_end(cur);
@@ -731,7 +730,7 @@ Token *tokenize(File *file) {
 
     // Wide character literal
     if (startswith(p, "L'")) {
-      cur = cur->next = read_char_literal(p, p + 1, ty_int, raw_trivia);
+      cur = cur->next = read_char_literal(ctx, p, p + 1, ty_int, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -739,7 +738,7 @@ Token *tokenize(File *file) {
 
     // UTF-32 character literal
     if (startswith(p, "U'")) {
-      cur = cur->next = read_char_literal(p, p + 1, ty_uint, raw_trivia);
+      cur = cur->next = read_char_literal(ctx, p, p + 1, ty_uint, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -748,7 +747,7 @@ Token *tokenize(File *file) {
     // Identifier or keyword
     int ident_len = read_ident(p);
     if (ident_len) {
-      cur = cur->next = new_token(TK_IDENT, p, p + ident_len, raw_trivia);
+      cur = cur->next = new_token(ctx, TK_IDENT, p, p + ident_len, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -757,17 +756,17 @@ Token *tokenize(File *file) {
     // Punctuators
     int punct_len = read_punct(p);
     if (punct_len) {
-      cur = cur->next = new_token(TK_PUNCT, p, p + punct_len, raw_trivia);
+      cur = cur->next = new_token(ctx, TK_PUNCT, p, p + punct_len, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
     }
 
-    error_at(chibicc_ctx(), p, "invalid token");
+    error_at(ctx, p, "invalid token");
   }
 
   // The trailing trivia of the file belongs to the EOF token.
-  cur = cur->next = new_token(TK_EOF, p, p, raw_trivia);
+  cur = cur->next = new_token(ctx, TK_EOF, p, p, raw_trivia);
   add_line_numbers(head.next);
   return head.next;
 }
@@ -776,8 +775,7 @@ Token *tokenize(File *file) {
 // text is returned exactly as it is on disk: the rewrites that used to
 // happen here (a synthesized final newline, the BOM skip) moved into
 // make_scan_buffer, which can remember them in raw coordinates.
-static char *read_file(char *path, size_t *len) {
-  ChibiccContext *ctx = chibicc_active_ctx;
+static char *read_file(ChibiccContext *ctx, char *path, size_t *len) {
   FILE *fp;
 
   if (strcmp(path, "-") == 0) {
@@ -819,7 +817,7 @@ static char *read_file(char *path, size_t *len) {
   if (buflen > INT32_MAX) {
     fclose(out);
     free(buf);
-    error(chibicc_ctx(), "file too large: %s", path);
+    error(ctx, "file too large: %s", path);
   }
 
   // fputc below grows the memstream's length by the terminator; keep the
@@ -832,7 +830,7 @@ static char *read_file(char *path, size_t *len) {
   // The memstream buffer is malloc-owned; move the text into the arena
   // so a context reset releases it with everything else.
   if (ctx) {
-    char *copy = chibicc_arena_alloc(chibicc_ctx(), data_len + 1, 1);
+    char *copy = chibicc_arena_alloc(ctx, data_len + 1, 1);
     memcpy(copy, buf, data_len + 1);
     free(buf);
     if (strcmp(path, "-") == 0) {
@@ -844,12 +842,12 @@ static char *read_file(char *path, size_t *len) {
   return buf;
 }
 
-File **get_input_files(void) {
-  return chibicc_ctx()->input_files;
+File **get_input_files(ChibiccContext *ctx) {
+  return ctx->input_files;
 }
 
-File *new_file_len(char *name, int file_no, char *contents, int len) {
-  File *file = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(File));
+File *new_file_len(ChibiccContext *ctx, char *name, int file_no, char *contents, int len) {
+  File *file = chibicc_arena_calloc(ctx, 1, sizeof(File));
   file->name = name;
   file->display_name = name;
   file->file_no = file_no;
@@ -860,8 +858,8 @@ File *new_file_len(char *name, int file_no, char *contents, int len) {
   // count. (tokenize_file replaces these tables with the ones
   // make_scan_buffer builds.)
   file->raw = contents;
-  file->map = chibicc_arena_calloc(chibicc_ctx(), len + 2, sizeof(int));
-  file->lines = chibicc_arena_calloc(chibicc_ctx(), len + 2, sizeof(int));
+  file->map = chibicc_arena_calloc(ctx, len + 2, sizeof(int));
+  file->lines = chibicc_arena_calloc(ctx, len + 2, sizeof(int));
 
   int line = 1;
   for (int i = 0; i <= len; i++) {
@@ -873,8 +871,8 @@ File *new_file_len(char *name, int file_no, char *contents, int len) {
   return file;
 }
 
-File *new_file(char *name, int file_no, char *contents) {
-  return new_file_len(name, file_no, contents, strlen(contents));
+File *new_file(ChibiccContext *ctx, char *name, int file_no, char *contents) {
+  return new_file_len(ctx, name, file_no, contents, strlen(contents));
 }
 
 // True if p starts a line break: '\n', '\r\n' or '\r'.
@@ -900,14 +898,14 @@ int line_break_len(char *p) {
 // break inside a continuation counts at the next real break (the removed
 // pass moved those newlines down) and the synthesized final newline
 // counts at the end.
-static char *make_scan_buffer(char *raw, int len, int **map_out, int **lines_out) {
-  int *map = chibicc_arena_calloc(chibicc_ctx(), len + 2, sizeof(int));
-  int *lines = chibicc_arena_calloc(chibicc_ctx(), len + 2, sizeof(int));
-  char *buf = chibicc_arena_calloc(chibicc_ctx(), 1, len + 2);
+static char *make_scan_buffer(ChibiccContext *ctx, char *raw, int len, int **map_out, int **lines_out) {
+  int *map = chibicc_arena_calloc(ctx, len + 2, sizeof(int));
+  int *lines = chibicc_arena_calloc(ctx, len + 2, sizeof(int));
+  char *buf = chibicc_arena_calloc(ctx, 1, len + 2);
 
   // The text the pre-passes used to see: the raw text plus the final
   // newline for a text that does not end in one.
-  char *text = chibicc_arena_calloc(chibicc_ctx(), 1, len + 2);
+  char *text = chibicc_arena_calloc(ctx, 1, len + 2);
   memcpy(text, raw, len);
   if (len == 0 || raw[len - 1] != '\n')
     text[len] = '\n';
@@ -1002,18 +1000,18 @@ static char *make_scan_buffer(char *raw, int len, int **map_out, int **lines_out
   return buf;
 }
 
-Token *tokenize_file(char *path) {
+Token *tokenize_file(ChibiccContext *ctx, char *path) {
   size_t raw_len;
-  char *raw = read_file(path, &raw_len);
+  char *raw = read_file(ctx, path, &raw_len);
   if (!raw)
     return NULL;
 
   int *map, *lines;
-  char *contents = make_scan_buffer(raw, (int)raw_len, &map, &lines);
+  char *contents = make_scan_buffer(ctx, raw, (int)raw_len, &map, &lines);
 
   // Save the filename for assembler .file directive.
-  int file_no = chibicc_ctx()->next_file_no++;
-  File *file = new_file(path, file_no + 1, contents);
+  int file_no = ctx->next_file_no++;
+  File *file = new_file(ctx, path, file_no + 1, contents);
 
   // The scan buffer replaces the identity tables new_file built.
   file->raw = raw;
@@ -1024,16 +1022,15 @@ Token *tokenize_file(char *path) {
   // contains it (make_scan_buffer no longer stops at strlen), so report
   // the first one before tokenizing.
   if (memchr(raw, 0, raw_len)) {
-    chibicc_ctx()->current_file = file;
-    error_at(chibicc_ctx(), memchr(contents, 0, raw_len + 2), "NUL byte in source file");
+    ctx->current_file = file;
+    error_at(ctx, memchr(contents, 0, raw_len + 2), "NUL byte in source file");
   }
 
   // Save the filename for assembler .file directive.
-  ChibiccContext *ctx = chibicc_ctx();
   if (ctx->input_files_cap < file_no + 2) {
     size_t old = sizeof(File *) * ctx->input_files_cap;
     int cap = file_no + 2;
-    ctx->input_files = chibicc_arena_realloc(chibicc_ctx(), ctx->input_files, old,
+    ctx->input_files = chibicc_arena_realloc(ctx, ctx->input_files, old,
                                              sizeof(File *) * cap);
     ctx->input_files_cap = cap;
   }
@@ -1042,5 +1039,5 @@ Token *tokenize_file(char *path) {
   ctx->input_files_len = file_no + 1;
   file_no++;
 
-  return tokenize(file);
+  return tokenize(ctx, file);
 }

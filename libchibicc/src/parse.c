@@ -368,7 +368,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
       tok = tok->next;
       if (equal(tok , "(")) {
         ty = typename(&tok, tok->next, specs);
-        tok = skip(tok, ")");
+        tok = skip(chibicc_ctx(), tok, ")");
       }
       is_atomic = true;
       continue;
@@ -377,7 +377,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
     if (equal(tok, "_Alignas")) {
       if (!attr)
         error_tok(chibicc_ctx(), tok, "_Alignas is not allowed in this context");
-      tok = skip(tok->next, "(");
+      tok = skip(chibicc_ctx(), tok->next, "(");
 
       // The `_Alignas(type)` form asks for a property of a type that
       // may not be complete yet, and the `_Alignas(expr)` form is a
@@ -390,7 +390,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
         attr->align_ty = NULL;
         attr->align_expr = conditional(&tok, tok);
       }
-      tok = skip(tok, ")");
+      tok = skip(chibicc_ctx(), tok, ")");
       continue;
     }
 
@@ -531,12 +531,12 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
 
   while (!equal(tok, ")")) {
     if (cur != &head)
-      tok = skip(tok, ",");
+      tok = skip(chibicc_ctx(), tok, ",");
 
     if (equal(tok, "...")) {
       is_variadic = true;
       tok = tok->next;
-      skip(tok, ")");
+      skip(chibicc_ctx(), tok, ")");
       break;
     }
 
@@ -587,7 +587,7 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
   }
 
   Node *expr = conditional(&tok, tok);
-  tok = skip(tok, "]");
+  tok = skip(chibicc_ctx(), tok, "]");
   ty = type_suffix(rest, tok, ty);
 
   // Whether the dimension denotes a fixed-length array or a VLA depends
@@ -643,7 +643,7 @@ static Type *declarator1(Token **rest, Token *tok, Type *ty, DeclName *decl) {
     Token *start = tok;
     Type dummy = {};
     declarator(&tok, start->next, &dummy, NULL);
-    tok = skip(tok, ")");
+    tok = skip(chibicc_ctx(), tok, ")");
     ty = type_suffix(rest, tok, ty);
     return declarator(&tok, start->next, ty, decl);
   }
@@ -686,7 +686,7 @@ static Type *abstract_declarator1(Token **rest, Token *tok, Type *ty) {
     Token *start = tok;
     Type dummy = {};
     abstract_declarator(&tok, start->next, &dummy);
-    tok = skip(tok, ")");
+    tok = skip(chibicc_ctx(), tok, ")");
     ty = type_suffix(rest, tok, ty);
     return abstract_declarator(&tok, start->next, ty);
   }
@@ -742,7 +742,7 @@ static Type *enum_specifier(Token **rest, Token *tok, Node **specs) {
     return ty;
   }
 
-  tok = skip(tok, "{");
+  tok = skip(chibicc_ctx(), tok, "{");
 
   // Read an enum-list. Each member becomes a declaration record node
   // carrying the name, the optional explicit value expression and the
@@ -751,7 +751,7 @@ static Type *enum_specifier(Token **rest, Token *tok, Node **specs) {
   int i = 0;
   while (!consume_end(rest, tok)) {
     if (i++ > 0)
-      tok = skip(tok, ",");
+      tok = skip(chibicc_ctx(), tok, ",");
 
     Token *name = tok;
     tok = tok->next;
@@ -772,7 +772,7 @@ static Type *enum_specifier(Token **rest, Token *tok, Node **specs) {
 
 // typeof-specifier = "(" (expr | typename) ")"
 static Type *typeof_specifier(Token **rest, Token *tok, Node **specs) {
-  tok = skip(tok, "(");
+  tok = skip(chibicc_ctx(), tok, "(");
 
   Type *ty;
   if (is_typename(tok)) {
@@ -784,7 +784,7 @@ static Type *typeof_specifier(Token **rest, Token *tok, Node **specs) {
     ty = typeof_placeholder(chibicc_ctx());
     ty->typeof_expr = expr(&tok, tok);
   }
-  *rest = skip(tok, ")");
+  *rest = skip(chibicc_ctx(), tok, ")");
   return ty;
 }
 
@@ -807,7 +807,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
 
   while (!equal(tok, ";")) {
     if (i++ > 0)
-      tok = skip(tok, ",");
+      tok = skip(chibicc_ctx(), tok, ",");
 
     DeclName decl_name = {};
     Type *ty = declarator(&tok, tok, basety, &decl_name);
@@ -883,7 +883,7 @@ static InitDesig *designators(Token **rest, Token *tok) {
       if (equal(tok, "..."))
         desig->end = conditional(&tok, tok->next);
       desig->rbracket = tok;
-      tok = skip(tok, "]");
+      tok = skip(chibicc_ctx(), tok, "]");
       cur = cur->next = desig;
       continue;
     }
@@ -939,7 +939,7 @@ static Initializer *init_record1(Token **rest, Token *tok) {
       InitItem *item = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(InitItem));
       if (!first) {
         item->comma_tok = tok;
-        tok = skip(tok, ",");
+        tok = skip(chibicc_ctx(), tok, ",");
       }
       first = false;
 
@@ -1001,11 +1001,11 @@ static Node *asm_stmt(Token **rest, Token *tok) {
   while (equal(tok, "volatile") || equal(tok, "inline"))
     tok = tok->next;
 
-  tok = skip(tok, "(");
+  tok = skip(chibicc_ctx(), tok, "(");
   if (tok->kind != TK_STR || tok->ty->base->kind != TY_CHAR)
     error_tok(chibicc_ctx(), tok, "expected string literal");
   node->asm_str = tok->str;
-  *rest = skip(tok->next, ")");
+  *rest = skip(chibicc_ctx(), tok->next, ")");
   return node;
 }
 
@@ -1033,15 +1033,15 @@ static Node *stmt(Token **rest, Token *tok) {
       return node;
 
     node->lhs = expr(&tok, tok->next);
-    *rest = skip(tok, ";");
+    *rest = skip(chibicc_ctx(), tok, ";");
     return node;
   }
 
   if (equal(tok, "if")) {
     Node *node = new_node(ND_IF, tok);
-    tok = skip(tok->next, "(");
+    tok = skip(chibicc_ctx(), tok->next, "(");
     node->cond = expr(&tok, tok);
-    tok = skip(tok, ")");
+    tok = skip(chibicc_ctx(), tok, ")");
     node->then = stmt(&tok, tok);
     if (equal(tok, "else"))
       node->els = stmt(&tok, tok->next);
@@ -1051,9 +1051,9 @@ static Node *stmt(Token **rest, Token *tok) {
 
   if (equal(tok, "switch")) {
     Node *node = new_node(ND_SWITCH, tok);
-    tok = skip(tok->next, "(");
+    tok = skip(chibicc_ctx(), tok->next, "(");
     node->cond = expr(&tok, tok);
-    tok = skip(tok, ")");
+    tok = skip(chibicc_ctx(), tok, ")");
     node->then = stmt(rest, tok);
     return node;
   }
@@ -1072,7 +1072,7 @@ static Node *stmt(Token **rest, Token *tok) {
     }
 
     node->colon_tok = tok;
-    tok = skip(tok, ":");
+    tok = skip(chibicc_ctx(), tok, ":");
     node->lhs = stmt(rest, tok);
     return node;
   }
@@ -1080,14 +1080,14 @@ static Node *stmt(Token **rest, Token *tok) {
   if (equal(tok, "default")) {
     Node *node = new_node(ND_CASE, tok);
     node->is_default = true;
-    tok = skip(tok->next, ":");
+    tok = skip(chibicc_ctx(), tok->next, ":");
     node->lhs = stmt(rest, tok);
     return node;
   }
 
   if (equal(tok, "for")) {
     Node *node = new_node(ND_FOR, tok);
-    tok = skip(tok->next, "(");
+    tok = skip(chibicc_ctx(), tok->next, "(");
 
     enter_scope();
 
@@ -1106,11 +1106,11 @@ static Node *stmt(Token **rest, Token *tok) {
 
     if (!equal(tok, ";"))
       node->cond = expr(&tok, tok);
-    tok = skip(tok, ";");
+    tok = skip(chibicc_ctx(), tok, ";");
 
     if (!equal(tok, ")"))
       node->inc = expr(&tok, tok);
-    tok = skip(tok, ")");
+    tok = skip(chibicc_ctx(), tok, ")");
 
     node->then = stmt(rest, tok);
 
@@ -1120,9 +1120,9 @@ static Node *stmt(Token **rest, Token *tok) {
 
   if (equal(tok, "while")) {
     Node *node = new_node(ND_WHILE, tok);
-    tok = skip(tok->next, "(");
+    tok = skip(chibicc_ctx(), tok->next, "(");
     node->cond = expr(&tok, tok);
-    tok = skip(tok, ")");
+    tok = skip(chibicc_ctx(), tok, ")");
     node->then = stmt(rest, tok);
     return node;
   }
@@ -1131,11 +1131,11 @@ static Node *stmt(Token **rest, Token *tok) {
     Node *node = new_node(ND_DO, tok);
     node->then = stmt(&tok, tok->next);
 
-    tok = skip(tok, "while");
-    tok = skip(tok, "(");
+    tok = skip(chibicc_ctx(), tok, "while");
+    tok = skip(chibicc_ctx(), tok, "(");
     node->cond = expr(&tok, tok);
-    tok = skip(tok, ")");
-    *rest = skip(tok, ";");
+    tok = skip(chibicc_ctx(), tok, ")");
+    *rest = skip(chibicc_ctx(), tok, ";");
     return node;
   }
 
@@ -1147,23 +1147,23 @@ static Node *stmt(Token **rest, Token *tok) {
       // [GNU] `goto *ptr` jumps to the address specified by `ptr`.
       Node *node = new_node(ND_GOTO_EXPR, tok);
       node->lhs = expr(&tok, tok->next->next);
-      *rest = skip(tok, ";");
+      *rest = skip(chibicc_ctx(), tok, ";");
       return node;
     }
 
     Node *node = new_node(ND_GOTO, tok);
     node->label = get_ident(tok->next);
-    *rest = skip(tok->next->next, ";");
+    *rest = skip(chibicc_ctx(), tok->next->next, ";");
     return node;
   }
 
   if (equal(tok, "break")) {
-    *rest = skip(tok->next, ";");
+    *rest = skip(chibicc_ctx(), tok->next, ";");
     return new_node(ND_BREAK, tok);
   }
 
   if (equal(tok, "continue")) {
-    *rest = skip(tok->next, ";");
+    *rest = skip(chibicc_ctx(), tok->next, ";");
     return new_node(ND_CONTINUE, tok);
   }
 
@@ -1238,7 +1238,7 @@ static Node *expr_stmt(Token **rest, Token *tok) {
 
   Node *node = new_node(ND_EXPR_STMT, tok);
   node->lhs = expr(&tok, tok);
-  *rest = skip(tok, ";");
+  *rest = skip(chibicc_ctx(), tok, ";");
   return node;
 }
 
@@ -1380,7 +1380,7 @@ static Node *conditional1(Token **rest, Token *tok) {
   Node *node = new_node(ND_COND, tok);
   node->cond = cond;
   node->then = expr(&tok, tok->next);
-  tok = skip(tok, ":");
+  tok = skip(chibicc_ctx(), tok, ":");
   node->els = conditional(rest, tok);
   return node;
 }
@@ -1580,7 +1580,7 @@ static Node *cast1(Token **rest, Token *tok) {
     Token *start = tok;
     Node *specs = NULL;
     Type *ty = typename(&tok, tok->next, &specs);
-    tok = skip(tok, ")");
+    tok = skip(chibicc_ctx(), tok, ")");
 
     // compound literal
     if (equal(tok, "{"))
@@ -1704,7 +1704,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
     // Regular struct members
     while (!consume(&tok, tok, ";")) {
       if (!first)
-        tok = skip(tok, ",");
+        tok = skip(chibicc_ctx(), tok, ",");
       first = false;
 
       Member *mem = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Member));
@@ -1772,14 +1772,14 @@ static bool is_ignored_attribute(Token *tok) {
 
 static Token *attribute_list(Token *tok, Type *ty) {
   while (consume(&tok, tok, "__attribute__")) {
-    tok = skip(tok, "(");
-    tok = skip(tok, "(");
+    tok = skip(chibicc_ctx(), tok, "(");
+    tok = skip(chibicc_ctx(), tok, "(");
 
     bool first = true;
 
     while (!consume(&tok, tok, ")")) {
       if (!first)
-        tok = skip(tok, ",");
+        tok = skip(chibicc_ctx(), tok, ",");
       first = false;
 
       if (consume(&tok, tok, "packed")) {
@@ -1797,7 +1797,7 @@ static Token *attribute_list(Token *tok, Type *ty) {
             ty->align_expr = conditional(&tok, tok);
           else
             (void)conditional(&tok, tok);
-          tok = skip(tok, ")");
+          tok = skip(chibicc_ctx(), tok, ")");
         }
         continue;
       }
@@ -1816,7 +1816,7 @@ static Token *attribute_list(Token *tok, Type *ty) {
       error_tok(chibicc_ctx(), tok, "unknown attribute");
     }
 
-    tok = skip(tok, ")");
+    tok = skip(chibicc_ctx(), tok, ")");
   }
 
   return tok;
@@ -1846,7 +1846,7 @@ static Type *struct_union_decl(Token **rest, Token *tok, Node **specs) {
     return ty;
   }
 
-  tok = skip(tok, "{");
+  tok = skip(chibicc_ctx(), tok, "{");
 
   // Construct a struct object. The member list is syntax; placing the
   // members is sema's job, which it does when the type is completed -
@@ -1934,7 +1934,7 @@ static Node *postfix(Token **rest, Token *tok) {
     Token *start = tok;
     Node *specs = NULL;
     Type *ty = typename(&tok, tok->next, &specs);
-    tok = skip(tok, ")");
+    tok = skip(chibicc_ctx(), tok, ")");
 
     Node *node = new_node(ND_COMPOUND_LITERAL, start);
     node->ty_op = ty;
@@ -1954,7 +1954,7 @@ static Node *postfix(Token **rest, Token *tok) {
     if (equal(tok, "[")) {
       Token *start = tok;
       Node *idx = expr(&tok, tok->next);
-      tok = skip(tok, "]");
+      tok = skip(chibicc_ctx(), tok, "]");
       Node *subscript = new_node(ND_SUBSCRIPT, start);
       subscript->lhs = node;
       subscript->rhs = idx;
@@ -2012,12 +2012,12 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
 
   while (!equal(tok, ")")) {
     if (cur != &head)
-      tok = skip(tok, ",");
+      tok = skip(chibicc_ctx(), tok, ",");
 
     cur = cur->next = assign(&tok, tok);
   }
 
-  *rest = skip(tok, ")");
+  *rest = skip(chibicc_ctx(), tok, ")");
 
   Node *node = new_unary(ND_FUNCALL, fn, tok);
   node->args = head.next;
@@ -2036,25 +2036,25 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
 static Node *generic_selection(Token **rest, Token *tok) {
   Node *node = new_node(ND_GENERIC, tok);
 
-  tok = skip(tok, "(");
+  tok = skip(chibicc_ctx(), tok, "(");
   node->cond = assign(&tok, tok);
 
   Node head = {};
   Node *cur = &head;
 
   while (!consume(rest, tok, ")")) {
-    tok = skip(tok, ",");
+    tok = skip(chibicc_ctx(), tok, ",");
 
     Node *assoc = new_node(ND_GENERIC_ASSOC, tok);
 
     // A "default:" association is the one that carries no type name.
     if (equal(tok, "default")) {
-      tok = skip(tok->next, ":");
+      tok = skip(chibicc_ctx(), tok->next, ":");
     } else {
       Node *specs = NULL;
       assoc->ty_op = typename(&tok, tok, &specs);
       assoc->spec_decls = specs;
-      tok = skip(tok, ":");
+      tok = skip(chibicc_ctx(), tok, ":");
     }
     assoc->lhs = assign(&tok, tok);
 
@@ -2084,20 +2084,20 @@ static Node *primary(Token **rest, Token *tok) {
     // This is a GNU statement expresssion.
     Node *node = new_node(ND_STMT_EXPR, tok);
     node->body = compound_stmt(&tok, tok->next->next)->body;
-    *rest = skip(tok, ")");
+    *rest = skip(chibicc_ctx(), tok, ")");
     return node;
   }
 
   if (equal(tok, "(")) {
     Node *node = expr(&tok, tok->next);
-    *rest = skip(tok, ")");
+    *rest = skip(chibicc_ctx(), tok, ")");
     return node;
   }
 
   if (equal(tok, "sizeof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
     Node *specs = NULL;
     Type *ty = typename(&tok, tok->next->next, &specs);
-    *rest = skip(tok, ")");
+    *rest = skip(chibicc_ctx(), tok, ")");
 
     // Keep sizeof faithful; sema folds it to its value.
     Node *node = new_node(ND_SIZEOF, start);
@@ -2116,7 +2116,7 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "_Alignof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
     Node *specs = NULL;
     Type *ty = typename(&tok, tok->next->next, &specs);
-    *rest = skip(tok, ")");
+    *rest = skip(chibicc_ctx(), tok, ")");
 
     Node *node = new_node(ND_ALIGNOF, start);
     node->ty_op = ty;
@@ -2137,12 +2137,12 @@ static Node *primary(Token **rest, Token *tok) {
     // Both type operands are recorded; sema folds the node to 0 or 1.
     Node *node = new_node(ND_TYPES_COMPATIBLE, start);
     Node *specs = NULL;
-    tok = skip(tok->next, "(");
+    tok = skip(chibicc_ctx(), tok->next, "(");
     node->ty_op = typename(&tok, tok, &specs);
-    tok = skip(tok, ",");
+    tok = skip(chibicc_ctx(), tok, ",");
     node->ty_op2 = typename(&tok, tok, &specs);
     node->spec_decls = specs;
-    *rest = skip(tok, ")");
+    *rest = skip(chibicc_ctx(), tok, ")");
     return node;
   }
 
@@ -2150,32 +2150,32 @@ static Node *primary(Token **rest, Token *tok) {
     // sema folds the node to the register class of its type operand.
     Node *node = new_node(ND_REG_CLASS, start);
     Node *specs = NULL;
-    tok = skip(tok->next, "(");
+    tok = skip(chibicc_ctx(), tok->next, "(");
     node->ty_op = typename(&tok, tok, &specs);
     node->spec_decls = specs;
-    *rest = skip(tok, ")");
+    *rest = skip(chibicc_ctx(), tok, ")");
     return node;
   }
 
   if (equal(tok, "__builtin_compare_and_swap")) {
     Node *node = new_node(ND_CAS, tok);
-    tok = skip(tok->next, "(");
+    tok = skip(chibicc_ctx(), tok->next, "(");
     node->cas_addr = assign(&tok, tok);
-    tok = skip(tok, ",");
+    tok = skip(chibicc_ctx(), tok, ",");
     node->cas_old = assign(&tok, tok);
-    tok = skip(tok, ",");
+    tok = skip(chibicc_ctx(), tok, ",");
     node->cas_new = assign(&tok, tok);
-    *rest = skip(tok, ")");
+    *rest = skip(chibicc_ctx(), tok, ")");
     return node;
   }
 
   if (equal(tok, "__builtin_atomic_exchange")) {
     Node *node = new_node(ND_EXCH, tok);
-    tok = skip(tok->next, "(");
+    tok = skip(chibicc_ctx(), tok->next, "(");
     node->lhs = assign(&tok, tok);
-    tok = skip(tok, ",");
+    tok = skip(chibicc_ctx(), tok, ",");
     node->rhs = assign(&tok, tok);
-    *rest = skip(tok, ")");
+    *rest = skip(chibicc_ctx(), tok, ")");
     return node;
   }
 
@@ -2320,7 +2320,7 @@ static Node *expr_nud(Token **rest, Token *tok) {
     Token *start = tok;
     Node *specs = NULL;
     Type *ty = typename(&tok, tok->next, &specs);
-    tok = skip(tok, ")");
+    tok = skip(chibicc_ctx(), tok, ")");
 
     // A compound literal. Kept faithful, with the type and the
     // initializer record on the node; sema materializes the object.
@@ -2414,7 +2414,7 @@ static Node *expr_bp(Token **rest, Token *tok, int min_bp) {
         Node *subscript = new_node(ND_SUBSCRIPT, op);
         subscript->lhs = node;
         subscript->rhs = expr(&idx, idx);
-        *rest = skip(idx, "]");
+        *rest = skip(chibicc_ctx(), idx, "]");
         node = subscript;
         continue;
       }
@@ -2470,7 +2470,7 @@ static Node *expr_bp(Token **rest, Token *tok, int min_bp) {
       Token *mid = NULL;
       cond->cond = node;
       cond->then = expr_bp(&mid, op->next, 0);
-      Token *colon = skip(mid, ":");
+      Token *colon = skip(chibicc_ctx(), mid, ":");
       cond->els = expr_bp(rest, colon, BP_COND - 1);
       node = cond;
       continue;
@@ -2520,7 +2520,7 @@ static Node *parse_typedef(Token **rest, Token *tok, Type *basety) {
 
   while (!consume(&tok, tok, ";")) {
     if (!first)
-      tok = skip(tok, ",");
+      tok = skip(chibicc_ctx(), tok, ",");
     first = false;
 
     DeclName decl = {};
@@ -2566,7 +2566,7 @@ static Node *function_def(Token **rest, Token *tok, Type *basety, VarAttr *attr)
     if (p->name)
       add_declared_name(p->name);
 
-  tok = skip(tok, "{");
+  tok = skip(chibicc_ctx(), tok, "{");
   node->body = compound_stmt(&tok, tok);
   leave_scope();
   *rest = tok;
@@ -2583,7 +2583,7 @@ static Node *global_variable(Token **rest, Token *tok, Type *basety, VarAttr *at
 
   while (!consume(&tok, tok, ";")) {
     if (!first)
-      tok = skip(tok, ",");
+      tok = skip(chibicc_ctx(), tok, ",");
     first = false;
 
     DeclName decl = {};
