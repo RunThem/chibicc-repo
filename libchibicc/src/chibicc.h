@@ -103,7 +103,7 @@ Token *tokenize(ChibiccContext *ctx, File *file);
 Token *tokenize_file(ChibiccContext *ctx, char *filename);
 
 #define unreachable() \
-  error(chibicc_ctx(), "internal error at %s:%d", __FILE__, __LINE__)
+  error(ctx, "internal error at %s:%d", __FILE__, __LINE__)
 
 //
 // cst.c
@@ -268,8 +268,8 @@ typedef struct {
   int ndeleted; // tombstones in `used`
 } HashMap;
 
-void *hashmap_get(HashMap *map, char *key);
-void *hashmap_get2(HashMap *map, char *key, int keylen);
+void *hashmap_get(ChibiccContext *ctx, HashMap *map, char *key);
+void *hashmap_get2(ChibiccContext *ctx, HashMap *map, char *key, int keylen);
 void hashmap_put(ChibiccContext *ctx, HashMap *map, char *key, void *val);
 void hashmap_put2(ChibiccContext *ctx, HashMap *map, char *key, int keylen, void *val);
 void hashmap_delete(ChibiccContext *ctx, HashMap *map, char *key);
@@ -382,10 +382,6 @@ struct ChibiccContext {
   bool resolving_body;
 };
 
-extern _Thread_local ChibiccContext *chibicc_active_ctx;
-ChibiccContext *chibicc_ctx(void);
-
-void chibicc_context_activate(ChibiccContext *ctx);
 void chibicc_context_set_base_file(ChibiccContext *ctx, char *path);
 
 void *chibicc_arena_alloc(ChibiccContext *ctx, size_t size, size_t align);

@@ -93,6 +93,7 @@ test: $(TESTS)
 	test/expand.sh ./chibicc
 	test/library.sh
 	test/self-test.sh
+	CHIBICC_LIB="$(CURDIR)/libchibicc.a" test/context-audit.sh --strict
 
 pratt/test/%.exe: chibicc-pratt test/%.c
 	mkdir -p pratt/test
@@ -111,6 +112,7 @@ test-pratt: $(PRATT_TESTS)
 	test/expand.sh ./chibicc-pratt
 	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/library.sh
 	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/self-test.sh
+	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" test/context-audit.sh --strict
 
 test-both: test test-pratt
 
@@ -137,15 +139,14 @@ check-library-pratt: pratt/libchibicc.a libchibicc.pc
 	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/library.sh
 	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" test/public-api.sh
 
-# The implicit-context gate (PLAN-explicit-context). Report mode while
-# the line is in progress; E10 turns it strict and adds it to test-all.
-context-audit-args ?=
-
+# The implicit-context gate (PLAN-explicit-context E10): the library has
+# no thread-local accessor, and codegen carries no context pointer of its
+# own. Run by test / test-pratt and available on its own.
 check-context: libchibicc.a
-	CHIBICC_LIB="$(CURDIR)/libchibicc.a" test/context-audit.sh $(context-audit-args)
+	CHIBICC_LIB="$(CURDIR)/libchibicc.a" test/context-audit.sh --strict
 
 check-context-pratt: pratt/libchibicc.a
-	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" test/context-audit.sh $(context-audit-args)
+	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" test/context-audit.sh --strict
 
 # Stage 2
 

@@ -41,21 +41,21 @@ static void hashmap_test(ChibiccContext *ctx) {
     hashmap_put(ctx, map, format(ctx, "key %d", i), (void *)(size_t)i);
 
   for (int i = 0; i < 1000; i++)
-    assert((size_t)hashmap_get(map, format(ctx, "key %d", i)) == i);
+    assert((size_t)hashmap_get(ctx, map, format(ctx, "key %d", i)) == i);
   for (int i = 1000; i < 1500; i++)
-    assert(hashmap_get(map, "no such key") == NULL);
+    assert(hashmap_get(ctx, map, "no such key") == NULL);
   for (int i = 1500; i < 1600; i++)
-    assert((size_t)hashmap_get(map, format(ctx, "key %d", i)) == i);
+    assert((size_t)hashmap_get(ctx, map, format(ctx, "key %d", i)) == i);
   for (int i = 1600; i < 2000; i++)
-    assert(hashmap_get(map, "no such key") == NULL);
+    assert(hashmap_get(ctx, map, "no such key") == NULL);
   for (int i = 2000; i < 5000; i++)
-    assert((size_t)hashmap_get(map, format(ctx, "key %d", i)) == i);
+    assert((size_t)hashmap_get(ctx, map, format(ctx, "key %d", i)) == i);
   for (int i = 5000; i < 6000; i++)
-    assert(hashmap_get(map, "no such key") == NULL);
+    assert(hashmap_get(ctx, map, "no such key") == NULL);
   for (int i = 6000; i < 7000; i++)
     hashmap_put(ctx, map, format(ctx, "key %d", i), (void *)(size_t)i);
 
-  assert(hashmap_get(map, "no such key") == NULL);
+  assert(hashmap_get(ctx, map, "no such key") == NULL);
 
   // Delete-heavy traffic must not leave tombstones behind: once they
   // outnumber the live entries the table rehashes (C8).
@@ -65,11 +65,11 @@ static void hashmap_test(ChibiccContext *ctx) {
   for (int i = 0; i < 900; i++)
     hashmap_delete(ctx, tomb, format(ctx, "t %d", i));
   assert(tomb->ndeleted <= tomb->used - tomb->ndeleted);
-  assert(hashmap_get(tomb, "t 0") == NULL);
-  assert((size_t)hashmap_get(tomb, "t 999") == 999);
+  assert(hashmap_get(ctx, tomb, "t 0") == NULL);
+  assert((size_t)hashmap_get(ctx, tomb, "t 999") == 999);
   hashmap_put(ctx, tomb, "t 0", (void *)123);
-  assert((size_t)hashmap_get(tomb, "t 0") == 123);
-  assert((size_t)hashmap_get(tomb, "t 999") == 999);
+  assert((size_t)hashmap_get(ctx, tomb, "t 0") == 123);
+  assert((size_t)hashmap_get(ctx, tomb, "t 999") == 999);
 
   printf("hashmap: ok\n");
 }

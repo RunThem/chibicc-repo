@@ -57,7 +57,7 @@ static bool match(HashEntry *ent, char *key, int keylen) {
          ent->keylen == keylen && memcmp(ent->key, key, keylen) == 0;
 }
 
-static HashEntry *get_entry(HashMap *map, char *key, int keylen) {
+static HashEntry *get_entry(ChibiccContext *ctx, HashMap *map, char *key, int keylen) {
   if (!map->buckets)
     return NULL;
 
@@ -106,12 +106,12 @@ static HashEntry *get_or_insert_entry(ChibiccContext *ctx, HashMap *map, char *k
   unreachable();
 }
 
-void *hashmap_get(HashMap *map, char *key) {
-  return hashmap_get2(map, key, strlen(key));
+void *hashmap_get(ChibiccContext *ctx, HashMap *map, char *key) {
+  return hashmap_get2(ctx, map, key, strlen(key));
 }
 
-void *hashmap_get2(HashMap *map, char *key, int keylen) {
-  HashEntry *ent = get_entry(map, key, keylen);
+void *hashmap_get2(ChibiccContext *ctx, HashMap *map, char *key, int keylen) {
+  HashEntry *ent = get_entry(ctx, map, key, keylen);
   return ent ? ent->val : NULL;
 }
 
@@ -129,7 +129,7 @@ void hashmap_delete(ChibiccContext *ctx, HashMap *map, char *key) {
 }
 
 void hashmap_delete2(ChibiccContext *ctx, HashMap *map, char *key, int keylen) {
-  HashEntry *ent = get_entry(map, key, keylen);
+  HashEntry *ent = get_entry(ctx, map, key, keylen);
   if (!ent)
     return;
 

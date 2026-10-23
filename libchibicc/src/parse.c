@@ -198,7 +198,7 @@ static Type *find_typedef(ChibiccContext *ctx, Token *tok) {
     return NULL;
 
   for (ParseScope *sc = scope; sc; sc = sc->next) {
-    NameEntry *e = hashmap_get2(&sc->names, tok->loc, tok->len);
+    NameEntry *e = hashmap_get2(ctx, &sc->names, tok->loc, tok->len);
     if (e)
       return e->type_def;
   }
@@ -225,7 +225,7 @@ static void add_declared_name(ChibiccContext *ctx, Token *tok) {
 // Find a struct/union/enum tag by name, in any enclosing scope.
 static Type *find_tag(ChibiccContext *ctx, Token *tok) {
   for (ParseScope *sc = scope; sc; sc = sc->next) {
-    Type *ty = hashmap_get2(&sc->tags, tok->loc, tok->len);
+    Type *ty = hashmap_get2(ctx, &sc->tags, tok->loc, tok->len);
     if (ty)
       return ty;
   }
@@ -236,7 +236,7 @@ static Type *find_tag(ChibiccContext *ctx, Token *tok) {
 // (re)defined, so that a previous forward declaration in the same scope
 // keeps its identity.
 static Type *find_current_tag(ChibiccContext *ctx, Token *tok) {
-  return hashmap_get2(&scope->tags, tok->loc, tok->len);
+  return hashmap_get2(ctx, &scope->tags, tok->loc, tok->len);
 }
 
 static void push_tag_scope(ChibiccContext *ctx, Token *tok, Type *ty) {
@@ -990,7 +990,7 @@ static bool is_typename(ChibiccContext *ctx, Token *tok) {
       hashmap_put(ctx, map, kw[i], (void *)1);
   }
 
-  return hashmap_get2(map, tok->loc, tok->len) || find_typedef(ctx, tok);
+  return hashmap_get2(ctx, map, tok->loc, tok->len) || find_typedef(ctx, tok);
 }
 
 // asm-stmt = "asm" ("volatile" | "inline")* "(" string-literal ")"

@@ -4,46 +4,34 @@
 
 #include "chibicc.h"
 
-_Thread_local ChibiccContext *chibicc_active_ctx;
-
 const char *chibicc_version(void) {
   return CHIBICC_VERSION;
 }
 
-ChibiccContext *chibicc_ctx(void) {
-  return chibicc_active_ctx;
-}
-
 // Every public entry is an error boundary: an error_* longjmps to the
-// innermost frame, and the entry returns its failure value.
+// innermost frame, and the entry returns its failure value. The frame
+// belongs to the context in hand; no other state is saved or restored.
 #define ENTER_RET(ctx, fail)                                              \
-  ChibiccContext *_prev = chibicc_active_ctx;                             \
   JmpFrame _jf;                                                           \
   _jf.prev = (ctx)->jmp_top;                                              \
   (ctx)->jmp_top = &_jf;                                                  \
-  chibicc_active_ctx = (ctx);                                             \
   if (setjmp(_jf.buf)) {                                                  \
     (ctx)->jmp_top = _jf.prev;                                            \
-    chibicc_active_ctx = _prev;                                           \
     return fail;                                                          \
   }
 
 #define ENTER_VOID(ctx)                                                   \
-  ChibiccContext *_prev = chibicc_active_ctx;                             \
   JmpFrame _jf;                                                           \
   _jf.prev = (ctx)->jmp_top;                                              \
   (ctx)->jmp_top = &_jf;                                                  \
-  chibicc_active_ctx = (ctx);                                             \
   if (setjmp(_jf.buf)) {                                                  \
     (ctx)->jmp_top = _jf.prev;                                            \
-    chibicc_active_ctx = _prev;                                           \
     return;                                                               \
   }
 
 #define LEAVE(ctx)                                                        \
   do {                                                                    \
     (ctx)->jmp_top = _jf.prev;                                            \
-    chibicc_active_ctx = _prev;                                           \
   } while (0)
 
 #define ARENA_BLOCK_SIZE (64 * 1024)
@@ -54,8 +42,7 @@ ChibiccContext *chibicc_ctx(void) {
 // enables this in its ASan round.
 static void *arena_alloc(ChibiccContext *ctx, size_t size, size_t align) {
   (void)align;
-  if (!ctx)
-    return calloc(1, size ? size : 1);
+  assert(ctx);
   if (size == 0)
     size = 1;
 
@@ -75,9 +62,7 @@ static void *arena_alloc(ChibiccContext *ctx, size_t size, size_t align) {
 }
 #else
 static void *arena_alloc(ChibiccContext *ctx, size_t size, size_t align) {
-  if (!ctx)
-    return calloc(1, size ? size : 1);
-
+  assert(ctx);
   if (size == 0)
     size = 1;
   if (align < 8)
@@ -114,8 +99,6 @@ void *chibicc_arena_calloc(ChibiccContext *ctx, size_t count, size_t size) {
   if (size && count > SIZE_MAX / size)
     return NULL;
   size_t n = count * size;
-  if (!ctx)
-    return calloc(count, size);
   // 16, not 8: Token and Node embed a long double, which needs 16-byte
   // alignment on x86-64 (UBSan found this in L3.4c).
   void *p = arena_alloc(ctx, n, 16);
@@ -148,15 +131,6 @@ char *chibicc_arena_strndup(ChibiccContext *ctx, char *s, size_t n) {
 void *chibicc_arena_realloc(ChibiccContext *ctx, void *old, size_t old_size, size_t new_size) {
   size_t kept = old ? (old_size < new_size ? old_size : new_size) : 0;
 
-  if (!ctx) {
-    void *p = realloc(old, new_size);
-    if (!p)
-      return NULL;
-    if (new_size > kept)
-      memset((char *)p + kept, 0, new_size - kept);
-    return p;
-  }
-
   void *p = arena_alloc(ctx, new_size, 8);
   if (kept)
     memcpy(p, old, kept);
@@ -186,12 +160,10 @@ void chibicc_context_add_include_path(ChibiccContext *ctx, char *path) {
 }
 
 void chibicc_context_set_base_file(ChibiccContext *ctx, char *path) {
-  chibicc_active_ctx = ctx;
   ctx->base_file = chibicc_arena_strdup(ctx, path);
 }
 
 static void apply_macro_op(ChibiccContext *ctx, char *op) {
-  chibicc_active_ctx = ctx;
   if (op[0] == 'D') {
     char *name = op + 2;
     char *eq = strchr(name, '=');
@@ -238,10 +210,6 @@ bool chibicc_context_failed(ChibiccContext *ctx) {
   return ctx->failed;
 }
 
-void chibicc_context_activate(ChibiccContext *ctx) {
-  chibicc_active_ctx = ctx;
-}
-
 static void free_arena(ChibiccContext *ctx) {
   for (ArenaBlock *b = ctx->arena; b;) {
     ArenaBlock *next = b->next;
@@ -285,15 +253,13 @@ static void clear_state(ChibiccContext *ctx) {
 ChibiccContext *chibicc_context_new(void) {
   ChibiccContext *ctx = calloc(1, sizeof(ChibiccContext));
   ctx->predefined_macros = true;
-  chibicc_active_ctx = ctx;
-  init_macros(chibicc_ctx());
+  init_macros(ctx);
   return ctx;
 }
 
 void chibicc_context_reset(ChibiccContext *ctx) {
   free_arena(ctx);
   clear_state(ctx);
-  chibicc_active_ctx = ctx;
   init_macros(ctx);
   for (int i = 0; i < ctx->macro_ops_len; i++)
     apply_macro_op(ctx, ctx->macro_ops[i]);
@@ -309,8 +275,6 @@ void chibicc_context_free(ChibiccContext *ctx) {
   for (int i = 0; i < ctx->macro_ops_len; i++)
     free(ctx->macro_ops[i]);
   free(ctx->macro_ops);
-  if (chibicc_active_ctx == ctx)
-    chibicc_active_ctx = NULL;
   free(ctx);
 }
 

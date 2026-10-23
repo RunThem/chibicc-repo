@@ -405,7 +405,7 @@ static CondIncl *push_cond_incl(ChibiccContext *ctx, Token *tok, bool included) 
 static Macro *find_macro(ChibiccContext *ctx, Token *tok) {
   if (tok->kind != TK_IDENT)
     return NULL;
-  return hashmap_get2(&macros, tok->loc, tok->len);
+  return hashmap_get2(ctx, &macros, tok->loc, tok->len);
 }
 
 static Macro *add_macro(ChibiccContext *ctx, char *name, bool is_objlike, Token *body) {
@@ -822,7 +822,7 @@ char *search_include_paths(ChibiccContext *ctx, char *filename) {
   if (filename[0] == '/')
     return filename;
 
-  char *cached = hashmap_get(&ctx->search_cache, filename);
+  char *cached = hashmap_get(ctx, &ctx->search_cache, filename);
   if (cached)
     return cached;
 
@@ -939,14 +939,14 @@ static char *detect_include_guard(ChibiccContext *ctx, Token *tok) {
 static Token *include_file(ChibiccContext *ctx, Token *tok, char *path, Token *filename_tok,
                            File *parent) {
   // Check for "#pragma once"
-  if (hashmap_get(&pragma_once, path))
+  if (hashmap_get(ctx, &pragma_once, path))
     return tok;
 
   // If we read the same file before, and if the file was guarded
   // by the usual #ifndef ... #endif pattern, we may be able to
   // skip the file without opening it.
-  char *guard_name = hashmap_get(&ctx->include_guards, path);
-  if (guard_name && hashmap_get(&macros, guard_name))
+  char *guard_name = hashmap_get(ctx, &ctx->include_guards, path);
+  if (guard_name && hashmap_get(ctx, &macros, guard_name))
     return tok;
 
   if (parent->include_depth >= MAX_INCLUDE_DEPTH)

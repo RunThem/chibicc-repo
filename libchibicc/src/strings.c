@@ -66,7 +66,7 @@ bool file_exists(char *path) {
 }
 
 // Takes a printf-style format string and returns a formatted string in
-// the active context's arena (or malloc when there is no context).
+// the context's arena.
 char *format(ChibiccContext *ctx, char *fmt, ...) {
   va_list ap;
   va_list ap2;

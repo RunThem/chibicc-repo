@@ -214,7 +214,7 @@ static void leave_scope(ChibiccContext *ctx) {
 // Find a variable by name.
 static VarScope *find_var(ChibiccContext *ctx, Token *tok) {
   for (Scope *sc = scope; sc; sc = sc->next) {
-    VarScope *sc2 = hashmap_get2(&sc->vars, tok->loc, tok->len);
+    VarScope *sc2 = hashmap_get2(ctx, &sc->vars, tok->loc, tok->len);
     if (sc2)
       return sc2;
   }
@@ -240,7 +240,7 @@ static Obj *find_func(ChibiccContext *ctx, char *name) {
   while (sc->next)
     sc = sc->next;
 
-  VarScope *sc2 = hashmap_get(&sc->vars, name);
+  VarScope *sc2 = hashmap_get(ctx, &sc->vars, name);
   if (sc2 && sc2->var && sc2->var->is_function)
     return sc2->var;
   return NULL;
@@ -433,7 +433,7 @@ static void scan_globals(ChibiccContext *ctx) {
 
     // A real definition of this name exists, or one tentative
     // definition of it already survived.
-    if (hashmap_get(&reals, var->name) || hashmap_get(&kept, var->name))
+    if (hashmap_get(ctx, &reals, var->name) || hashmap_get(ctx, &kept, var->name))
       continue;
 
     hashmap_put(ctx, &kept, var->name, &kept_tag);

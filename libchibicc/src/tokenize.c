@@ -280,7 +280,7 @@ static bool is_keyword(ChibiccContext *ctx, Token *tok) {
       hashmap_put(ctx, map, kw[i], (void *)1);
   }
 
-  return hashmap_get2(map, tok->loc, tok->len);
+  return hashmap_get2(ctx, map, tok->loc, tok->len);
 }
 
 static int read_escaped_char(ChibiccContext *ctx, char **new_pos, char *p) {

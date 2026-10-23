@@ -646,8 +646,9 @@ static int check_context_scope(ChibiccContext *a) {
   return ok ? 0 : 1;
 }
 
-// Two contexts in two threads (PLAN L3.4b). The active context is
-// thread-local, so the two pipelines never see each other.
+// Two contexts in two threads (PLAN L3.4b). Each pipeline passes its
+// own context explicitly and contexts carry no shared state, so the two
+// never see each other.
 static void *thread_main(void *arg) {
   char *src = arg;
   ChibiccContext *ctx = chibicc_context_new();
