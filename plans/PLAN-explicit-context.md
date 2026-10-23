@@ -1,6 +1,6 @@
 # PLAN-explicit-context.md - 显式 ChibiccContext 传参线
 
-> 状态: 已拍板, 待开工 (计划书 2026-10-23)
+> 状态: 已完成 (2026-10-23); 执行记录见 `plans/RESULT-explicit-context.md`
 > 基线: `main` @ `0138b5a`
 > 分支: `explicit-context`
 > 范围: `libchibicc/` 内部函数与 `codegen.c` 的隐式上下文; 公共 API, 公共头与
@@ -331,34 +331,34 @@
 
 ### E0 - 基线与开工准备
 
-- [ ] E0.1 在 `main` 上复验: `make docker-test`, `make docker-snapshot-diff`,
+- [x] E0.1 在 `main` 上复验: `make docker-test`, `make docker-snapshot-diff`,
   `make check-library`, `test/self-test.sh`. 快照缺失或过期时先
   `make docker-snapshot`, 并在 `RESULT` 记录重置原因.
-- [ ] E0.2 记录锚点: `git rev-parse HEAD`, 3.1 / 3.2 的行数与计数, 41 个
+- [x] E0.2 记录锚点: `git rev-parse HEAD`, 3.1 / 3.2 的行数与计数, 41 个
   `test/*.c`, 各测试的基线数字.
-- [ ] E0.3 开分支 `explicit-context`; 每一步一个提交; 每个提交单独可构建.
-- [ ] E0.4 建立独立的 `test/context-audit.sh` 与 `make check-context`:
+- [x] E0.3 开分支 `explicit-context`; 每一步一个提交; 每个提交单独可构建.
+- [x] E0.4 建立独立的 `test/context-audit.sh` 与 `make check-context`:
   E0 版本只打印当前的三个符号与 TLS 行并以 0 退出 (报告模式), E10 转为断言失败;
   脚本接受 `CHIBICC_LIB` (默认 `libchibicc.a`), 以便对 `pratt/libchibicc.a`
   复用; 不并入 `make check-library`.
-- [ ] E0.5 把实测锚点补进 3.x, 并确认 4.1 的参数约定与 4.2 的迁移顺序和当前代码
+- [x] E0.5 把实测锚点补进 3.x, 并确认 4.1 的参数约定与 4.2 的迁移顺序和当前代码
   一致; 后续提交按此审读.
 
 验收: 基线全绿; 锚点与审计脚本入库; 后续每一步都能用同一套命令复验.
 
 ### E1 - 原语层: arena, strings, hashmap
 
-- [ ] E1.1 `chibicc_arena_alloc` / `calloc` / `strdup` / `strndup` / `realloc`
+- [x] E1.1 `chibicc_arena_alloc` / `calloc` / `strdup` / `strndup` / `realloc`
   增加 `ctx` 首参; 删除内部的 `chibicc_active_ctx` 读取; 82 个调用点, 除 `lib.c`
   传自己的 `ctx` 外, 其余先传 `chibicc_ctx()`. 暂时保留 NULL 兜底.
-- [ ] E1.2 `format(ctx, ...)`, `strarray_push(ctx, ...)`,
+- [x] E1.2 `format(ctx, ...)`, `strarray_push(ctx, ...)`,
   `nodearray_push(ctx, ...)`; 28 + 58 + 5 个调用点. `main.c` 传全局 `ctx`;
   codegen 的 1 个 `format` 与 1 个 `nodearray_push` 先传 `chibicc_ctx()`,
   E9 再换成 `ctx`.
-- [ ] E1.3 `hashmap_put` / `put2` / `delete` / `delete2` 与内部 `rehash` /
+- [x] E1.3 `hashmap_put` / `put2` / `delete` / `delete2` 与内部 `rehash` /
   `get_or_insert_entry` 增加 `ctx`; 20 个调用点先传 `chibicc_ctx()`.
   `hashmap_get` / `get2` 不变.
-- [ ] E1.4 `test/self/self-test.c`: `arena_test(ctx)` / `hashmap_test(ctx)`,
+- [x] E1.4 `test/self/self-test.c`: `arena_test(ctx)` / `hashmap_test(ctx)`,
   `format(ctx, ...)`.
 
 验收: 构建通过; `test/diagnostic.sh`, `test/ast.sh`, `test/cst.sh`,
@@ -367,13 +367,13 @@
 
 ### E2 - 诊断层
 
-- [ ] E2.1 `error`, `error_at`, `error_tok`, `warn_tok`, `verror_at`,
+- [x] E2.1 `error`, `error_at`, `error_tok`, `warn_tok`, `verror_at`,
   `vformat`, `raise_error` 增加 `ctx` 首参; 185 个调用点. `lib.c` 传 `ctx`,
   其他未转换文件传 `chibicc_ctx()`; `main.c` 传全局 `ctx`; codegen 的 7 个
   `error_tok` 先传 `chibicc_ctx()`, E9 再换成 `ctx`.
-- [ ] E2.2 `raise_error(ctx)` 只在 `ctx->jmp_top == NULL` 时 `exit(1)`; 删除
+- [x] E2.2 `raise_error(ctx)` 只在 `ctx->jmp_top == NULL` 时 `exit(1)`; 删除
   `ctx` 为空的判断; `error_at` 继续用 `ctx->current_file`.
-- [ ] E2.3 在 `test/library.sh` 的 `check_nested` 旁增加 `check_context_scope`:
+- [x] E2.3 在 `test/library.sh` 的 `check_nested` 旁增加 `check_context_scope`:
   回调里 `new` + `define` + `free` 另一个 context; 断言外层错误仍返回而不是退出,
   外层 context 之后仍能跑完整管线.
 
@@ -382,26 +382,26 @@
 
 ### E3 - type.c
 
-- [ ] E3.1 内部 `new_type` 与 9 个对外构造器加 `ctx`: `copy_type`,
+- [x] E3.1 内部 `new_type` 与 9 个对外构造器加 `ctx`: `copy_type`,
   `pointer_to`, `func_type`, `array_of`, `vla_of`, `array_of_dim`,
   `typeof_placeholder`, `enum_type`, `struct_type`. 4 个谓词 (`is_integer`,
   `is_flonum`, `is_numeric`, `is_compatible`) 不变.
-- [ ] E3.2 调用点: parse / sema / cst 等未转换文件先传 `chibicc_ctx()`;
+- [x] E3.2 调用点: parse / sema / cst 等未转换文件先传 `chibicc_ctx()`;
   `main` / `lib` 传 `ctx`.
-- [ ] E3.3 `type.c` 内 `chibicc_ctx()` 清零; 内建 `Type` 只读对象的注释保留.
+- [x] E3.3 `type.c` 内 `chibicc_ctx()` 清零; 内建 `Type` 只读对象的注释保留.
 
 验收: 构建; `test/ast.sh`; `test/shape.sh`; `test/library.sh`; `type.c` 的
 `chibicc_ctx()` 为 0.
 
 ### E4 - tokenize.c
 
-- [ ] E4.1 入口与构造器加 `ctx`: `tokenize_file`, `tokenize`, `new_file_len`,
+- [x] E4.1 入口与构造器加 `ctx`: `tokenize_file`, `tokenize`, `new_file_len`,
   `new_file`, `new_token`, `add_line_numbers`, `make_scan_buffer`, 以及所有
   `read_*` / `is_keyword` 辅助. 31 个 `chibicc_ctx()` 与 14 个 arena 调用点.
-- [ ] E4.2 调用方: `lib.c` 的 `chibicc_tokenize_file` /
+- [x] E4.2 调用方: `lib.c` 的 `chibicc_tokenize_file` /
   `chibicc_tokenize_buffer*` 传 `ctx`; preprocess 的 include 路径先传
   `chibicc_ctx()`; `cst` 不调用 tokenize.
-- [ ] E4.3 `ctx->current_file`, `input_files`, `at_bol`, `has_space` 的写入改为
+- [x] E4.3 `ctx->current_file`, `input_files`, `at_bol`, `has_space` 的写入改为
   参数 `ctx`.
 
 验收: `test/trivia.sh` (`-dump-tokens` / `-reconstruct` / `-E` 锚点);
@@ -410,27 +410,27 @@
 
 ### E5 - cst.c
 
-- [ ] E5.1 `cst_parse(ctx, tok)`; `new_cst_node(ctx, ...)` 与全部建树 / 分组 /
+- [x] E5.1 `cst_parse(ctx, tok)`; `new_cst_node(ctx, ...)` 与全部建树 / 分组 /
   指令解析函数加 `ctx`; 67 个 `new_cst_node` 调用点.
-- [ ] E5.2 `strarray_push` 与 arena 调用点改传 `ctx`; children 数组的 arena
+- [x] E5.2 `strarray_push` 与 arena 调用点改传 `ctx`; children 数组的 arena
   realloc 同步.
-- [ ] E5.3 `lib.c` 的 `chibicc_cst_*` facade 传 `ctx`.
+- [x] E5.3 `lib.c` 的 `chibicc_cst_*` facade 传 `ctx`.
 
 验收: `test/cst.sh` 305 项 / 61 个 dump 样本 / 全量 round-trip / verify;
 `test/library.sh` 的 CST 与 ASan 轮; `cst.c` 的 `chibicc_ctx()` 为 0.
 
 ### E6 - parse.c
 
-- [ ] E6.1 入口与全部语法函数加 `ctx`: `parse`, `parse_init`,
+- [x] E6.1 入口与全部语法函数加 `ctx`: `parse`, `parse_init`,
   `is_typename` (读 `ctx->typename_map`), `enter_scope` / `leave_scope`,
   `add_typedef` / `add_declared_name` / tag 作用域, `declspec` / `declarator`
   全家, 语句层, 初始化器, `primary`.
-- [ ] E6.2 两条表达式路径都转换: 默认级联 (`expr` ... `mul`) 与
+- [x] E6.2 两条表达式路径都转换: 默认级联 (`expr` ... `mul`) 与
   `CHIBICC_PRATT_PARSE_FEATURE=1` 的 `expr_bp` / nud / led; `InfixOp` 表不变.
-- [ ] E6.3 节点构造器 `new_node` / `new_binary` / `new_unary` / `new_num`
+- [x] E6.3 节点构造器 `new_node` / `new_binary` / `new_unary` / `new_num`
   加 `ctx`; parse 与 sema 的调用点传各自作用域的 `ctx` 或 `chibicc_ctx()`;
   codegen 的 62 个调用点先传 `chibicc_ctx()`, E9 再换成 `ctx`.
-- [ ] E6.4 `parse_depth` 的递增 / 递减改走参数 `ctx`; 512 上限不变.
+- [x] E6.4 `parse_depth` 的递增 / 递减改走参数 `ctx`; 512 上限不变.
 
 验收: `test/ast.sh` 85 例 (两个构建); `test/pratt-ab.sh` 41 个语料的 AST 与
 `-S` 逐字节相同; `test/diagnostic.sh`; `test/library.sh` 的深度用例;
@@ -438,16 +438,16 @@
 
 ### E7 - sema.c
 
-- [ ] E7.1 `sema(ctx, toplevel)`, `const_expr(ctx, tok)`, `eval` / `eval2` /
+- [x] E7.1 `sema(ctx, toplevel)`, `const_expr(ctx, tok)`, `eval` / `eval2` /
   `eval_rval` / `eval_double` / `is_const_expr`, `add_type`, `type_chain`,
   `bind_ident`, `push_scope`, `analyze_function`, `resolve_*`, `check_*`,
   `write_gvar_data`, `layout_struct` / `layout_union` 等全部加 `ctx`.
-- [ ] E7.2 `new_cast(ctx, expr, ty)`; sema 内 8 个调用点传 `ctx`, codegen 的
+- [x] E7.2 `new_cast(ctx, expr, ty)`; sema 内 8 个调用点传 `ctx`, codegen 的
   1 个先传 `chibicc_ctx()`, E9 再换成 `ctx`.
-- [ ] E7.3 `ctx->locals` / `globals` / `sema_fn` / `builtin_alloca` / 作用域表 /
+- [x] E7.3 `ctx->locals` / `globals` / `sema_fn` / `builtin_alloca` / 作用域表 /
   `gotos` / `labels` / `loop_depth` / `switch_depth` / `unique_name_id` /
   `resolving_body` 的访问改为参数 `ctx`.
-- [ ] E7.4 preprocess 的 `const_expr` 调用点先改为 `const_expr(chibicc_ctx(), tok)`,
+- [x] E7.4 preprocess 的 `const_expr` 调用点先改为 `const_expr(chibicc_ctx(), tok)`,
   等 E8 再换成 `const_expr(ctx, tok)`.
 
 验收: `test/library.sh` 全管线; `test/self-test.sh` 的 sema-state;
@@ -456,13 +456,13 @@
 
 ### E8 - preprocess.c
 
-- [ ] E8.1 `preprocess(ctx, tok)`, `init_macros(ctx)`, `define_macro` /
+- [x] E8.1 `preprocess(ctx, tok)`, `init_macros(ctx)`, `define_macro` /
   `undef_macro(ctx, ...)`, `expand_macro`, `subst`, `read_macro_definition`,
   `include_file`, `search_include_paths`, `eval_const_expr` 等全部加 `ctx`.
-- [ ] E8.2 `const_expr(ctx, tok)` 的调用点从 `chibicc_ctx()` 换成 `ctx`.
-- [ ] E8.3 `copy_token` 的 14 个调用点, `format` 的 8 个, `error_tok` 的 26 个,
+- [x] E8.2 `const_expr(ctx, tok)` 的调用点从 `chibicc_ctx()` 换成 `ctx`.
+- [x] E8.3 `copy_token` 的 14 个调用点, `format` 的 8 个, `error_tok` 的 26 个,
   arena 的 20 个, hashmap 的 4 个全部显式传 `ctx`.
-- [ ] E8.4 `chibicc_preprocess` facade 传 `ctx`; `init_macros` 在
+- [x] E8.4 `chibicc_preprocess` facade 传 `ctx`; `init_macros` 在
   `chibicc_context_new` / `reset` 里由 `ctx` 调用.
 
 验收: `test/expand.sh` 29 + 3 + 17 + 48; `-E` 逐字节; `test/trivia.sh`;
@@ -471,18 +471,18 @@
 
 ### E9 - codegen 全显式
 
-- [ ] E9.1 `codegen(ChibiccContext *ctx, Obj *prog, FILE *out)`; `driver.h` 与
+- [x] E9.1 `codegen(ChibiccContext *ctx, Obj *prog, FILE *out)`; `driver.h` 与
   `main.c` 更新; 确认 codegen 没有 `cg_ctx` 或任何 context 文件域指针.
-- [ ] E9.2 把 `ctx` 穿透 17 个调用库构造器 / 诊断 / `format` /
+- [x] E9.2 把 `ctx` 穿透 17 个调用库构造器 / 诊断 / `format` /
   `nodearray_push` 的函数, 并继续传给它们的调用者: `gen_addr`, `gen_expr`,
   `gen_stmt`, `new_label`, `scale_rhs`, `new_add`, `new_sub`,
   `compute_vla_size`, `vla_size_expr`, `init_desg_expr`, `create_lvar_init`,
   `lvar_init_comma`, `expand_decl`, `combine`, `to_assign`, `new_inc_dec`,
   `shape_node`. 以编译器报错枚举调用点, 不做手工清单.
-- [ ] E9.3 把 codegen 里 E1-E8 期间使用的临时 `chibicc_ctx()` (1 个 `format`,
+- [x] E9.3 把 codegen 里 E1-E8 期间使用的临时 `chibicc_ctx()` (1 个 `format`,
   1 个 `nodearray_push`, 7 个 `error_tok`, 62 个 `new_node` 家族构造器,
   1 个 `new_cast`) 全部换成 `ctx`; 确认 `codegen.c` 的 `chibicc_ctx()` 为 0.
-- [ ] E9.4 不需要 ctx 的函数保持原签名; `output_file` / `depth` /
+- [x] E9.4 不需要 ctx 的函数保持原签名; `output_file` / `depth` /
   `current_fn` / cg 表不动.
 
 验收: `test/shape.sh` 34 段; `make docker-snapshot-diff` 为空; `test/ast.sh`
@@ -491,24 +491,24 @@
 
 ### E10 - 删除隐式状态
 
-- [ ] E10.1 删除 `libchibicc/src/chibicc.h` 的 `chibicc_active_ctx` /
+- [x] E10.1 删除 `libchibicc/src/chibicc.h` 的 `chibicc_active_ctx` /
   `chibicc_ctx` / `chibicc_context_activate` 声明; 删除 `lib.c` 的 TLS 定义,
   访问器与 activate.
-- [ ] E10.2 `ENTER_RET` / `ENTER_VOID` 去掉 `_prev` 与 active 保存 / 恢复;
+- [x] E10.2 `ENTER_RET` / `ENTER_VOID` 去掉 `_prev` 与 active 保存 / 恢复;
   `LEAVE` 只弹 `jmp_top`. `chibicc_context_new` / `reset` / `free` 不再触碰
   active.
-- [ ] E10.3 删除 arena 在 `ctx == NULL` 时退回 `calloc` / `realloc` 的分支
+- [x] E10.3 删除 arena 在 `ctx == NULL` 时退回 `calloc` / `realloc` 的分支
   (保留 `old == NULL` 的重分配语义) 与 `format` 的 malloc 分支;
   `CHIBICC_DEBUG_ARENA` 下加 `assert(ctx)`.
-- [ ] E10.4 `main.c` 删除对 `chibicc_context_new` 副作用的依赖; 所有内部调用
+- [x] E10.4 `main.c` 删除对 `chibicc_context_new` 副作用的依赖; 所有内部调用
   显式传 `ctx`; 确认没有 `chibicc_context_activate` 调用.
-- [ ] E10.5 确认 `test/self/self-test.c` 全部走显式 `ctx` (E1.4 已改), 不再依赖
+- [x] E10.5 确认 `test/self/self-test.c` 全部走显式 `ctx` (E1.4 已改), 不再依赖
   `chibicc_context_new` 的副作用; `test/library.sh` 的注释从
   "active context is thread-local" 改为"contexts carry no shared state".
-- [ ] E10.6 `test/context-audit.sh` 转严: 三个符号, TLS 关键字, codegen /
+- [x] E10.6 `test/context-audit.sh` 转严: 三个符号, TLS 关键字, codegen /
   `main.c` 的访问器引用, 以及 codegen 的 `cg_ctx` 必须为 0; Makefile 提供
   `check-context` 与 `check-context-pratt`, 并接入 `test-all` 与 Docker 闸门.
-- [ ] E10.7 (可选, 单独提交) 给 `predefined_defs` 加 `const`, 把
+- [x] E10.7 (可选, 单独提交) 给 `predefined_defs` 加 `const`, 把
   `preprocess.c` 的遍历指针改成 `const PredefinedDef *`; 这是审计口径的硬化,
   与 ctx 改动分开.
 
@@ -517,19 +517,19 @@
 
 ### E11 - 全闸门, 文档与归档
 
-- [ ] E11.1 默认构建: `make docker-test` (含自举), `make docker-snapshot-diff`,
+- [x] E11.1 默认构建: `make docker-test` (含自举), `make docker-snapshot-diff`,
   `make check-context`, `make check-library`, `test/self-test.sh`.
-- [ ] E11.2 Pratt: `make docker-test-both`, `make docker-pratt-ab`
+- [x] E11.2 Pratt: `make docker-test-both`, `make docker-pratt-ab`
   (41 语料 + tinycc 的 AST / `-S` A/B 与测试套件), `make check-library-pratt`,
   `make check-context-pratt`, `make test-stage2-pratt`.
-- [ ] E11.3 真实项目 (硬性): `make docker-test-thirdparty THIRDPARTY=tinycc`;
+- [x] E11.3 真实项目 (硬性): `make docker-test-thirdparty THIRDPARTY=tinycc`;
   任一失败即本线未完成.
-- [ ] E11.4 文档: 4.9 列出的文件全部更新; `docs/02-architecture.md` 2.7 重写;
+- [x] E11.4 文档: 4.9 列出的文件全部更新; `docs/02-architecture.md` 2.7 重写;
   `AGENTS.md` 的规则, 代码地图与路线图同步; `docs/09-api-reference.md` 注明
   `.a` 内部符号签名不承诺兼容.
-- [ ] E11.5 `plans/RESULT-explicit-context.md`: 每步实测, 改动量, 受影响的
+- [x] E11.5 `plans/RESULT-explicit-context.md`: 每步实测, 改动量, 受影响的
   `.a` 内部符号, 与计划的偏离, 以及 codegen 全显式的调用点统计.
-- [ ] E11.6 合并回 `main`; 确认 `make clean && make` 与基线等价.
+- [x] E11.6 合并回 `main`; 确认 `make clean && make` 与基线等价.
 
 验收: 判据 1 到 6 全部有实测证据; 没有临时代码, 脚本或未使用目标.
 

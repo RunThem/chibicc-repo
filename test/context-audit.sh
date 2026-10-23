@@ -71,6 +71,16 @@ if [ -n "$hits" ]; then
 else
   echo "context-audit: cg_ctx in codegen.c: 0"
 fi
+# No file-scope context pointer under any other name either. main.c is
+# the driver and keeps its one context; codegen receives it as a
+# parameter.
+hits=$(grep -nE '^[[:space:]]*(static[[:space:]]+)?ChibiccContext[[:space:]]*\*' "$root/codegen.c" || true)
+if [ -n "$hits" ]; then
+  echo "$hits"
+  note "file-scope context pointer in codegen.c (want 0)"
+else
+  echo "context-audit: file-scope context pointer in codegen.c: 0"
+fi
 
 # 4. The accessors must not survive in the archive either. Darwin nm
 #    prefixes C symbols with an underscore.
