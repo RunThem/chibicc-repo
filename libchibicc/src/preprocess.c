@@ -1258,7 +1258,7 @@ static int predefined_size(SizeKind size) {
 // The predefined set. `value` is the replacement text; the __SIZEOF_*
 // entries derive it from the built-in types, and the builtin/dynamic
 // entries have no replacement text of their own.
-static PredefinedDef predefined_defs[] = {
+static const PredefinedDef predefined_defs[] = {
   {"_LP64", "1", SZ_NONE, PREDEF_MACRO, NULL},
   {"__C99_MACRO_WITH_VA_ARGS", "1", SZ_NONE, PREDEF_MACRO, NULL},
   {"__ELF__", "1", SZ_NONE, PREDEF_MACRO, NULL},
@@ -1317,7 +1317,7 @@ void init_macros(ChibiccContext *ctx) {
   ctx->predefined = chibicc_arena_calloc(ctx, n, sizeof(ChibiccPredefinedMacro));
 
   for (int i = 0; i < n; i++) {
-    PredefinedDef *d = &predefined_defs[i];
+    const PredefinedDef *d = &predefined_defs[i];
     ChibiccPredefinedMacro *e = &ctx->predefined[i];
     e->name = d->name;
 
