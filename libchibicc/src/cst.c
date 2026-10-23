@@ -95,7 +95,7 @@ typedef struct {
 // only nested delimiters are grouped. On a missing closer or a depth
 // overrun the node becomes CST_UNPARSED but keeps the opener and
 // everything it consumed.
-static CstNode *cst_parse_group(CstContext *ctx, Token **rest, Token *tok) {
+static CstNode *cst_parse_group(CstContext *cst, Token **rest, Token *tok) {
   char *closer = equal(tok, "(") ? ")" : equal(tok, "[") ? "]" : "}";
   CstKind kind = equal(tok, "(") ? CST_GROUP_PAREN
                : equal(tok, "[") ? CST_GROUP_BRACKET
@@ -105,7 +105,7 @@ static CstNode *cst_parse_group(CstContext *ctx, Token **rest, Token *tok) {
   cst_add_leaf(group, tok);
 
   Token *p = tok->next;
-  if (++ctx->depth > MAX_CST_DEPTH) {
+  if (++cst->depth > MAX_CST_DEPTH) {
     // Depth fallback: keep the rest of the group as flat leaves. The
     // group is an unparsed span; the token order (and so the
     // reconstruction) is unchanged.
@@ -118,14 +118,14 @@ static CstNode *cst_parse_group(CstContext *ctx, Token **rest, Token *tok) {
       cst_add_leaf(group, p);
       p = p->next;
     }
-    ctx->depth--;
+    cst->depth--;
     *rest = p;
     return group;
   }
 
   while (p && p->kind != TK_EOF && !equal(p, closer)) {
     if (cst_is_open(p)) {
-      cst_add_child(group, cst_parse_group(ctx, &p, p));
+      cst_add_child(group, cst_parse_group(cst, &p, p));
       continue;
     }
     cst_add_leaf(group, p);
@@ -138,7 +138,7 @@ static CstNode *cst_parse_group(CstContext *ctx, Token **rest, Token *tok) {
   } else {
     group->kind = CST_UNPARSED;
   }
-  ctx->depth--;
+  cst->depth--;
   *rest = p;
   return group;
 }
@@ -156,7 +156,7 @@ static CstNode *cst_parse_group(CstContext *ctx, Token **rest, Token *tok) {
 typedef struct {
   Token *tok;
   bool ok;
-  CstContext *ctx;
+  CstContext *cst;
 } CstParser;
 
 static void cst_fail(CstParser *p) {
@@ -193,18 +193,18 @@ static bool cst_is_keyword(Token *tok) {
   return cst_in_list(tok, kw);
 }
 
-static bool cst_is_typedef_name(CstContext *ctx, Token *tok) {
+static bool cst_is_typedef_name(CstContext *cst, Token *tok) {
   if (!tok || tok->kind != TK_IDENT)
     return false;
-  for (int i = 0; i < ctx->typedefs.len; i++)
-    if (equal(tok, ctx->typedefs.data[i]))
+  for (int i = 0; i < cst->typedefs.len; i++)
+    if (equal(tok, cst->typedefs.data[i]))
       return true;
   return false;
 }
 
 // True if `tok` can start a type name in a cast or sizeof: a type
 // specifier / qualifier keyword, or a file-local typedef name.
-static bool cst_is_type_start(Token *tok, CstContext *ctx) {
+static bool cst_is_type_start(Token *tok, CstContext *cst) {
   char *kw[] = {
     "void", "_Bool", "char", "short", "int", "long", "float", "double",
     "signed", "unsigned", "_Complex", "_Imaginary", "const", "volatile",
@@ -213,12 +213,12 @@ static bool cst_is_type_start(Token *tok, CstContext *ctx) {
     "__restrict", "__restrict__",
     NULL,
   };
-  return cst_in_list(tok, kw) || cst_is_typedef_name(ctx, tok);
+  return cst_in_list(tok, kw) || cst_is_typedef_name(cst, tok);
 }
 
 // True if `tok` can start a declaration. Storage classes and the
 // declaration-only keywords are included; statement keywords are not.
-static bool cst_is_decl_start(Token *tok, CstContext *ctx) {
+static bool cst_is_decl_start(Token *tok, CstContext *cst) {
   char *kw[] = {
     "typedef", "static", "extern", "auto", "register", "inline",
     "_Thread_local", "__thread", "_Noreturn", "_Alignas", "const",
@@ -229,11 +229,11 @@ static bool cst_is_decl_start(Token *tok, CstContext *ctx) {
     "_Imaginary", "__signed__", "__const__", "__volatile__",
     NULL,
   };
-  return cst_in_list(tok, kw) || cst_is_typedef_name(ctx, tok);
+  return cst_in_list(tok, kw) || cst_is_typedef_name(cst, tok);
 }
 
-static void cst_add_typedef(CstContext *ctx, Token *tok) {
-  strarray_push(&ctx->typedefs, chibicc_arena_strndup(tok->loc, tok->len));
+static void cst_add_typedef(CstContext *cst, Token *tok) {
+  strarray_push(&cst->typedefs, chibicc_arena_strndup(tok->loc, tok->len));
 }
 
 // A conservative pre-scan for file-local typedef names. Names introduced
@@ -242,7 +242,7 @@ static void cst_add_typedef(CstContext *ctx, Token *tok) {
 // are collected; parameter names and struct tags are not. This is the
 // cast / declaration oracle the plan allows - an include-provided name
 // stays unknown and is not guessed.
-static void cst_collect_typedefs(CstContext *ctx, Token *tok) {
+static void cst_collect_typedefs(CstContext *cst, Token *tok) {
   Token *p = tok;
 
   while (p && p->kind != TK_EOF) {
@@ -271,9 +271,9 @@ static void cst_collect_typedefs(CstContext *ctx, Token *tok) {
 
       if (depth == 0 &&
           (equal(q->next, ";") || equal(q->next, ",") || equal(q->next, "[")))
-        cst_add_typedef(ctx, q);
+        cst_add_typedef(cst, q);
       else if (depth == 1 && equal(prev, "*") && equal(q->next, ")"))
-        cst_add_typedef(ctx, q);
+        cst_add_typedef(cst, q);
     }
 
     p = q ? q : p->next;
@@ -305,7 +305,7 @@ static CstNode *cst_parse_declarator1(CstParser *p, bool allow_abstract);
 // back to the skeleton, where the span becomes UNPARSED.
 static CstNode *cst_parse_raw_group(CstParser *p) {
   Token *rest = NULL;
-  CstNode *group = cst_parse_group(p->ctx, &rest, p->tok);
+  CstNode *group = cst_parse_group(p->cst, &rest, p->tok);
 
   if (group->kind == CST_UNPARSED) {
     cst_fail(p);
@@ -462,13 +462,13 @@ static CstNode *cst_parse_initializer(CstParser *p) {
 // sublist is a nested CST_INIT_LIST, and no target-type decision is made
 // here (brace elision belongs to a later consumer).
 static CstNode *cst_parse_init_list(CstParser *p) {
-  if (++p->ctx->depth > MAX_CST_DEPTH) {
-    p->ctx->depth--;
+  if (++p->cst->depth > MAX_CST_DEPTH) {
+    p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
   CstNode *node = cst_parse_init_list1(p);
-  p->ctx->depth--;
+  p->cst->depth--;
   return node;
 }
 
@@ -602,13 +602,13 @@ static CstNode *cst_parse_postfix(CstParser *p) {
 //       | "(" type-name ")" "{" init-list "}"        // compound literal
 //       | postfix
 static CstNode *cst_parse_unary(CstParser *p) {
-  if (++p->ctx->depth > MAX_CST_DEPTH) {
-    p->ctx->depth--;
+  if (++p->cst->depth > MAX_CST_DEPTH) {
+    p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
   CstNode *node = cst_parse_unary1(p);
-  p->ctx->depth--;
+  p->cst->depth--;
   return node;
 }
 
@@ -623,7 +623,7 @@ static CstNode *cst_parse_unary1(CstParser *p) {
     p->tok = op->next;
 
     CstNode *operand = (cst_at(p, "(") && p->tok->next &&
-                        cst_is_type_start(p->tok->next, p->ctx))
+                        cst_is_type_start(p->tok->next, p->cst))
                          ? cst_parse_type_name(p)
                          : cst_parse_unary(p);
     if (!p->ok)
@@ -652,7 +652,7 @@ static CstNode *cst_parse_unary1(CstParser *p) {
   }
 
   if (cst_at(p, "(") && p->tok->next &&
-      cst_is_type_start(p->tok->next, p->ctx)) {
+      cst_is_type_start(p->tok->next, p->cst)) {
     CstNode *type = cst_parse_type_name(p);
     if (!p->ok)
       return NULL;
@@ -856,13 +856,13 @@ static CstNode *cst_parse_logor(CstParser *p) {
 
 // conditional = logor ("?" expr ":" conditional | "?" ":" conditional)?
 static CstNode *cst_parse_conditional(CstParser *p) {
-  if (++p->ctx->depth > MAX_CST_DEPTH) {
-    p->ctx->depth--;
+  if (++p->cst->depth > MAX_CST_DEPTH) {
+    p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
   CstNode *node = cst_parse_conditional1(p);
-  p->ctx->depth--;
+  p->cst->depth--;
   return node;
 }
 
@@ -913,13 +913,13 @@ static bool cst_at_assign_op(CstParser *p) {
 
 // assign = conditional (assign-op assign)?
 static CstNode *cst_parse_assign(CstParser *p) {
-  if (++p->ctx->depth > MAX_CST_DEPTH) {
-    p->ctx->depth--;
+  if (++p->cst->depth > MAX_CST_DEPTH) {
+    p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
   CstNode *node = cst_parse_assign1(p);
-  p->ctx->depth--;
+  p->cst->depth--;
   return node;
 }
 
@@ -942,13 +942,13 @@ static CstNode *cst_parse_assign1(CstParser *p) {
 
 // comma = assign ("," assign)*
 static CstNode *cst_parse_comma(CstParser *p) {
-  if (++p->ctx->depth > MAX_CST_DEPTH) {
-    p->ctx->depth--;
+  if (++p->cst->depth > MAX_CST_DEPTH) {
+    p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
   CstNode *node = cst_parse_comma1(p);
-  p->ctx->depth--;
+  p->cst->depth--;
   return node;
 }
 
@@ -985,7 +985,7 @@ static CstNode *cst_parse_raw_group_at(CstParser *p, Token *start) {
   p->ok = true;
 
   Token *rest = NULL;
-  CstNode *group = cst_parse_group(p->ctx, &rest, start);
+  CstNode *group = cst_parse_group(p->cst, &rest, start);
   if (group->kind == CST_UNPARSED) {
     cst_fail(p);
     return NULL;
@@ -1045,7 +1045,7 @@ static CstNode *cst_parse_decl_specs(CstParser *p) {
       }
       if (cst_at(p, "{")) {
         Token *rest = NULL;
-        CstNode *body = cst_parse_group(p->ctx, &rest, p->tok);
+        CstNode *body = cst_parse_group(p->cst, &rest, p->tok);
         if (body->kind == CST_UNPARSED) {
           cst_fail(p);
           return NULL;
@@ -1068,7 +1068,7 @@ static CstNode *cst_parse_decl_specs(CstParser *p) {
       }
       if (cst_at(p, "{")) {
         Token *rest = NULL;
-        CstNode *body = cst_parse_group(p->ctx, &rest, p->tok);
+        CstNode *body = cst_parse_group(p->cst, &rest, p->tok);
         if (body->kind == CST_UNPARSED) {
           cst_fail(p);
           return NULL;
@@ -1134,7 +1134,7 @@ static CstNode *cst_parse_decl_specs(CstParser *p) {
       continue;
     }
 
-    if (cst_is_typedef_name(p->ctx, tok)) {
+    if (cst_is_typedef_name(p->cst, tok)) {
       if (has_type)
         break;
       cst_add_leaf(specs, tok);
@@ -1213,13 +1213,13 @@ static CstNode *cst_parse_dimension(CstParser *p) {
 // GROUP_PAREN, the name, and the suffixes in source order. No type is
 // built and no name is bound.
 static CstNode *cst_parse_declarator(CstParser *p, bool allow_abstract) {
-  if (++p->ctx->depth > MAX_CST_DEPTH) {
-    p->ctx->depth--;
+  if (++p->cst->depth > MAX_CST_DEPTH) {
+    p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
   CstNode *node = cst_parse_declarator1(p, allow_abstract);
-  p->ctx->depth--;
+  p->cst->depth--;
   return node;
 }
 
@@ -1459,7 +1459,7 @@ static CstNode *cst_parse_item1(CstParser *p);
 // where it should have ended. The node is CST_UNPARSED: the expression
 // grammar did not explain the span (a declaration is one such span until
 // C2.2), and the children are exactly the raw pieces, not a guess.
-static CstNode *cst_parse_fallback_statement(CstContext *ctx, Token **rest,
+static CstNode *cst_parse_fallback_statement(CstContext *cst, Token **rest,
                                              Token *tok) {
   CstNode *stmt = new_cst_node(CST_UNPARSED);
 
@@ -1478,7 +1478,7 @@ static CstNode *cst_parse_fallback_statement(CstContext *ctx, Token **rest,
     if (cst_is_close(p))
       break;
     if (cst_is_open(p)) {
-      cst_add_child(stmt, cst_parse_group(ctx, &p, p));
+      cst_add_child(stmt, cst_parse_group(cst, &p, p));
       continue;
     }
     cst_add_leaf(stmt, p);
@@ -1491,8 +1491,8 @@ static CstNode *cst_parse_fallback_statement(CstContext *ctx, Token **rest,
 // A statement whose whole span is an expression followed by ';' becomes
 // CST_EXPR_STMT. On any failure the caller uses the raw skeleton instead;
 // the failed attempt's nodes are unreachable, which is allowed.
-static CstNode *cst_try_expr_stmt(Token **rest, Token *tok, CstContext *ctx) {
-  CstParser p = {tok, true, ctx};
+static CstNode *cst_try_expr_stmt(Token **rest, Token *tok, CstContext *cst) {
+  CstParser p = {tok, true, cst};
 
   CstNode *expr = cst_parse_comma(&p);
   if (!p.ok || !equal(p.tok, ";"))
@@ -1708,7 +1708,7 @@ static CstNode *cst_parse_for(CstParser *p) {
   if (cst_at(p, ";")) {
     cst_add_leaf(node, p->tok);
     p->tok = p->tok->next;
-  } else if (cst_is_decl_start(p->tok, p->ctx)) {
+  } else if (cst_is_decl_start(p->tok, p->cst)) {
     CstNode *decl = cst_parse_decl(p);
     if (!decl)
       return NULL;
@@ -1885,13 +1885,13 @@ static CstNode *cst_parse_asm(CstParser *p) {
 }
 
 static CstNode *cst_parse_statement(CstParser *p) {
-  if (++p->ctx->depth > MAX_CST_DEPTH) {
-    p->ctx->depth--;
+  if (++p->cst->depth > MAX_CST_DEPTH) {
+    p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
   CstNode *node = cst_parse_statement1(p);
-  p->ctx->depth--;
+  p->cst->depth--;
   return node;
 }
 
@@ -1945,7 +1945,7 @@ static CstNode *cst_parse_statement1(CstParser *p) {
   // A declaration is tried only when the first token can start one; an
   // unknown type (`size_t x;`) therefore fails the expression path and
   // becomes UNPARSED instead of being guessed.
-  if (cst_is_decl_start(tok, p->ctx)) {
+  if (cst_is_decl_start(tok, p->cst)) {
     CstNode *decl = cst_parse_decl(p);
     if (decl)
       return decl;
@@ -1954,7 +1954,7 @@ static CstNode *cst_parse_statement1(CstParser *p) {
   }
 
   Token *next = NULL;
-  CstNode *stmt = cst_try_expr_stmt(&next, tok, p->ctx);
+  CstNode *stmt = cst_try_expr_stmt(&next, tok, p->cst);
   if (stmt) {
     p->tok = next;
     return stmt;
@@ -2151,17 +2151,17 @@ static CstNode *cst_parse_pp_if(CstParser *p) {
 // or a statement / declaration with the raw fallback. Every path
 // consumes at least one token when one is available.
 static CstNode *cst_parse_item(CstParser *p) {
-  if (++p->ctx->depth > MAX_CST_DEPTH) {
-    p->ctx->depth--;
+  if (++p->cst->depth > MAX_CST_DEPTH) {
+    p->cst->depth--;
     Token *start = p->tok;
     p->ok = true;
     Token *next = NULL;
-    CstNode *item = cst_parse_fallback_statement(p->ctx, &next, start);
+    CstNode *item = cst_parse_fallback_statement(p->cst, &next, start);
     p->tok = next;
     return item;
   }
   CstNode *item = cst_parse_item1(p);
-  p->ctx->depth--;
+  p->cst->depth--;
   return item;
 }
 
@@ -2180,7 +2180,7 @@ static CstNode *cst_parse_item1(CstParser *p) {
   p->tok = start;
   p->ok = true;
   Token *next = NULL;
-  item = cst_parse_fallback_statement(p->ctx, &next, start);
+  item = cst_parse_fallback_statement(p->cst, &next, start);
   p->tok = next;
   return item;
 }
@@ -2233,10 +2233,10 @@ static void cst_parse_items(CstNode *parent, CstParser *p) {
 // Build the CST for tokenize_file()'s output. The EOF marker has its own
 // kind because it carries the file's trailing trivia and no spelling.
 CstNode *cst_parse(Token *tok) {
-  CstContext ctx = {};
-  cst_collect_typedefs(&ctx, tok);
+  CstContext cst = {};
+  cst_collect_typedefs(&cst, tok);
 
-  CstParser p = {tok, true, &ctx};
+  CstParser p = {tok, true, &cst};
   CstNode *root = new_cst_node(CST_TRANSLATION_UNIT);
   cst_parse_items(root, &p);
 
