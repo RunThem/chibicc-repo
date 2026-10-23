@@ -112,7 +112,7 @@ static Token *skip_line(Token *tok) {
 }
 
 static Token *copy_token(Token *tok) {
-  Token *t = chibicc_arena_calloc(1, sizeof(Token));
+  Token *t = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Token));
   *t = *tok;
   t->next = NULL;
   return t;
@@ -130,7 +130,7 @@ static Token *new_eof(Token *tok) {
 // own text already carried, so chains are built by prepending only and
 // shared tails are never mutated (plans/PLAN.md, "挂接规则").
 static MacroProv *new_prov(MacroExpansion *exp, int arg_index, MacroProv *next) {
-  MacroProv *p = chibicc_arena_calloc(1, sizeof(MacroProv));
+  MacroProv *p = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(MacroProv));
   p->exp = exp;
   p->arg_index = arg_index;
   p->next = next;
@@ -142,7 +142,7 @@ static MacroProv *new_prov(MacroExpansion *exp, int arg_index, MacroProv *next) 
 static MacroExpansion *
 new_expansion(Token *name, Token *rparen, Macro *macro, MacroArg *args,
               int arg_count, bool is_builtin) {
-  MacroExpansion *e = chibicc_arena_calloc(1, sizeof(MacroExpansion));
+  MacroExpansion *e = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(MacroExpansion));
   e->name = name;
   e->rparen = rparen;
   e->macro = macro;
@@ -160,7 +160,7 @@ static int count_macro_args(MacroArg *args) {
 }
 
 static Hideset *new_hideset(char *name) {
-  Hideset *hs = chibicc_arena_calloc(1, sizeof(Hideset));
+  Hideset *hs = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Hideset));
   hs->name = name;
   return hs;
 }
@@ -262,7 +262,7 @@ static char *quote_string(char *str) {
     bufsize++;
   }
 
-  char *buf = chibicc_arena_calloc(1, bufsize);
+  char *buf = chibicc_arena_calloc(chibicc_ctx(), 1, bufsize);
   char *p = buf;
   *p++ = '"';
   for (int i = 0; str[i]; i++) {
@@ -313,7 +313,7 @@ static Token *copy_line(Token **rest, Token *tok) {
 }
 
 static Token *new_num_token(int val, Token *tmpl) {
-  char *buf = format("%d\n", val);
+  char *buf = format(chibicc_ctx(), "%d\n", val);
   return tokenize_nested(new_file(tmpl->file->name, tmpl->file->file_no, buf));
 }
 
@@ -393,7 +393,7 @@ static long eval_const_expr(Token **rest, Token *tok) {
 }
 
 static CondIncl *push_cond_incl(Token *tok, bool included) {
-  CondIncl *ci = chibicc_arena_calloc(1, sizeof(CondIncl));
+  CondIncl *ci = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(CondIncl));
   ci->next = cond_incl;
   ci->ctx = IN_THEN;
   ci->tok = tok;
@@ -409,11 +409,11 @@ static Macro *find_macro(Token *tok) {
 }
 
 static Macro *add_macro(char *name, bool is_objlike, Token *body) {
-  Macro *m = chibicc_arena_calloc(1, sizeof(Macro));
+  Macro *m = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Macro));
   m->name = name;
   m->is_objlike = is_objlike;
   m->body = body;
-  hashmap_put(&macros, name, m);
+  hashmap_put(chibicc_ctx(), &macros, name, m);
   return m;
 }
 
@@ -435,13 +435,13 @@ static MacroParam *read_macro_params(Token **rest, Token *tok, char **va_args_na
       error_tok(tok, "expected an identifier");
 
     if (equal(tok->next, "...")) {
-      *va_args_name = chibicc_arena_strndup(tok->loc, tok->len);
+      *va_args_name = chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len);
       *rest = skip(tok->next->next, ")");
       return head.next;
     }
 
-    MacroParam *m = chibicc_arena_calloc(1, sizeof(MacroParam));
-    m->name = chibicc_arena_strndup(tok->loc, tok->len);
+    MacroParam *m = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(MacroParam));
+    m->name = chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len);
     cur = cur->next = m;
     tok = tok->next;
   }
@@ -454,7 +454,7 @@ static void read_macro_definition(Token **rest, Token *tok) {
   if (tok->kind != TK_IDENT)
     error_tok(tok, "macro name must be an identifier");
   Token *name_tok = tok;
-  char *name = chibicc_arena_strndup(tok->loc, tok->len);
+  char *name = chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len);
   tok = tok->next;
 
   if (!tok->has_space && equal(tok, "(")) {
@@ -498,7 +498,7 @@ static MacroArg *read_macro_arg_one(Token **rest, Token *tok, bool read_rest) {
 
   cur->next = new_eof(tok);
 
-  MacroArg *arg = chibicc_arena_calloc(1, sizeof(MacroArg));
+  MacroArg *arg = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(MacroArg));
   arg->tok = head.next;
   *rest = tok;
   return arg;
@@ -525,7 +525,7 @@ read_macro_args(Token **rest, Token *tok, MacroParam *params, char *va_args_name
   if (va_args_name) {
     MacroArg *arg;
     if (equal(tok, ")")) {
-      arg = chibicc_arena_calloc(1, sizeof(MacroArg));
+      arg = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(MacroArg));
       arg->tok = new_eof(tok);
     } else {
       if (pp != params)
@@ -562,7 +562,7 @@ static char *join_tokens(Token *tok, Token *end) {
     len += t->len;
   }
 
-  char *buf = chibicc_arena_calloc(1, len);
+  char *buf = chibicc_arena_calloc(chibicc_ctx(), 1, len);
 
   // Copy token texts.
   int pos = 0;
@@ -589,7 +589,7 @@ static Token *stringize(Token *hash, Token *arg) {
 // Concatenate two tokens to create a new token.
 static Token *paste(Token *lhs, Token *rhs) {
   // Paste the two tokens.
-  char *buf = format("%.*s%.*s", lhs->len, lhs->loc, rhs->len, rhs->loc);
+  char *buf = format(chibicc_ctx(), "%.*s%.*s", lhs->len, lhs->loc, rhs->len, rhs->loc);
 
   // Tokenize the resulting string.
   Token *tok = tokenize_nested(new_file(lhs->file->name, lhs->file->file_no, buf));
@@ -829,10 +829,10 @@ char *search_include_paths(char *filename) {
 
   // Search a file from the include paths.
   for (int i = 0; i < ctx->include_paths_len; i++) {
-    char *path = format("%s/%s", ctx->include_paths[i], filename);
+    char *path = format(chibicc_ctx(), "%s/%s", ctx->include_paths[i], filename);
     if (!file_exists(path))
       continue;
-    hashmap_put(&ctx->search_cache, filename, path);
+    hashmap_put(chibicc_ctx(), &ctx->search_cache, filename, path);
     ctx->include_next_idx = i + 1;
     return path;
   }
@@ -843,7 +843,7 @@ static char *search_include_next(char *filename) {
   ChibiccContext *ctx = chibicc_ctx();
   for (; ctx->include_next_idx < ctx->include_paths_len;
        ctx->include_next_idx++) {
-    char *path = format("%s/%s", ctx->include_paths[ctx->include_next_idx],
+    char *path = format(chibicc_ctx(), "%s/%s", ctx->include_paths[ctx->include_next_idx],
                         filename);
     if (file_exists(path))
       return path;
@@ -862,7 +862,7 @@ static char *read_include_filename(Token **rest, Token *tok, bool *is_dquote) {
     // So we don't want to use token->str.
     *is_dquote = true;
     *rest = skip_line(tok->next);
-    return chibicc_arena_strndup(tok->loc + 1, tok->len - 2);
+    return chibicc_arena_strndup(chibicc_ctx(), tok->loc + 1, tok->len - 2);
   }
 
   // Pattern 2: #include <foo.h>
@@ -907,7 +907,7 @@ static char *detect_include_guard(Token *tok) {
   if (tok->kind != TK_IDENT)
     return NULL;
 
-  char *macro = chibicc_arena_strndup(tok->loc, tok->len);
+  char *macro = chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len);
   tok = tok->next;
 
   if (!is_hash(tok) || !equal(tok->next, "define") || !equal(tok->next->next, macro))
@@ -964,7 +964,7 @@ static Token *include_file(Token *tok, char *path, Token *filename_tok,
 
   guard_name = detect_include_guard(tok2);
   if (guard_name)
-    hashmap_put(&ctx->include_guards, path, guard_name);
+    hashmap_put(chibicc_ctx(), &ctx->include_guards, path, guard_name);
 
   return append(tok2, tok);
 }
@@ -1015,7 +1015,7 @@ static Token *preprocess2(Token *tok) {
       char *filename = read_include_filename(&tok, tok->next, &is_dquote);
 
       if (filename[0] != '/' && is_dquote) {
-        char *path = format("%s/%s", dirname(chibicc_arena_strdup(start->file->name)), filename);
+        char *path = format(chibicc_ctx(), "%s/%s", dirname(chibicc_arena_strdup(chibicc_ctx(), start->file->name)), filename);
         if (file_exists(path)) {
           tok = include_file(tok, path, start->next->next, start->file);
           continue;
@@ -1046,7 +1046,7 @@ static Token *preprocess2(Token *tok) {
       tok = tok->next;
       if (tok->kind != TK_IDENT)
         error_tok(tok, "macro name must be an identifier");
-      undef_macro(chibicc_arena_strndup(tok->loc, tok->len));
+      undef_macro(chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len));
       tok = skip_line(tok->next);
       continue;
     }
@@ -1119,7 +1119,7 @@ static Token *preprocess2(Token *tok) {
     }
 
     if (equal(tok, "pragma") && equal(tok->next, "once")) {
-      hashmap_put(&pragma_once, tok->file->name, (void *)1);
+      hashmap_put(chibicc_ctx(), &pragma_once, tok->file->name, (void *)1);
       tok = skip_line(tok->next->next);
       continue;
     }
@@ -1151,7 +1151,7 @@ void define_macro(char *name, char *buf) {
 }
 
 void undef_macro(char *name) {
-  hashmap_delete(&macros, name);
+  hashmap_delete(chibicc_ctx(), &macros, name);
 }
 
 static Macro *add_builtin(char *name, macro_handler_fn *fn) {
@@ -1204,12 +1204,12 @@ static char *format_date(struct tm *tm) {
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
   };
 
-  return format("\"%s %2d %d\"", mon[tm->tm_mon], tm->tm_mday, tm->tm_year + 1900);
+  return format(chibicc_ctx(), "\"%s %2d %d\"", mon[tm->tm_mon], tm->tm_mday, tm->tm_year + 1900);
 }
 
 // __TIME__ is expanded to the current time, e.g. "13:34:03".
 static char *format_time(struct tm *tm) {
-  return format("\"%02d:%02d:%02d\"", tm->tm_hour, tm->tm_min, tm->tm_sec);
+  return format(chibicc_ctx(), "\"%02d:%02d:%02d\"", tm->tm_hour, tm->tm_min, tm->tm_sec);
 }
 
 typedef enum {
@@ -1318,7 +1318,7 @@ void init_macros(void) {
 
   int n = sizeof(predefined_defs) / sizeof(*predefined_defs);
   ctx->predefined_len = n;
-  ctx->predefined = chibicc_arena_calloc(n, sizeof(ChibiccPredefinedMacro));
+  ctx->predefined = chibicc_arena_calloc(chibicc_ctx(), n, sizeof(ChibiccPredefinedMacro));
 
   for (int i = 0; i < n; i++) {
     PredefinedDef *d = &predefined_defs[i];
@@ -1326,7 +1326,7 @@ void init_macros(void) {
     e->name = d->name;
 
     if (d->kind == PREDEF_SIZEOF) {
-      char *value = format("%d", predefined_size(d->size));
+      char *value = format(chibicc_ctx(), "%d", predefined_size(d->size));
       e->value = value;
       define_macro(d->name, value);
     } else if (d->kind == PREDEF_MACRO) {
@@ -1436,7 +1436,7 @@ static void join_adjacent_string_literals(Token *tok) {
     for (Token *t = tok1->next; t != tok2; t = t->next)
       len = len + t->ty->array_len - 1;
 
-    char *buf = chibicc_arena_calloc(tok1->ty->base->size, len);
+    char *buf = chibicc_arena_calloc(chibicc_ctx(), tok1->ty->base->size, len);
 
     int i = 0;
     for (Token *t = tok1; t != tok2; t = t->next) {

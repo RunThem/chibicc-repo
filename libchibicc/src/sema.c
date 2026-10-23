@@ -140,7 +140,7 @@ Node *new_ulong(long val, Token *tok) {
 Node *new_cast(Node *expr, Type *ty) {
   add_type(expr);
 
-  Node *node = chibicc_arena_calloc(1, sizeof(Node));
+  Node *node = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Node));
   node->kind = ND_CAST;
   node->tok = expr->tok;
   node->lhs = expr;
@@ -193,7 +193,7 @@ void sema_state_clear(ChibiccContext *ctx) {
 static void sema_init(void) {
   ChibiccContext *ctx = chibicc_ctx();
   sema_state_clear(ctx);
-  ctx->sema_scope = chibicc_arena_calloc(1, sizeof(Scope));
+  ctx->sema_scope = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Scope));
 }
 
 #define scope (chibicc_ctx()->sema_scope)
@@ -203,7 +203,7 @@ static void sema_init(void) {
 #define builtin_alloca (chibicc_ctx()->builtin_alloca)
 
 static void enter_scope(void) {
-  Scope *sc = chibicc_arena_calloc(1, sizeof(Scope));
+  Scope *sc = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Scope));
   sc->next = scope;
   scope = sc;
 }
@@ -223,8 +223,8 @@ static VarScope *find_var(Token *tok) {
 }
 
 static VarScope *push_scope(char *name) {
-  VarScope *sc = chibicc_arena_calloc(1, sizeof(VarScope));
-  hashmap_put(&scope->vars, name, sc);
+  VarScope *sc = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(VarScope));
+  hashmap_put(chibicc_ctx(), &scope->vars, name, sc);
   return sc;
 }
 
@@ -373,10 +373,10 @@ static void check_node(Node *node) {
       error_tok(node->tok, "stray continue");
     return;
   case ND_GOTO:
-    nodearray_push(&gotos, node);
+    nodearray_push(chibicc_ctx(), &gotos, node);
     return;
   case ND_LABEL:
-    nodearray_push(&labels, node);
+    nodearray_push(chibicc_ctx(), &labels, node);
     check_node(node->lhs);
     return;
   case ND_FUNCDEF:
@@ -421,7 +421,7 @@ static void scan_globals(void) {
 
   for (Obj *var = globals; var; var = var->next)
     if (var->is_definition && !var->is_tentative)
-      hashmap_put(&reals, var->name, &real_tag);
+      hashmap_put(chibicc_ctx(), &reals, var->name, &real_tag);
 
   Obj head;
   Obj *cur = &head;
@@ -437,7 +437,7 @@ static void scan_globals(void) {
     if (hashmap_get(&reals, var->name) || hashmap_get(&kept, var->name))
       continue;
 
-    hashmap_put(&kept, var->name, &kept_tag);
+    hashmap_put(chibicc_ctx(), &kept, var->name, &kept_tag);
     cur = cur->next = var;
   }
 
@@ -821,7 +821,7 @@ static void bind_ident(Node *node) {
     // liveness analysis can tell which ones are actually needed.
     if (var->is_function) {
       if (sema_fn)
-        strarray_push(&sema_fn->refs, var->name);
+        strarray_push(chibicc_ctx(), &sema_fn->refs, var->name);
       else
         var->is_root = true;
     }
@@ -845,7 +845,7 @@ static void bind_ident(Node *node) {
 }
 
 static Obj *new_var(char *name, Type *ty) {
-  Obj *var = chibicc_arena_calloc(1, sizeof(Obj));
+  Obj *var = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Obj));
   var->name = name;
   var->ty = ty;
   resolve_type(ty);
@@ -914,7 +914,7 @@ static Obj *new_builtin_gvar(char *name, Type *ty) {
 #define unique_name_id (chibicc_ctx()->unique_name_id)
 
 static char *new_unique_name(void) {
-  return format(".L..%d", unique_name_id++);
+  return format(chibicc_ctx(), ".L..%d", unique_name_id++);
 }
 
 // Read-only peek at the counter: a consumer that allocates its own
@@ -1073,7 +1073,7 @@ static void lower_funcall(Node *node, Token *tok) {
 }
 
 static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
-  InitTree *init = chibicc_arena_calloc(1, sizeof(InitTree));
+  InitTree *init = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(InitTree));
   init->ty = ty;
 
   if (ty->kind == TY_ARRAY) {
@@ -1082,7 +1082,7 @@ static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
       return init;
     }
 
-    init->children = chibicc_arena_calloc(ty->array_len, sizeof(InitTree *));
+    init->children = chibicc_arena_calloc(chibicc_ctx(), ty->array_len, sizeof(InitTree *));
     for (int i = 0; i < ty->array_len; i++)
       init->children[i] = new_resolved_init(ty->base, false);
     return init;
@@ -1094,11 +1094,11 @@ static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
     for (Member *mem = ty->members; mem; mem = mem->next)
       len++;
 
-    init->children = chibicc_arena_calloc(len, sizeof(InitTree *));
+    init->children = chibicc_arena_calloc(chibicc_ctx(), len, sizeof(InitTree *));
 
     for (Member *mem = ty->members; mem; mem = mem->next) {
       if (is_flexible && ty->is_flexible && !mem->next) {
-        InitTree *child = chibicc_arena_calloc(1, sizeof(InitTree));
+        InitTree *child = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(InitTree));
         child->ty = mem->ty;
         child->is_flexible = true;
         init->children[mem->idx] = child;
@@ -1118,7 +1118,7 @@ static Type *copy_struct_type(Type *ty) {
   Member head = {};
   Member *cur = &head;
   for (Member *mem = ty->members; mem; mem = mem->next) {
-    Member *m = chibicc_arena_calloc(1, sizeof(Member));
+    Member *m = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Member));
     *m = *mem;
     cur = cur->next = m;
   }
@@ -1667,7 +1667,7 @@ write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset
     return cur;
   }
 
-  Relocation *rel = chibicc_arena_calloc(1, sizeof(Relocation));
+  Relocation *rel = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Relocation));
   rel->offset = offset;
   rel->label = label.name;
   rel->label_node = label.node;
@@ -1680,7 +1680,7 @@ write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset
 // global variable.
 static void gvar_init_data(Obj *var, InitTree *init) {
   Relocation head = {};
-  char *buf = chibicc_arena_calloc(1, var->ty->size);
+  char *buf = chibicc_arena_calloc(chibicc_ctx(), 1, var->ty->size);
   write_gvar_data(&head, init, var->ty, buf, 0);
   var->init_data = buf;
   var->rel = head.next;
@@ -2287,7 +2287,7 @@ void add_type(Node *node) {
     // expression can live outside the statement tree - a block-scope
     // static initializer holds one, and only the evaluator reaches it.
     // The type annotation makes this run exactly once per node.
-    nodearray_push(&gotos, node);
+    nodearray_push(chibicc_ctx(), &gotos, node);
     node->ty = pointer_to(ty_void);
     return;
   case ND_CAS:
@@ -3088,7 +3088,7 @@ static void splice_locals(Obj *fn) {
 // handoff, not a layer-3/4 field of Obj. The parameter is not named
 // `gotos` because sema.c aliases that name to the context slot.
 void sema_store_label_gotos(Obj *fn, NodeArray refs) {
-  LabelGotoList *l = chibicc_arena_calloc(1, sizeof(LabelGotoList));
+  LabelGotoList *l = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(LabelGotoList));
   l->fn = fn;
   l->refs = refs;
   l->next = chibicc_ctx()->label_gotos;

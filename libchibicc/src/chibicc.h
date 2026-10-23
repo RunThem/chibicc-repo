@@ -77,9 +77,9 @@ typedef struct {
   int len;
 } NodeArray;
 
-void strarray_push(StringArray *arr, char *s);
-void nodearray_push(NodeArray *arr, Node *node);
-char *format(char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void strarray_push(ChibiccContext *ctx, StringArray *arr, char *s);
+void nodearray_push(ChibiccContext *ctx, NodeArray *arr, Node *node);
+char *format(ChibiccContext *ctx, char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
 //
 // tokenize.c
@@ -270,10 +270,10 @@ typedef struct {
 
 void *hashmap_get(HashMap *map, char *key);
 void *hashmap_get2(HashMap *map, char *key, int keylen);
-void hashmap_put(HashMap *map, char *key, void *val);
-void hashmap_put2(HashMap *map, char *key, int keylen, void *val);
-void hashmap_delete(HashMap *map, char *key);
-void hashmap_delete2(HashMap *map, char *key, int keylen);
+void hashmap_put(ChibiccContext *ctx, HashMap *map, char *key, void *val);
+void hashmap_put2(ChibiccContext *ctx, HashMap *map, char *key, int keylen, void *val);
+void hashmap_delete(ChibiccContext *ctx, HashMap *map, char *key);
+void hashmap_delete2(ChibiccContext *ctx, HashMap *map, char *key, int keylen);
 
 //
 // Shared helpers (strings.c / tokenize.c)
@@ -388,8 +388,8 @@ ChibiccContext *chibicc_ctx(void);
 void chibicc_context_activate(ChibiccContext *ctx);
 void chibicc_context_set_base_file(ChibiccContext *ctx, char *path);
 
-void *chibicc_arena_alloc(size_t size, size_t align);
-void *chibicc_arena_calloc(size_t count, size_t size);
-char *chibicc_arena_strdup(char *s);
-char *chibicc_arena_strndup(char *s, size_t n);
-void *chibicc_arena_realloc(void *old, size_t old_size, size_t new_size);
+void *chibicc_arena_alloc(ChibiccContext *ctx, size_t size, size_t align);
+void *chibicc_arena_calloc(ChibiccContext *ctx, size_t count, size_t size);
+char *chibicc_arena_strdup(ChibiccContext *ctx, char *s);
+char *chibicc_arena_strndup(ChibiccContext *ctx, char *s, size_t n);
+void *chibicc_arena_realloc(ChibiccContext *ctx, void *old, size_t old_size, size_t new_size);

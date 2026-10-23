@@ -25,7 +25,7 @@ static uint64_t fnv_hash(char *s, int len) {
 
 // Make room for new entires in a given hashmap by removing
 // tombstones and possibly extending the bucket size.
-static void rehash(HashMap *map) {
+static void rehash(ChibiccContext *ctx, HashMap *map) {
   // Compute the size of the new hashmap.
   int nkeys = 0;
   for (int i = 0; i < map->capacity; i++)
@@ -39,13 +39,13 @@ static void rehash(HashMap *map) {
 
   // Create a new hashmap and copy all key-values.
   HashMap map2 = {};
-  map2.buckets = chibicc_arena_calloc(cap, sizeof(HashEntry));
+  map2.buckets = chibicc_arena_calloc(ctx, cap, sizeof(HashEntry));
   map2.capacity = cap;
 
   for (int i = 0; i < map->capacity; i++) {
     HashEntry *ent = &map->buckets[i];
     if (ent->key && ent->key != TOMBSTONE)
-      hashmap_put2(&map2, ent->key, ent->keylen, ent->val);
+      hashmap_put2(ctx, &map2, ent->key, ent->keylen, ent->val);
   }
 
   assert(map2.used == nkeys);
@@ -73,12 +73,12 @@ static HashEntry *get_entry(HashMap *map, char *key, int keylen) {
   unreachable();
 }
 
-static HashEntry *get_or_insert_entry(HashMap *map, char *key, int keylen) {
+static HashEntry *get_or_insert_entry(ChibiccContext *ctx, HashMap *map, char *key, int keylen) {
   if (!map->buckets) {
-    map->buckets = chibicc_arena_calloc(INIT_SIZE, sizeof(HashEntry));
+    map->buckets = chibicc_arena_calloc(ctx, INIT_SIZE, sizeof(HashEntry));
     map->capacity = INIT_SIZE;
   } else if ((map->used * 100) / map->capacity >= HIGH_WATERMARK) {
-    rehash(map);
+    rehash(ctx, map);
   }
 
   uint64_t hash = fnv_hash(key, keylen);
@@ -115,20 +115,20 @@ void *hashmap_get2(HashMap *map, char *key, int keylen) {
   return ent ? ent->val : NULL;
 }
 
-void hashmap_put(HashMap *map, char *key, void *val) {
-   hashmap_put2(map, key, strlen(key), val);
+void hashmap_put(ChibiccContext *ctx, HashMap *map, char *key, void *val) {
+   hashmap_put2(ctx, map, key, strlen(key), val);
 }
 
-void hashmap_put2(HashMap *map, char *key, int keylen, void *val) {
-  HashEntry *ent = get_or_insert_entry(map, key, keylen);
+void hashmap_put2(ChibiccContext *ctx, HashMap *map, char *key, int keylen, void *val) {
+  HashEntry *ent = get_or_insert_entry(ctx, map, key, keylen);
   ent->val = val;
 }
 
-void hashmap_delete(HashMap *map, char *key) {
-  hashmap_delete2(map, key, strlen(key));
+void hashmap_delete(ChibiccContext *ctx, HashMap *map, char *key) {
+  hashmap_delete2(ctx, map, key, strlen(key));
 }
 
-void hashmap_delete2(HashMap *map, char *key, int keylen) {
+void hashmap_delete2(ChibiccContext *ctx, HashMap *map, char *key, int keylen) {
   HashEntry *ent = get_entry(map, key, keylen);
   if (!ent)
     return;
@@ -141,5 +141,5 @@ void hashmap_delete2(HashMap *map, char *key, int keylen) {
   // they outnumber the live entries, rebuild now so a delete-heavy
   // stretch cannot leave the table half dead (C8).
   if (map->ndeleted > map->used - map->ndeleted)
-    rehash(map);
+    rehash(ctx, map);
 }

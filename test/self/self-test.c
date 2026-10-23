@@ -11,63 +11,63 @@
 
 // Verifies the realloc contract with an active context: the tail is
 // zeroed and the old bytes are preserved.
-static void arena_test(void) {
-  char *p = chibicc_arena_calloc(4, 1);
+static void arena_test(ChibiccContext *ctx) {
+  char *p = chibicc_arena_calloc(ctx, 4, 1);
   p[0] = 1;
   p[3] = 4;
 
-  char *q = chibicc_arena_realloc(p, 4, 16);
+  char *q = chibicc_arena_realloc(ctx, p, 4, 16);
   assert(q[0] == 1 && q[3] == 4);
   for (int i = 4; i < 16; i++)
     assert(q[i] == 0);
 
-  char *r = chibicc_arena_realloc(NULL, 0, 8);
+  char *r = chibicc_arena_realloc(ctx, NULL, 0, 8);
   for (int i = 0; i < 8; i++)
     assert(r[i] == 0);
 
   printf("arena: ok\n");
 }
 
-static void hashmap_test(void) {
-  HashMap *map = chibicc_arena_calloc(1, sizeof(HashMap));
+static void hashmap_test(ChibiccContext *ctx) {
+  HashMap *map = chibicc_arena_calloc(ctx, 1, sizeof(HashMap));
 
   for (int i = 0; i < 5000; i++)
-    hashmap_put(map, format("key %d", i), (void *)(size_t)i);
+    hashmap_put(ctx, map, format(ctx, "key %d", i), (void *)(size_t)i);
   for (int i = 1000; i < 2000; i++)
-    hashmap_delete(map, format("key %d", i));
+    hashmap_delete(ctx, map, format(ctx, "key %d", i));
   for (int i = 1500; i < 1600; i++)
-    hashmap_put(map, format("key %d", i), (void *)(size_t)i);
+    hashmap_put(ctx, map, format(ctx, "key %d", i), (void *)(size_t)i);
   for (int i = 6000; i < 7000; i++)
-    hashmap_put(map, format("key %d", i), (void *)(size_t)i);
+    hashmap_put(ctx, map, format(ctx, "key %d", i), (void *)(size_t)i);
 
   for (int i = 0; i < 1000; i++)
-    assert((size_t)hashmap_get(map, format("key %d", i)) == i);
+    assert((size_t)hashmap_get(map, format(ctx, "key %d", i)) == i);
   for (int i = 1000; i < 1500; i++)
     assert(hashmap_get(map, "no such key") == NULL);
   for (int i = 1500; i < 1600; i++)
-    assert((size_t)hashmap_get(map, format("key %d", i)) == i);
+    assert((size_t)hashmap_get(map, format(ctx, "key %d", i)) == i);
   for (int i = 1600; i < 2000; i++)
     assert(hashmap_get(map, "no such key") == NULL);
   for (int i = 2000; i < 5000; i++)
-    assert((size_t)hashmap_get(map, format("key %d", i)) == i);
+    assert((size_t)hashmap_get(map, format(ctx, "key %d", i)) == i);
   for (int i = 5000; i < 6000; i++)
     assert(hashmap_get(map, "no such key") == NULL);
   for (int i = 6000; i < 7000; i++)
-    hashmap_put(map, format("key %d", i), (void *)(size_t)i);
+    hashmap_put(ctx, map, format(ctx, "key %d", i), (void *)(size_t)i);
 
   assert(hashmap_get(map, "no such key") == NULL);
 
   // Delete-heavy traffic must not leave tombstones behind: once they
   // outnumber the live entries the table rehashes (C8).
-  HashMap *tomb = chibicc_arena_calloc(1, sizeof(HashMap));
+  HashMap *tomb = chibicc_arena_calloc(ctx, 1, sizeof(HashMap));
   for (int i = 0; i < 1000; i++)
-    hashmap_put(tomb, format("t %d", i), (void *)(size_t)i);
+    hashmap_put(ctx, tomb, format(ctx, "t %d", i), (void *)(size_t)i);
   for (int i = 0; i < 900; i++)
-    hashmap_delete(tomb, format("t %d", i));
+    hashmap_delete(ctx, tomb, format(ctx, "t %d", i));
   assert(tomb->ndeleted <= tomb->used - tomb->ndeleted);
   assert(hashmap_get(tomb, "t 0") == NULL);
   assert((size_t)hashmap_get(tomb, "t 999") == 999);
-  hashmap_put(tomb, "t 0", (void *)123);
+  hashmap_put(ctx, tomb, "t 0", (void *)123);
   assert((size_t)hashmap_get(tomb, "t 0") == 123);
   assert((size_t)hashmap_get(tomb, "t 999") == 999);
 
@@ -155,8 +155,8 @@ static bool sema_state_test(void) {
 
 int main(void) {
   ChibiccContext *ctx = chibicc_context_new();
-  arena_test();
-  hashmap_test();
+  arena_test(ctx);
+  hashmap_test(ctx);
   chibicc_context_free(ctx);
 
   return sema_state_test() ? 0 : 1;

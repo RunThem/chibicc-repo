@@ -60,7 +60,7 @@ static char *vformat(char *fmt, va_list ap) {
   va_copy(ap2, ap);
   int n = vsnprintf(NULL, 0, fmt, ap2);
   va_end(ap2);
-  char *buf = chibicc_arena_alloc(n + 1, 1);
+  char *buf = chibicc_arena_alloc(chibicc_ctx(), n + 1, 1);
   vsnprintf(buf, n + 1, fmt, ap);
   return buf;
 }
@@ -208,7 +208,7 @@ bool consume(Token **rest, Token *tok, char *str) {
 // Create a new token. `raw_trivia` is the raw offset where the bytes
 // skipped in front of this token start (see Token.trivia).
 static Token *new_token(TokenKind kind, char *start, char *end, int raw_trivia) {
-  Token *tok = chibicc_arena_calloc(1, sizeof(Token));
+  Token *tok = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Token));
   tok->kind = kind;
   tok->loc = start;
   tok->len = end - start;
@@ -282,7 +282,7 @@ static bool is_keyword(Token *tok) {
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
-      hashmap_put(map, kw[i], (void *)1);
+      hashmap_put(chibicc_ctx(), map, kw[i], (void *)1);
   }
 
   return hashmap_get2(map, tok->loc, tok->len);
@@ -355,7 +355,7 @@ static char *string_literal_end(char *p) {
 
 static Token *read_string_literal(char *start, char *quote, int raw_trivia) {
   char *end = string_literal_end(quote + 1);
-  char *buf = chibicc_arena_calloc(1, end - quote);
+  char *buf = chibicc_arena_calloc(chibicc_ctx(), 1, end - quote);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
@@ -380,7 +380,7 @@ static Token *read_string_literal(char *start, char *quote, int raw_trivia) {
 // is called a "surrogate pair".
 static Token *read_utf16_string_literal(char *start, char *quote, int raw_trivia) {
   char *end = string_literal_end(quote + 1);
-  uint16_t *buf = chibicc_arena_calloc(2, end - start);
+  uint16_t *buf = chibicc_arena_calloc(chibicc_ctx(), 2, end - start);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
@@ -413,7 +413,7 @@ static Token *read_utf16_string_literal(char *start, char *quote, int raw_trivia
 // encoded in 4 bytes.
 static Token *read_utf32_string_literal(char *start, char *quote, Type *ty, int raw_trivia) {
   char *end = string_literal_end(quote + 1);
-  uint32_t *buf = chibicc_arena_calloc(4, end - quote);
+  uint32_t *buf = chibicc_arena_calloc(chibicc_ctx(), 4, end - quote);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
@@ -836,7 +836,7 @@ static char *read_file(char *path, size_t *len) {
   // The memstream buffer is malloc-owned; move the text into the arena
   // so a context reset releases it with everything else.
   if (ctx) {
-    char *copy = chibicc_arena_alloc(data_len + 1, 1);
+    char *copy = chibicc_arena_alloc(chibicc_ctx(), data_len + 1, 1);
     memcpy(copy, buf, data_len + 1);
     free(buf);
     if (strcmp(path, "-") == 0) {
@@ -853,7 +853,7 @@ File **get_input_files(void) {
 }
 
 File *new_file_len(char *name, int file_no, char *contents, int len) {
-  File *file = chibicc_arena_calloc(1, sizeof(File));
+  File *file = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(File));
   file->name = name;
   file->display_name = name;
   file->file_no = file_no;
@@ -864,8 +864,8 @@ File *new_file_len(char *name, int file_no, char *contents, int len) {
   // count. (tokenize_file replaces these tables with the ones
   // make_scan_buffer builds.)
   file->raw = contents;
-  file->map = chibicc_arena_calloc(len + 2, sizeof(int));
-  file->lines = chibicc_arena_calloc(len + 2, sizeof(int));
+  file->map = chibicc_arena_calloc(chibicc_ctx(), len + 2, sizeof(int));
+  file->lines = chibicc_arena_calloc(chibicc_ctx(), len + 2, sizeof(int));
 
   int line = 1;
   for (int i = 0; i <= len; i++) {
@@ -905,13 +905,13 @@ int line_break_len(char *p) {
 // pass moved those newlines down) and the synthesized final newline
 // counts at the end.
 static char *make_scan_buffer(char *raw, int len, int **map_out, int **lines_out) {
-  int *map = chibicc_arena_calloc(len + 2, sizeof(int));
-  int *lines = chibicc_arena_calloc(len + 2, sizeof(int));
-  char *buf = chibicc_arena_calloc(1, len + 2);
+  int *map = chibicc_arena_calloc(chibicc_ctx(), len + 2, sizeof(int));
+  int *lines = chibicc_arena_calloc(chibicc_ctx(), len + 2, sizeof(int));
+  char *buf = chibicc_arena_calloc(chibicc_ctx(), 1, len + 2);
 
   // The text the pre-passes used to see: the raw text plus the final
   // newline for a text that does not end in one.
-  char *text = chibicc_arena_calloc(1, len + 2);
+  char *text = chibicc_arena_calloc(chibicc_ctx(), 1, len + 2);
   memcpy(text, raw, len);
   if (len == 0 || raw[len - 1] != '\n')
     text[len] = '\n';
@@ -1037,7 +1037,7 @@ Token *tokenize_file(char *path) {
   if (ctx->input_files_cap < file_no + 2) {
     size_t old = sizeof(File *) * ctx->input_files_cap;
     int cap = file_no + 2;
-    ctx->input_files = chibicc_arena_realloc(ctx->input_files, old,
+    ctx->input_files = chibicc_arena_realloc(chibicc_ctx(), ctx->input_files, old,
                                              sizeof(File *) * cap);
     ctx->input_files_cap = cap;
   }

@@ -1695,7 +1695,7 @@ static Node *current_switch;
 static NodeArray cg_labels;  // the labels of the function being shaped
 
 static char *new_label(void) {
-  return format(".L..%d", label_base + label_seq++);
+  return format(chibicc_ctx(), ".L..%d", label_base + label_seq++);
 }
 
 static void shape_node(Node *node);
@@ -2339,7 +2339,7 @@ static void shape_node(Node *node) {
     return;
   case ND_LABEL:
     cg(node)->unique_label = new_label();
-    nodearray_push(&cg_labels, node);
+    nodearray_push(chibicc_ctx(), &cg_labels, node);
     shape_node(node->lhs);
     return;
   case ND_ASSIGN:

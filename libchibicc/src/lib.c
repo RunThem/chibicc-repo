@@ -104,37 +104,37 @@ static void *arena_alloc(ChibiccContext *ctx, size_t size, size_t align) {
 }
 #endif
 
-void *chibicc_arena_alloc(size_t size, size_t align) {
-  return arena_alloc(chibicc_active_ctx, size, align);
+void *chibicc_arena_alloc(ChibiccContext *ctx, size_t size, size_t align) {
+  return arena_alloc(ctx, size, align);
 }
 
-void *chibicc_arena_calloc(size_t count, size_t size) {
+void *chibicc_arena_calloc(ChibiccContext *ctx, size_t count, size_t size) {
   // The arena path multiplies by hand; fail instead of wrapping to a
   // small allocation that memset would then overflow.
   if (size && count > SIZE_MAX / size)
     return NULL;
   size_t n = count * size;
-  if (!chibicc_active_ctx)
+  if (!ctx)
     return calloc(count, size);
   // 16, not 8: Token and Node embed a long double, which needs 16-byte
   // alignment on x86-64 (UBSan found this in L3.4c).
-  void *p = arena_alloc(chibicc_active_ctx, n, 16);
+  void *p = arena_alloc(ctx, n, 16);
   memset(p, 0, n);
   return p;
 }
 
-char *chibicc_arena_strdup(char *s) {
+char *chibicc_arena_strdup(ChibiccContext *ctx, char *s) {
   if (!s)
     return NULL;
   size_t n = strlen(s) + 1;
-  char *p = arena_alloc(chibicc_active_ctx, n, 1);
+  char *p = arena_alloc(ctx, n, 1);
   memcpy(p, s, n);
   return p;
 }
 
-char *chibicc_arena_strndup(char *s, size_t n) {
+char *chibicc_arena_strndup(ChibiccContext *ctx, char *s, size_t n) {
   size_t len = strnlen(s, n);
-  char *p = arena_alloc(chibicc_active_ctx, len + 1, 1);
+  char *p = arena_alloc(ctx, len + 1, 1);
   memcpy(p, s, len);
   p[len] = '\0';
   return p;
@@ -145,10 +145,10 @@ char *chibicc_arena_strndup(char *s, size_t n) {
 // the dead capacity alive and peaks at about twice the final size; that
 // is the arena trade-off, not a leak. Every byte past `old_size` in the
 // returned block is zeroed, so a caller may rely on a clean tail (C9).
-void *chibicc_arena_realloc(void *old, size_t old_size, size_t new_size) {
+void *chibicc_arena_realloc(ChibiccContext *ctx, void *old, size_t old_size, size_t new_size) {
   size_t kept = old ? (old_size < new_size ? old_size : new_size) : 0;
 
-  if (!chibicc_active_ctx) {
+  if (!ctx) {
     void *p = realloc(old, new_size);
     if (!p)
       return NULL;
@@ -157,7 +157,7 @@ void *chibicc_arena_realloc(void *old, size_t old_size, size_t new_size) {
     return p;
   }
 
-  void *p = arena_alloc(chibicc_active_ctx, new_size, 8);
+  void *p = arena_alloc(ctx, new_size, 8);
   if (kept)
     memcpy(p, old, kept);
   if (new_size > kept)
@@ -187,7 +187,7 @@ void chibicc_context_add_include_path(ChibiccContext *ctx, char *path) {
 
 void chibicc_context_set_base_file(ChibiccContext *ctx, char *path) {
   chibicc_active_ctx = ctx;
-  ctx->base_file = chibicc_arena_strdup(path);
+  ctx->base_file = chibicc_arena_strdup(ctx, path);
 }
 
 static void apply_macro_op(ChibiccContext *ctx, char *op) {
@@ -317,7 +317,7 @@ void chibicc_context_free(ChibiccContext *ctx) {
 Token *chibicc_tokenize_file(ChibiccContext *ctx, char *path) {
   ENTER_RET(ctx, NULL);
   if (!ctx->base_file)
-    ctx->base_file = chibicc_arena_strdup(path);
+    ctx->base_file = chibicc_arena_strdup(ctx, path);
   Token *tok = tokenize_file(path);
   // tokenize_file returns NULL only when the file cannot be opened; the
   // facades report it, so a library consumer never sees a silent NULL
@@ -334,13 +334,13 @@ Token *chibicc_tokenize_buffer_len(ChibiccContext *ctx, char *name,
   if (len < 0)
     error("invalid buffer length");
   if (!ctx->base_file)
-    ctx->base_file = chibicc_arena_strdup(name);
+    ctx->base_file = chibicc_arena_strdup(ctx, name);
 
-  char *copy = chibicc_arena_alloc((size_t)len + 1, 1);
+  char *copy = chibicc_arena_alloc(ctx, (size_t)len + 1, 1);
   memcpy(copy, contents, len);
   copy[len] = '\0';
 
-  File *file = new_file_len(chibicc_arena_strdup(name), 0, copy, len);
+  File *file = new_file_len(chibicc_arena_strdup(ctx, name), 0, copy, len);
   char *nul = memchr(copy, 0, len);
   if (nul) {
     ctx->current_file = file;

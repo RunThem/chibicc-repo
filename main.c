@@ -61,7 +61,7 @@ static bool take_arg(char *arg) {
 static void add_default_include_paths(char *argv0) {
   // We expect that chibicc-specific include files are installed
   // to ./include relative to argv[0].
-  chibicc_context_add_include_path(ctx, format("%s/include", dirname(strdup(argv0))));
+  chibicc_context_add_include_path(ctx, format(ctx, "%s/include", dirname(strdup(argv0))));
 
   // Add standard include paths.
   chibicc_context_add_include_path(ctx, "/usr/local/include");
@@ -70,7 +70,7 @@ static void add_default_include_paths(char *argv0) {
 
   // Keep a copy of the standard include paths for -MMD option.
   for (int i = 0; i < ctx->include_paths_len; i++)
-    strarray_push(&std_include_paths, ctx->include_paths[i]);
+    strarray_push(ctx, &std_include_paths, ctx->include_paths[i]);
 }
 
 static void define(char *str) {
@@ -246,7 +246,7 @@ static void parse_args(int argc, char **argv) {
     }
 
     if (!strcmp(argv[i], "-include")) {
-      strarray_push(&opt_include, argv[++i]);
+      strarray_push(ctx, &opt_include, argv[++i]);
       continue;
     }
 
@@ -261,17 +261,17 @@ static void parse_args(int argc, char **argv) {
     }
 
     if (!strncmp(argv[i], "-l", 2) || !strncmp(argv[i], "-Wl,", 4)) {
-      strarray_push(&input_paths, argv[i]);
+      strarray_push(ctx, &input_paths, argv[i]);
       continue;
     }
 
     if (!strcmp(argv[i], "-Xlinker")) {
-      strarray_push(&ld_extra_args, argv[++i]);
+      strarray_push(ctx, &ld_extra_args, argv[++i]);
       continue;
     }
 
     if (!strcmp(argv[i], "-s")) {
-      strarray_push(&ld_extra_args, "-s");
+      strarray_push(ctx, &ld_extra_args, "-s");
       continue;
     }
 
@@ -294,7 +294,7 @@ static void parse_args(int argc, char **argv) {
       if (opt_MT == NULL)
         opt_MT = argv[++i];
       else
-        opt_MT = format("%s %s", opt_MT, argv[++i]);
+        opt_MT = format(ctx, "%s %s", opt_MT, argv[++i]);
       continue;
     }
 
@@ -307,7 +307,7 @@ static void parse_args(int argc, char **argv) {
       if (opt_MT == NULL)
         opt_MT = quote_makefile(argv[++i]);
       else
-        opt_MT = format("%s %s", opt_MT, quote_makefile(argv[++i]));
+        opt_MT = format(ctx, "%s %s", opt_MT, quote_makefile(argv[++i]));
       continue;
     }
 
@@ -332,31 +332,31 @@ static void parse_args(int argc, char **argv) {
     }
 
     if (!strcmp(argv[i], "-idirafter")) {
-      strarray_push(&idirafter, argv[i++]);
+      strarray_push(ctx, &idirafter, argv[i++]);
       continue;
     }
 
     if (!strcmp(argv[i], "-static")) {
       opt_static = true;
-      strarray_push(&ld_extra_args, "-static");
+      strarray_push(ctx, &ld_extra_args, "-static");
       continue;
     }
 
     if (!strcmp(argv[i], "-shared")) {
       opt_shared = true;
-      strarray_push(&ld_extra_args, "-shared");
+      strarray_push(ctx, &ld_extra_args, "-shared");
       continue;
     }
 
     if (!strcmp(argv[i], "-L")) {
-      strarray_push(&ld_extra_args, "-L");
-      strarray_push(&ld_extra_args, argv[++i]);
+      strarray_push(ctx, &ld_extra_args, "-L");
+      strarray_push(ctx, &ld_extra_args, argv[++i]);
       continue;
     }
 
     if (!strncmp(argv[i], "-L", 2)) {
-      strarray_push(&ld_extra_args, "-L");
-      strarray_push(&ld_extra_args, argv[i] + 2);
+      strarray_push(ctx, &ld_extra_args, "-L");
+      strarray_push(ctx, &ld_extra_args, argv[i] + 2);
       continue;
     }
 
@@ -378,7 +378,7 @@ static void parse_args(int argc, char **argv) {
     if (argv[i][0] == '-' && argv[i][1] != '\0')
       error("unknown argument: %s", argv[i]);
 
-    strarray_push(&input_paths, argv[i]);
+    strarray_push(ctx, &input_paths, argv[i]);
   }
 
   for (int i = 0; i < idirafter.len; i++)
@@ -414,7 +414,7 @@ static char *replace_extn(char *tmpl, char *extn) {
   char *dot = strrchr(filename, '.');
   if (dot)
     *dot = '\0';
-  return format("%s%s", filename, extn);
+  return format(ctx, "%s%s", filename, extn);
 }
 
 static void cleanup(void) {
@@ -429,7 +429,7 @@ static char *create_tmpfile(void) {
     error("mkstemp failed: %s", strerror(errno));
   close(fd);
 
-  strarray_push(&tmpfiles, path);
+  strarray_push(ctx, &tmpfiles, path);
   return path;
 }
 
@@ -1255,66 +1255,66 @@ static char *find_gcc_libpath(void) {
 static void run_linker(StringArray *inputs, char *output) {
   StringArray arr = {};
 
-  strarray_push(&arr, "ld");
-  strarray_push(&arr, "-o");
-  strarray_push(&arr, output);
-  strarray_push(&arr, "-m");
-  strarray_push(&arr, "elf_x86_64");
+  strarray_push(ctx, &arr, "ld");
+  strarray_push(ctx, &arr, "-o");
+  strarray_push(ctx, &arr, output);
+  strarray_push(ctx, &arr, "-m");
+  strarray_push(ctx, &arr, "elf_x86_64");
 
   char *libpath = find_libpath();
   char *gcc_libpath = find_gcc_libpath();
 
   if (opt_shared) {
-    strarray_push(&arr, format("%s/crti.o", libpath));
-    strarray_push(&arr, format("%s/crtbeginS.o", gcc_libpath));
+    strarray_push(ctx, &arr, format(ctx, "%s/crti.o", libpath));
+    strarray_push(ctx, &arr, format(ctx, "%s/crtbeginS.o", gcc_libpath));
   } else {
-    strarray_push(&arr, format("%s/crt1.o", libpath));
-    strarray_push(&arr, format("%s/crti.o", libpath));
-    strarray_push(&arr, format("%s/crtbegin.o", gcc_libpath));
+    strarray_push(ctx, &arr, format(ctx, "%s/crt1.o", libpath));
+    strarray_push(ctx, &arr, format(ctx, "%s/crti.o", libpath));
+    strarray_push(ctx, &arr, format(ctx, "%s/crtbegin.o", gcc_libpath));
   }
 
-  strarray_push(&arr, format("-L%s", gcc_libpath));
-  strarray_push(&arr, "-L/usr/lib/x86_64-linux-gnu");
-  strarray_push(&arr, "-L/usr/lib64");
-  strarray_push(&arr, "-L/lib64");
-  strarray_push(&arr, "-L/usr/lib/x86_64-linux-gnu");
-  strarray_push(&arr, "-L/usr/lib/x86_64-pc-linux-gnu");
-  strarray_push(&arr, "-L/usr/lib/x86_64-redhat-linux");
-  strarray_push(&arr, "-L/usr/lib");
-  strarray_push(&arr, "-L/lib");
+  strarray_push(ctx, &arr, format(ctx, "-L%s", gcc_libpath));
+  strarray_push(ctx, &arr, "-L/usr/lib/x86_64-linux-gnu");
+  strarray_push(ctx, &arr, "-L/usr/lib64");
+  strarray_push(ctx, &arr, "-L/lib64");
+  strarray_push(ctx, &arr, "-L/usr/lib/x86_64-linux-gnu");
+  strarray_push(ctx, &arr, "-L/usr/lib/x86_64-pc-linux-gnu");
+  strarray_push(ctx, &arr, "-L/usr/lib/x86_64-redhat-linux");
+  strarray_push(ctx, &arr, "-L/usr/lib");
+  strarray_push(ctx, &arr, "-L/lib");
 
   if (!opt_static) {
-    strarray_push(&arr, "-dynamic-linker");
-    strarray_push(&arr, "/lib64/ld-linux-x86-64.so.2");
+    strarray_push(ctx, &arr, "-dynamic-linker");
+    strarray_push(ctx, &arr, "/lib64/ld-linux-x86-64.so.2");
   }
 
   for (int i = 0; i < ld_extra_args.len; i++)
-    strarray_push(&arr, ld_extra_args.data[i]);
+    strarray_push(ctx, &arr, ld_extra_args.data[i]);
 
   for (int i = 0; i < inputs->len; i++)
-    strarray_push(&arr, inputs->data[i]);
+    strarray_push(ctx, &arr, inputs->data[i]);
 
   if (opt_static) {
-    strarray_push(&arr, "--start-group");
-    strarray_push(&arr, "-lgcc");
-    strarray_push(&arr, "-lgcc_eh");
-    strarray_push(&arr, "-lc");
-    strarray_push(&arr, "--end-group");
+    strarray_push(ctx, &arr, "--start-group");
+    strarray_push(ctx, &arr, "-lgcc");
+    strarray_push(ctx, &arr, "-lgcc_eh");
+    strarray_push(ctx, &arr, "-lc");
+    strarray_push(ctx, &arr, "--end-group");
   } else {
-    strarray_push(&arr, "-lc");
-    strarray_push(&arr, "-lgcc");
-    strarray_push(&arr, "--as-needed");
-    strarray_push(&arr, "-lgcc_s");
-    strarray_push(&arr, "--no-as-needed");
+    strarray_push(ctx, &arr, "-lc");
+    strarray_push(ctx, &arr, "-lgcc");
+    strarray_push(ctx, &arr, "--as-needed");
+    strarray_push(ctx, &arr, "-lgcc_s");
+    strarray_push(ctx, &arr, "--no-as-needed");
   }
 
   if (opt_shared)
-    strarray_push(&arr, format("%s/crtendS.o", gcc_libpath));
+    strarray_push(ctx, &arr, format(ctx, "%s/crtendS.o", gcc_libpath));
   else
-    strarray_push(&arr, format("%s/crtend.o", gcc_libpath));
+    strarray_push(ctx, &arr, format(ctx, "%s/crtend.o", gcc_libpath));
 
-  strarray_push(&arr, format("%s/crtn.o", libpath));
-  strarray_push(&arr, NULL);
+  strarray_push(ctx, &arr, format(ctx, "%s/crtn.o", libpath));
+  strarray_push(ctx, &arr, NULL);
 
   run_subprocess(arr.data);
 }
@@ -1358,7 +1358,7 @@ int main(int argc, char **argv) {
     char *input = input_paths.data[i];
 
     if (!strncmp(input, "-l", 2)) {
-      strarray_push(&ld_args, input);
+      strarray_push(ctx, &ld_args, input);
       continue;
     }
 
@@ -1366,7 +1366,7 @@ int main(int argc, char **argv) {
       char *s = strdup(input + 4);
       char *arg = strtok(s, ",");
       while (arg) {
-        strarray_push(&ld_args, arg);
+        strarray_push(ctx, &ld_args, arg);
         arg = strtok(NULL, ",");
       }
       continue;
@@ -1384,7 +1384,7 @@ int main(int argc, char **argv) {
 
     // Handle .o or .a
     if (type == FILE_OBJ || type == FILE_AR || type == FILE_DSO) {
-      strarray_push(&ld_args, input);
+      strarray_push(ctx, &ld_args, input);
       continue;
     }
 
@@ -1425,7 +1425,7 @@ int main(int argc, char **argv) {
     char *tmp2 = create_tmpfile();
     run_cc1(argc, argv, input, tmp1);
     assemble(tmp1, tmp2);
-    strarray_push(&ld_args, tmp2);
+    strarray_push(ctx, &ld_args, tmp2);
     continue;
   }
 

@@ -44,7 +44,7 @@
 #define MAX_CST_DEPTH 512
 
 static CstNode *new_cst_node(CstKind kind) {
-  CstNode *node = chibicc_arena_calloc(1, sizeof(CstNode));
+  CstNode *node = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(CstNode));
   node->kind = kind;
   return node;
 }
@@ -56,7 +56,7 @@ static void cst_add_child(CstNode *node, CstNode *child) {
   if ((size_t)node->child_count == cap) {
     cap = cap ? cap * 2 : 8;
     size_t bytes = sizeof(size_t) + cap * sizeof(CstNode *);
-    char *p = chibicc_arena_alloc(bytes, 8);
+    char *p = chibicc_arena_alloc(chibicc_ctx(), bytes, 8);
     *(size_t *)p = cap;
     CstNode **children = (CstNode **)(p + sizeof(size_t));
     if (node->children)
@@ -233,7 +233,7 @@ static bool cst_is_decl_start(Token *tok, CstContext *cst) {
 }
 
 static void cst_add_typedef(CstContext *cst, Token *tok) {
-  strarray_push(&cst->typedefs, chibicc_arena_strndup(tok->loc, tok->len));
+  strarray_push(chibicc_ctx(), &cst->typedefs, chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len));
 }
 
 // A conservative pre-scan for file-local typedef names. Names introduced
