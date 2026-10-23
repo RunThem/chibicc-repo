@@ -34,7 +34,7 @@ int encode_utf8(char *buf, uint32_t c) {
 // encoded in one to four bytes. One byte UTF-8 code points are
 // identical to ASCII. Non-ASCII characters are encoded using more
 // than one byte.
-uint32_t decode_utf8(char **new_pos, char *p) {
+uint32_t decode_utf8(ChibiccContext *ctx, char **new_pos, char *p) {
   if ((unsigned char)*p < 128) {
     *new_pos = p + 1;
     return *p;
@@ -48,7 +48,7 @@ uint32_t decode_utf8(char **new_pos, char *p) {
     // Valid four-byte leads stop at F4; F5..FF cannot encode a code
     // point and would otherwise alias a valid range.
     if ((unsigned char)*p > 0b11110100)
-      error_at(chibicc_ctx(), start, "invalid UTF-8 sequence");
+      error_at(ctx, start, "invalid UTF-8 sequence");
     len = 4;
     c = *p & 0b111;
   } else if ((unsigned char)*p >= 0b11100000) {
@@ -58,12 +58,12 @@ uint32_t decode_utf8(char **new_pos, char *p) {
     len = 2;
     c = *p & 0b11111;
   } else {
-    error_at(chibicc_ctx(), start, "invalid UTF-8 sequence");
+    error_at(ctx, start, "invalid UTF-8 sequence");
   }
 
   for (int i = 1; i < len; i++) {
     if ((unsigned char)p[i] >> 6 != 0b10)
-      error_at(chibicc_ctx(), start, "invalid UTF-8 sequence");
+      error_at(ctx, start, "invalid UTF-8 sequence");
     c = (c << 6) | (p[i] & 0b111111);
   }
 
@@ -72,7 +72,7 @@ uint32_t decode_utf8(char **new_pos, char *p) {
   // the Unicode maximum.
   static uint32_t min[] = {0, 0, 0x80, 0x800, 0x10000};
   if (c < min[len] || (c >= 0xD800 && c <= 0xDFFF) || c > 0x10FFFF)
-    error_at(chibicc_ctx(), start, "invalid UTF-8 sequence");
+    error_at(ctx, start, "invalid UTF-8 sequence");
 
   *new_pos = p + len;
   return c;
@@ -189,11 +189,11 @@ static int char_width(uint32_t c) {
 
 // Returns the number of columns needed to display a given
 // string in a fixed-width font.
-int display_width(char *p, int len) {
+int display_width(ChibiccContext *ctx, char *p, int len) {
   char *start = p;
   int w = 0;
   while (p - start < len) {
-    uint32_t c = decode_utf8(&p, p);
+    uint32_t c = decode_utf8(ctx, &p, p);
     w += char_width(c);
   }
   return w;

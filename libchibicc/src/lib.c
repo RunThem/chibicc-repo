@@ -197,13 +197,13 @@ static void apply_macro_op(ChibiccContext *ctx, char *op) {
     char *eq = strchr(name, '=');
     if (eq) {
       *eq = '\0';
-      define_macro(name, eq + 1);
+      define_macro(ctx, name, eq + 1);
       *eq = '=';
     } else {
-      define_macro(name, "1");
+      define_macro(ctx, name, "1");
     }
   } else {
-    undef_macro(op + 2);
+    undef_macro(ctx, op + 2);
   }
 }
 
@@ -286,7 +286,7 @@ ChibiccContext *chibicc_context_new(void) {
   ChibiccContext *ctx = calloc(1, sizeof(ChibiccContext));
   ctx->predefined_macros = true;
   chibicc_active_ctx = ctx;
-  init_macros();
+  init_macros(chibicc_ctx());
   return ctx;
 }
 
@@ -294,7 +294,7 @@ void chibicc_context_reset(ChibiccContext *ctx) {
   free_arena(ctx);
   clear_state(ctx);
   chibicc_active_ctx = ctx;
-  init_macros();
+  init_macros(ctx);
   for (int i = 0; i < ctx->macro_ops_len; i++)
     apply_macro_op(ctx, ctx->macro_ops[i]);
 }
@@ -367,7 +367,7 @@ void chibicc_reconstruct(ChibiccContext *ctx, Token *tok, FILE *out) {
 
 Token *chibicc_preprocess(ChibiccContext *ctx, Token *tok) {
   ENTER_RET(ctx, NULL);
-  Token *r = preprocess(tok);
+  Token *r = preprocess(ctx, tok);
   LEAVE(ctx);
   return r;
 }
@@ -414,7 +414,7 @@ bool chibicc_cst_verify(ChibiccContext *ctx, CstNode *root, Token *tok) {
 
 void chibicc_expansion_dump(ChibiccContext *ctx, Token *tok, FILE *out) {
   ENTER_VOID(ctx);
-  expansion_dump(tok, out);
+  expansion_dump(ctx, tok, out);
   LEAVE(ctx);
 }
 

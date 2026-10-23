@@ -40,11 +40,11 @@ static void print_pos(FILE *out, Token *tok) {
     fprintf(out, "%s:%d", tok->file->name, tok->line_no - tok->line_delta);
 }
 
-void expansion_dump(Token *tok, FILE *out) {
+void expansion_dump(ChibiccContext *ctx, Token *tok, FILE *out) {
   for (; tok->kind != TK_EOF; tok = tok->next) {
     fputs("T ", out);
     print_pos(out, tok);
-    fprintf(out, " %s ", token_kind_name(chibicc_ctx(), tok->kind));
+    fprintf(out, " %s ", token_kind_name(ctx, tok->kind));
     print_escaped(out, tok->loc, tok->len);
 
     MacroProv *prov = token_provenance(tok);

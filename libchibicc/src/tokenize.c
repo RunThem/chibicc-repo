@@ -93,7 +93,7 @@ static void verror_at(ChibiccContext *ctx, char *filename, char *input, int line
   if (ctx && ctx->diag_fn) {
     char *msg = vformat(ctx, fmt, ap);
     ChibiccDiagnostic d = {filename, line_no,
-                           display_width(line, loc - line) + 1,
+                           display_width(ctx, line, loc - line) + 1,
                            severity, msg};
     ctx->diag_fn(ctx->diag_user, &d);
     return;
@@ -108,7 +108,7 @@ static void verror_at(ChibiccContext *ctx, char *filename, char *input, int line
   fprintf(stderr, "%.*s\n", (int)(end - line), line);
 
   // Show the error message.
-  int pos = display_width(line, loc - line) + indent;
+  int pos = display_width(ctx, line, loc - line) + indent;
 
   fprintf(stderr, "%*s", pos, ""); // print pos spaces.
   fprintf(stderr, "^ ");
@@ -231,15 +231,15 @@ static bool startswith(char *p, char *q) {
 
 // Read an identifier and returns the length of it.
 // If p does not point to a valid identifier, 0 is returned.
-static int read_ident(char *start) {
+static int read_ident(ChibiccContext *ctx, char *start) {
   char *p = start;
-  uint32_t c = decode_utf8(&p, p);
+  uint32_t c = decode_utf8(ctx, &p, p);
   if (!is_ident1(c))
     return 0;
 
   for (;;) {
     char *q;
-    c = decode_utf8(&q, p);
+    c = decode_utf8(ctx, &q, p);
     if (!is_ident2(c))
       return p - start;
     p = q;
@@ -384,7 +384,7 @@ static Token *read_utf16_string_literal(ChibiccContext *ctx, char *start, char *
       continue;
     }
 
-    uint32_t c = decode_utf8(&p, p);
+    uint32_t c = decode_utf8(ctx, &p, p);
     if (c < 0x10000) {
       // Encode a code point in 2 bytes.
       buf[len++] = c;
@@ -415,7 +415,7 @@ static Token *read_utf32_string_literal(ChibiccContext *ctx, char *start, char *
     if (*p == '\\')
       buf[len++] = read_escaped_char(ctx, &p, p + 1);
     else
-      buf[len++] = decode_utf8(&p, p);
+      buf[len++] = decode_utf8(ctx, &p, p);
   }
 
   Token *tok = new_token(ctx, TK_STR, start, end + 1, raw_trivia);
@@ -433,7 +433,7 @@ static Token *read_char_literal(ChibiccContext *ctx, char *start, char *quote, T
   if (*p == '\\')
     c = read_escaped_char(ctx, &p, p + 1);
   else
-    c = decode_utf8(&p, p);
+    c = decode_utf8(ctx, &p, p);
 
   char *end = strchr(p, '\'');
   if (!end)
@@ -745,7 +745,7 @@ Token *tokenize(ChibiccContext *ctx, File *file) {
     }
 
     // Identifier or keyword
-    int ident_len = read_ident(p);
+    int ident_len = read_ident(ctx, p);
     if (ident_len) {
       cur = cur->next = new_token(ctx, TK_IDENT, p, p + ident_len, raw_trivia);
       p += cur->len;

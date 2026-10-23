@@ -118,11 +118,11 @@ bool cst_verify(CstNode *root, Token *tok);
 // preprocess.c
 //
 
-char *search_include_paths(char *filename);
-void init_macros(void);
-void define_macro(char *name, char *buf);
-void undef_macro(char *name);
-Token *preprocess(Token *tok);
+char *search_include_paths(ChibiccContext *ctx, char *filename);
+void init_macros(ChibiccContext *ctx);
+void define_macro(ChibiccContext *ctx, char *name, char *buf);
+void undef_macro(ChibiccContext *ctx, char *name);
+Token *preprocess(ChibiccContext *ctx, Token *tok);
 
 MacroProv *token_provenance(Token *tok);
 MacroProv *macro_prov_next(MacroProv *p);
@@ -141,7 +141,7 @@ bool macro_expansion_is_builtin(MacroExpansion *e);
 // provenance.c
 //
 
-void expansion_dump(Token *tok, FILE *out);
+void expansion_dump(ChibiccContext *ctx, Token *tok, FILE *out);
 bool expansion_verify(Token *tok);
 
 //
@@ -246,10 +246,10 @@ int align_to(int n, int align);
 //
 
 int encode_utf8(char *buf, uint32_t c);
-uint32_t decode_utf8(char **new_pos, char *p);
+uint32_t decode_utf8(ChibiccContext *ctx, char **new_pos, char *p);
 bool is_ident1(uint32_t c);
 bool is_ident2(uint32_t c);
-int display_width(char *p, int len);
+int display_width(ChibiccContext *ctx, char *p, int len);
 
 //
 // hashmap.c

@@ -1139,7 +1139,7 @@ static int cc1(void) {
     if (file_exists(incl)) {
       path = incl;
     } else {
-      path = search_include_paths(incl);
+      path = search_include_paths(ctx, incl);
       if (!path)
         error(ctx, "-include: %s: %s", incl, strerror(errno));
     }
