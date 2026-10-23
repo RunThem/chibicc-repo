@@ -8,7 +8,7 @@
 
 #include "chibicc.h"
 
-void codegen(Obj *prog, FILE *out);
+void codegen(ChibiccContext *ctx, Obj *prog, FILE *out);
 
 extern bool opt_fpic;
 extern bool opt_fcommon;

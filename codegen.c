@@ -158,11 +158,11 @@ static unsigned long bitfield_mask(int width) {
 static char *cur_brk_label;
 static char *cur_cont_label;
 
-static void gen_expr(Node *node);
-static void gen_stmt(Node *node);
-static Node *new_add(Node *lhs, Node *rhs, Token *tok);
-static Node *new_sub(Node *lhs, Node *rhs, Token *tok);
-static Node *lvar_init_comma(Obj *var, InitTree *init, Token *tok);
+static void gen_expr(ChibiccContext *ctx, Node *node);
+static void gen_stmt(ChibiccContext *ctx, Node *node);
+static Node *new_add(ChibiccContext *ctx, Node *lhs, Node *rhs, Token *tok);
+static Node *new_sub(ChibiccContext *ctx, Node *lhs, Node *rhs, Token *tok);
+static Node *lvar_init_comma(ChibiccContext *ctx, Obj *var, InitTree *init, Token *tok);
 
 __attribute__((format(printf, 1, 2)))
 static void println(char *fmt, ...) {
@@ -203,7 +203,7 @@ static void popf(int reg) {
 // Round up `n` to the nearest multiple of `align` is in strings.c now:
 // sema needs it too, and codegen must not be the library's dependency.
 
-static char *reg_dx(int sz) {
+static char *reg_dx(ChibiccContext *ctx, int sz) {
   switch (sz) {
   case 1: return "%dl";
   case 2: return "%dx";
@@ -213,7 +213,7 @@ static char *reg_dx(int sz) {
   unreachable();
 }
 
-static char *reg_ax(int sz) {
+static char *reg_ax(ChibiccContext *ctx, int sz) {
   switch (sz) {
   case 1: return "%al";
   case 2: return "%ax";
@@ -225,7 +225,7 @@ static char *reg_ax(int sz) {
 
 // Compute the absolute address of a given node.
 // It's an error if a given node does not reside in memory.
-static void gen_addr(Node *node) {
+static void gen_addr(ChibiccContext *ctx, Node *node) {
   switch (node->kind) {
   case ND_STRING:
     // The literal's anonymous global (PLAN A9.1: the node keeps its
@@ -302,11 +302,11 @@ static void gen_addr(Node *node) {
     println("  lea %s(%%rip), %%rax", node->var->name);
     return;
   case ND_DEREF:
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
     return;
   case ND_COMMA:
-    gen_expr(node->lhs);
-    gen_addr(node->rhs);
+    gen_expr(ctx, node->lhs);
+    gen_addr(ctx, node->rhs);
     return;
   case ND_SUBSCRIPT: {
     // `x[y]` keeps its faithful spelling (PLAN B1.1a): the scaled,
@@ -317,8 +317,8 @@ static void gen_addr(Node *node) {
     // ones the old `*(x+y)` form produced. It carries the lowered
     // mark, so the emitter's own additive lowering (PLAN B2) leaves
     // it alone.
-    Node *add = new_add(node->lhs, node->rhs, node->tok);
-    gen_expr(add);
+    Node *add = new_add(ctx, node->lhs, node->rhs, node->tok);
+    gen_expr(ctx, add);
     return;
   }
   case ND_MEMBER:
@@ -328,14 +328,14 @@ static void gen_addr(Node *node) {
     // taking the operand's address. The member binding and the
     // member's type were settled in sema.
     if (node->arrow_tok)
-      gen_expr(node->lhs);
+      gen_expr(ctx, node->lhs);
     else
-      gen_addr(node->lhs);
+      gen_addr(ctx, node->lhs);
     println("  add $%d, %%rax", node->member->offset);
     return;
   case ND_FUNCALL:
     if (cg(node)->ret_buffer) {
-      gen_expr(node);
+      gen_expr(ctx, node);
       return;
     }
     break;
@@ -343,12 +343,12 @@ static void gen_addr(Node *node) {
     // The selection's conclusion, an lvalue if the selected result
     // is one (PLAN A9.1: the node keeps its kind and the field
     // carries the result).
-    gen_addr(node->generic_sel);
+    gen_addr(ctx, node->generic_sel);
     return;
   case ND_ASSIGN:
   case ND_COND:
     if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION) {
-      gen_expr(node);
+      gen_expr(ctx, node);
       return;
     }
     break;
@@ -357,7 +357,7 @@ static void gen_addr(Node *node) {
     return;
   }
 
-  error_tok(chibicc_ctx(), node->tok, "not an lvalue");
+  error_tok(ctx, node->tok, "not an lvalue");
 }
 
 // Load a value from where %rax is pointing to.
@@ -631,16 +631,16 @@ static void push_struct(Type *ty) {
   }
 }
 
-static void push_args2(Node *args, bool first_pass) {
+static void push_args2(ChibiccContext *ctx, Node *args, bool first_pass) {
   if (!args)
     return;
-  push_args2(args->next, first_pass);
+  push_args2(ctx, args->next, first_pass);
 
   CgNode *ci = cg(args);
   if ((first_pass && !ci->pass_by_stack) || (!first_pass && ci->pass_by_stack))
     return;
 
-  gen_expr(args);
+  gen_expr(ctx, args);
 
   switch (args->ty->kind) {
   case TY_STRUCT:
@@ -680,7 +680,7 @@ static void push_args2(Node *args, bool first_pass) {
 //
 // - If a function is variadic, set the number of floating-point type
 //   arguments to RAX.
-static int push_args(Node *node) {
+static int push_args(ChibiccContext *ctx, Node *node) {
   int stack = 0, gp = 0, fp = 0;
 
   // If the return type is a large struct/union, the caller passes
@@ -736,8 +736,8 @@ static int push_args(Node *node) {
     stack++;
   }
 
-  push_args2(node->args, true);
-  push_args2(node->args, false);
+  push_args2(ctx, node->args, true);
+  push_args2(ctx, node->args, false);
 
   // If the return type is a large struct/union, the caller passes
   // a pointer to a buffer as if it were the first argument.
@@ -868,7 +868,7 @@ static void builtin_alloca(void) {
 }
 
 // Generate code for a given node.
-static void gen_expr(Node *node) {
+static void gen_expr(ChibiccContext *ctx, Node *node) {
   // A faithful `+`/`-` still carries its source shape (PLAN B2): the
   // element-size scaling, the `num + ptr` canonicalization and the
   // conversions new_arith applies are made here, at emission, by the
@@ -879,8 +879,8 @@ static void gen_expr(Node *node) {
   // built itself carry the mark and fall through to the plain
   // machine-arithmetic emission below.
   if ((node->kind == ND_ADD || node->kind == ND_SUB) && !cg(node)->is_lowered)
-    node = node->kind == ND_ADD ? new_add(node->lhs, node->rhs, node->tok)
-                                : new_sub(node->lhs, node->rhs, node->tok);
+    node = node->kind == ND_ADD ? new_add(ctx, node->lhs, node->rhs, node->tok)
+                                : new_sub(ctx, node->lhs, node->rhs, node->tok);
 
   println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
 
@@ -932,10 +932,10 @@ static void gen_expr(Node *node) {
   case ND_GENERIC:
     // The selection's conclusion (PLAN A9.1): emit the selected
     // result expression.
-    gen_expr(node->generic_sel);
+    gen_expr(ctx, node->generic_sel);
     return;
   case ND_NEG:
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
 
     switch (node->ty->kind) {
     case TY_FLOAT:
@@ -963,11 +963,11 @@ static void gen_expr(Node *node) {
     // below takes its address and the array load is a no-op - the
     // same instructions the lowered ND_VAR produced.
   case ND_VAR:
-    gen_addr(node);
+    gen_addr(ctx, node);
     load(node->ty);
     return;
   case ND_MEMBER: {
-    gen_addr(node);
+    gen_addr(ctx, node);
     load(node->ty);
 
     Member *mem = node->member;
@@ -984,20 +984,20 @@ static void gen_expr(Node *node) {
     // `x[y]` in value context (PLAN B1.1a): the address gen_addr
     // computes, then the pointee load - the instructions of the old
     // `*(x+y)` form, with the sum built on demand.
-    gen_addr(node);
+    gen_addr(ctx, node);
     load(node->ty);
     return;
   case ND_DEREF:
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
     load(node->ty);
     return;
   case ND_ADDR:
-    gen_addr(node->lhs);
+    gen_addr(ctx, node->lhs);
     return;
   case ND_ASSIGN:
-    gen_addr(node->lhs);
+    gen_addr(ctx, node->lhs);
     push();
-    gen_expr(node->rhs);
+    gen_expr(ctx, node->rhs);
 
     if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
       println("  mov %%rax, %%r8");
@@ -1036,14 +1036,14 @@ static void gen_expr(Node *node) {
     return;
   case ND_STMT_EXPR:
     for (Node *n = node->body; n; n = n->next)
-      gen_stmt(n);
+      gen_stmt(ctx, n);
     return;
   case ND_COMMA:
-    gen_expr(node->lhs);
-    gen_expr(node->rhs);
+    gen_expr(ctx, node->lhs);
+    gen_expr(ctx, node->rhs);
     return;
   case ND_CAST:
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
     cast(node->lhs->ty, node->ty);
     return;
   case ND_MEMZERO:
@@ -1063,7 +1063,7 @@ static void gen_expr(Node *node) {
       // each arm is converted to that type here. The label names are
       // the ones the old `tmp = a, tmp ? tmp : b` lowering emitted.
       int c = count();
-      gen_expr(node->cond);
+      gen_expr(ctx, node->cond);
 
       // cmp_zero consumes whatever value it compares on the x87
       // stack; the duplicate taken here is the one left behind as the
@@ -1081,38 +1081,38 @@ static void gen_expr(Node *node) {
       if (node->cond->ty->kind == TY_LDOUBLE)
         println("  fstp %%st(0)");
 
-      gen_expr(node->els);
+      gen_expr(ctx, node->els);
       cast(node->els->ty, node->ty);
       println(".L.end.%d:", c);
       return;
     }
     int c = count();
-    gen_expr(node->cond);
+    gen_expr(ctx, node->cond);
     cmp_zero(node->cond->ty);
     println("  je .L.else.%d", c);
-    gen_expr(node->then);
+    gen_expr(ctx, node->then);
     println("  jmp .L.end.%d", c);
     println(".L.else.%d:", c);
-    gen_expr(node->els);
+    gen_expr(ctx, node->els);
     println(".L.end.%d:", c);
     return;
   }
   case ND_NOT:
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
     cmp_zero(node->lhs->ty);
     println("  sete %%al");
     println("  movzx %%al, %%rax");
     return;
   case ND_BITNOT:
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
     println("  not %%rax");
     return;
   case ND_LOGAND: {
     int c = count();
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
     cmp_zero(node->lhs->ty);
     println("  je .L.false.%d", c);
-    gen_expr(node->rhs);
+    gen_expr(ctx, node->rhs);
     cmp_zero(node->rhs->ty);
     println("  je .L.false.%d", c);
     println("  mov $1, %%rax");
@@ -1124,10 +1124,10 @@ static void gen_expr(Node *node) {
   }
   case ND_LOGOR: {
     int c = count();
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
     cmp_zero(node->lhs->ty);
     println("  jne .L.true.%d", c);
-    gen_expr(node->rhs);
+    gen_expr(ctx, node->rhs);
     cmp_zero(node->rhs->ty);
     println("  jne .L.true.%d", c);
     println("  mov $0, %%rax");
@@ -1139,14 +1139,14 @@ static void gen_expr(Node *node) {
   }
   case ND_FUNCALL: {
     if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca")) {
-      gen_expr(node->args);
+      gen_expr(ctx, node->args);
       println("  mov %%rax, %%rdi");
       builtin_alloca();
       return;
     }
 
-    int stack_args = push_args(node);
-    gen_expr(node->lhs);
+    int stack_args = push_args(ctx, node);
+    gen_expr(ctx, node->lhs);
 
     int gp = 0, fp = 0;
 
@@ -1235,33 +1235,33 @@ static void gen_expr(Node *node) {
     println("  lea %s(%%rip), %%rax", cg(node)->unique_label);
     return;
   case ND_CAS: {
-    gen_expr(node->cas_addr);
+    gen_expr(ctx, node->cas_addr);
     push();
-    gen_expr(node->cas_new);
+    gen_expr(ctx, node->cas_new);
     push();
-    gen_expr(node->cas_old);
+    gen_expr(ctx, node->cas_old);
     println("  mov %%rax, %%r8");
     load(node->cas_old->ty->base);
     pop("%rdx"); // new
     pop("%rdi"); // addr
 
     int sz = node->cas_addr->ty->base->size;
-    println("  lock cmpxchg %s, (%%rdi)", reg_dx(sz));
+    println("  lock cmpxchg %s, (%%rdi)", reg_dx(ctx, sz));
     println("  sete %%cl");
     println("  je 1f");
-    println("  mov %s, (%%r8)", reg_ax(sz));
+    println("  mov %s, (%%r8)", reg_ax(ctx, sz));
     println("1:");
     println("  movzbl %%cl, %%eax");
     return;
   }
   case ND_EXCH: {
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
     push();
-    gen_expr(node->rhs);
+    gen_expr(ctx, node->rhs);
     pop("%rdi");
 
     int sz = node->lhs->ty->base->size;
-    println("  xchg %s, (%%rdi)", reg_ax(sz));
+    println("  xchg %s, (%%rdi)", reg_ax(ctx, sz));
     return;
   }
   }
@@ -1276,19 +1276,19 @@ static void gen_expr(Node *node) {
   // is the one of the operand the swap moves to the left, which is
   // also how the evaluator reads the faithful pair.
   if (node->kind == ND_GT || node->kind == ND_GE) {
-    Node *swapped = new_binary(chibicc_ctx(), node->kind == ND_GT ? ND_LT : ND_LE,
+    Node *swapped = new_binary(ctx, node->kind == ND_GT ? ND_LT : ND_LE,
                                node->rhs, node->lhs, node->tok);
     swapped->ty = node->ty;
-    gen_expr(swapped);
+    gen_expr(ctx, swapped);
     return;
   }
 
   switch (node->lhs->ty->kind) {
   case TY_FLOAT:
   case TY_DOUBLE: {
-    gen_expr(node->rhs);
+    gen_expr(ctx, node->rhs);
     pushf();
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
     popf(1);
 
     char *sz = (node->lhs->ty->kind == TY_FLOAT) ? "ss" : "sd";
@@ -1331,11 +1331,11 @@ static void gen_expr(Node *node) {
       return;
     }
 
-    error_tok(chibicc_ctx(), node->tok, "invalid expression");
+    error_tok(ctx, node->tok, "invalid expression");
   }
   case TY_LDOUBLE: {
-    gen_expr(node->lhs);
-    gen_expr(node->rhs);
+    gen_expr(ctx, node->lhs);
+    gen_expr(ctx, node->rhs);
 
     switch (node->kind) {
     case ND_ADD:
@@ -1370,13 +1370,13 @@ static void gen_expr(Node *node) {
       return;
     }
 
-    error_tok(chibicc_ctx(), node->tok, "invalid expression");
+    error_tok(ctx, node->tok, "invalid expression");
   }
   }
 
-  gen_expr(node->rhs);
+  gen_expr(ctx, node->rhs);
   push();
-  gen_expr(node->lhs);
+  gen_expr(ctx, node->lhs);
   pop("%rdi");
 
   char *ax, *di, *dx;
@@ -1463,23 +1463,23 @@ static void gen_expr(Node *node) {
     return;
   }
 
-  error_tok(chibicc_ctx(), node->tok, "invalid expression");
+  error_tok(ctx, node->tok, "invalid expression");
 }
 
-static void gen_stmt(Node *node) {
+static void gen_stmt(ChibiccContext *ctx, Node *node) {
   println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
 
   switch (node->kind) {
   case ND_IF: {
     int c = count();
-    gen_expr(node->cond);
+    gen_expr(ctx, node->cond);
     cmp_zero(node->cond->ty);
     println("  je  .L.else.%d", c);
-    gen_stmt(node->then);
+    gen_stmt(ctx, node->then);
     println("  jmp .L.end.%d", c);
     println(".L.else.%d:", c);
     if (node->els)
-      gen_stmt(node->els);
+      gen_stmt(ctx, node->els);
     println(".L.end.%d:", c);
     return;
   }
@@ -1495,10 +1495,10 @@ static void gen_stmt(Node *node) {
     cur_cont_label = cg(node)->cont_label;
 
     println(".L.begin.%d:", c);
-    gen_expr(node->cond);
+    gen_expr(ctx, node->cond);
     cmp_zero(node->cond->ty);
     println("  je %s", cg(node)->brk_label);
-    gen_stmt(node->then);
+    gen_stmt(ctx, node->then);
     println("%s:", cg(node)->cont_label);
     println("  jmp .L.begin.%d", c);
     println("%s:", cg(node)->brk_label);
@@ -1515,17 +1515,17 @@ static void gen_stmt(Node *node) {
     cur_cont_label = cg(node)->cont_label;
 
     if (node->init)
-      gen_stmt(node->init);
+      gen_stmt(ctx, node->init);
     println(".L.begin.%d:", c);
     if (node->cond) {
-      gen_expr(node->cond);
+      gen_expr(ctx, node->cond);
       cmp_zero(node->cond->ty);
       println("  je %s", cg(node)->brk_label);
     }
-    gen_stmt(node->then);
+    gen_stmt(ctx, node->then);
     println("%s:", cg(node)->cont_label);
     if (node->inc)
-      gen_expr(node->inc);
+      gen_expr(ctx, node->inc);
     println("  jmp .L.begin.%d", c);
     println("%s:", cg(node)->brk_label);
 
@@ -1541,9 +1541,9 @@ static void gen_stmt(Node *node) {
     cur_cont_label = cg(node)->cont_label;
 
     println(".L.begin.%d:", c);
-    gen_stmt(node->then);
+    gen_stmt(ctx, node->then);
     println("%s:", cg(node)->cont_label);
-    gen_expr(node->cond);
+    gen_expr(ctx, node->cond);
     cmp_zero(node->cond->ty);
     println("  jne .L.begin.%d", c);
     println("%s:", cg(node)->brk_label);
@@ -1559,7 +1559,7 @@ static void gen_stmt(Node *node) {
     char *brk = cur_brk_label;
     cur_brk_label = cg(node)->brk_label;
 
-    gen_expr(node->cond);
+    gen_expr(ctx, node->cond);
 
     for (Node *n = cg(node)->case_next; n; n = cg(n)->case_next) {
       char *ax = (node->cond->ty->size == 8) ? "%rax" : "%eax";
@@ -1582,7 +1582,7 @@ static void gen_stmt(Node *node) {
       println("  jmp %s", cg(cg(node)->default_case)->unique_label);
 
     println("  jmp %s", cg(node)->brk_label);
-    gen_stmt(node->then);
+    gen_stmt(ctx, node->then);
     println("%s:", cg(node)->brk_label);
 
     cur_brk_label = brk;
@@ -1590,11 +1590,11 @@ static void gen_stmt(Node *node) {
   }
   case ND_CASE:
     println("%s:", cg(node)->unique_label);
-    gen_stmt(node->lhs);
+    gen_stmt(ctx, node->lhs);
     return;
   case ND_BLOCK:
     for (Node *n = node->body; n; n = n->next)
-      gen_stmt(n);
+      gen_stmt(ctx, n);
     return;
   case ND_DECL: {
     // A declaration record reaching the emitter (PLAN B1.2b): a
@@ -1606,12 +1606,12 @@ static void gen_stmt(Node *node) {
     if (node->attr.is_static || !node->init_resolved)
       return;
 
-    Node *chain = lvar_init_comma(node->var, node->init_resolved,
+    Node *chain = lvar_init_comma(ctx, node->var, node->init_resolved,
                                   node->decl_init->tok);
     node->decl_init = NULL;
     node->init_resolved = NULL;
-    add_type(chibicc_ctx(), chain);
-    gen_expr(chain);
+    add_type(ctx, chain);
+    gen_expr(ctx, chain);
     return;
   }
   case ND_BREAK:
@@ -1627,16 +1627,16 @@ static void gen_stmt(Node *node) {
     println("  jmp %s", cg(node)->unique_label);
     return;
   case ND_GOTO_EXPR:
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
     println("  jmp *%%rax");
     return;
   case ND_LABEL:
     println("%s:", cg(node)->unique_label);
-    gen_stmt(node->lhs);
+    gen_stmt(ctx, node->lhs);
     return;
   case ND_RETURN:
     if (node->lhs) {
-      gen_expr(node->lhs);
+      gen_expr(ctx, node->lhs);
       Type *ty = node->lhs->ty;
 
       switch (ty->kind) {
@@ -1653,14 +1653,14 @@ static void gen_stmt(Node *node) {
     println("  jmp .L.return.%s", current_fn->name);
     return;
   case ND_EXPR_STMT:
-    gen_expr(node->lhs);
+    gen_expr(ctx, node->lhs);
     return;
   case ND_ASM:
     println("  %s", node->asm_str);
     return;
   }
 
-  error_tok(chibicc_ctx(), node->tok, "invalid statement");
+  error_tok(ctx, node->tok, "invalid statement");
 }
 
 // The shaping pass, at its terminal shape: the control-flow half of
@@ -1694,13 +1694,13 @@ static int label_seq;   // labels handed out since then
 static Node *current_switch;
 static NodeArray cg_labels;  // the labels of the function being shaped
 
-static char *new_label(void) {
-  return format(chibicc_ctx(), ".L..%d", label_base + label_seq++);
+static char *new_label(ChibiccContext *ctx) {
+  return format(ctx, ".L..%d", label_base + label_seq++);
 }
 
-static void shape_node(Node *node);
-static bool expand_decl(Node *node);
-static void shape_init_exprs(InitTree *init);
+static void shape_node(ChibiccContext *ctx, Node *node);
+static bool expand_decl(ChibiccContext *ctx, Node *node);
+static void shape_init_exprs(ChibiccContext *ctx, InitTree *init);
 
 // Whether a declaration's type involves a VLA anywhere: its runtime
 // size slot has to exist before assign_lvar_offsets runs, so such a
@@ -1722,7 +1722,7 @@ static bool decl_needs_vla_size(Node *node) {
 // unhooked here (PLAN A8.2). A nested function's body is not entered
 // from here: the program list is its home and this pass walks it from
 // there exactly once (contract 3(e)).
-static void shape_chain(Node **head) {
+static void shape_chain(ChibiccContext *ctx, Node **head) {
   for (Node **pp = head; *pp;) {
     Node *n = *pp;
 
@@ -1735,18 +1735,18 @@ static void shape_chain(Node **head) {
       continue;
     case ND_DECL:
       if (decl_needs_vla_size(n))
-        expand_decl(n);
+        expand_decl(ctx, n);
       else
         // The record stays; this walk is what still reaches the
         // residue kinds a resolved initializer may hold (op=, an
         // inc/dec, a VLA sizeof, a compound literal, a
         // struct-returning call - the additive scaling is no longer
         // one of them, it is lowered at emission, PLAN B2).
-        shape_init_exprs(n->init_resolved);
+        shape_init_exprs(ctx, n->init_resolved);
       pp = &(*pp)->next;
       continue;
     default:
-      shape_node(n);
+      shape_node(ctx, n);
       pp = &(*pp)->next;
       continue;
     }
@@ -1756,19 +1756,19 @@ static void shape_chain(Node **head) {
 // Descends every subtree a node owns, statements and expressions
 // alike: a break can sit in a statement expression, which is an
 // expression node holding a statement chain.
-static void shape_children(Node *node) {
-  shape_node(node->lhs);
-  shape_node(node->rhs);
-  shape_node(node->cond);
-  shape_node(node->then);
-  shape_node(node->els);
-  shape_chain(&node->init);
-  shape_node(node->inc);
-  shape_chain(&node->body);
-  shape_chain(&node->args);
-  shape_node(node->cas_addr);
-  shape_node(node->cas_old);
-  shape_node(node->cas_new);
+static void shape_children(ChibiccContext *ctx, Node *node) {
+  shape_node(ctx, node->lhs);
+  shape_node(ctx, node->rhs);
+  shape_node(ctx, node->cond);
+  shape_node(ctx, node->then);
+  shape_node(ctx, node->els);
+  shape_chain(ctx, &node->init);
+  shape_node(ctx, node->inc);
+  shape_chain(ctx, &node->body);
+  shape_chain(ctx, &node->args);
+  shape_node(ctx, node->cas_addr);
+  shape_node(ctx, node->cas_old);
+  shape_node(ctx, node->cas_new);
 }
 
 // The temporaries a compound-assignment rewrite introduces are slots
@@ -1788,10 +1788,10 @@ static Obj *new_lvar(char *name, Type *ty) {
 // The scaled operand of an additive operator on a pointer: `p + n`
 // advances by sizeof(*p) * n rather than by n, and when the pointee is
 // a VLA, by its runtime size rather than a compile-time one.
-static Node *scale_rhs(Type *ptr_ty, Node *rhs, Token *tok) {
+static Node *scale_rhs(ChibiccContext *ctx, Type *ptr_ty, Node *rhs, Token *tok) {
   if (ptr_ty->base->kind == TY_VLA)
-    return new_binary(chibicc_ctx(), ND_MUL, rhs, new_var_node(chibicc_ctx(), cg_type(ptr_ty->base)->vla_size, tok), tok);
-  return new_binary(chibicc_ctx(), ND_MUL, rhs, new_long(chibicc_ctx(), ptr_ty->base->size, tok), tok);
+    return new_binary(ctx, ND_MUL, rhs, new_var_node(ctx, cg_type(ptr_ty->base)->vla_size, tok), tok);
+  return new_binary(ctx, ND_MUL, rhs, new_long(ctx, ptr_ty->base->size, tok), tok);
 }
 
 // Marks an additive node one of the lowering helpers below built. Its
@@ -1813,16 +1813,16 @@ static Node *mark_lowered(Node *node) {
 // It is both the helper codegen's own builders call and the definition
 // of the faithful lowering the emitter runs at emission (PLAN B2); its
 // product carries the mark either way.
-static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
-  add_type(chibicc_ctx(), lhs);
-  add_type(chibicc_ctx(), rhs);
+static Node *new_add(ChibiccContext *ctx, Node *lhs, Node *rhs, Token *tok) {
+  add_type(ctx, lhs);
+  add_type(ctx, rhs);
 
   // num + num
   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
-    return mark_lowered(new_arith(chibicc_ctx(), ND_ADD, lhs, rhs, tok));
+    return mark_lowered(new_arith(ctx, ND_ADD, lhs, rhs, tok));
 
   if (lhs->ty->base && rhs->ty->base)
-    error_tok(chibicc_ctx(), tok, "invalid operands");
+    error_tok(ctx, tok, "invalid operands");
 
   // Canonicalize `num + ptr` to `ptr + num`.
   if (!lhs->ty->base && rhs->ty->base) {
@@ -1832,25 +1832,25 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   }
 
   // ptr + num; a pointer to a VLA scales by its runtime size
-  return mark_lowered(new_arith(chibicc_ctx(), ND_ADD, lhs, scale_rhs(lhs->ty, rhs, tok), tok));
+  return mark_lowered(new_arith(ctx, ND_ADD, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 }
 
 // Like `+`, `-` is overloaded for the pointer type.
-static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
-  add_type(chibicc_ctx(), lhs);
-  add_type(chibicc_ctx(), rhs);
+static Node *new_sub(ChibiccContext *ctx, Node *lhs, Node *rhs, Token *tok) {
+  add_type(ctx, lhs);
+  add_type(ctx, rhs);
 
   // num - num
   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
-    return mark_lowered(new_arith(chibicc_ctx(), ND_SUB, lhs, rhs, tok));
+    return mark_lowered(new_arith(ctx, ND_SUB, lhs, rhs, tok));
 
   // pointer to a VLA - num
   if (lhs->ty->base && lhs->ty->base->kind == TY_VLA)
-    return mark_lowered(new_arith(chibicc_ctx(), ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok));
+    return mark_lowered(new_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 
   // ptr - num
   if (lhs->ty->base && is_integer(rhs->ty))
-    return mark_lowered(new_arith(chibicc_ctx(), ND_SUB, lhs, scale_rhs(lhs->ty, rhs, tok), tok));
+    return mark_lowered(new_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 
   // ptr - ptr, which returns how many elements are between the two. The
   // difference itself is an element count, so it is typed long and left
@@ -1859,12 +1859,12 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   // through the emitter under the `DIV` just like a built `ptr + num`
   // does.
   if (lhs->ty->base && rhs->ty->base) {
-    Node *node = mark_lowered(new_binary(chibicc_ctx(), ND_SUB, lhs, rhs, tok));
+    Node *node = mark_lowered(new_binary(ctx, ND_SUB, lhs, rhs, tok));
     node->ty = ty_long;
-    return new_arith(chibicc_ctx(), ND_DIV, node, new_num(chibicc_ctx(), lhs->ty->base->size, tok), tok);
+    return new_arith(ctx, ND_DIV, node, new_num(ctx, lhs->ty->base->size, tok), tok);
   }
 
-  error_tok(chibicc_ctx(), tok, "invalid operands");
+  error_tok(ctx, tok, "invalid operands");
 }
 
 // Generate code for computing a VLA size: one assignment per VLA the
@@ -1873,33 +1873,33 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
 // from sema at A7.1 (it was the mirror of this function for one step):
 // the size variables are slots of this consumer, which is also why the
 // builder cannot live in the library any more.
-static Node *compute_vla_size(Type *ty, Token *tok) {
-  Node *node = ty->base ? compute_vla_size(ty->base, tok) : NULL;
+static Node *compute_vla_size(ChibiccContext *ctx, Type *ty, Token *tok) {
+  Node *node = ty->base ? compute_vla_size(ctx, ty->base, tok) : NULL;
 
   if (ty->kind != TY_VLA)
     return node;
 
   Node *base_sz;
   if (ty->base->kind == TY_VLA)
-    base_sz = new_var_node(chibicc_ctx(), cg_type(ty->base)->vla_size, tok);
+    base_sz = new_var_node(ctx, cg_type(ty->base)->vla_size, tok);
   else
-    base_sz = new_num(chibicc_ctx(), ty->base->size, tok);
+    base_sz = new_num(ctx, ty->base->size, tok);
 
   cg_type(ty)->vla_size = new_lvar("", ty_ulong);
-  Node *expr = new_binary(chibicc_ctx(), ND_ASSIGN, new_var_node(chibicc_ctx(), cg_type(ty)->vla_size, tok),
-                          new_binary(chibicc_ctx(), ND_MUL, ty->vla_len, base_sz, tok),
+  Node *expr = new_binary(ctx, ND_ASSIGN, new_var_node(ctx, cg_type(ty)->vla_size, tok),
+                          new_binary(ctx, ND_MUL, ty->vla_len, base_sz, tok),
                           tok);
-  return node ? new_binary(chibicc_ctx(), ND_COMMA, node, expr, tok) : expr;
+  return node ? new_binary(ctx, ND_COMMA, node, expr, tok) : expr;
 }
 
 // `sizeof` of a VLA type: a reference to its runtime size variable,
 // computed first if this type has not had its size computed yet
 // (e.g. `sizeof(int[n])` with a fresh type).
-static Node *vla_size_expr(Type *ty, Token *tok) {
+static Node *vla_size_expr(ChibiccContext *ctx, Type *ty, Token *tok) {
   if (cg_type(ty)->vla_size)
-    return new_var_node(chibicc_ctx(), cg_type(ty)->vla_size, tok);
-  Node *lhs = compute_vla_size(ty, tok);
-  return new_binary(chibicc_ctx(), ND_COMMA, lhs, new_var_node(chibicc_ctx(), cg_type(ty)->vla_size, tok), tok);
+    return new_var_node(ctx, cg_type(ty)->vla_size, tok);
+  Node *lhs = compute_vla_size(ctx, ty, tok);
+  return new_binary(ctx, ND_COMMA, lhs, new_var_node(ctx, cg_type(ty)->vla_size, tok), tok);
 }
 
 // The target expression of one initializer assignment (PLAN A8.1,
@@ -1908,19 +1908,19 @@ static Node *vla_size_expr(Type *ty, Token *tok) {
 // dereference of the scaled addition - the shape the faithful
 // subscript would lower to - so no intermediate node needs a second
 // walk (contract 3(d)).
-static Node *init_desg_expr(InitPath *desg, Token *tok) {
+static Node *init_desg_expr(ChibiccContext *ctx, InitPath *desg, Token *tok) {
   if (desg->var)
-    return new_var_node(chibicc_ctx(), desg->var, tok);
+    return new_var_node(ctx, desg->var, tok);
 
   if (desg->member) {
-    Node *node = new_unary(chibicc_ctx(), ND_MEMBER, init_desg_expr(desg->next, tok), tok);
+    Node *node = new_unary(ctx, ND_MEMBER, init_desg_expr(ctx, desg->next, tok), tok);
     node->member = desg->member;
     return node;
   }
 
-  Node *lhs = init_desg_expr(desg->next, tok);
-  Node *add = new_add(lhs, new_num(chibicc_ctx(), desg->idx, tok), tok);
-  Node *node = new_unary(chibicc_ctx(), ND_DEREF, add, tok);
+  Node *lhs = init_desg_expr(ctx, desg->next, tok);
+  Node *add = new_add(ctx, lhs, new_num(ctx, desg->idx, tok), tok);
+  Node *node = new_unary(ctx, ND_DEREF, add, tok);
   node->ty = add->ty->base;
   return node;
 }
@@ -1929,24 +1929,24 @@ static Node *init_desg_expr(InitPath *desg, Token *tok) {
 // resolved tree (moved from sema at A8.1). Aggregates recurse into
 // their children; a union walks only the member the record selected;
 // a partial list is preceded by the MEMZERO in lvar_init_comma below.
-static Node *create_lvar_init(InitTree *init, Type *ty, InitPath *desg, Token *tok) {
+static Node *create_lvar_init(ChibiccContext *ctx, InitTree *init, Type *ty, InitPath *desg, Token *tok) {
   if (ty->kind == TY_ARRAY) {
-    Node *node = new_node(chibicc_ctx(), ND_NULL_EXPR, tok);
+    Node *node = new_node(ctx, ND_NULL_EXPR, tok);
     for (int i = 0; i < ty->array_len; i++) {
       InitPath desg2 = {desg, i};
-      Node *rhs = create_lvar_init(init->children[i], ty->base, &desg2, tok);
-      node = new_binary(chibicc_ctx(), ND_COMMA, node, rhs, tok);
+      Node *rhs = create_lvar_init(ctx, init->children[i], ty->base, &desg2, tok);
+      node = new_binary(ctx, ND_COMMA, node, rhs, tok);
     }
     return node;
   }
 
   if (ty->kind == TY_STRUCT && !init->expr) {
-    Node *node = new_node(chibicc_ctx(), ND_NULL_EXPR, tok);
+    Node *node = new_node(ctx, ND_NULL_EXPR, tok);
 
     for (Member *mem = ty->members; mem; mem = mem->next) {
       InitPath desg2 = {desg, 0, mem};
-      Node *rhs = create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
-      node = new_binary(chibicc_ctx(), ND_COMMA, node, rhs, tok);
+      Node *rhs = create_lvar_init(ctx, init->children[mem->idx], mem->ty, &desg2, tok);
+      node = new_binary(ctx, ND_COMMA, node, rhs, tok);
     }
     return node;
   }
@@ -1954,14 +1954,14 @@ static Node *create_lvar_init(InitTree *init, Type *ty, InitPath *desg, Token *t
   if (ty->kind == TY_UNION) {
     Member *mem = init->mem ? init->mem : ty->members;
     InitPath desg2 = {desg, 0, mem};
-    return create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
+    return create_lvar_init(ctx, init->children[mem->idx], mem->ty, &desg2, tok);
   }
 
   if (!init->expr)
-    return new_node(chibicc_ctx(), ND_NULL_EXPR, tok);
+    return new_node(ctx, ND_NULL_EXPR, tok);
 
-  Node *lhs = init_desg_expr(desg, tok);
-  return new_binary(chibicc_ctx(), ND_ASSIGN, lhs, init->expr, tok);
+  Node *lhs = init_desg_expr(ctx, desg, tok);
+  return new_binary(ctx, ND_ASSIGN, lhs, init->expr, tok);
 }
 
 // Shapes every expression a resolved initializer record holds, once
@@ -1971,33 +1971,33 @@ static Node *create_lvar_init(InitTree *init, Type *ty, InitPath *desg, Token *t
 // - but the initializer expressions are old nodes nothing else in the
 // tree references, and an expression shared by several records (a
 // range designator) is shaped exactly once here.
-static void shape_init_exprs(InitTree *init);
+static void shape_init_exprs(ChibiccContext *ctx, InitTree *init);
 
 // Build the MEMZERO + assignment comma chain that initializes a local
 // variable from its resolved initializer tree. `tok` anchors the
 // synthesized nodes; the record's first token is where the parser used
 // to anchor them. Moved from sema at A8.1 with the declaration
 // expansion; sema itself no longer builds it.
-static Node *lvar_init_comma(Obj *var, InitTree *init, Token *tok) {
+static Node *lvar_init_comma(ChibiccContext *ctx, Obj *var, InitTree *init, Token *tok) {
   InitPath desg = {NULL, 0, NULL, var};
 
   // If a partial initializer list is given, the standard requires
   // that unspecified elements are set to 0. Here, we simply
   // zero-initialize the entire memory region of a variable before
   // initializing it with user-supplied values.
-  Node *lhs = new_node(chibicc_ctx(), ND_MEMZERO, tok);
+  Node *lhs = new_node(ctx, ND_MEMZERO, tok);
   lhs->var = var;
 
-  Node *rhs = create_lvar_init(init, var->ty, &desg, tok);
-  return new_binary(chibicc_ctx(), ND_COMMA, lhs, rhs, tok);
+  Node *rhs = create_lvar_init(ctx, init, var->ty, &desg, tok);
+  return new_binary(ctx, ND_COMMA, lhs, rhs, tok);
 }
 
-static void shape_init_exprs(InitTree *init) {
+static void shape_init_exprs(ChibiccContext *ctx, InitTree *init) {
   if (!init)
     return;
 
   if (init->expr) {
-    shape_node(init->expr);
+    shape_node(ctx, init->expr);
     return;
   }
 
@@ -2006,12 +2006,12 @@ static void shape_init_exprs(InitTree *init) {
 
   if (init->ty->kind == TY_ARRAY) {
     for (int i = 0; i < init->ty->array_len; i++)
-      shape_init_exprs(init->children[i]);
+      shape_init_exprs(ctx, init->children[i]);
     return;
   }
 
   for (Member *mem = init->ty->members; mem; mem = mem->next)
-    shape_init_exprs(init->children[mem->idx]);
+    shape_init_exprs(ctx, init->children[mem->idx]);
 }
 
 // Expands a declaration record whose type involves a VLA into the
@@ -2024,7 +2024,7 @@ static void shape_init_exprs(InitTree *init) {
 // initializer record resolved, and the block-scope static's data
 // image is already in .data. Moved from sema at A8.1; the VLA half
 // came over at A7.1, when the size slots did.
-static bool expand_decl(Node *node) {
+static bool expand_decl(ChibiccContext *ctx, Node *node) {
   Obj *var = node->var;
   Token *tok = node->tok;
 
@@ -2043,8 +2043,8 @@ static bool expand_decl(Node *node) {
       // through an earlier declaration of the same type (a typedef
       // shared by two objects), and its dimensions were shaped then.
       if (!cg_type(var->ty)->vla_size)
-        shape_node(t->vla_len);
-      vla_size = compute_vla_size(var->ty, tok);
+        shape_node(ctx, t->vla_len);
+      vla_size = compute_vla_size(ctx, var->ty, tok);
       break;
     }
   }
@@ -2053,19 +2053,19 @@ static bool expand_decl(Node *node) {
 
   if (var->ty->kind == TY_VLA) {
     // `var = alloca(<size>)`: the size chain computed just above.
-    lowered = new_binary(chibicc_ctx(), ND_ASSIGN, new_vla_ptr(chibicc_ctx(), var, tok),
-                         new_alloca(chibicc_ctx(), new_var_node(chibicc_ctx(), cg_type(var->ty)->vla_size, tok)),
+    lowered = new_binary(ctx, ND_ASSIGN, new_vla_ptr(ctx, var, tok),
+                         new_alloca(ctx, new_var_node(ctx, cg_type(var->ty)->vla_size, tok)),
                          tok);
   } else if (node->init_resolved) {
     // The initializer comma; a pointer to a VLA reaches here too,
     // with the size chain sequenced in front of the assignments.
-    lowered = lvar_init_comma(var, node->init_resolved, node->decl_init->tok);
+    lowered = lvar_init_comma(ctx, var, node->init_resolved, node->decl_init->tok);
     node->decl_init = NULL;
     // The initializer expressions have never been through this pass
     // and nothing else in the tree references them; the size chain
     // and the designator targets are already lowered form and are
     // not touched again.
-    shape_init_exprs(node->init_resolved);
+    shape_init_exprs(ctx, node->init_resolved);
     node->init_resolved = NULL;
   }
 
@@ -2075,9 +2075,9 @@ static bool expand_decl(Node *node) {
 
   node->kind = ND_EXPR_STMT;
   node->lhs = (vla_size && lowered)
-                ? new_binary(chibicc_ctx(), ND_COMMA, vla_size, lowered, tok)
+                ? new_binary(ctx, ND_COMMA, vla_size, lowered, tok)
                 : (lowered ? lowered : vla_size);
-  add_type(chibicc_ctx(), node);
+  add_type(ctx, node);
   return true;
 }
 
@@ -2087,21 +2087,21 @@ static bool expand_decl(Node *node) {
 // which is the shape `+`/`-` produce; the others are handed to add_type,
 // which converts the multiplicative and bitwise ones and leaves the
 // shifts alone.
-static Node *combine(NodeKind op, Node *lhs, Node *rhs, Token *tok) {
+static Node *combine(ChibiccContext *ctx, NodeKind op, Node *lhs, Node *rhs, Token *tok) {
   // The additive case takes operands that already went through
   // new_add/new_sub (this combines a read-modify-write value with its
   // scaled operand), so it is a plain machine arithmetic node too.
   if (op == ND_ADD || op == ND_SUB)
-    return mark_lowered(new_arith(chibicc_ctx(), op, lhs, rhs, tok));
+    return mark_lowered(new_arith(ctx, op, lhs, rhs, tok));
 
-  Node *node = new_binary(chibicc_ctx(), op, lhs, rhs, tok);
-  add_type(chibicc_ctx(), node);
+  Node *node = new_binary(ctx, op, lhs, rhs, tok);
+  add_type(ctx, node);
   return node;
 }
 
 // Build the `lhs op rhs` operand expression for a compound assignment
 // driven by node->op.
-static Node *compound_op(Node *node, Node *lhs, Token *tok) {
+static Node *compound_op(ChibiccContext *ctx, Node *node, Node *lhs, Token *tok) {
   Node *rhs = node->rhs;
 
   // `+=`/`-=` are routed through new_add/new_sub so that the operand
@@ -2109,12 +2109,12 @@ static Node *compound_op(Node *node, Node *lhs, Token *tok) {
   // plain `+`/`-`; the operand they settle on is the one the rebuilt
   // expression combines with `lhs`.
   if (node->op == ND_ADD || node->op == ND_SUB) {
-    Node *scaled = node->op == ND_ADD ? new_add(node->lhs, node->rhs, tok)
-                                      : new_sub(node->lhs, node->rhs, tok);
+    Node *scaled = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok)
+                                      : new_sub(ctx, node->lhs, node->rhs, tok);
     rhs = scaled->rhs;
   }
 
-  return combine(node->op, lhs, rhs, tok);
+  return combine(ctx, node->op, lhs, rhs, tok);
 }
 
 // Convert op= operators to expressions containing an assignment.
@@ -2125,9 +2125,9 @@ static Node *compound_op(Node *node, Node *lhs, Token *tok) {
 // However, if a given expression is of form `A.x op= C`, the input is
 // converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
 // to bitfields.
-static Node *to_assign(Node *node) {
-  add_type(chibicc_ctx(), node->lhs);
-  add_type(chibicc_ctx(), node->rhs);
+static Node *to_assign(ChibiccContext *ctx, Node *node) {
+  add_type(ctx, node->lhs);
+  add_type(ctx, node->rhs);
   Token *tok = node->tok;
 
   // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
@@ -2143,27 +2143,27 @@ static Node *to_assign(Node *node) {
   if (node->lhs->kind == ND_MEMBER) {
     Node *operand = node->lhs->lhs;
     bool arrow = node->lhs->arrow_tok;
-    Obj *var = new_lvar("", pointer_to(chibicc_ctx(), arrow ? operand->ty->base : operand->ty));
-    Node *addr = arrow ? operand : new_unary(chibicc_ctx(), ND_ADDR, operand, tok);
+    Obj *var = new_lvar("", pointer_to(ctx, arrow ? operand->ty->base : operand->ty));
+    Node *addr = arrow ? operand : new_unary(ctx, ND_ADDR, operand, tok);
 
-    Node *expr1 = new_binary(chibicc_ctx(), ND_ASSIGN, new_var_node(chibicc_ctx(), var, tok),
+    Node *expr1 = new_binary(ctx, ND_ASSIGN, new_var_node(ctx, var, tok),
                              addr, tok);
 
-    Node *expr2 = new_unary(chibicc_ctx(), ND_MEMBER,
-                            new_unary(chibicc_ctx(), ND_DEREF, new_var_node(chibicc_ctx(), var, tok), tok),
+    Node *expr2 = new_unary(ctx, ND_MEMBER,
+                            new_unary(ctx, ND_DEREF, new_var_node(ctx, var, tok), tok),
                             tok);
     expr2->member = node->lhs->member;
 
-    Node *expr3 = new_unary(chibicc_ctx(), ND_MEMBER,
-                            new_unary(chibicc_ctx(), ND_DEREF, new_var_node(chibicc_ctx(), var, tok), tok),
+    Node *expr3 = new_unary(ctx, ND_MEMBER,
+                            new_unary(ctx, ND_DEREF, new_var_node(ctx, var, tok), tok),
                             tok);
     expr3->member = node->lhs->member;
 
-    Node *expr4 = new_binary(chibicc_ctx(), ND_ASSIGN, expr2,
-                             compound_op(node, expr3, tok),
+    Node *expr4 = new_binary(ctx, ND_ASSIGN, expr2,
+                             compound_op(ctx, node, expr3, tok),
                              tok);
 
-    return new_binary(chibicc_ctx(), ND_COMMA, expr1, expr4, tok);
+    return new_binary(ctx, ND_COMMA, expr1, expr4, tok);
   }
 
   // If A is an atomic type, Convert `A op= B` to
@@ -2181,38 +2181,38 @@ static Node *to_assign(Node *node) {
     // new_add/new_sub, which is also what runs the operand checks.
     Node *rhs = node->rhs;
     if (node->op == ND_ADD || node->op == ND_SUB) {
-      Node *operand = node->op == ND_ADD ? new_add(node->lhs, node->rhs, tok)
-                                         : new_sub(node->lhs, node->rhs, tok);
+      Node *operand = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok)
+                                         : new_sub(ctx, node->lhs, node->rhs, tok);
       rhs = operand->rhs;
     }
-    add_type(chibicc_ctx(), rhs);
+    add_type(ctx, rhs);
 
     Node head = {};
     Node *cur = &head;
 
-    Obj *addr = new_lvar("", pointer_to(chibicc_ctx(), node->lhs->ty));
+    Obj *addr = new_lvar("", pointer_to(ctx, node->lhs->ty));
     Obj *val = new_lvar("", rhs->ty);
     Obj *old = new_lvar("", node->lhs->ty);
     Obj *new = new_lvar("", node->lhs->ty);
 
     cur = cur->next =
-      new_unary(chibicc_ctx(), ND_EXPR_STMT,
-                new_binary(chibicc_ctx(), ND_ASSIGN, new_var_node(chibicc_ctx(), addr, tok),
-                           new_unary(chibicc_ctx(), ND_ADDR, node->lhs, tok), tok),
+      new_unary(ctx, ND_EXPR_STMT,
+                new_binary(ctx, ND_ASSIGN, new_var_node(ctx, addr, tok),
+                           new_unary(ctx, ND_ADDR, node->lhs, tok), tok),
                 tok);
 
     cur = cur->next =
-      new_unary(chibicc_ctx(), ND_EXPR_STMT,
-                new_binary(chibicc_ctx(), ND_ASSIGN, new_var_node(chibicc_ctx(), val, tok), rhs, tok),
+      new_unary(ctx, ND_EXPR_STMT,
+                new_binary(ctx, ND_ASSIGN, new_var_node(ctx, val, tok), rhs, tok),
                 tok);
 
     cur = cur->next =
-      new_unary(chibicc_ctx(), ND_EXPR_STMT,
-                new_binary(chibicc_ctx(), ND_ASSIGN, new_var_node(chibicc_ctx(), old, tok),
-                           new_unary(chibicc_ctx(), ND_DEREF, new_var_node(chibicc_ctx(), addr, tok), tok), tok),
+      new_unary(ctx, ND_EXPR_STMT,
+                new_binary(ctx, ND_ASSIGN, new_var_node(ctx, old, tok),
+                           new_unary(ctx, ND_DEREF, new_var_node(ctx, addr, tok), tok), tok),
                 tok);
 
-    Node *loop = new_node(chibicc_ctx(), ND_DO, tok);
+    Node *loop = new_node(ctx, ND_DO, tok);
 
     // The retry loop takes its labels here rather than through a
     // shape_node descent: its interior is codegen-built lowered form
@@ -2223,57 +2223,57 @@ static Node *to_assign(Node *node) {
     // operands). The allocation order - break before continue, at the
     // point the enclosing statement was reached - matches what the
     // whole-tree descent would have produced.
-    cg(loop)->brk_label = new_label();
-    cg(loop)->cont_label = new_label();
+    cg(loop)->brk_label = new_label(ctx);
+    cg(loop)->cont_label = new_label(ctx);
 
     // `val` already holds the operand as `op` would have it - scaled
     // for an additive operator on a pointer - so the retry loop
     // combines it with the old value without scaling again.
-    Node *body = new_binary(chibicc_ctx(), ND_ASSIGN,
-                            new_var_node(chibicc_ctx(), new, tok),
-                            combine(node->op, new_var_node(chibicc_ctx(), old, tok),
-                                    new_var_node(chibicc_ctx(), val, tok), tok),
+    Node *body = new_binary(ctx, ND_ASSIGN,
+                            new_var_node(ctx, new, tok),
+                            combine(ctx, node->op, new_var_node(ctx, old, tok),
+                                    new_var_node(ctx, val, tok), tok),
                             tok);
 
-    loop->then = new_node(chibicc_ctx(), ND_BLOCK, tok);
-    loop->then->body = new_unary(chibicc_ctx(), ND_EXPR_STMT, body, tok);
+    loop->then = new_node(ctx, ND_BLOCK, tok);
+    loop->then->body = new_unary(ctx, ND_EXPR_STMT, body, tok);
 
-    Node *cas = new_node(chibicc_ctx(), ND_CAS, tok);
-    cas->cas_addr = new_var_node(chibicc_ctx(), addr, tok);
-    cas->cas_old = new_unary(chibicc_ctx(), ND_ADDR, new_var_node(chibicc_ctx(), old, tok), tok);
-    cas->cas_new = new_var_node(chibicc_ctx(), new, tok);
-    loop->cond = new_unary(chibicc_ctx(), ND_NOT, cas, tok);
+    Node *cas = new_node(ctx, ND_CAS, tok);
+    cas->cas_addr = new_var_node(ctx, addr, tok);
+    cas->cas_old = new_unary(ctx, ND_ADDR, new_var_node(ctx, old, tok), tok);
+    cas->cas_new = new_var_node(ctx, new, tok);
+    loop->cond = new_unary(ctx, ND_NOT, cas, tok);
 
     cur = cur->next = loop;
-    cur = cur->next = new_unary(chibicc_ctx(), ND_EXPR_STMT, new_var_node(chibicc_ctx(), new, tok), tok);
+    cur = cur->next = new_unary(ctx, ND_EXPR_STMT, new_var_node(ctx, new, tok), tok);
 
-    Node *stmt_expr = new_node(chibicc_ctx(), ND_STMT_EXPR, tok);
+    Node *stmt_expr = new_node(ctx, ND_STMT_EXPR, tok);
     stmt_expr->body = head.next;
     return stmt_expr;
   }
 
   // Convert `A op= B` to ``tmp = &A, *tmp = *tmp op B`.
-  Obj *var = new_lvar("", pointer_to(chibicc_ctx(), node->lhs->ty));
+  Obj *var = new_lvar("", pointer_to(ctx, node->lhs->ty));
 
-  Node *expr1 = new_binary(chibicc_ctx(), ND_ASSIGN, new_var_node(chibicc_ctx(), var, tok),
-                           new_unary(chibicc_ctx(), ND_ADDR, node->lhs, tok), tok);
+  Node *expr1 = new_binary(ctx, ND_ASSIGN, new_var_node(ctx, var, tok),
+                           new_unary(ctx, ND_ADDR, node->lhs, tok), tok);
 
   Node *expr2 =
-    new_binary(chibicc_ctx(), ND_ASSIGN,
-               new_unary(chibicc_ctx(), ND_DEREF, new_var_node(chibicc_ctx(), var, tok), tok),
-               compound_op(node, new_unary(chibicc_ctx(), ND_DEREF, new_var_node(chibicc_ctx(), var, tok), tok), tok),
+    new_binary(ctx, ND_ASSIGN,
+               new_unary(ctx, ND_DEREF, new_var_node(ctx, var, tok), tok),
+               compound_op(ctx, node, new_unary(ctx, ND_DEREF, new_var_node(ctx, var, tok), tok), tok),
                tok);
 
-  return new_binary(chibicc_ctx(), ND_COMMA, expr1, expr2, tok);
+  return new_binary(ctx, ND_COMMA, expr1, expr2, tok);
 }
 
 // Convert A++ to `(typeof A)((A += 1) - 1)`. Moved from parse.c.
-static Node *new_inc_dec(Node *node, Token *tok, int addend) {
-  add_type(chibicc_ctx(), node);
-  Node *expr = new_binary(chibicc_ctx(), ND_ASSIGN, node, new_num(chibicc_ctx(), addend, tok), tok);
+static Node *new_inc_dec(ChibiccContext *ctx, Node *node, Token *tok, int addend) {
+  add_type(ctx, node);
+  Node *expr = new_binary(ctx, ND_ASSIGN, node, new_num(ctx, addend, tok), tok);
   expr->op = ND_ADD;
-  Node *sub = new_add(to_assign(expr), new_num(chibicc_ctx(), -addend, tok), tok);
-  return new_cast(chibicc_ctx(), sub, node->ty);
+  Node *sub = new_add(ctx, to_assign(ctx, expr), new_num(ctx, -addend, tok), tok);
+  return new_cast(ctx, sub, node->ty);
 }
 
 // The descent is pre-order: a loop or a switch owns its labels before
@@ -2281,7 +2281,7 @@ static Node *new_inc_dec(Node *node, Token *tok, int addend) {
 // emitter resolves a break or a continue against the innermost one at
 // emission time (PLAN B1.2a); the descent here only makes sure every
 // loop has them.
-static void shape_node(Node *node) {
+static void shape_node(ChibiccContext *ctx, Node *node) {
   if (!node)
     return;
 
@@ -2289,10 +2289,10 @@ static void shape_node(Node *node) {
   case ND_WHILE:
   case ND_DO:
   case ND_FOR: {
-    cg(node)->brk_label = new_label();
-    cg(node)->cont_label = new_label();
+    cg(node)->brk_label = new_label(ctx);
+    cg(node)->cont_label = new_label(ctx);
 
-    shape_children(node);
+    shape_children(ctx, node);
 
     // gen_stmt's `for` has a single-statement init slot, so an init
     // chain the expansion left with more than one statement - or none
@@ -2301,7 +2301,7 @@ static void shape_node(Node *node) {
       if (!node->init) {
         // nothing to do
       } else if (node->init->next) {
-        Node *blk = new_node(chibicc_ctx(), ND_BLOCK, node->init->tok);
+        Node *blk = new_node(ctx, ND_BLOCK, node->init->tok);
         blk->body = node->init;
         node->init = blk;
       }
@@ -2309,17 +2309,17 @@ static void shape_node(Node *node) {
     return;
   }
   case ND_SWITCH: {
-    cg(node)->brk_label = new_label();
+    cg(node)->brk_label = new_label(ctx);
 
     Node *sw = current_switch;
     current_switch = node;
-    shape_children(node);
+    shape_children(ctx, node);
     current_switch = sw;
     return;
   }
   case ND_CASE:
-    cg(node)->unique_label = new_label();
-    shape_node(node->lhs);
+    cg(node)->unique_label = new_label(ctx);
+    shape_node(ctx, node->lhs);
 
     // Linked after the body: a case label may sit inside the statement
     // of an earlier one (`case 0: while (..) { .. case 1: .. }`), and
@@ -2338,29 +2338,29 @@ static void shape_node(Node *node) {
     // Obj, because a label value can sit outside the statement tree.
     return;
   case ND_LABEL:
-    cg(node)->unique_label = new_label();
-    nodearray_push(chibicc_ctx(), &cg_labels, node);
-    shape_node(node->lhs);
+    cg(node)->unique_label = new_label(ctx);
+    nodearray_push(ctx, &cg_labels, node);
+    shape_node(ctx, node->lhs);
     return;
   case ND_ASSIGN:
-    shape_children(node);
+    shape_children(ctx, node);
     if (node->op) {
       // A compound assignment as the parser recorded it: rewrite to
       // the read-modify-write form (handling the member and atomic
       // cases), then type the result afresh. The rewrite takes the
       // whole node, because the atomic form becomes a statement
       // expression, which carries its body outside lhs/rhs.
-      Node *result = to_assign(node);
+      Node *result = to_assign(ctx, node);
       Node *nxt = node->next;
       *node = *result;
       node->next = nxt;
-      add_type(chibicc_ctx(), node);
+      add_type(ctx, node);
     }
     return;
   case ND_INCDEC: {
     // Lower `++i`/`i--` to the compound-assignment form, rewriting
     // the node in place.
-    shape_children(node);
+    shape_children(ctx, node);
     Node *operand = node->lhs;
     Token *tok = node->tok;
 
@@ -2368,7 +2368,7 @@ static void shape_node(Node *node) {
       // The result is the implicit cast restoring the operand's type
       // around `(A += 1) - 1`, so its marking has to travel with the
       // shape it contributes.
-      Node *result = new_inc_dec(operand, tok, node->addend);
+      Node *result = new_inc_dec(ctx, operand, tok, node->addend);
       node->kind = result->kind;
       node->lhs = result->lhs;
       node->ty = result->ty;
@@ -2376,13 +2376,13 @@ static void shape_node(Node *node) {
       return;
     }
 
-    Node *expr = new_binary(chibicc_ctx(), ND_ASSIGN, operand, new_num(chibicc_ctx(), 1, tok), tok);
+    Node *expr = new_binary(ctx, ND_ASSIGN, operand, new_num(ctx, 1, tok), tok);
     expr->op = node->addend < 0 ? ND_SUB : ND_ADD;
-    Node *result = to_assign(expr);
+    Node *result = to_assign(ctx, expr);
     Node *nxt = node->next;
     *node = *result;
     node->next = nxt;
-    add_type(chibicc_ctx(), node);
+    add_type(ctx, node);
     return;
   }
   case ND_FUNCALL:
@@ -2391,7 +2391,7 @@ static void shape_node(Node *node) {
     // recorded the return type; a struct or union one means the call
     // needs a buffer, created here so it lands in the frame before
     // assign_lvar_offsets runs.
-    shape_children(node);
+    shape_children(ctx, node);
     if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
       cg(node)->ret_buffer = new_lvar("", node->ty);
     return;
@@ -2399,7 +2399,7 @@ static void shape_node(Node *node) {
     // Both spellings keep their shape: the GNU `a ?: b` is emitted
     // slot-free from its own fields (PLAN B1.1e, in gen_expr), and
     // the ordinary conditional's arms were converted by sema.
-    shape_children(node);
+    shape_children(ctx, node);
     return;
   case ND_SIZEOF: {
     // A sizeof of a VLA is the one conclusion that is a runtime
@@ -2420,10 +2420,10 @@ static void shape_node(Node *node) {
       if (!cg_type(ty)->vla_size)
         for (Type *t = ty; t; t = t->base)
           if (t->kind == TY_VLA)
-            shape_node(t->vla_len);
+            shape_node(ctx, t->vla_len);
 
-      Node *expr = vla_size_expr(ty, node->tok);
-      add_type(chibicc_ctx(), expr);
+      Node *expr = vla_size_expr(ctx, ty, node->tok);
+      add_type(ctx, expr);
       Node *nxt = node->next;
       *node = *expr;
       node->next = nxt;
@@ -2434,7 +2434,7 @@ static void shape_node(Node *node) {
     // Only the selected association's expression reaches the
     // emission; the controlling expression and the unselected arms
     // are typed but produce no code, so only the selection is shaped.
-    shape_node(node->generic_sel);
+    shape_node(ctx, node->generic_sel);
     return;
   case ND_COMPOUND_LITERAL:
     // A block-scope compound literal: the initializer comma and the
@@ -2445,19 +2445,19 @@ static void shape_node(Node *node) {
     {
       Obj *var = node->var;
 
-      shape_init_exprs(node->init_resolved);
-      Node *lowered = lvar_init_comma(var, node->init_resolved,
+      shape_init_exprs(ctx, node->init_resolved);
+      Node *lowered = lvar_init_comma(ctx, var, node->init_resolved,
                                       node->decl_init->tok);
-      Node *comma = new_binary(chibicc_ctx(), ND_COMMA, lowered,
-                               new_var_node(chibicc_ctx(), var, node->tok), node->tok);
-      add_type(chibicc_ctx(), comma);
+      Node *comma = new_binary(ctx, ND_COMMA, lowered,
+                               new_var_node(ctx, var, node->tok), node->tok);
+      add_type(ctx, comma);
       Node *nxt = node->next;
       *node = *comma;
       node->next = nxt;
     }
     return;
   default:
-    shape_children(node);
+    shape_children(ctx, node);
     return;
   }
 }
@@ -2466,8 +2466,8 @@ static void shape_node(Node *node) {
 // them in the context) with the labels the descent above allocated,
 // writing the name each one jumps to. The undeclared-label check
 // already ran in sema, so every reference here matched there.
-static void resolve_label_refs(Obj *fn) {
-  NodeArray *refs = sema_label_gotos(chibicc_ctx(), fn);
+static void resolve_label_refs(ChibiccContext *ctx, Obj *fn) {
+  NodeArray *refs = sema_label_gotos(ctx, fn);
   if (!refs)
     return;
   for (int i = 0; i < refs->len; i++) {
@@ -2487,15 +2487,15 @@ static void resolve_label_refs(Obj *fn) {
 // [GNU] nested function's body - which also hangs inside its host's
 // body before sema's type_chain takes the record off the chain - is
 // visited exactly once, through its own entry here.
-static void shape(Obj *prog) {
+static void shape(ChibiccContext *ctx, Obj *prog) {
   for (Obj *fn = prog; fn; fn = fn->next) {
     if (!fn->is_function || !fn->is_definition)
       continue;
     // The rewrite temporaries created below enter this function's
     // frame, so the slot factory needs to know where to append.
     current_fn = fn;
-    shape_chain(&fn->body);
-    resolve_label_refs(fn);
+    shape_chain(ctx, &fn->body);
+    resolve_label_refs(ctx, fn);
   }
 }
 
@@ -2651,7 +2651,7 @@ static void emit_data(Obj *prog) {
   }
 }
 
-static void store_fp(int r, int offset, int sz) {
+static void store_fp(ChibiccContext *ctx, int r, int offset, int sz) {
   switch (sz) {
   case 4:
     println("  movss %%xmm%d, %d(%%rbp)", r, offset);
@@ -2686,7 +2686,7 @@ static void store_gp(int r, int offset, int sz) {
   }
 }
 
-static void emit_text(Obj *prog) {
+static void emit_text(ChibiccContext *ctx, Obj *prog) {
   for (Obj *fn = prog; fn; fn = fn->next) {
     if (!fn->is_function || !fn->is_definition)
       continue;
@@ -2762,20 +2762,20 @@ static void emit_text(Obj *prog) {
       case TY_UNION:
         assert(ty->size <= 16);
         if (has_flonum(ty, 0, 8, 0))
-          store_fp(fp++, obj_offset(var), MIN(8, ty->size));
+          store_fp(ctx, fp++, obj_offset(var), MIN(8, ty->size));
         else
           store_gp(gp++, obj_offset(var), MIN(8, ty->size));
 
         if (ty->size > 8) {
           if (has_flonum(ty, 8, 16, 0))
-            store_fp(fp++, obj_offset(var) + 8, ty->size - 8);
+            store_fp(ctx, fp++, obj_offset(var) + 8, ty->size - 8);
           else
             store_gp(gp++, obj_offset(var) + 8, ty->size - 8);
         }
         break;
       case TY_FLOAT:
       case TY_DOUBLE:
-        store_fp(fp++, obj_offset(var), ty->size);
+        store_fp(ctx, fp++, obj_offset(var), ty->size);
         break;
       default:
         store_gp(gp++, obj_offset(var), ty->size);
@@ -2783,7 +2783,7 @@ static void emit_text(Obj *prog) {
     }
 
     // Emit code
-    gen_stmt(fn->body);
+    gen_stmt(ctx, fn->body);
     assert(depth == 0);
 
     // [https://www.sigbus.info/n1570#5.1.2.2.3p1] The C spec defines
@@ -2801,20 +2801,20 @@ static void emit_text(Obj *prog) {
   }
 }
 
-void codegen(Obj *prog, FILE *out) {
+void codegen(ChibiccContext *ctx, Obj *prog, FILE *out) {
   output_file = out;
 
-  File **files = get_input_files(chibicc_ctx());
+  File **files = get_input_files(ctx);
   for (int i = 0; files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
 
   // The shaping pass runs first: it is what fills the label fields
   // gen_stmt reads and resolves the goto references, and nothing may
   // be assigned or emitted before it (PLAN contract 3).
-  label_base = unique_name_next(chibicc_ctx());
-  shape(prog);
+  label_base = unique_name_next(ctx);
+  shape(ctx, prog);
 
   assign_lvar_offsets(prog);
   emit_data(prog);
-  emit_text(prog);
+  emit_text(ctx, prog);
 }

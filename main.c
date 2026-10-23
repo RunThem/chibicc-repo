@@ -1203,7 +1203,7 @@ static int cc1(void) {
   FILE *output_buf = open_memstream(&buf, &buflen);
 
   // Traverse the AST to emit assembly.
-  codegen(prog, output_buf);
+  codegen(ctx, prog, output_buf);
   fclose(output_buf);
 
   // Write the asembly text to a file.
