@@ -97,9 +97,9 @@ bool failed = chibicc_context_failed(ctx);    /* false */
 ## 11.4 线程
 
 - 一个 context 不能跨线程并发.
-- 不同 context 可以在不同线程并存.
-- `active_ctx` 是 `_Thread_local`, 同一线程嵌套调用会保存 / 恢复.
-- `chibicc_context_new` / `free` 会修改 active 指针, 跨线程调用要自己同步.
+- 不同 context 可以在不同线程并存: 内部函数只看见参数里收到的 context.
+- 库层没有线程局部存储, 也没有 `chibicc_ctx()` 访问器; 同一线程的嵌套调用各用各的指针.
+- `chibicc_context_new` / `reset` / `free` 只操作自己的 context, 不修改全局状态.
 
 规避:
 

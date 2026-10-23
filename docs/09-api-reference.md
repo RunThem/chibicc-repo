@@ -46,6 +46,8 @@ cc -std=c11 -Ilibchibicc/include app.c libchibicc.a
 
 `CHIBICC_API` 在 GCC/Clang 下展开为 `__attribute__((visibility("default")))`, 用于共享库导出. 消费者不需要关心它.
 
+`.a` 里还有内部符号(没有 `chibicc_` 前缀的名字, 或未在任何公共头声明). 它们对该归档可见, 但不属于 API: 内部函数以 `ChibiccContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 36 个函数.
+
 ## 9.2 函数总表
 
 | 组 | 函数 |

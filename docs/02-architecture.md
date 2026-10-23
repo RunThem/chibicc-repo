@@ -232,17 +232,18 @@ chibicc_context_set_diagnostic(ctx, on_diagnostic, user);
 
 1. **一个 context 只能在一个线程里使用**, 不能两个线程同时调用同一个 context.
 2. **不同 context 可以在不同线程并存**.
-3. **同一线程可以嵌套调用公共入口**, 内部保存并恢复 active context.
+3. **同一线程可以嵌套调用公共入口**.
 
-实现方式是一个 `_Thread_local ChibiccContext *active_ctx`. 公共入口进入时把 `active_ctx` 指向自己的 context, 退出时恢复旧值. 库层约 400 个内部函数通过这个指针访问状态, 不显式穿参.
+实现方式是显式传参: 每个直接或传递地触碰 arena, 诊断, 格式化, 容器分配或 context 字段的内部函数都以 `ChibiccContext *ctx` 作为首参, 由公共入口把自己的 context 传下去. 库层没有线程局部指针, 也没有 `chibicc_ctx()` 访问器; `make check-context` (即 `test/context-audit.sh --strict`) 在源码与 `.a` 符号两层锁定这一点.
 
 这意味着:
 
 - 你不能在一个 context 上并发.
 - 你可以在线程 A 创建 context, 在线程 B 使用它, 只要不同时用.
-- 你可以在同一线程交替使用多个 context, 但同一时刻只有一个处于"活动"状态; 公共入口会自动切换.
+- 你可以在同一线程交替使用多个 context: 每次公共入口只认自己收到的那个指针.
+- 诊断回调里创建, 配置, 使用并释放另一个 context 是安全的; 外层 `raise_error` 用的是外层 context 自己的 frame, 不依赖任何全局状态.
 
-`chibicc_context_new` 和 `chibicc_context_free` 会修改 active 指针, 不要在没有同步的情况下跨线程调用.
+`chibicc_context_new`, `reset` 和 `free` 只操作自己的 context, 不修改任何全局指针.
 
 ## 2.8 如何选择层
 

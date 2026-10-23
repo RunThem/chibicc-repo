@@ -3,7 +3,7 @@
 ## 10.1 环境要求
 
 - C11 编译器. 开发和测试主要用 clang / gcc.
-- POSIX 基础环境: 文件系统, `FILE`, 线程局部存储.
+- POSIX 基础环境: 文件系统, `FILE`. 库层不使用线程局部存储; 测试套件用 pthread (`-pthread`).
 - GNU make.
 - 完整测试需要 Linux x86-64. 生成的目标代码是 x86-64 System V, 在 macOS ARM64 上不能汇编或运行.
 - 可选: Docker 或 OrbStack, 用于跑 amd64 容器里的完整闸门.
@@ -184,7 +184,7 @@ make test-stage2
 3. 用 `chibicc` 编译驱动器和测试.
 4. 跑全部测试, 包括 `test/library.sh` 链接 `stage2/libchibicc.a`.
 
-自举证明库代码能被自己编译. `setjmp`, `_Thread_local`, `va_copy` 都在这条路径上被验证.
+自举证明库代码能被自己编译. `setjmp` 与 `va_copy` 都在这条路径上被验证.
 
 Pratt 版本:
 

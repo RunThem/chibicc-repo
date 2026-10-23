@@ -1,7 +1,11 @@
 // The context object (PLAN L2/L3.1b): one context is one translation unit.
 // The context is opaque; its fields are an implementation detail.
 // Different contexts may live in different threads; one context must not
-// be used concurrently from two threads.
+// be used concurrently from two threads. Internally every function that
+// touches the arena, diagnostics, or context state takes the context as
+// its first parameter - there is no thread-local current context, so a
+// diagnostic callback may create, use, and free another context without
+// disturbing the outer call.
 
 #ifndef CHIBICC_CONTEXT_H
 #define CHIBICC_CONTEXT_H
