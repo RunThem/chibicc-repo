@@ -386,7 +386,7 @@ static long eval_const_expr(Token **rest, Token *tok) {
   convert_pp_tokens(chibicc_ctx(), expr);
 
   Token *rest2;
-  long val = const_expr(&rest2, expr);
+  long val = const_expr(chibicc_ctx(), &rest2, expr);
   if (rest2->kind != TK_EOF)
     error_tok(chibicc_ctx(), rest2, "extra token");
   return val;

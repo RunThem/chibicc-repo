@@ -53,7 +53,7 @@ static void set_obj_locals(Obj *fn, Obj *v) {
   fn->locals = v;
 }
 
-static int64_t eval(Node *node);
+static int64_t eval(ChibiccContext *ctx, Node *node);
 
 // The target an address constant resolves to. `name` is a symbol the
 // serializer can write down now; `node` is a [GNU] `&&label` whose
@@ -63,26 +63,26 @@ typedef struct {
   Node *node;
 } LabelRef;
 
-static int64_t eval2(Node *node, LabelRef *label);
-static int64_t eval_rval(Node *node, LabelRef *label);
-static double eval_double(Node *node);
-static bool is_const_expr(Node *node);
-static void layout_struct(Type *ty);
-static void layout_union(Type *ty);
-static void type_chain(Node *head);
-static void check_control_flow(Node *body);
-static void analyze_function(Obj *fn);
-static void resolve_node(Node *node);
-static void resolve_chain(Node *node);
-static void resolve_function(Node *node);
-static void resolve_enum_records(Node *recs);
-static void resolve_type_exprs(Type *ty);
-static void resolve_type(Type *ty);
-static void serialize_gvar(Node *node);
-static int attr_align(VarAttr *attr);
-static Obj *new_gvar(char *name, Type *ty);
-static Obj *new_lvar(char *name, Type *ty);
-static char *new_unique_name(void);
+static int64_t eval2(ChibiccContext *ctx, Node *node, LabelRef *label);
+static int64_t eval_rval(ChibiccContext *ctx, Node *node, LabelRef *label);
+static double eval_double(ChibiccContext *ctx, Node *node);
+static bool is_const_expr(ChibiccContext *ctx, Node *node);
+static void layout_struct(ChibiccContext *ctx, Type *ty);
+static void layout_union(ChibiccContext *ctx, Type *ty);
+static void type_chain(ChibiccContext *ctx, Node *head);
+static void check_control_flow(ChibiccContext *ctx, Node *body);
+static void analyze_function(ChibiccContext *ctx, Obj *fn);
+static void resolve_node(ChibiccContext *ctx, Node *node);
+static void resolve_chain(ChibiccContext *ctx, Node *node);
+static void resolve_function(ChibiccContext *ctx, Node *node);
+static void resolve_enum_records(ChibiccContext *ctx, Node *recs);
+static void resolve_type_exprs(ChibiccContext *ctx, Type *ty);
+static void resolve_type(ChibiccContext *ctx, Type *ty);
+static void serialize_gvar(ChibiccContext *ctx, Node *node);
+static int attr_align(ChibiccContext *ctx, VarAttr *attr);
+static Obj *new_gvar(ChibiccContext *ctx, char *name, Type *ty);
+static Obj *new_lvar(ChibiccContext *ctx, char *name, Type *ty);
+static char *new_unique_name(ChibiccContext *ctx);
 static Member *get_struct_member(Type *ty, Token *tok);
 
 // All local variable instances created for the function being analyzed
@@ -104,27 +104,27 @@ static Member *get_struct_member(Type *ty, Token *tok);
 // a numeric literal whose type is settled at birth rather than read off
 // a token. Exported (see chibicc.h): a consumer that builds a node needs
 // it to arrive typed, and these are the shapes it cannot build itself.
-Node *new_var_node(Obj *var, Token *tok) {
-  Node *node = new_node(chibicc_ctx(), ND_VAR, tok);
+Node *new_var_node(ChibiccContext *ctx, Obj *var, Token *tok) {
+  Node *node = new_node(ctx, ND_VAR, tok);
   node->var = var;
   return node;
 }
 
-Node *new_vla_ptr(Obj *var, Token *tok) {
-  Node *node = new_node(chibicc_ctx(), ND_VLA_PTR, tok);
+Node *new_vla_ptr(ChibiccContext *ctx, Obj *var, Token *tok) {
+  Node *node = new_node(ctx, ND_VLA_PTR, tok);
   node->var = var;
   return node;
 }
 
-Node *new_long(int64_t val, Token *tok) {
-  Node *node = new_node(chibicc_ctx(), ND_NUM, tok);
+Node *new_long(ChibiccContext *ctx, int64_t val, Token *tok) {
+  Node *node = new_node(ctx, ND_NUM, tok);
   node->val = val;
   node->ty = ty_long;
   return node;
 }
 
-Node *new_ulong(long val, Token *tok) {
-  Node *node = new_node(chibicc_ctx(), ND_NUM, tok);
+Node *new_ulong(ChibiccContext *ctx, long val, Token *tok) {
+  Node *node = new_node(ctx, ND_NUM, tok);
   node->val = val;
   node->ty = ty_ulong;
   return node;
@@ -137,14 +137,14 @@ Node *new_ulong(long val, Token *tok) {
 // marking the node is a single assignment. A cast the source wrote
 // arrives as an ND_CAST node from the parser instead, which leaves the
 // flag false, and add_type resolves rather than builds it.
-Node *new_cast(Node *expr, Type *ty) {
-  add_type(expr);
+Node *new_cast(ChibiccContext *ctx, Node *expr, Type *ty) {
+  add_type(ctx, expr);
 
-  Node *node = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Node));
+  Node *node = chibicc_arena_calloc(ctx, 1, sizeof(Node));
   node->kind = ND_CAST;
   node->tok = expr->tok;
   node->lhs = expr;
-  node->ty = copy_type(chibicc_ctx(), ty);
+  node->ty = copy_type(ctx, ty);
   node->is_implicit = true;
   return node;
 }
@@ -190,30 +190,29 @@ void sema_state_clear(ChibiccContext *ctx) {
 // stack lives in ChibiccContext (PLAN L2.5).
 //
 // A run starts with the fields cleared and a fresh root scope.
-static void sema_init(void) {
-  ChibiccContext *ctx = chibicc_ctx();
+static void sema_init(ChibiccContext *ctx) {
   sema_state_clear(ctx);
-  ctx->sema_scope = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Scope));
+  ctx->sema_scope = chibicc_arena_calloc(ctx, 1, sizeof(Scope));
 }
 
-#define scope (chibicc_ctx()->sema_scope)
-#define locals (chibicc_ctx()->locals)
-#define globals (chibicc_ctx()->globals)
-#define sema_fn (chibicc_ctx()->sema_fn)
-#define builtin_alloca (chibicc_ctx()->builtin_alloca)
+#define scope (ctx->sema_scope)
+#define locals (ctx->locals)
+#define globals (ctx->globals)
+#define sema_fn (ctx->sema_fn)
+#define builtin_alloca (ctx->builtin_alloca)
 
-static void enter_scope(void) {
-  Scope *sc = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Scope));
+static void enter_scope(ChibiccContext *ctx) {
+  Scope *sc = chibicc_arena_calloc(ctx, 1, sizeof(Scope));
   sc->next = scope;
   scope = sc;
 }
 
-static void leave_scope(void) {
+static void leave_scope(ChibiccContext *ctx) {
   scope = scope->next;
 }
 
 // Find a variable by name.
-static VarScope *find_var(Token *tok) {
+static VarScope *find_var(ChibiccContext *ctx, Token *tok) {
   for (Scope *sc = scope; sc; sc = sc->next) {
     VarScope *sc2 = hashmap_get2(&sc->vars, tok->loc, tok->len);
     if (sc2)
@@ -222,21 +221,21 @@ static VarScope *find_var(Token *tok) {
   return NULL;
 }
 
-static VarScope *push_scope(char *name) {
-  VarScope *sc = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(VarScope));
-  hashmap_put(chibicc_ctx(), &scope->vars, name, sc);
+static VarScope *push_scope(ChibiccContext *ctx, char *name) {
+  VarScope *sc = chibicc_arena_calloc(ctx, 1, sizeof(VarScope));
+  hashmap_put(ctx, &scope->vars, name, sc);
   return sc;
 }
 
 // A block-scope declaration may not declare a void object. `tok` is the
 // position of the declaration, anchored exactly as the parser used to.
-static void check_declared_void(Token *tok, Type *ty) {
+static void check_declared_void(ChibiccContext *ctx, Token *tok, Type *ty) {
   if (ty->kind == TY_VOID)
-    error_tok(chibicc_ctx(), tok, "variable declared void");
+    error_tok(ctx, tok, "variable declared void");
 }
 
 // Looks up a function in the file scope.
-static Obj *find_func(char *name) {
+static Obj *find_func(ChibiccContext *ctx, char *name) {
   Scope *sc = scope;
   while (sc->next)
     sc = sc->next;
@@ -250,9 +249,9 @@ static Obj *find_func(char *name) {
 // Declares a function at file scope, or checks a redeclaration against
 // the object declared before. `tok` is the token following the
 // declarator and `is_definition` says whether a body follows.
-static Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
+static Obj *declare_function(ChibiccContext *ctx, char *name, Type *ty, VarAttr *attr, Token *tok,
                              bool is_definition) {
-  Obj *fn = find_func(name);
+  Obj *fn = find_func(ctx, name);
 
   if (fn) {
     // Redeclaration. The first check is unreachable in the current
@@ -260,14 +259,14 @@ static Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
     // fn->is_function is always true here (the diagnostic lock
     // leaves it uncovered for exactly that reason).
     if (!fn->is_function)
-      error_tok(chibicc_ctx(), tok, "redeclared as a different kind of symbol");
+      error_tok(ctx, tok, "redeclared as a different kind of symbol");
     if (fn->is_definition && is_definition)
-      error_tok(chibicc_ctx(), tok, "redefinition of %s", name);
+      error_tok(ctx, tok, "redefinition of %s", name);
     if (!fn->is_static && attr->is_static)
-      error_tok(chibicc_ctx(), tok, "static declaration follows a non-static declaration");
+      error_tok(ctx, tok, "static declaration follows a non-static declaration");
     fn->is_definition = fn->is_definition || is_definition;
   } else {
-    fn = new_gvar(name, ty);
+    fn = new_gvar(ctx, name, ty);
     fn->is_function = true;
     fn->is_definition = is_definition;
     fn->is_static = attr->is_static || (attr->is_inline && !attr->is_extern);
@@ -283,14 +282,14 @@ static Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
 // annotated and checked (a label value can live outside the statement
 // tree, in a block-scope static initializer, which only the
 // annotation pass reaches - see add_type's ND_LABEL_VAL case).
-#define gotos (chibicc_ctx()->gotos)
-#define labels (chibicc_ctx()->labels)
+#define gotos (ctx->gotos)
+#define labels (ctx->labels)
 
 // The pairing check: every goto and label value must name a label of
 // the same function. Gotos may refer to a label that appears later,
 // so this runs once the whole body has been checked. The matched name
 // is written by codegen's shaping pass, which is what allocates it.
-static void check_labels(void) {
+static void check_labels(ChibiccContext *ctx) {
   for (int i = 0; i < gotos.len; i++) {
     Node *x = gotos.data[i];
     bool found = false;
@@ -300,7 +299,7 @@ static void check_labels(void) {
         break;
       }
     if (!found)
-      error_tok(chibicc_ctx(), x->tok->next, "use of undeclared label");
+      error_tok(ctx, x->tok->next, "use of undeclared label");
   }
 }
 
@@ -312,37 +311,37 @@ static void check_labels(void) {
 // nesting the checks need (a break binds to the innermost loop or
 // switch, a continue to the innermost loop, a case to the innermost
 // switch - existence is all each check asks). It writes no names.
-#define loop_depth (chibicc_ctx()->loop_depth)
-#define switch_depth (chibicc_ctx()->switch_depth)
+#define loop_depth (ctx->loop_depth)
+#define switch_depth (ctx->switch_depth)
 
-static void check_node(Node *node);
+static void check_node(ChibiccContext *ctx, Node *node);
 
-static void check_chain(Node *node) {
+static void check_chain(ChibiccContext *ctx, Node *node) {
   for (Node *n = node; n; n = n->next)
-    check_node(n);
+    check_node(ctx, n);
 }
 
 // Descends every subtree a node owns, statements and expressions alike:
 // a break can sit in a statement expression, which is an expression
 // node holding a statement chain.
-static void check_children(Node *node) {
-  check_node(node->lhs);
-  check_node(node->rhs);
-  check_node(node->cond);
-  check_node(node->then);
-  check_node(node->els);
-  check_node(node->init);
-  check_node(node->inc);
-  check_chain(node->body);
-  check_chain(node->args);
-  check_node(node->cas_addr);
-  check_node(node->cas_old);
-  check_node(node->cas_new);
+static void check_children(ChibiccContext *ctx, Node *node) {
+  check_node(ctx, node->lhs);
+  check_node(ctx, node->rhs);
+  check_node(ctx, node->cond);
+  check_node(ctx, node->then);
+  check_node(ctx, node->els);
+  check_node(ctx, node->init);
+  check_node(ctx, node->inc);
+  check_chain(ctx, node->body);
+  check_chain(ctx, node->args);
+  check_node(ctx, node->cas_addr);
+  check_node(ctx, node->cas_old);
+  check_node(ctx, node->cas_new);
 }
 
 // Pre-order, like the shaping pass it mirrors: the checks of a loop
 // fire inside it, the stray check of a case inside its switch.
-static void check_node(Node *node) {
+static void check_node(ChibiccContext *ctx, Node *node) {
   if (!node)
     return;
 
@@ -351,33 +350,33 @@ static void check_node(Node *node) {
   case ND_DO:
   case ND_FOR:
     loop_depth++;
-    check_children(node);
+    check_children(ctx, node);
     loop_depth--;
     return;
   case ND_SWITCH:
     switch_depth++;
-    check_children(node);
+    check_children(ctx, node);
     switch_depth--;
     return;
   case ND_CASE:
     if (!switch_depth)
-      error_tok(chibicc_ctx(), node->tok, node->is_default ? "stray default" : "stray case");
-    check_node(node->lhs);
+      error_tok(ctx, node->tok, node->is_default ? "stray default" : "stray case");
+    check_node(ctx, node->lhs);
     return;
   case ND_BREAK:
     if (!loop_depth && !switch_depth)
-      error_tok(chibicc_ctx(), node->tok, "stray break");
+      error_tok(ctx, node->tok, "stray break");
     return;
   case ND_CONTINUE:
     if (!loop_depth)
-      error_tok(chibicc_ctx(), node->tok, "stray continue");
+      error_tok(ctx, node->tok, "stray continue");
     return;
   case ND_GOTO:
-    nodearray_push(chibicc_ctx(), &gotos, node);
+    nodearray_push(ctx, &gotos, node);
     return;
   case ND_LABEL:
-    nodearray_push(chibicc_ctx(), &labels, node);
-    check_node(node->lhs);
+    nodearray_push(ctx, &labels, node);
+    check_node(ctx, node->lhs);
     return;
   case ND_FUNCDEF:
     // A [GNU] nested definition: its own analysis ran when the record
@@ -387,25 +386,25 @@ static void check_node(Node *node) {
     // population, which its own resolution already handed to codegen.
     return;
   default:
-    check_children(node);
+    check_children(ctx, node);
     return;
   }
 }
 
-static void check_control_flow(Node *body) {
-  check_chain(body);
-  check_labels();
+static void check_control_flow(ChibiccContext *ctx, Node *body) {
+  check_chain(ctx, body);
+  check_labels(ctx);
 }
 
-static void mark_live(Obj *var) {
+static void mark_live(ChibiccContext *ctx, Obj *var) {
   if (!var->is_function || var->is_live)
     return;
   var->is_live = true;
 
   for (int i = 0; i < var->refs.len; i++) {
-    Obj *fn = find_func(var->refs.data[i]);
+    Obj *fn = find_func(ctx, var->refs.data[i]);
     if (fn)
-      mark_live(fn);
+      mark_live(ctx, fn);
   }
 }
 
@@ -414,14 +413,14 @@ static void mark_live(Obj *var) {
 // survives; a tentative definition that has a real definition to attach
 // to is dropped. The lookups are hash maps - a scan of the whole list per
 // tentative declaration made this quadratic (C6).
-static void scan_globals(void) {
+static void scan_globals(ChibiccContext *ctx) {
   char real_tag, kept_tag;
   HashMap reals = {};
   HashMap kept = {};
 
   for (Obj *var = globals; var; var = var->next)
     if (var->is_definition && !var->is_tentative)
-      hashmap_put(chibicc_ctx(), &reals, var->name, &real_tag);
+      hashmap_put(ctx, &reals, var->name, &real_tag);
 
   Obj head;
   Obj *cur = &head;
@@ -437,7 +436,7 @@ static void scan_globals(void) {
     if (hashmap_get(&reals, var->name) || hashmap_get(&kept, var->name))
       continue;
 
-    hashmap_put(chibicc_ctx(), &kept, var->name, &kept_tag);
+    hashmap_put(ctx, &kept, var->name, &kept_tag);
     cur = cur->next = var;
   }
 
@@ -447,12 +446,12 @@ static void scan_globals(void) {
 
 // Finishes the translated unit: marks the functions reachable from a
 // root live and drops the redundant tentative definitions.
-static void finalize_globals(void) {
+static void finalize_globals(ChibiccContext *ctx) {
   for (Obj *var = globals; var; var = var->next)
     if (var->is_root)
-      mark_live(var);
+      mark_live(ctx, var);
 
-  scan_globals();
+  scan_globals(ctx);
 }
 
 // Evaluates and registers a run of enum-constant declaration records.
@@ -461,7 +460,7 @@ static void finalize_globals(void) {
 // value continues the running value of the list, exactly as the old
 // on-the-spot evaluation did. Each record is consumed (ty_op cleared)
 // so that a later walk skips it.
-static void resolve_enum_records(Node *recs) {
+static void resolve_enum_records(ChibiccContext *ctx, Node *recs) {
   // The walk stops at the first record that is not an enum constant:
   // on the top-level and block chains the run is followed by whatever
   // declaration record comes next, which carries its own type payload.
@@ -479,16 +478,16 @@ static void resolve_enum_records(Node *recs) {
     int64_t val = 0;
     while (recs && recs->kind == ND_ENUM_CONST && recs->ty_op == ety) {
       if (recs->lhs) {
-        resolve_node(recs->lhs);
-        val = eval(recs->lhs);
+        resolve_node(ctx, recs->lhs);
+        val = eval(ctx, recs->lhs);
       }
       if (val < INT32_MIN || val > INT32_MAX)
-        error_tok(chibicc_ctx(), recs->lhs ? recs->lhs->tok : recs->tok,
+        error_tok(ctx, recs->lhs ? recs->lhs->tok : recs->tok,
                   "enum constant value is out of range for int");
       recs->val = val++;
       recs->ty_op = NULL;
 
-      VarScope *sc = push_scope(get_ident(chibicc_ctx(), recs->tok));
+      VarScope *sc = push_scope(ctx, get_ident(ctx, recs->tok));
       sc->enum_ty = ety;
       sc->enum_val = recs->val;
       recs = recs->next;
@@ -501,7 +500,7 @@ static void resolve_enum_records(Node *recs) {
 // dimension or operand is settled before the outer one wrapped in it -
 // the order the parser's own recursion gave. A record is cleared as it is
 // consumed, so calling this again costs nothing.
-static void resolve_type(Type *ty) {
+static void resolve_type(ChibiccContext *ctx, Type *ty) {
   if (!ty)
     return;
 
@@ -519,13 +518,13 @@ static void resolve_type(Type *ty) {
     // pending dimension or parameter types of its own.
     if (ty->base && ty->base->kind != TY_STRUCT &&
         ty->base->kind != TY_UNION)
-      resolve_type(ty->base);
+      resolve_type(ctx, ty->base);
     break;
   case TY_VLA:
-    resolve_type(ty->base);
+    resolve_type(ctx, ty->base);
     break;
   case TY_ARRAY:
-    resolve_type(ty->base);
+    resolve_type(ctx, ty->base);
     // An array the parser built on a not-yet-laid-out aggregate was
     // sized with placeholder values; recompute now that the element
     // type is complete. (A pending dimension recomputes below.)
@@ -548,28 +547,28 @@ static void resolve_type(Type *ty) {
     if (ty->layout_pending && ty->size >= 0) {
       ty->layout_pending = false;
       if (ty->kind == TY_STRUCT)
-        layout_struct(ty);
+        layout_struct(ctx, ty);
       else
-        layout_union(ty);
+        layout_union(ctx, ty);
     }
     break;
   case TY_FUNC:
     // Enum constants a parameter's declspec defined ride on the
     // function type; they become visible when the type is completed.
     if (ty->spec_decls) {
-      resolve_enum_records(ty->spec_decls);
+      resolve_enum_records(ctx, ty->spec_decls);
       ty->spec_decls = NULL;
     }
-    resolve_type(ty->return_ty);
+    resolve_type(ctx, ty->return_ty);
     for (Type *param = ty->params; param; param = param->next)
-      resolve_type(param);
+      resolve_type(ctx, param);
     break;
   default:
     break;
   }
 
   if (ty->align_expr) {
-    ty->align = (int) eval(ty->align_expr);
+    ty->align = (int) eval(ctx, ty->align_expr);
     ty->align_expr = NULL;
   }
 
@@ -581,8 +580,8 @@ static void resolve_type(Type *ty) {
     // the parser has already built the rest of the declarator's types on
     // top of it, and a per-parameter name already attached to this
     // record must survive the replacement (F1).
-    add_type(expr);
-    resolve_type(expr->ty);
+    add_type(ctx, expr);
+    resolve_type(ctx, expr->ty);
 
     Token *name = ty->name;
     Token *name_pos = ty->name_pos;
@@ -597,13 +596,13 @@ static void resolve_type(Type *ty) {
 
     // A dimension that is not a constant expression, like the base of a
     // VLA, gives a variable-length array.
-    if (ty->base->kind == TY_VLA || !is_const_expr(dim)) {
+    if (ty->base->kind == TY_VLA || !is_const_expr(ctx, dim)) {
       ty->kind = TY_VLA;
       ty->vla_len = dim;
       ty->size = 8;
       ty->align = 8;
     } else {
-      ty->array_len = (int) eval(dim);
+      ty->array_len = (int) eval(ctx, dim);
       ty->size = ty->base->size * ty->array_len;
       ty->align = ty->base->align;
     }
@@ -616,23 +615,23 @@ static void resolve_type(Type *ty) {
 // bound and the declaration records inside (a statement expression can
 // appear in a constant context) get declared, so that the evaluations
 // resolve_type performs afterwards find a complete picture.
-static void resolve_type_exprs(Type *ty) {
+static void resolve_type_exprs(ChibiccContext *ctx, Type *ty) {
   if (!ty)
     return;
 
   switch (ty->kind) {
   case TY_PTR:
   case TY_VLA:
-    resolve_type_exprs(ty->base);
+    resolve_type_exprs(ctx, ty->base);
     break;
   case TY_ARRAY:
-    resolve_type_exprs(ty->base);
-    resolve_node(ty->dim_len);
+    resolve_type_exprs(ctx, ty->base);
+    resolve_node(ctx, ty->dim_len);
     break;
   case TY_FUNC:
-    resolve_type_exprs(ty->return_ty);
+    resolve_type_exprs(ctx, ty->return_ty);
     for (Type *param = ty->params; param; param = param->next)
-      resolve_type_exprs(param);
+      resolve_type_exprs(ctx, param);
     break;
   case TY_STRUCT:
   case TY_UNION:
@@ -642,10 +641,10 @@ static void resolve_type_exprs(Type *ty) {
     if (ty->layout_pending) {
       ty->layout_pending = false;
       for (Member *mem = ty->members; mem; mem = mem->next) {
-        resolve_type_exprs(mem->ty);
-        resolve_node(mem->width_expr);
-        resolve_node(mem->align_expr);
-        resolve_type_exprs(mem->align_ty);
+        resolve_type_exprs(ctx, mem->ty);
+        resolve_node(ctx, mem->width_expr);
+        resolve_node(ctx, mem->align_expr);
+        resolve_type_exprs(ctx, mem->align_ty);
       }
       ty->layout_pending = true;
     }
@@ -654,8 +653,8 @@ static void resolve_type_exprs(Type *ty) {
     break;
   }
 
-  resolve_node(ty->align_expr);
-  resolve_node(ty->typeof_expr);
+  resolve_node(ctx, ty->align_expr);
+  resolve_node(ctx, ty->typeof_expr);
 }
 
 // The alignment a declaration's `_Alignas` asks for. The parser records
@@ -663,16 +662,16 @@ static void resolve_type_exprs(Type *ty) {
 // read once the type is complete, and the `_Alignas(expr)` one as a
 // constant expression to evaluate. The value is cached, because one
 // declaration declares several objects and each of them asks.
-static int attr_align(VarAttr *attr) {
+static int attr_align(ChibiccContext *ctx, VarAttr *attr) {
   if (!attr)
     return 0;
   if (attr->align_expr) {
-    attr->align = (int) eval(attr->align_expr);
+    attr->align = (int) eval(ctx, attr->align_expr);
     attr->align_expr = NULL;
     return attr->align;
   }
   if (attr->align_ty) {
-    resolve_type(attr->align_ty);
+    resolve_type(ctx, attr->align_ty);
     attr->align = attr->align_ty->align;
     attr->align_ty = NULL;
     return attr->align;
@@ -688,18 +687,18 @@ static int align_down(int n, int align) {
 // may still carry parser stashes (a dimension, a typeof operand), and
 // the `_Alignas` forms are settled here. A trailing incomplete-array
 // member becomes the zero-sized flexible array member.
-static void finalize_members(Type *ty) {
+static void finalize_members(ChibiccContext *ctx, Type *ty) {
   for (Member *mem = ty->members; mem; mem = mem->next) {
-    resolve_type_exprs(mem->ty);
-    resolve_type(mem->ty);
+    resolve_type_exprs(ctx, mem->ty);
+    resolve_type(ctx, mem->ty);
 
     if (mem->align_ty) {
-      resolve_type(mem->align_ty);
+      resolve_type(ctx, mem->align_ty);
       mem->align = mem->align_ty->align;
       mem->align_ty = NULL;
     }
     if (mem->align_expr) {
-      mem->align = (int) eval(mem->align_expr);
+      mem->align = (int) eval(ctx, mem->align_expr);
       mem->align_expr = NULL;
     }
     if (!mem->align)
@@ -713,7 +712,7 @@ static void finalize_members(Type *ty) {
   for (Member *mem = ty->members; mem; mem = mem->next)
     last = mem;
   if (last && last->ty->kind == TY_ARRAY && last->ty->array_len < 0) {
-    last->ty = array_of(chibicc_ctx(), last->ty->base, 0);
+    last->ty = array_of(ctx, last->ty->base, 0);
     ty->is_flexible = true;
   }
 }
@@ -721,7 +720,7 @@ static void finalize_members(Type *ty) {
 // Evaluate the recorded bitfield width expressions of a member list.
 // The parser records the width unevaluated; layout is where the value
 // is first needed.
-static void eval_bitfield_widths(Type *ty) {
+static void eval_bitfield_widths(ChibiccContext *ctx, Type *ty) {
   for (Member *mem = ty->members; mem; mem = mem->next) {
     if (mem->width_expr) {
       // C11 6.7.2.1p4: the width is a nonnegative integer constant
@@ -729,13 +728,13 @@ static void eval_bitfield_widths(Type *ty) {
       // The mask builders below shift by this value, so an unchecked
       // width is both UB and a silent miscompile.
       if (!is_integer(mem->ty))
-        error_tok(chibicc_ctx(), mem->tok, "bit-field has non-integer type");
+        error_tok(ctx, mem->tok, "bit-field has non-integer type");
 
-      int64_t width = eval(mem->width_expr);
+      int64_t width = eval(ctx, mem->width_expr);
       if (width < 0)
-        error_tok(chibicc_ctx(), mem->width_expr->tok, "negative width in bit-field");
+        error_tok(ctx, mem->width_expr->tok, "negative width in bit-field");
       if (width > mem->ty->size * 8)
-        error_tok(chibicc_ctx(), mem->width_expr->tok,
+        error_tok(ctx, mem->width_expr->tok,
                   "width of bit-field exceeds its type");
 
       mem->bit_width = width;
@@ -748,17 +747,17 @@ static void eval_bitfield_widths(Type *ty) {
 // and alignment. The parser builds the member list (the syntax shape)
 // and marks it complete; resolve_type calls this on first sight, and
 // nested aggregates are laid out inner-first by the resolve order.
-static void layout_struct(Type *ty) {
+static void layout_struct(ChibiccContext *ctx, Type *ty) {
   // An `aligned` attribute on the type is a constant expression the
   // parser recorded; it has to be settled before the offsets are.
-  resolve_type(ty);
+  resolve_type(ctx, ty);
 
   // Defensive: an incomplete type has no members to place.
   if (ty->size < 0)
     return;
 
-  finalize_members(ty);
-  eval_bitfield_widths(ty);
+  finalize_members(ctx, ty);
+  eval_bitfield_widths(ctx, ty);
 
   int bits = 0;
 
@@ -791,14 +790,14 @@ static void layout_struct(Type *ty) {
 
 // Unions need no member offsets (they are all zero), only the union
 // of the member sizes and the largest member alignment.
-static void layout_union(Type *ty) {
-  resolve_type(ty);
+static void layout_union(ChibiccContext *ctx, Type *ty) {
+  resolve_type(ctx, ty);
 
   if (ty->size < 0)
     return;
 
-  finalize_members(ty);
-  eval_bitfield_widths(ty);
+  finalize_members(ctx, ty);
+  eval_bitfield_widths(ctx, ty);
 
   for (Member *mem = ty->members; mem; mem = mem->next) {
     if (ty->align < mem->align)
@@ -811,9 +810,9 @@ static void layout_union(Type *ty) {
 
 // Binds an unresolved name. A variable or function reference becomes
 // ND_VAR; an enum constant becomes ND_NUM.
-static void bind_ident(Node *node) {
+static void bind_ident(ChibiccContext *ctx, Node *node) {
   Token *tok = node->tok;
-  VarScope *sc = find_var(tok);
+  VarScope *sc = find_var(ctx, tok);
   Obj *var = sc ? sc->var : NULL;
 
   if (var) {
@@ -821,7 +820,7 @@ static void bind_ident(Node *node) {
     // liveness analysis can tell which ones are actually needed.
     if (var->is_function) {
       if (sema_fn)
-        strarray_push(chibicc_ctx(), &sema_fn->refs, var->name);
+        strarray_push(ctx, &sema_fn->refs, var->name);
       else
         var->is_root = true;
     }
@@ -840,22 +839,22 @@ static void bind_ident(Node *node) {
   }
 
   if (equal(tok->next, "("))
-    error_tok(chibicc_ctx(), tok, "implicit declaration of a function");
-  error_tok(chibicc_ctx(), tok, "undefined variable");
+    error_tok(ctx, tok, "implicit declaration of a function");
+  error_tok(ctx, tok, "undefined variable");
 }
 
-static Obj *new_var(char *name, Type *ty) {
-  Obj *var = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Obj));
+static Obj *new_var(ChibiccContext *ctx, char *name, Type *ty) {
+  Obj *var = chibicc_arena_calloc(ctx, 1, sizeof(Obj));
   var->name = name;
   var->ty = ty;
-  resolve_type(ty);
+  resolve_type(ctx, ty);
   var->align = ty->align;
-  push_scope(name)->var = var;
+  push_scope(ctx, name)->var = var;
   return var;
 }
 
-static Obj *new_lvar(char *name, Type *ty) {
-  Obj *var = new_var(name, ty);
+static Obj *new_lvar(ChibiccContext *ctx, char *name, Type *ty) {
+  Obj *var = new_var(ctx, name, ty);
   var->is_local = true;
   var->next = locals;
   locals = var;
@@ -869,17 +868,17 @@ static Obj *new_lvar(char *name, Type *ty) {
 // keys its runtime size on, and a typedef'd VLA is shared by the
 // declarations that use it on purpose (A10.2), so it is returned as is;
 // its name slot stays unset.
-static Type *named_type(Type *ty, Token *name_tok) {
+static Type *named_type(ChibiccContext *ctx, Type *ty, Token *name_tok) {
   if (ty->kind == TY_VLA)
     return ty;
 
-  Type *copy = copy_type(chibicc_ctx(), ty);
+  Type *copy = copy_type(ctx, ty);
   copy->name = name_tok;
   return copy;
 }
 
-static Obj *new_gvar(char *name, Type *ty) {
-  Obj *var = new_var(name, ty);
+static Obj *new_gvar(ChibiccContext *ctx, char *name, Type *ty) {
+  Obj *var = new_var(ctx, name, ty);
   var->next = globals;
   var->is_static = true;
   var->is_definition = true;
@@ -891,8 +890,8 @@ static Obj *new_gvar(char *name, Type *ty) {
 // object, but it is not linked into the globals list: codegen never
 // emits it, and leaving it out keeps that list the plain result of the
 // current TU instead of something sema() has to detach afterwards.
-static Obj *new_builtin_gvar(char *name, Type *ty) {
-  Obj *var = new_var(name, ty);
+static Obj *new_builtin_gvar(ChibiccContext *ctx, char *name, Type *ty) {
+  Obj *var = new_var(ctx, name, ty);
   var->is_static = true;
   var->is_definition = true;
   return var;
@@ -911,34 +910,34 @@ static Obj *new_builtin_gvar(char *name, Type *ty) {
 // ".<digits>", so a prefix change shows up as a diff even when
 // only the numbering moved. A2.1 moves label allocation to codegen
 // against this same namespace (one counter), not a parallel one.
-#define unique_name_id (chibicc_ctx()->unique_name_id)
+#define unique_name_id (ctx->unique_name_id)
 
-static char *new_unique_name(void) {
-  return format(chibicc_ctx(), ".L..%d", unique_name_id++);
+static char *new_unique_name(ChibiccContext *ctx) {
+  return format(ctx, ".L..%d", unique_name_id++);
 }
 
 // Read-only peek at the counter: a consumer that allocates its own
 // `.L..%d` labels (codegen's shaping pass) continues from here.
-int unique_name_next(void) {
+int unique_name_next(ChibiccContext *ctx) {
   return unique_name_id;
 }
 
-static Obj *new_anon_gvar(Type *ty) {
-  return new_gvar(new_unique_name(), ty);
+static Obj *new_anon_gvar(ChibiccContext *ctx, Type *ty) {
+  return new_gvar(ctx, new_unique_name(ctx), ty);
 }
 
-static Obj *new_string_literal(char *p, Type *ty) {
-  Obj *var = new_anon_gvar(ty);
+static Obj *new_string_literal(ChibiccContext *ctx, char *p, Type *ty) {
+  Obj *var = new_anon_gvar(ctx, ty);
   var->init_data = p;
   return var;
 }
 
-static void create_param_lvars(Type *param) {
+static void create_param_lvars(ChibiccContext *ctx, Type *param) {
   if (param) {
-    create_param_lvars(param->next);
+    create_param_lvars(ctx, param->next);
     if (!param->name)
-      error_tok(chibicc_ctx(), param->name_pos, "parameter name omitted");
-    new_lvar(get_ident(chibicc_ctx(), param->name), param);
+      error_tok(ctx, param->name_pos, "parameter name omitted");
+    new_lvar(ctx, get_ident(ctx, param->name), param);
   }
 }
 
@@ -948,49 +947,49 @@ static void create_param_lvars(Type *param) {
 // __FUNCTION__ strings. The resolve pass calls this once it reaches the
 // function body, so that everything is created in the same order as
 // before.
-static void begin_function(Obj *fn, Type *ty) {
+static void begin_function(ChibiccContext *ctx, Obj *fn, Type *ty) {
   locals = NULL;
-  create_param_lvars(ty->params);
+  create_param_lvars(ctx, ty->params);
 
   // A buffer for a struct/union return value is passed
   // as the hidden first parameter.
   Type *rty = ty->return_ty;
   if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
-    new_lvar("", pointer_to(chibicc_ctx(), rty));
+    new_lvar(ctx, "", pointer_to(ctx, rty));
 
   fn->params = locals;
 
   if (ty->is_variadic)
-    fn->va_area = new_lvar("__va_area__", array_of(chibicc_ctx(), ty_char, 136));
-  fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(chibicc_ctx(), ty_char));
+    fn->va_area = new_lvar(ctx, "__va_area__", array_of(ctx, ty_char, 136));
+  fn->alloca_bottom = new_lvar(ctx, "__alloca_size__", pointer_to(ctx, ty_char));
 
   // [https://www.sigbus.info/n1570#6.4.2.2p1] "__func__" is
   // automatically defined as a local variable containing
   // the current function name.
-  push_scope("__func__")->var =
-    new_string_literal(fn->name, array_of(chibicc_ctx(), ty_char, strlen(fn->name) + 1));
+  push_scope(ctx, "__func__")->var =
+    new_string_literal(ctx, fn->name, array_of(ctx, ty_char, strlen(fn->name) + 1));
 
   // [GNU] __FUNCTION__ is yet another name of __func__.
-  push_scope("__FUNCTION__")->var =
-    new_string_literal(fn->name, array_of(chibicc_ctx(), ty_char, strlen(fn->name) + 1));
+  push_scope(ctx, "__FUNCTION__")->var =
+    new_string_literal(ctx, fn->name, array_of(ctx, ty_char, strlen(fn->name) + 1));
 }
 
-static void declare_builtin_functions(void) {
-  Type *ty = func_type(chibicc_ctx(), pointer_to(chibicc_ctx(), ty_void));
-  ty->params = copy_type(chibicc_ctx(), ty_int);
-  builtin_alloca = new_builtin_gvar("alloca", ty);
+static void declare_builtin_functions(ChibiccContext *ctx) {
+  Type *ty = func_type(ctx, pointer_to(ctx, ty_void));
+  ty->params = copy_type(ctx, ty_int);
+  builtin_alloca = new_builtin_gvar(ctx, "alloca", ty);
   builtin_alloca->is_definition = false;
 }
 
 // Build the `alloca(<size>)` call node for a VLA declaration. The call
 // arrives fully typed, so add_type skips it and codegen recognizes the
 // builtin by name.
-Node *new_alloca(Node *sz) {
-  Node *node = new_unary(chibicc_ctx(), ND_FUNCALL, new_var_node(builtin_alloca, sz->tok), sz->tok);
+Node *new_alloca(ChibiccContext *ctx, Node *sz) {
+  Node *node = new_unary(ctx, ND_FUNCALL, new_var_node(ctx, builtin_alloca, sz->tok), sz->tok);
   node->func_ty = builtin_alloca->ty;
   node->ty = builtin_alloca->ty->return_ty;
   node->args = sz;
-  add_type(sz);
+  add_type(ctx, sz);
   return node;
 }
 
@@ -1004,12 +1003,12 @@ Node *new_alloca(Node *sz) {
 //
 // Exported: this is how a consumer obtains a typed binary node, and with
 // it sema's conversion decisions, without re-implementing either.
-Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
-  add_type(lhs);
-  add_type(rhs);
-  usual_arith_conv(&lhs, &rhs);
+Node *new_arith(ChibiccContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
+  add_type(ctx, lhs);
+  add_type(ctx, rhs);
+  usual_arith_conv(ctx, &lhs, &rhs);
 
-  Node *node = new_binary(chibicc_ctx(), kind, lhs, rhs, tok);
+  Node *node = new_binary(ctx, kind, lhs, rhs, tok);
   node->ty = lhs->ty;
   return node;
 }
@@ -1021,13 +1020,13 @@ Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
 // recorded - a struct or union one tells the consumer to allocate the
 // buffer the call writes into. `tok` is the call's closing paren, where
 // the argument-count diagnostics are anchored.
-static void lower_funcall(Node *node, Token *tok) {
+static void lower_funcall(ChibiccContext *ctx, Node *node, Token *tok) {
   Node *fn = node->lhs;
   Type *ty = fn->ty;
 
   if (ty->kind != TY_FUNC &&
       (ty->kind != TY_PTR || ty->base->kind != TY_FUNC))
-    error_tok(chibicc_ctx(), fn->tok, "not a function");
+    error_tok(ctx, fn->tok, "not a function");
 
   if (ty->kind != TY_FUNC)
     ty = ty->base;
@@ -1040,19 +1039,19 @@ static void lower_funcall(Node *node, Token *tok) {
 
   for (Node *arg = node->args; arg;) {
     Node *next = arg->next;
-    add_type(arg);
+    add_type(ctx, arg);
 
     if (!param_ty && !ty->is_variadic)
-      error_tok(chibicc_ctx(), tok, "too many arguments");
+      error_tok(ctx, tok, "too many arguments");
 
     if (param_ty) {
       if (param_ty->kind != TY_STRUCT && param_ty->kind != TY_UNION)
-        arg = new_cast(arg, param_ty);
+        arg = new_cast(ctx, arg, param_ty);
       param_ty = param_ty->next;
     } else if (arg->ty->kind == TY_FLOAT) {
       // If parameter type is omitted (e.g. in "..."), float
       // arguments are promoted to double.
-      arg = new_cast(arg, ty_double);
+      arg = new_cast(ctx, arg, ty_double);
     }
 
     arg->next = NULL;
@@ -1061,7 +1060,7 @@ static void lower_funcall(Node *node, Token *tok) {
   }
 
   if (param_ty)
-    error_tok(chibicc_ctx(), tok, "too few arguments");
+    error_tok(ctx, tok, "too few arguments");
 
   node->args = head.next;
   node->ty = ty->return_ty;
@@ -1072,8 +1071,8 @@ static void lower_funcall(Node *node, Token *tok) {
   // here is the conclusion - the return type - which the pass reads.
 }
 
-static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
-  InitTree *init = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(InitTree));
+static InitTree *new_resolved_init(ChibiccContext *ctx, Type *ty, bool is_flexible) {
+  InitTree *init = chibicc_arena_calloc(ctx, 1, sizeof(InitTree));
   init->ty = ty;
 
   if (ty->kind == TY_ARRAY) {
@@ -1082,9 +1081,9 @@ static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
       return init;
     }
 
-    init->children = chibicc_arena_calloc(chibicc_ctx(), ty->array_len, sizeof(InitTree *));
+    init->children = chibicc_arena_calloc(ctx, ty->array_len, sizeof(InitTree *));
     for (int i = 0; i < ty->array_len; i++)
-      init->children[i] = new_resolved_init(ty->base, false);
+      init->children[i] = new_resolved_init(ctx, ty->base, false);
     return init;
   }
 
@@ -1094,16 +1093,16 @@ static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
     for (Member *mem = ty->members; mem; mem = mem->next)
       len++;
 
-    init->children = chibicc_arena_calloc(chibicc_ctx(), len, sizeof(InitTree *));
+    init->children = chibicc_arena_calloc(ctx, len, sizeof(InitTree *));
 
     for (Member *mem = ty->members; mem; mem = mem->next) {
       if (is_flexible && ty->is_flexible && !mem->next) {
-        InitTree *child = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(InitTree));
+        InitTree *child = chibicc_arena_calloc(ctx, 1, sizeof(InitTree));
         child->ty = mem->ty;
         child->is_flexible = true;
         init->children[mem->idx] = child;
       } else {
-        init->children[mem->idx] = new_resolved_init(mem->ty, false);
+        init->children[mem->idx] = new_resolved_init(ctx, mem->ty, false);
       }
     }
     return init;
@@ -1112,13 +1111,13 @@ static InitTree *new_resolved_init(Type *ty, bool is_flexible) {
   return init;
 }
 
-static Type *copy_struct_type(Type *ty) {
-  ty = copy_type(chibicc_ctx(), ty);
+static Type *copy_struct_type(ChibiccContext *ctx, Type *ty) {
+  ty = copy_type(ctx, ty);
 
   Member head = {};
   Member *cur = &head;
   for (Member *mem = ty->members; mem; mem = mem->next) {
-    Member *m = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Member));
+    Member *m = chibicc_arena_calloc(ctx, 1, sizeof(Member));
     *m = *mem;
     cur = cur->next = m;
   }
@@ -1128,25 +1127,25 @@ static Type *copy_struct_type(Type *ty) {
 }
 
 // Evaluate a recorded designator index expression.
-static int eval_desig_index(Node *expr) {
-  return eval(expr);
+static int eval_desig_index(ChibiccContext *ctx, Node *expr) {
+  return eval(ctx, expr);
 }
 
 // Evaluate an array designator and run its bounds checks against the
 // array being designated. Anchors mirror the old parse-time checks:
 // the begin bound reports at the token following the begin expression,
 // the end bound and the empty range at `]`.
-static void eval_array_desig(InitDesig *d, Type *ty, int *begin, int *end) {
-  *begin = eval_desig_index(d->begin);
+static void eval_array_desig(ChibiccContext *ctx, InitDesig *d, Type *ty, int *begin, int *end) {
+  *begin = eval_desig_index(ctx, d->begin);
   if (*begin >= ty->array_len)
-    error_tok(chibicc_ctx(), d->after_begin, "array designator index exceeds array bounds");
+    error_tok(ctx, d->after_begin, "array designator index exceeds array bounds");
 
   if (d->end) {
-    *end = eval_desig_index(d->end);
+    *end = eval_desig_index(ctx, d->end);
     if (*end >= ty->array_len)
-      error_tok(chibicc_ctx(), d->rbracket, "array designator index exceeds array bounds");
+      error_tok(ctx, d->rbracket, "array designator index exceeds array bounds");
     if (*end < *begin)
-      error_tok(chibicc_ctx(), d->rbracket, "array designator range [%d, %d] is empty", *begin, *end);
+      error_tok(ctx, d->rbracket, "array designator range [%d, %d] is empty", *begin, *end);
   } else {
     *end = *begin;
   }
@@ -1155,7 +1154,7 @@ static void eval_array_desig(InitDesig *d, Type *ty, int *begin, int *end) {
 // Find the member a `.name` designator refers to. If the name lives
 // inside an anonymous struct member, that (nameless) member is
 // returned and the caller re-applies the designator to its subtree.
-static Member *find_init_member(Type *ty, Token *name) {
+static Member *find_init_member(ChibiccContext *ctx, Type *ty, Token *name) {
   for (Member *mem = ty->members; mem; mem = mem->next) {
     // Anonymous struct or union member
     if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) &&
@@ -1175,21 +1174,21 @@ static Member *find_init_member(Type *ty, Token *name) {
       return mem;
   }
 
-  error_tok(chibicc_ctx(), name, "struct has no such member");
+  error_tok(ctx, name, "struct has no such member");
 }
 
 // Turn a recorded string literal into an expression node referencing
 // its anonymous global, which is what a string initializer for a
 // non-array target used to parse into.
-static Node *materialize_str(Initializer *rec) {
-  Node *node = new_node(chibicc_ctx(), ND_STRING, rec->str_tok);
-  add_type(node);
+static Node *materialize_str(ChibiccContext *ctx, Initializer *rec) {
+  Node *node = new_node(ctx, ND_STRING, rec->str_tok);
+  add_type(ctx, node);
   return node;
 }
 
 // Expand a string literal into the elements of a character array,
 // one character (of the element width) per element.
-static void resolve_string(Initializer *rec, InitTree *init) {
+static void resolve_string(ChibiccContext *ctx, Initializer *rec, InitTree *init) {
   Token *tok = rec->str_tok;
   int len = MIN(init->ty->array_len, tok->ty->array_len);
 
@@ -1197,19 +1196,19 @@ static void resolve_string(Initializer *rec, InitTree *init) {
   case 1: {
     char *str = tok->str;
     for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(chibicc_ctx(), str[i], tok);
+      init->children[i]->expr = new_num(ctx, str[i], tok);
     break;
   }
   case 2: {
     uint16_t *str = (uint16_t *)tok->str;
     for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(chibicc_ctx(), str[i], tok);
+      init->children[i]->expr = new_num(ctx, str[i], tok);
     break;
   }
   case 4: {
     uint32_t *str = (uint32_t *)tok->str;
     for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(chibicc_ctx(), str[i], tok);
+      init->children[i]->expr = new_num(ctx, str[i], tok);
     break;
   }
   default:
@@ -1217,88 +1216,88 @@ static void resolve_string(Initializer *rec, InitTree *init) {
   }
 }
 
-static void resolve_value(Initializer *rec, InitTree *init, InitItem **cursor);
-static void resolve_desig(InitTree *init, InitDesig *d, Initializer *rec, InitItem **cursor);
-static void resolve_array1(Initializer *rec, InitTree *init);
-static void resolve_array_cont(InitTree *init, int i, InitItem **cursor);
-static void resolve_struct1(Initializer *rec, InitTree *init);
-static void resolve_struct_cont(InitTree *init, Member *mem, InitItem **cursor);
-static void resolve_struct_first(InitTree *init, Member *mem, Initializer *rec, InitItem **cursor);
-static void resolve_union(Initializer *rec, InitTree *init, InitItem **cursor);
-static int count_flex_list(InitItem *items, Type *ty);
-static int count_flex(Initializer *rec, InitItem **cursor, Type *ty);
+static void resolve_value(ChibiccContext *ctx, Initializer *rec, InitTree *init, InitItem **cursor);
+static void resolve_desig(ChibiccContext *ctx, InitTree *init, InitDesig *d, Initializer *rec, InitItem **cursor);
+static void resolve_array1(ChibiccContext *ctx, Initializer *rec, InitTree *init);
+static void resolve_array_cont(ChibiccContext *ctx, InitTree *init, int i, InitItem **cursor);
+static void resolve_struct1(ChibiccContext *ctx, Initializer *rec, InitTree *init);
+static void resolve_struct_cont(ChibiccContext *ctx, InitTree *init, Member *mem, InitItem **cursor);
+static void resolve_struct_first(ChibiccContext *ctx, InitTree *init, Member *mem, Initializer *rec, InitItem **cursor);
+static void resolve_union(ChibiccContext *ctx, Initializer *rec, InitTree *init, InitItem **cursor);
+static int count_flex_list(ChibiccContext *ctx, InitItem *items, Type *ty);
+static int count_flex(ChibiccContext *ctx, Initializer *rec, InitItem **cursor, Type *ty);
 
 // Consume one braced-list item: apply its designator chain (if any)
 // and resolve its value. *cursor advances past the item and any
 // siblings the value consumes through brace elision.
-static void resolve_item(InitItem **cursor, InitTree *init) {
+static void resolve_item(ChibiccContext *ctx, InitItem **cursor, InitTree *init) {
   InitItem *it = *cursor;
   *cursor = it->next;
-  resolve_desig(init, it->desigs, it->init, cursor);
+  resolve_desig(ctx, init, it->desigs, it->init, cursor);
 }
 
 // Apply a designator chain to a resolved node, then its value. This
 // is the record-driven form of the old designation(): `[n]` moves
 // within an array, `.name` within a struct or union, and after a
 // struct member the following siblings continue with the next members.
-static void resolve_desig(InitTree *init, InitDesig *d, Initializer *rec, InitItem **cursor) {
+static void resolve_desig(ChibiccContext *ctx, InitTree *init, InitDesig *d, Initializer *rec, InitItem **cursor) {
   if (!d) {
-    resolve_value(rec, init, cursor);
+    resolve_value(ctx, rec, init, cursor);
     return;
   }
 
   if (!d->name) {
     if (init->ty->kind != TY_ARRAY)
-      error_tok(chibicc_ctx(), d->tok, "array index in non-array initializer");
+      error_tok(ctx, d->tok, "array index in non-array initializer");
 
     int begin, end;
-    eval_array_desig(d, init->ty, &begin, &end);
+    eval_array_desig(ctx, d, init->ty, &begin, &end);
 
     for (int j = begin; j <= end; j++)
-      resolve_desig(init->children[j], d->next, rec, cursor);
-    resolve_array_cont(init, begin + 1, cursor);
+      resolve_desig(ctx, init->children[j], d->next, rec, cursor);
+    resolve_array_cont(ctx, init, begin + 1, cursor);
     return;
   }
 
   if (init->ty->kind == TY_STRUCT) {
-    Member *mem = find_init_member(init->ty, d->name);
+    Member *mem = find_init_member(ctx, init->ty, d->name);
     if (!mem->name) {
       // Anonymous struct member: re-apply the designator to its subtree.
-      resolve_desig(init->children[mem->idx], d, rec, cursor);
+      resolve_desig(ctx, init->children[mem->idx], d, rec, cursor);
       return;
     }
-    resolve_desig(init->children[mem->idx], d->next, rec, cursor);
+    resolve_desig(ctx, init->children[mem->idx], d->next, rec, cursor);
     init->expr = NULL;
-    resolve_struct_cont(init, mem->next, cursor);
+    resolve_struct_cont(ctx, init, mem->next, cursor);
     return;
   }
 
   if (init->ty->kind == TY_UNION) {
-    Member *mem = find_init_member(init->ty, d->name);
+    Member *mem = find_init_member(ctx, init->ty, d->name);
     init->mem = mem;
     if (!mem->name) {
-      resolve_desig(init->children[mem->idx], d, rec, cursor);
+      resolve_desig(ctx, init->children[mem->idx], d, rec, cursor);
       return;
     }
-    resolve_desig(init->children[mem->idx], d->next, rec, cursor);
+    resolve_desig(ctx, init->children[mem->idx], d->next, rec, cursor);
     return;
   }
 
-  error_tok(chibicc_ctx(), d->tok, "field name not in struct or union initializer");
+  error_tok(ctx, d->tok, "field name not in struct or union initializer");
 }
 
 // Fill array elements from sibling items (brace-elision continuation
 // or post-designator continuation), stopping at a designated item or
 // when the items run out.
-static void resolve_array_cont(InitTree *init, int i, InitItem **cursor) {
+static void resolve_array_cont(ChibiccContext *ctx, InitTree *init, int i, InitItem **cursor) {
   for (; i < init->ty->array_len && *cursor && !(*cursor)->desigs; i++)
-    resolve_item(cursor, init->children[i]);
+    resolve_item(ctx, cursor, init->children[i]);
 }
 
 // Resolve a braced array initializer, designated items included.
 // Elements past the end of the array have no target; each one is
 // diagnosed and dropped (C11 6.7.9 constrains the excess).
-static void resolve_array1(Initializer *rec, InitTree *init) {
+static void resolve_array1(ChibiccContext *ctx, Initializer *rec, InitTree *init) {
   int i = 0;
   InitItem *cursor = rec->items;
 
@@ -1307,18 +1306,18 @@ static void resolve_array1(Initializer *rec, InitTree *init) {
 
     if (it->desigs && !it->desigs->name) {
       int begin, end;
-      eval_array_desig(it->desigs, init->ty, &begin, &end);
+      eval_array_desig(ctx, it->desigs, init->ty, &begin, &end);
       cursor = it->next;
       for (int j = begin; j <= end; j++)
-        resolve_desig(init->children[j], it->desigs->next, it->init, &cursor);
+        resolve_desig(ctx, init->children[j], it->desigs->next, it->init, &cursor);
       i = end + 1;
       continue;
     }
 
     if (i < init->ty->array_len) {
-      resolve_item(&cursor, init->children[i]);
+      resolve_item(ctx, &cursor, init->children[i]);
     } else {
-      warn_tok(chibicc_ctx(), it->init->tok, "excess elements in array initializer");
+      warn_tok(ctx, it->init->tok, "excess elements in array initializer");
       cursor = it->next;
     }
     i++;
@@ -1327,24 +1326,24 @@ static void resolve_array1(Initializer *rec, InitTree *init) {
 
 // Fill struct members from sibling items, stopping at a designated
 // item or when the items run out.
-static void resolve_struct_cont(InitTree *init, Member *mem, InitItem **cursor) {
+static void resolve_struct_cont(ChibiccContext *ctx, InitTree *init, Member *mem, InitItem **cursor) {
   for (; mem && *cursor && !(*cursor)->desigs; mem = mem->next)
-    resolve_item(cursor, init->children[mem->idx]);
+    resolve_item(ctx, cursor, init->children[mem->idx]);
 }
 
 // Brace-elision entry for structs: the expression a struct was
 // "initialized" with becomes the first member's initializer and the
 // siblings continue with the following members.
-static void resolve_struct_first(InitTree *init, Member *mem, Initializer *rec, InitItem **cursor) {
+static void resolve_struct_first(ChibiccContext *ctx, InitTree *init, Member *mem, Initializer *rec, InitItem **cursor) {
   if (mem) {
-    resolve_value(rec, init->children[mem->idx], cursor);
+    resolve_value(ctx, rec, init->children[mem->idx], cursor);
     mem = mem->next;
   }
-  resolve_struct_cont(init, mem, cursor);
+  resolve_struct_cont(ctx, init, mem, cursor);
 }
 
 // Resolve a braced struct initializer.
-static void resolve_struct1(Initializer *rec, InitTree *init) {
+static void resolve_struct1(ChibiccContext *ctx, Initializer *rec, InitTree *init) {
   Member *mem = init->ty->members;
   InitItem *cursor = rec->items;
 
@@ -1352,18 +1351,18 @@ static void resolve_struct1(Initializer *rec, InitTree *init) {
     InitItem *it = cursor;
 
     if (it->desigs && it->desigs->name) {
-      Member *m = find_init_member(init->ty, it->desigs->name);
+      Member *m = find_init_member(ctx, init->ty, it->desigs->name);
       cursor = it->next;
       if (m->name)
-        resolve_desig(init->children[m->idx], it->desigs->next, it->init, &cursor);
+        resolve_desig(ctx, init->children[m->idx], it->desigs->next, it->init, &cursor);
       else
-        resolve_desig(init->children[m->idx], it->desigs, it->init, &cursor);
+        resolve_desig(ctx, init->children[m->idx], it->desigs, it->init, &cursor);
       mem = m->next;
       continue;
     }
 
     if (mem) {
-      resolve_item(&cursor, init->children[mem->idx]);
+      resolve_item(ctx, &cursor, init->children[mem->idx]);
       mem = mem->next;
     } else {
       cursor = it->next;
@@ -1375,20 +1374,20 @@ static void resolve_struct1(Initializer *rec, InitTree *init) {
 // take only one initializer, and that initializes the first union
 // member by default. You can initialize another member using a
 // designated initializer.
-static void resolve_union(Initializer *rec, InitTree *init, InitItem **cursor) {
+static void resolve_union(ChibiccContext *ctx, Initializer *rec, InitTree *init, InitItem **cursor) {
   if (rec->kind == INIT_LIST) {
     InitItem *it = rec->items;
 
     if (it && it->desigs && it->desigs->name) {
-      Member *mem = find_init_member(init->ty, it->desigs->name);
+      Member *mem = find_init_member(ctx, init->ty, it->desigs->name);
       init->mem = mem;
       InitItem *next = it->next;
       if (mem->name)
-        resolve_desig(init->children[mem->idx], it->desigs->next, it->init, &next);
+        resolve_desig(ctx, init->children[mem->idx], it->desigs->next, it->init, &next);
       else
-        resolve_desig(init->children[mem->idx], it->desigs, it->init, &next);
+        resolve_desig(ctx, init->children[mem->idx], it->desigs, it->init, &next);
       if (next)
-        error_tok(chibicc_ctx(), next->comma_tok, "expected '}'");
+        error_tok(ctx, next->comma_tok, "expected '}'");
       return;
     }
 
@@ -1397,19 +1396,19 @@ static void resolve_union(Initializer *rec, InitTree *init, InitItem **cursor) {
       // The old parser dispatched on the closing brace here; only an
       // array first member came out of `{}` without an error.
       if (init->ty->members->ty->kind != TY_ARRAY)
-        error_tok(chibicc_ctx(), rec->tok->next, "expected an expression");
+        error_tok(ctx, rec->tok->next, "expected an expression");
       return;
     }
 
     InitItem *next = it->next;
-    resolve_desig(init->children[0], it->desigs, it->init, &next);
+    resolve_desig(ctx, init->children[0], it->desigs, it->init, &next);
     if (next)
-      error_tok(chibicc_ctx(), next->desigs ? next->desigs->tok : next->init->tok, "expected '}'");
+      error_tok(ctx, next->desigs ? next->desigs->tok : next->init->tok, "expected '}'");
     return;
   }
 
   init->mem = init->ty->members;
-  resolve_value(rec, init->children[0], cursor);
+  resolve_value(ctx, rec, init->children[0], cursor);
 }
 
 // Count the elements a flexible-array initializer will have so the
@@ -1417,21 +1416,21 @@ static void resolve_union(Initializer *rec, InitTree *init, InitItem **cursor) {
 // resolved against a throwaway tree, exactly like the old parser's
 // counting pass; designator bounds are not checked here (the build
 // pass checks them against the completed length).
-static int count_flex_list(InitItem *items, Type *ty) {
-  InitTree *dummy = new_resolved_init(ty->base, true);
+static int count_flex_list(ChibiccContext *ctx, InitItem *items, Type *ty) {
+  InitTree *dummy = new_resolved_init(ctx, ty->base, true);
   int i = 0, max = 0;
   InitItem *cursor = items;
 
   while (cursor) {
     InitItem *it = cursor;
     if (it->desigs && !it->desigs->name) {
-      i = eval_desig_index(it->desigs->begin);
+      i = eval_desig_index(ctx, it->desigs->begin);
       if (it->desigs->end)
-        i = eval_desig_index(it->desigs->end);
+        i = eval_desig_index(ctx, it->desigs->end);
       cursor = it->next;
-      resolve_desig(dummy, it->desigs->next, it->init, &cursor);
+      resolve_desig(ctx, dummy, it->desigs->next, it->init, &cursor);
     } else {
-      resolve_item(&cursor, dummy);
+      resolve_item(ctx, &cursor, dummy);
     }
     i++;
     max = MAX(max, i);
@@ -1441,24 +1440,24 @@ static int count_flex_list(InitItem *items, Type *ty) {
 
 // The brace-elision form of count_flex_list: the first value is the
 // record itself and the siblings follow it.
-static int count_flex(Initializer *rec, InitItem **cursor, Type *ty) {
-  InitTree *dummy = new_resolved_init(ty->base, true);
+static int count_flex(ChibiccContext *ctx, Initializer *rec, InitItem **cursor, Type *ty) {
+  InitTree *dummy = new_resolved_init(ctx, ty->base, true);
   int i = 0, max = 0;
 
-  resolve_value(rec, dummy, cursor);
+  resolve_value(ctx, rec, dummy, cursor);
   i++;
   max = MAX(max, i);
 
   while (*cursor) {
     InitItem *it = *cursor;
     if (it->desigs && !it->desigs->name) {
-      i = eval_desig_index(it->desigs->begin);
+      i = eval_desig_index(ctx, it->desigs->begin);
       if (it->desigs->end)
-        i = eval_desig_index(it->desigs->end);
+        i = eval_desig_index(ctx, it->desigs->end);
       *cursor = it->next;
-      resolve_desig(dummy, it->desigs->next, it->init, cursor);
+      resolve_desig(ctx, dummy, it->desigs->next, it->init, cursor);
     } else {
-      resolve_item(cursor, dummy);
+      resolve_item(ctx, cursor, dummy);
     }
     i++;
     max = MAX(max, i);
@@ -1467,13 +1466,13 @@ static int count_flex(Initializer *rec, InitItem **cursor, Type *ty) {
 }
 
 // Resolve one initializer record against its target slot.
-static void resolve_value(Initializer *rec, InitTree *init, InitItem **cursor) {
+static void resolve_value(ChibiccContext *ctx, Initializer *rec, InitTree *init, InitItem **cursor) {
   Type *ty = init->ty;
 
   if (ty->kind == TY_ARRAY && rec->kind == INIT_STR) {
     if (init->is_flexible)
-      *init = *new_resolved_init(array_of(chibicc_ctx(), ty->base, rec->str_tok->ty->array_len), false);
-    resolve_string(rec, init);
+      *init = *new_resolved_init(ctx, array_of(ctx, ty->base, rec->str_tok->ty->array_len), false);
+    resolve_string(ctx, rec, init);
     return;
   }
 
@@ -1482,43 +1481,43 @@ static void resolve_value(Initializer *rec, InitTree *init, InitItem **cursor) {
       // The counting pass walks the siblings without consuming them;
       // the build pass below resolves them for real.
       InitItem *save = *cursor;
-      int len = (rec->kind == INIT_LIST) ? count_flex_list(rec->items, ty)
-                                         : count_flex(rec, cursor, ty);
+      int len = (rec->kind == INIT_LIST) ? count_flex_list(ctx, rec->items, ty)
+                                         : count_flex(ctx, rec, cursor, ty);
       *cursor = save;
-      *init = *new_resolved_init(array_of(chibicc_ctx(), ty->base, len), false);
+      *init = *new_resolved_init(ctx, array_of(ctx, ty->base, len), false);
     }
 
     if (rec->kind == INIT_LIST) {
-      resolve_array1(rec, init);
+      resolve_array1(ctx, rec, init);
     } else {
-      resolve_value(rec, init->children[0], cursor);
-      resolve_array_cont(init, 1, cursor);
+      resolve_value(ctx, rec, init->children[0], cursor);
+      resolve_array_cont(ctx, init, 1, cursor);
     }
     return;
   }
 
   if (ty->kind == TY_STRUCT) {
     if (rec->kind == INIT_LIST) {
-      resolve_struct1(rec, init);
+      resolve_struct1(ctx, rec, init);
       return;
     }
 
     // A struct can be initialized with another struct. E.g.
     // `struct T x = y;` where y is a variable of type `struct T`.
     // Handle that case first.
-    Node *expr = (rec->kind == INIT_STR) ? materialize_str(rec) : rec->expr;
-    add_type(expr);
+    Node *expr = (rec->kind == INIT_STR) ? materialize_str(ctx, rec) : rec->expr;
+    add_type(ctx, expr);
     if (expr->ty->kind == TY_STRUCT) {
       init->expr = expr;
       return;
     }
 
-    resolve_struct_first(init, ty->members, rec, cursor);
+    resolve_struct_first(ctx, init, ty->members, rec, cursor);
     return;
   }
 
   if (ty->kind == TY_UNION) {
-    resolve_union(rec, init, cursor);
+    resolve_union(ctx, rec, init, cursor);
     return;
   }
 
@@ -1528,17 +1527,17 @@ static void resolve_value(Initializer *rec, InitTree *init, InitItem **cursor) {
     // element, no designators.
     InitItem *it = rec->items;
     if (!it)
-      error_tok(chibicc_ctx(), rec->tok->next, "expected an expression");
+      error_tok(ctx, rec->tok->next, "expected an expression");
     if (it->desigs)
-      error_tok(chibicc_ctx(), it->desigs->tok, "expected an expression");
+      error_tok(ctx, it->desigs->tok, "expected an expression");
     InitItem *next = it->next;
-    resolve_value(it->init, init, &next);
+    resolve_value(ctx, it->init, init, &next);
     if (next)
-      error_tok(chibicc_ctx(), next->comma_tok, "expected '}'");
+      error_tok(ctx, next->comma_tok, "expected '}'");
     return;
   }
 
-  init->expr = (rec->kind == INIT_STR) ? materialize_str(rec) : rec->expr;
+  init->expr = (rec->kind == INIT_STR) ? materialize_str(ctx, rec) : rec->expr;
 }
 
 // Resolve a faithful initializer record against a declared type:
@@ -1546,13 +1545,13 @@ static void resolve_value(Initializer *rec, InitTree *init, InitItem **cursor) {
 // flexible arrays and complete flexible struct/union members. *new_ty
 // receives the completed type (it may differ from ty for flexible
 // arrays and flexible members).
-static InitTree *resolve_initializer(Initializer *rec, Type *ty, Type **new_ty) {
+static InitTree *resolve_initializer(ChibiccContext *ctx, Initializer *rec, Type *ty, Type **new_ty) {
   InitItem *cursor = NULL;
-  InitTree *init = new_resolved_init(ty, true);
-  resolve_value(rec, init, &cursor);
+  InitTree *init = new_resolved_init(ctx, ty, true);
+  resolve_value(ctx, rec, init, &cursor);
 
   if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && ty->is_flexible) {
-    ty = copy_struct_type(ty);
+    ty = copy_struct_type(ctx, ty);
 
     Member *mem = ty->members;
     while (mem->next)
@@ -1583,7 +1582,7 @@ static InitTree *resolve_initializer(Initializer *rec, Type *ty, Type **new_ty) 
 // node; sema resolves it and this lowering rebuilds the chain from the
 // result.
 
-static uint64_t read_buf(char *buf, int sz) {
+static uint64_t read_buf(ChibiccContext *ctx, char *buf, int sz) {
   if (sz == 1)
     return *buf;
   if (sz == 2)
@@ -1595,7 +1594,7 @@ static uint64_t read_buf(char *buf, int sz) {
   unreachable();
 }
 
-static void write_buf(char *buf, uint64_t val, int sz) {
+static void write_buf(ChibiccContext *ctx, char *buf, uint64_t val, int sz) {
   if (sz == 1)
     *buf = val;
   else if (sz == 2)
@@ -1609,11 +1608,11 @@ static void write_buf(char *buf, uint64_t val, int sz) {
 }
 
 static Relocation *
-write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset) {
+write_gvar_data(ChibiccContext *ctx, Relocation *cur, InitTree *init, Type *ty, char *buf, int offset) {
   if (ty->kind == TY_ARRAY) {
     int sz = ty->base->size;
     for (int i = 0; i < ty->array_len; i++)
-      cur = write_gvar_data(cur, init->children[i], ty->base, buf, offset + sz * i);
+      cur = write_gvar_data(ctx, cur, init->children[i], ty->base, buf, offset + sz * i);
     return cur;
   }
 
@@ -1625,14 +1624,14 @@ write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset
           break;
 
         char *loc = buf + offset + mem->offset;
-        uint64_t oldval = read_buf(loc, mem->ty->size);
-        uint64_t newval = eval(expr);
+        uint64_t oldval = read_buf(ctx, loc, mem->ty->size);
+        uint64_t newval = eval(ctx, expr);
         uint64_t mask = mem->bit_width == 64 ? ~0ULL
                                              : (1ULL << mem->bit_width) - 1;
         uint64_t combined = oldval | ((newval & mask) << mem->bit_offset);
-        write_buf(loc, combined, mem->ty->size);
+        write_buf(ctx, loc, combined, mem->ty->size);
       } else {
-        cur = write_gvar_data(cur, init->children[mem->idx], mem->ty, buf,
+        cur = write_gvar_data(ctx, cur, init->children[mem->idx], mem->ty, buf,
                               offset + mem->offset);
       }
     }
@@ -1642,7 +1641,7 @@ write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset
   if (ty->kind == TY_UNION) {
     if (!init->mem)
       return cur;
-    return write_gvar_data(cur, init->children[init->mem->idx],
+    return write_gvar_data(ctx, cur, init->children[init->mem->idx],
                            init->mem->ty, buf, offset);
   }
 
@@ -1650,24 +1649,24 @@ write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset
     return cur;
 
   if (ty->kind == TY_FLOAT) {
-    *(float *)(buf + offset) = eval_double(init->expr);
+    *(float *)(buf + offset) = eval_double(ctx, init->expr);
     return cur;
   }
 
   if (ty->kind == TY_DOUBLE) {
-    *(double *)(buf + offset) = eval_double(init->expr);
+    *(double *)(buf + offset) = eval_double(ctx, init->expr);
     return cur;
   }
 
   LabelRef label = {};
-  uint64_t val = eval2(init->expr, &label);
+  uint64_t val = eval2(ctx, init->expr, &label);
 
   if (!label.name && !label.node) {
-    write_buf(buf + offset, val, ty->size);
+    write_buf(ctx, buf + offset, val, ty->size);
     return cur;
   }
 
-  Relocation *rel = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Relocation));
+  Relocation *rel = chibicc_arena_calloc(ctx, 1, sizeof(Relocation));
   rel->offset = offset;
   rel->label = label.name;
   rel->label_node = label.node;
@@ -1678,10 +1677,10 @@ write_gvar_data(Relocation *cur, InitTree *init, Type *ty, char *buf, int offset
 
 // Serialize a resolved initializer tree into the .data image of a
 // global variable.
-static void gvar_init_data(Obj *var, InitTree *init) {
+static void gvar_init_data(ChibiccContext *ctx, Obj *var, InitTree *init) {
   Relocation head = {};
-  char *buf = chibicc_arena_calloc(chibicc_ctx(), 1, var->ty->size);
-  write_gvar_data(&head, init, var->ty, buf, 0);
+  char *buf = chibicc_arena_calloc(ctx, 1, var->ty->size);
+  write_gvar_data(ctx, &head, init, var->ty, buf, 0);
   var->init_data = buf;
   var->rel = head.next;
 }
@@ -1690,23 +1689,23 @@ static void gvar_init_data(Obj *var, InitTree *init) {
 // serialize it into the variable's .data image. Initializers for
 // global variables are evaluated at compile-time; it is a compile
 // error if an initializer list contains a non-constant expression.
-static void serialize_gvar(Node *node) {
+static void serialize_gvar(ChibiccContext *ctx, Node *node) {
   if (!node->decl_init)
     return;
 
-  gvar_init_data(node->var, node->init_resolved);
+  gvar_init_data(ctx, node->var, node->init_resolved);
   node->decl_init = NULL;
   node->init_resolved = NULL;
 }
 
-Type *get_common_type(Type *ty1, Type *ty2) {
+Type *get_common_type(ChibiccContext *ctx, Type *ty1, Type *ty2) {
   if (ty1->base)
-    return pointer_to(chibicc_ctx(), ty1->base);
+    return pointer_to(ctx, ty1->base);
 
   if (ty1->kind == TY_FUNC)
-    return pointer_to(chibicc_ctx(), ty1);
+    return pointer_to(ctx, ty1);
   if (ty2->kind == TY_FUNC)
-    return pointer_to(chibicc_ctx(), ty2);
+    return pointer_to(ctx, ty2);
 
   if (ty1->kind == TY_LDOUBLE || ty2->kind == TY_LDOUBLE)
     return ty_ldouble;
@@ -1735,10 +1734,10 @@ Type *get_common_type(Type *ty1, Type *ty2) {
 // be promoted to match with the other.
 //
 // This operation is called the "usual arithmetic conversion".
-void usual_arith_conv(Node **lhs, Node **rhs) {
-  Type *ty = get_common_type((*lhs)->ty, (*rhs)->ty);
-  *lhs = new_cast(*lhs, ty);
-  *rhs = new_cast(*rhs, ty);
+void usual_arith_conv(ChibiccContext *ctx, Node **lhs, Node **rhs) {
+  Type *ty = get_common_type(ctx, (*lhs)->ty, (*rhs)->ty);
+  *lhs = new_cast(ctx, *lhs, ty);
+  *rhs = new_cast(ctx, *rhs, ty);
 }
 
 // Find a struct member by name, descending into anonymous members.
@@ -1772,7 +1771,7 @@ static Member *get_struct_member(Type *ty, Token *tok) {
 // its own between the operand and the named member.
 //
 // `node` is rewritten in place because its parent points at it.
-static void resolve_member(Node *node) {
+static void resolve_member(ChibiccContext *ctx, Node *node) {
   Node *operand = node->lhs;
   Type *ty = operand->ty;
   Token *arrow = node->arrow_tok;
@@ -1781,29 +1780,29 @@ static void resolve_member(Node *node) {
   // make, anchored at the arrow.
   if (arrow) {
     if (ty->kind != TY_PTR || !ty->base)
-      error_tok(chibicc_ctx(), arrow, "invalid pointer dereference");
+      error_tok(ctx, arrow, "invalid pointer dereference");
     if (ty->base->kind == TY_VOID)
-      error_tok(chibicc_ctx(), arrow, "dereferencing a void pointer");
+      error_tok(ctx, arrow, "dereferencing a void pointer");
     if (ty->base->kind != TY_STRUCT && ty->base->kind != TY_UNION)
-      error_tok(chibicc_ctx(), arrow, "not a struct nor a union");
+      error_tok(ctx, arrow, "not a struct nor a union");
     ty = ty->base;
   } else if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) {
-    error_tok(chibicc_ctx(), operand->tok, "not a struct nor a union");
+    error_tok(ctx, operand->tok, "not a struct nor a union");
   }
 
   // The access needs the members placed. A bare `struct S {...};`
   // definition carries no declaration record, so nothing has laid the
   // type out yet when the first access arrives through a pointer.
-  resolve_type(ty);
+  resolve_type(ctx, ty);
 
   bool flattened = false;
   Node *cur = operand;
   for (;;) {
     Member *mem = get_struct_member(ty, node->tok);
     if (!mem)
-      error_tok(chibicc_ctx(), node->tok, "no such member");
+      error_tok(ctx, node->tok, "no such member");
 
-    Node *link = new_unary(chibicc_ctx(), ND_MEMBER, cur, node->tok);
+    Node *link = new_unary(ctx, ND_MEMBER, cur, node->tok);
     link->member = mem;
     if (arrow) {
       // The dereference belongs to the innermost link. The marker
@@ -1843,14 +1842,14 @@ static void resolve_member(Node *node) {
 // the node afresh. The other associations are typed for their checks
 // only - they are expressions in the source, and a real compiler reports
 // their errors too.
-static void select_generic(Node *node) {
-  add_type(node->cond);
+static void select_generic(ChibiccContext *ctx, Node *node) {
+  add_type(ctx, node->cond);
 
   Type *ty = node->cond->ty;
   if (ty->kind == TY_FUNC)
-    ty = pointer_to(chibicc_ctx(), ty);
+    ty = pointer_to(ctx, ty);
   else if (ty->kind == TY_ARRAY)
-    ty = pointer_to(chibicc_ctx(), ty->base);
+    ty = pointer_to(ctx, ty->base);
 
   Node *sel = NULL;
   for (Node *assoc = node->args; assoc; assoc = assoc->next) {
@@ -1858,19 +1857,19 @@ static void select_generic(Node *node) {
       if (!sel)
         sel = assoc->lhs;
     } else {
-      resolve_type(assoc->ty_op);
+      resolve_type(ctx, assoc->ty_op);
       if (is_compatible(ty, assoc->ty_op))
         sel = assoc->lhs;
     }
   }
 
   if (!sel)
-    error_tok(chibicc_ctx(), node->tok, "controlling expression type not compatible with"
+    error_tok(ctx, node->tok, "controlling expression type not compatible with"
               " any generic association type");
 
   for (Node *assoc = node->args; assoc; assoc = assoc->next)
     if (assoc->lhs != sel)
-      add_type(assoc->lhs);
+      add_type(ctx, assoc->lhs);
 
   // The conclusion of the selection: the result expression of the
   // association the controlling expression picked, recorded on the
@@ -1878,7 +1877,7 @@ static void select_generic(Node *node) {
   // the consumer reads the field rather than a replaced tree (PLAN
   // A9.1). The selection itself is typed here for the same reason
   // the unselected ones are above.
-  add_type(sel);
+  add_type(ctx, sel);
   node->generic_sel = sel;
   node->ty = sel->ty;
 }
@@ -1892,24 +1891,24 @@ static void select_generic(Node *node) {
 // serialized global data keeps its position in the emission (contract
 // 4), and a [GNU] nested function definition's body is analyzed at
 // this position of the enclosing body, as the parser used to.
-static void type_chain(Node *head) {
+static void type_chain(ChibiccContext *ctx, Node *head) {
   for (Node *n = head; n; n = n->next) {
     switch (n->kind) {
     case ND_TYPEDEF:
     case ND_ENUM_CONST:
       continue;
     case ND_GVAR_DECL:
-      serialize_gvar(n);
+      serialize_gvar(ctx, n);
       continue;
     case ND_FUNCDEF:
       if (n->body)
-        analyze_function(n->var);
+        analyze_function(ctx, n->var);
       continue;
     default:
       break;
     }
 
-    add_type(n);
+    add_type(ctx, n);
   }
 }
 
@@ -1919,12 +1918,12 @@ static void type_chain(Node *head) {
 // expansion that used to type them is the consumer's now, so the
 // annotation is explicit here, in the same position the old
 // expansion ran.
-static void annotate_init_exprs(InitTree *init) {
+static void annotate_init_exprs(ChibiccContext *ctx, InitTree *init) {
   if (!init)
     return;
 
   if (init->expr) {
-    add_type(init->expr);
+    add_type(ctx, init->expr);
     return;
   }
 
@@ -1933,12 +1932,12 @@ static void annotate_init_exprs(InitTree *init) {
 
   if (init->ty->kind == TY_ARRAY) {
     for (int i = 0; i < init->ty->array_len; i++)
-      annotate_init_exprs(init->children[i]);
+      annotate_init_exprs(ctx, init->children[i]);
     return;
   }
 
   for (Member *mem = init->ty->members; mem; mem = mem->next)
-    annotate_init_exprs(init->children[mem->idx]);
+    annotate_init_exprs(ctx, init->children[mem->idx]);
 }
 
 // The annotation pass: types a node and every subtree it owns, inserts
@@ -1953,7 +1952,7 @@ static void annotate_init_exprs(InitTree *init) {
 // once - which is also why a consumer must not run its own shaping over a
 // subtree twice: this guard stops a second *annotation*, not a second
 // *lowering* (PLAN contract 3(d)).
-void add_type(Node *node) {
+void add_type(ChibiccContext *ctx, Node *node) {
   if (!node || node->ty)
     return;
 
@@ -1966,7 +1965,7 @@ void add_type(Node *node) {
   // identity while being typed - a `&&label` joining the gotos list -
   // registers exactly once.
   if (node->kind == ND_GENERIC) {
-    select_generic(node);
+    select_generic(ctx, node);
     return;
   }
 
@@ -1986,17 +1985,17 @@ void add_type(Node *node) {
       stmt_expr_value = NULL;
   }
 
-  add_type(node->lhs);
-  add_type(node->rhs);
-  add_type(node->cond);
-  add_type(node->then);
-  add_type(node->els);
-  type_chain(node->init);
-  add_type(node->inc);
-  type_chain(node->body);
+  add_type(ctx, node->lhs);
+  add_type(ctx, node->rhs);
+  add_type(ctx, node->cond);
+  add_type(ctx, node->then);
+  add_type(ctx, node->els);
+  type_chain(ctx, node->init);
+  add_type(ctx, node->inc);
+  type_chain(ctx, node->body);
 
   for (Node *n = node->args; n; n = n->next)
-    add_type(n);
+    add_type(ctx, n);
 
   switch (node->kind) {
   case ND_NUM:
@@ -2015,7 +2014,7 @@ void add_type(Node *node) {
     Type *rt = node->rhs->ty;
     if (node->kind == ND_ADD) {
       if (lt->base && rt->base)
-        error_tok(chibicc_ctx(), node->tok, "invalid operands");
+        error_tok(ctx, node->tok, "invalid operands");
     } else {
       if (lt->base && rt->base) {
         // The difference itself is an element count, so it is typed
@@ -2025,9 +2024,9 @@ void add_type(Node *node) {
       }
       if (!((is_numeric(lt) && is_numeric(rt)) ||
             (lt->base && (lt->base->kind == TY_VLA || is_integer(rt)))))
-        error_tok(chibicc_ctx(), node->tok, "invalid operands");
+        error_tok(ctx, node->tok, "invalid operands");
     }
-    node->ty = get_common_type(lt, rt);
+    node->ty = get_common_type(ctx, lt, rt);
     return;
   }
   case ND_MUL:
@@ -2036,12 +2035,12 @@ void add_type(Node *node) {
   case ND_BITAND:
   case ND_BITOR:
   case ND_BITXOR:
-    usual_arith_conv(&node->lhs, &node->rhs);
+    usual_arith_conv(ctx, &node->lhs, &node->rhs);
     node->ty = node->lhs->ty;
     return;
   case ND_NEG: {
-    Type *ty = get_common_type(ty_int, node->lhs->ty);
-    node->lhs = new_cast(node->lhs, ty);
+    Type *ty = get_common_type(ctx, ty_int, node->lhs->ty);
+    node->lhs = new_cast(ctx, node->lhs, ty);
     node->ty = ty;
     return;
   }
@@ -2057,9 +2056,9 @@ void add_type(Node *node) {
       return;
     }
     if (node->lhs->ty->kind == TY_ARRAY)
-      error_tok(chibicc_ctx(), node->lhs->tok, "not an lvalue");
+      error_tok(ctx, node->lhs->tok, "not an lvalue");
     if (node->lhs->ty->kind != TY_STRUCT)
-      node->rhs = new_cast(node->rhs, node->lhs->ty);
+      node->rhs = new_cast(ctx, node->rhs, node->lhs->ty);
     node->ty = node->lhs->ty;
     return;
   case ND_INCDEC:
@@ -2078,18 +2077,18 @@ void add_type(Node *node) {
     // consumer's (PLAN A4.1). The conversion does not care which way
     // the operands face - the common type is symmetric - so the cast
     // nodes land on the same operands either way.
-    usual_arith_conv(&node->lhs, &node->rhs);
+    usual_arith_conv(ctx, &node->lhs, &node->rhs);
     node->ty = ty_int;
     return;
   case ND_EQ:
   case ND_NE:
-    usual_arith_conv(&node->lhs, &node->rhs);
+    usual_arith_conv(ctx, &node->lhs, &node->rhs);
     node->ty = ty_int;
     return;
   case ND_FUNCALL:
     // Lower the faithful call node: the callee check, the argument
     // conversions and the return buffer.
-    lower_funcall(node, node->tok);
+    lower_funcall(ctx, node, node->tok);
     return;
   case ND_NOT:
   case ND_LOGOR:
@@ -2103,7 +2102,7 @@ void add_type(Node *node) {
     // operands, so a narrow left operand makes the result `int`. The
     // result type is a conclusion consumers read (`sizeof`, `_Generic`),
     // not just an instruction-selection hint.
-    Type *ty = get_common_type(ty_int, node->lhs->ty);
+    Type *ty = get_common_type(ctx, ty_int, node->lhs->ty);
     node->ty = ty;
     return;
   }
@@ -2112,7 +2111,7 @@ void add_type(Node *node) {
     // the literal is typed (PLAN contract 4). The node keeps its kind
     // and points at the object: the consumers - the evaluator and
     // codegen's address generation - read `node->var`.
-    Obj *var = new_string_literal(node->tok->str, node->tok->ty);
+    Obj *var = new_string_literal(ctx, node->tok->str, node->tok->ty);
     node->var = var;
     node->ty = var->ty;
     return;
@@ -2121,7 +2120,7 @@ void add_type(Node *node) {
     // The resolve pass binds every name while the scope it was
     // written in is reconstructed; this is the safety net for nodes
     // the evaluator reaches directly.
-    bind_ident(node);
+    bind_ident(ctx, node);
     return;
   case ND_VAR:
   case ND_VLA_PTR:
@@ -2140,13 +2139,13 @@ void add_type(Node *node) {
     // that case - it is what identifies the type.
     Type *ty = node->ty_op;
     if (!ty) {
-      add_type(node->lhs);
+      add_type(ctx, node->lhs);
       ty = node->lhs->ty;
     }
     // The operand's type is read for its size, so the layout has to be
     // complete; a struct reached through a dereference is not placed by
     // the pointer rules alone.
-    resolve_type(ty);
+    resolve_type(ctx, ty);
 
     node->ty = ty_ulong;
     if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
@@ -2158,8 +2157,8 @@ void add_type(Node *node) {
   case ND_TYPES_COMPATIBLE:
     // `__builtin_types_compatible_p(T1, T2)`: a 0/1 conclusion in
     // `val`, typed like the literal it always folded to.
-    resolve_type(node->ty_op);
-    resolve_type(node->ty_op2);
+    resolve_type(ctx, node->ty_op);
+    resolve_type(ctx, node->ty_op2);
     node->val = is_compatible(node->ty_op, node->ty_op2);
     node->ty_op = NULL;
     node->ty_op2 = NULL;
@@ -2168,7 +2167,7 @@ void add_type(Node *node) {
   case ND_REG_CLASS: {
     // `__builtin_reg_class(T)`: integer or pointer, floating-point,
     // or anything else, as a 0/1/2 conclusion in `val`.
-    resolve_type(node->ty_op);
+    resolve_type(ctx, node->ty_op);
     Type *ty = node->ty_op;
     int64_t val = 2;
     if (is_integer(ty) || ty->kind == TY_PTR)
@@ -2194,13 +2193,13 @@ void add_type(Node *node) {
       if (ty->kind == TY_VOID || node->els->ty->kind == TY_VOID)
         node->ty = ty_void;
       else
-        node->ty = get_common_type(ty, node->els->ty);
+        node->ty = get_common_type(ctx, ty, node->els->ty);
       return;
     }
     if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {
       node->ty = ty_void;
     } else {
-      usual_arith_conv(&node->then, &node->els);
+      usual_arith_conv(ctx, &node->then, &node->els);
       node->ty = node->then->ty;
     }
     return;
@@ -2212,18 +2211,18 @@ void add_type(Node *node) {
     // builds itself (compound assignment, initializer designators)
     // carry their member already.
     if (!node->member)
-      resolve_member(node);
+      resolve_member(ctx, node);
     node->ty = node->member->ty;
     return;
   case ND_ADDR: {
     if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield)
-      error_tok(chibicc_ctx(), node->tok, "cannot take address of bitfield");
+      error_tok(ctx, node->tok, "cannot take address of bitfield");
 
     Type *ty = node->lhs->ty;
     if (ty->kind == TY_ARRAY)
-      node->ty = pointer_to(chibicc_ctx(), ty->base);
+      node->ty = pointer_to(ctx, ty->base);
     else
-      node->ty = pointer_to(chibicc_ctx(), ty);
+      node->ty = pointer_to(ctx, ty);
     return;
   }
   case ND_SUBSCRIPT: {
@@ -2237,15 +2236,15 @@ void add_type(Node *node) {
     Type *rt = node->rhs->ty;
 
     if (!(is_numeric(lt) && is_numeric(rt)) && !lt->base && !rt->base)
-      error_tok(chibicc_ctx(), node->tok, "invalid operands");
+      error_tok(ctx, node->tok, "invalid operands");
     if (lt->base && rt->base)
-      error_tok(chibicc_ctx(), node->tok, "invalid operands");
+      error_tok(ctx, node->tok, "invalid operands");
 
     Type *base = lt->base ? lt->base : rt->base;
     if (!base)
-      error_tok(chibicc_ctx(), node->tok, "invalid pointer dereference");
+      error_tok(ctx, node->tok, "invalid pointer dereference");
     if (base->kind == TY_VOID)
-      error_tok(chibicc_ctx(), node->tok, "dereferencing a void pointer");
+      error_tok(ctx, node->tok, "dereferencing a void pointer");
     node->ty = base;
     return;
   }
@@ -2261,15 +2260,15 @@ void add_type(Node *node) {
       return;
     }
     if (!node->lhs->ty->base)
-      error_tok(chibicc_ctx(), node->tok, "invalid pointer dereference");
+      error_tok(ctx, node->tok, "invalid pointer dereference");
     if (node->lhs->ty->base->kind == TY_VOID)
-      error_tok(chibicc_ctx(), node->tok, "dereferencing a void pointer");
+      error_tok(ctx, node->tok, "dereferencing a void pointer");
 
     node->ty = node->lhs->ty->base;
     // A struct or union read through a pointer is used by value from
     // here on (`*p = x`, a struct argument), and that needs its members
     // placed; the pointer rules deliberately leave the target alone.
-    resolve_type(node->ty);
+    resolve_type(ctx, node->ty);
     return;
   case ND_STMT_EXPR:
     if (stmt_expr_value) {
@@ -2287,30 +2286,30 @@ void add_type(Node *node) {
     // expression can live outside the statement tree - a block-scope
     // static initializer holds one, and only the evaluator reaches it.
     // The type annotation makes this run exactly once per node.
-    nodearray_push(chibicc_ctx(), &gotos, node);
-    node->ty = pointer_to(chibicc_ctx(), ty_void);
+    nodearray_push(ctx, &gotos, node);
+    node->ty = pointer_to(ctx, ty_void);
     return;
   case ND_CAS:
-    add_type(node->cas_addr);
-    add_type(node->cas_old);
-    add_type(node->cas_new);
+    add_type(ctx, node->cas_addr);
+    add_type(ctx, node->cas_old);
+    add_type(ctx, node->cas_new);
     node->ty = ty_bool;
 
     if (node->cas_addr->ty->kind != TY_PTR)
-      error_tok(chibicc_ctx(), node->cas_addr->tok, "pointer expected");
+      error_tok(ctx, node->cas_addr->tok, "pointer expected");
     if (node->cas_old->ty->kind != TY_PTR)
-      error_tok(chibicc_ctx(), node->cas_old->tok, "pointer expected");
+      error_tok(ctx, node->cas_old->tok, "pointer expected");
     return;
   case ND_EXCH:
     if (node->lhs->ty->kind != TY_PTR)
-      error_tok(chibicc_ctx(), node->lhs->tok, "pointer expected");
+      error_tok(ctx, node->lhs->tok, "pointer expected");
     node->ty = node->lhs->ty->base;
     return;
   case ND_CAST:
     // An explicit cast from the parser: the target type is the record
     // in ty_op and the operand has been typed by the recursion above.
     // Casts sema builds itself arrive fully typed and never get here.
-    resolve_type(node->ty_op);
+    resolve_type(ctx, node->ty_op);
     node->ty = node->ty_op;
     return;
   case ND_RETURN:
@@ -2319,7 +2318,7 @@ void add_type(Node *node) {
     if (node->lhs) {
       Type *ty = sema_fn->ty->return_ty;
       if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
-        node->lhs = new_cast(node->lhs, ty);
+        node->lhs = new_cast(ctx, node->lhs, ty);
     }
     return;
   case ND_DECL: {
@@ -2336,7 +2335,7 @@ void add_type(Node *node) {
 
     if (node->attr.is_static) {
       if (node->decl_init) {
-        gvar_init_data(var, node->init_resolved);
+        gvar_init_data(ctx, var, node->init_resolved);
         node->decl_init = NULL;
         node->init_resolved = NULL;
       }
@@ -2348,17 +2347,17 @@ void add_type(Node *node) {
       // the two standing side by side because whether a declaration is a
       // VLA one depends on the dimension being a constant expression;
       // the `=` is where that used to be reported.
-      error_tok(chibicc_ctx(), node->decl_init->eq_tok,
+      error_tok(ctx, node->decl_init->eq_tok,
                 "variable-sized object may not be initialized");
 
     if (var->ty->kind != TY_VLA) {
       // A declared object must have a complete, non-void type.
-      check_declared_void(tok, var->ty);
+      check_declared_void(ctx, tok, var->ty);
       if (var->ty->size < 0)
-        error_tok(chibicc_ctx(), node->name_tok, "variable has incomplete type");
+        error_tok(ctx, node->name_tok, "variable has incomplete type");
     }
 
-    annotate_init_exprs(node->init_resolved);
+    annotate_init_exprs(ctx, node->init_resolved);
     return;
   }
   case ND_COMPOUND_LITERAL: {
@@ -2372,10 +2371,10 @@ void add_type(Node *node) {
     // annotated here either way - nothing else reaches them.
     Obj *var = node->var;
 
-    annotate_init_exprs(node->init_resolved);
+    annotate_init_exprs(ctx, node->init_resolved);
 
     if (!var->is_local) {
-      gvar_init_data(var, node->init_resolved);
+      gvar_init_data(ctx, var, node->init_resolved);
       node->decl_init = NULL;
       node->init_resolved = NULL;
     }
@@ -2385,8 +2384,8 @@ void add_type(Node *node) {
   }
 }
 
-static int64_t eval(Node *node) {
-  return eval2(node, NULL);
+static int64_t eval(ChibiccContext *ctx, Node *node) {
+  return eval2(ctx, node, NULL);
 }
 
 // Evaluate a given node as a constant expression.
@@ -2405,11 +2404,11 @@ static int64_t eval(Node *node) {
 // (A6.1 onwards), the entry call stays - it still types the tree -
 // but the switch starts seeing faithful kinds, which the cases below
 // recognize alongside the lowered ones.
-static int64_t eval2(Node *node, LabelRef *label) {
-  add_type(node);
+static int64_t eval2(ChibiccContext *ctx, Node *node, LabelRef *label) {
+  add_type(ctx, node);
 
   if (is_flonum(node->ty))
-    return eval_double(node);
+    return eval_double(ctx, node);
 
   switch (node->kind) {
   case ND_ADD: {
@@ -2426,22 +2425,22 @@ static int64_t eval2(Node *node, LabelRef *label) {
     Type *lt = node->lhs->ty;
     Type *rt = node->rhs->ty;
     if (lt->base && rt->base)
-      error_tok(chibicc_ctx(), node->tok, "invalid operands");
+      error_tok(ctx, node->tok, "invalid operands");
     if (lt->base && !rt->base) {
       if (lt->base->kind == TY_VLA)
-        error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
-      return eval2(node->lhs, label) + eval(node->rhs) * lt->base->size;
+        error_tok(ctx, node->tok, "not a compile-time constant");
+      return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs) * lt->base->size;
     }
     if (!lt->base && rt->base) {
       if (rt->base->kind == TY_VLA)
-        error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+        error_tok(ctx, node->tok, "not a compile-time constant");
       // The pointer side goes through eval2 with the caller's label
       // and unscaled, the numeric side carries the scale - the same
       // split the canonicalized lowered form had, with the pointer
       // side still evaluated first.
-      return eval2(node->rhs, label) + eval2(node->lhs, label) * rt->base->size;
+      return eval2(ctx, node->rhs, label) + eval2(ctx, node->lhs, label) * rt->base->size;
     }
-    return eval2(node->lhs, label) + eval(node->rhs);
+    return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs);
   }
   case ND_SUB: {
     // Same for `ptr - num`: the scaling is this case's now. A
@@ -2454,86 +2453,86 @@ static int64_t eval2(Node *node, LabelRef *label) {
     Type *lt = node->lhs->ty;
     Type *rt = node->rhs->ty;
     if (lt->base && rt->base) {
-      int64_t lhs = eval2(node->lhs, NULL);
-      int64_t rhs = eval2(node->rhs, NULL);
+      int64_t lhs = eval2(ctx, node->lhs, NULL);
+      int64_t rhs = eval2(ctx, node->rhs, NULL);
       return (lhs - rhs) / lt->base->size;
     }
     if (rt->base && !lt->base)
-      error_tok(chibicc_ctx(), node->tok, "invalid operands");
+      error_tok(ctx, node->tok, "invalid operands");
     if (lt->base) {
       if (lt->base->kind == TY_VLA)
-        error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
-      return eval2(node->lhs, label) - eval(node->rhs) * lt->base->size;
+        error_tok(ctx, node->tok, "not a compile-time constant");
+      return eval2(ctx, node->lhs, label) - eval(ctx, node->rhs) * lt->base->size;
     }
-    return eval2(node->lhs, label) - eval(node->rhs);
+    return eval2(ctx, node->lhs, label) - eval(ctx, node->rhs);
   }
   case ND_MUL:
-    return eval(node->lhs) * eval(node->rhs);
+    return eval(ctx, node->lhs) * eval(ctx, node->rhs);
   case ND_DIV:
     if (node->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) / eval(node->rhs);
-    return eval(node->lhs) / eval(node->rhs);
+      return (uint64_t)eval(ctx, node->lhs) / eval(ctx, node->rhs);
+    return eval(ctx, node->lhs) / eval(ctx, node->rhs);
   case ND_NEG:
-    return -eval(node->lhs);
+    return -eval(ctx, node->lhs);
   case ND_MOD:
     if (node->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) % eval(node->rhs);
-    return eval(node->lhs) % eval(node->rhs);
+      return (uint64_t)eval(ctx, node->lhs) % eval(ctx, node->rhs);
+    return eval(ctx, node->lhs) % eval(ctx, node->rhs);
   case ND_BITAND:
-    return eval(node->lhs) & eval(node->rhs);
+    return eval(ctx, node->lhs) & eval(ctx, node->rhs);
   case ND_BITOR:
-    return eval(node->lhs) | eval(node->rhs);
+    return eval(ctx, node->lhs) | eval(ctx, node->rhs);
   case ND_BITXOR:
-    return eval(node->lhs) ^ eval(node->rhs);
+    return eval(ctx, node->lhs) ^ eval(ctx, node->rhs);
   case ND_SHL:
-    return eval(node->lhs) << eval(node->rhs);
+    return eval(ctx, node->lhs) << eval(ctx, node->rhs);
   case ND_SHR:
     if (node->ty->is_unsigned && node->ty->size == 8)
-      return (uint64_t)eval(node->lhs) >> eval(node->rhs);
-    return eval(node->lhs) >> eval(node->rhs);
+      return (uint64_t)eval(ctx, node->lhs) >> eval(ctx, node->rhs);
+    return eval(ctx, node->lhs) >> eval(ctx, node->rhs);
   case ND_EQ:
-    return eval(node->lhs) == eval(node->rhs);
+    return eval(ctx, node->lhs) == eval(ctx, node->rhs);
   case ND_NE:
-    return eval(node->lhs) != eval(node->rhs);
+    return eval(ctx, node->lhs) != eval(ctx, node->rhs);
   case ND_GT:
     // The faithful `>`: the lowering swapped the operands and turned
     // this into `<`, so the faithful comparison runs the other way
     // round, with the signedness taken from the operand the swap
     // would have moved to the left.
     if (node->rhs->ty->is_unsigned)
-      return (uint64_t)eval(node->rhs) < eval(node->lhs);
-    return eval(node->rhs) < eval(node->lhs);
+      return (uint64_t)eval(ctx, node->rhs) < eval(ctx, node->lhs);
+    return eval(ctx, node->rhs) < eval(ctx, node->lhs);
   case ND_GE:
     if (node->rhs->ty->is_unsigned)
-      return (uint64_t)eval(node->rhs) <= eval(node->lhs);
-    return eval(node->rhs) <= eval(node->lhs);
+      return (uint64_t)eval(ctx, node->rhs) <= eval(ctx, node->lhs);
+    return eval(ctx, node->rhs) <= eval(ctx, node->lhs);
   case ND_LT:
     if (node->lhs->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) < eval(node->rhs);
-    return eval(node->lhs) < eval(node->rhs);
+      return (uint64_t)eval(ctx, node->lhs) < eval(ctx, node->rhs);
+    return eval(ctx, node->lhs) < eval(ctx, node->rhs);
   case ND_LE:
     if (node->lhs->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) <= eval(node->rhs);
-    return eval(node->lhs) <= eval(node->rhs);
+      return (uint64_t)eval(ctx, node->lhs) <= eval(ctx, node->rhs);
+    return eval(ctx, node->lhs) <= eval(ctx, node->rhs);
   case ND_COND:
     // An elvis never becomes the comma form here: its value passes
     // through the temporary the lowering stores the operand in, so
     // it is a runtime value and not a constant.
     if (node->is_elvis)
       break;
-    return eval(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
+    return eval(ctx, node->cond) ? eval2(ctx, node->then, label) : eval2(ctx, node->els, label);
   case ND_COMMA:
-    return eval2(node->rhs, label);
+    return eval2(ctx, node->rhs, label);
   case ND_NOT:
-    return !eval(node->lhs);
+    return !eval(ctx, node->lhs);
   case ND_BITNOT:
-    return ~eval(node->lhs);
+    return ~eval(ctx, node->lhs);
   case ND_LOGAND:
-    return eval(node->lhs) && eval(node->rhs);
+    return eval(ctx, node->lhs) && eval(ctx, node->rhs);
   case ND_LOGOR:
-    return eval(node->lhs) || eval(node->rhs);
+    return eval(ctx, node->lhs) || eval(ctx, node->rhs);
   case ND_CAST: {
-    int64_t val = eval2(node->lhs, label);
+    int64_t val = eval2(ctx, node->lhs, label);
     if (is_integer(node->ty)) {
       switch (node->ty->size) {
       case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
@@ -2550,10 +2549,10 @@ static int64_t eval2(Node *node, LabelRef *label) {
     // operand the dissolved form left in the tree. Any other
     // dereference is a runtime value and falls to the error below.
     if (node->lhs->ty->kind == TY_FUNC)
-      return eval2(node->lhs, label);
+      return eval2(ctx, node->lhs, label);
     break;
   case ND_ADDR:
-    return eval_rval(node->lhs, label);
+    return eval_rval(ctx, node->lhs, label);
   case ND_LABEL_VAL:
     label->node = node;
     return 0;
@@ -2564,21 +2563,21 @@ static int64_t eval2(Node *node, LabelRef *label) {
     // A plain `.` member takes the address of its operand instead.
     if (node->arrow_tok) {
       if (!label)
-        error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+        error_tok(ctx, node->tok, "not a compile-time constant");
       if (node->ty->kind != TY_ARRAY)
-        error_tok(chibicc_ctx(), node->tok, "invalid initializer");
-      return eval2(node->lhs, label) + node->member->offset;
+        error_tok(ctx, node->tok, "invalid initializer");
+      return eval2(ctx, node->lhs, label) + node->member->offset;
     }
     if (!label)
-      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+      error_tok(ctx, node->tok, "not a compile-time constant");
     if (node->ty->kind != TY_ARRAY)
-      error_tok(chibicc_ctx(), node->tok, "invalid initializer");
-    return eval_rval(node->lhs, label) + node->member->offset;
+      error_tok(ctx, node->tok, "invalid initializer");
+    return eval_rval(ctx, node->lhs, label) + node->member->offset;
   case ND_VAR:
     if (!label)
-      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+      error_tok(ctx, node->tok, "not a compile-time constant");
     if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
-      error_tok(chibicc_ctx(), node->tok, "invalid initializer");
+      error_tok(ctx, node->tok, "invalid initializer");
     label->name = node->var->name;
     return 0;
   case ND_STRING:
@@ -2586,7 +2585,7 @@ static int64_t eval2(Node *node, LabelRef *label) {
     // is annotated; the node keeps its kind and points at the
     // object, so the address is read off the object directly.
     if (!label)
-      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+      error_tok(ctx, node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_COMPOUND_LITERAL:
@@ -2594,7 +2593,7 @@ static int64_t eval2(Node *node, LabelRef *label) {
     // annotation pass serialized; the consumer reads the object -
     // the node keeps its kind since A9.2, like a string.
     if (node->var->is_local)
-      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+      error_tok(ctx, node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_SIZEOF:
@@ -2604,7 +2603,7 @@ static int64_t eval2(Node *node, LabelRef *label) {
     // that one is not a constant; an alignment always is.
     Type *ty = node->ty_op ? node->ty_op : node->lhs->ty;
     if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
-      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+      error_tok(ctx, node->tok, "not a compile-time constant");
     return node->val;
   }
   case ND_TYPES_COMPATIBLE:
@@ -2614,23 +2613,23 @@ static int64_t eval2(Node *node, LabelRef *label) {
   case ND_GENERIC:
     // The conclusion of the selection: the result expression of the
     // association the controlling expression picked.
-    return eval2(node->generic_sel, label);
+    return eval2(ctx, node->generic_sel, label);
   case ND_NUM:
     return node->val;
   }
 
-  error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+  error_tok(ctx, node->tok, "not a compile-time constant");
 }
 
-static int64_t eval_rval(Node *node, LabelRef *label) {
+static int64_t eval_rval(ChibiccContext *ctx, Node *node, LabelRef *label) {
   switch (node->kind) {
   case ND_VAR:
     if (node->var->is_local)
-      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+      error_tok(ctx, node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_DEREF:
-    return eval2(node->lhs, label);
+    return eval2(ctx, node->lhs, label);
   case ND_STRING:
     // The literal's anonymous global, as above.
     label->name = node->var->name;
@@ -2639,7 +2638,7 @@ static int64_t eval_rval(Node *node, LabelRef *label) {
     // The file-scope literal's hidden global, as above: its address
     // is the object's, and a block-scope one is not a constant.
     if (node->var->is_local)
-      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+      error_tok(ctx, node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_SUBSCRIPT: {
@@ -2649,10 +2648,10 @@ static int64_t eval_rval(Node *node, LabelRef *label) {
     // the lowered `*(x+y)` evaluated to for that shape.
     Type *base = node->lhs->ty->base;
     if (base && base->kind == TY_VLA)
-      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+      error_tok(ctx, node->tok, "not a compile-time constant");
     if (!base)
-      return eval2(node->lhs, label) + eval(node->rhs);
-    return eval2(node->lhs, label) + eval(node->rhs) * base->size;
+      return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs);
+    return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs) * base->size;
   }
   case ND_MEMBER:
     // `p->x`: the operand is the pointer itself, so the member's
@@ -2661,11 +2660,11 @@ static int64_t eval_rval(Node *node, LabelRef *label) {
     // in the lowered form: the operand's own evaluation produces
     // whatever complaint is due.
     if (node->arrow_tok)
-      return eval2(node->lhs, label) + node->member->offset;
-    return eval_rval(node->lhs, label) + node->member->offset;
+      return eval2(ctx, node->lhs, label) + node->member->offset;
+    return eval_rval(ctx, node->lhs, label) + node->member->offset;
   }
 
-  error_tok(chibicc_ctx(), node->tok, "invalid initializer");
+  error_tok(ctx, node->tok, "invalid initializer");
 }
 
 // Annotates first, like eval2, so it walks whatever shapes the
@@ -2675,8 +2674,8 @@ static int64_t eval_rval(Node *node, LabelRef *label) {
 // sizeof case below has to answer false for a VLA operand by its own
 // kind, not because the fold hid it - otherwise a VLA silently
 // becomes a fixed array.
-static bool is_const_expr(Node *node) {
-  add_type(node);
+static bool is_const_expr(ChibiccContext *ctx, Node *node) {
+  add_type(ctx, node);
 
   switch (node->kind) {
   case ND_ADD:
@@ -2696,22 +2695,22 @@ static bool is_const_expr(Node *node) {
   case ND_GE:
   case ND_LOGAND:
   case ND_LOGOR:
-    return is_const_expr(node->lhs) && is_const_expr(node->rhs);
+    return is_const_expr(ctx, node->lhs) && is_const_expr(ctx, node->rhs);
   case ND_COND:
     // An elvis is a runtime value: the lowering stores the operand
     // in a temporary first.
     if (node->is_elvis)
       return false;
-    if (!is_const_expr(node->cond))
+    if (!is_const_expr(ctx, node->cond))
       return false;
-    return is_const_expr(eval(node->cond) ? node->then : node->els);
+    return is_const_expr(ctx, eval(ctx, node->cond) ? node->then : node->els);
   case ND_COMMA:
-    return is_const_expr(node->rhs);
+    return is_const_expr(ctx, node->rhs);
   case ND_NEG:
   case ND_NOT:
   case ND_BITNOT:
   case ND_CAST:
-    return is_const_expr(node->lhs);
+    return is_const_expr(ctx, node->lhs);
   case ND_SIZEOF:
   case ND_ALIGNOF: {
     // The alignment of a VLA is a constant; its size is not.
@@ -2722,7 +2721,7 @@ static bool is_const_expr(Node *node) {
   case ND_REG_CLASS:
     return true;
   case ND_GENERIC:
-    return is_const_expr(node->generic_sel);
+    return is_const_expr(ctx, node->generic_sel);
   case ND_NUM:
     return true;
   }
@@ -2730,53 +2729,53 @@ static bool is_const_expr(Node *node) {
   return false;
 }
 
-int64_t const_expr(Token **rest, Token *tok) {
-  Node *node = conditional(chibicc_ctx(), rest, tok);
-  return eval(node);
+int64_t const_expr(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = conditional(ctx, rest, tok);
+  return eval(ctx, node);
 }
 
 // Annotates first, like eval2 (see there): the shapes this switch
 // sees are whatever the annotation pass currently produces, and the
 // faithful cases below take over as the lowerings leave it.
-static double eval_double(Node *node) {
-  add_type(node);
+static double eval_double(ChibiccContext *ctx, Node *node) {
+  add_type(ctx, node);
 
   if (is_integer(node->ty)) {
     if (node->ty->is_unsigned)
-      return (unsigned long)eval(node);
-    return eval(node);
+      return (unsigned long)eval(ctx, node);
+    return eval(ctx, node);
   }
 
   switch (node->kind) {
   case ND_ADD:
-    return eval_double(node->lhs) + eval_double(node->rhs);
+    return eval_double(ctx, node->lhs) + eval_double(ctx, node->rhs);
   case ND_SUB:
-    return eval_double(node->lhs) - eval_double(node->rhs);
+    return eval_double(ctx, node->lhs) - eval_double(ctx, node->rhs);
   case ND_MUL:
-    return eval_double(node->lhs) * eval_double(node->rhs);
+    return eval_double(ctx, node->lhs) * eval_double(ctx, node->rhs);
   case ND_DIV:
-    return eval_double(node->lhs) / eval_double(node->rhs);
+    return eval_double(ctx, node->lhs) / eval_double(ctx, node->rhs);
   case ND_NEG:
-    return -eval_double(node->lhs);
+    return -eval_double(ctx, node->lhs);
   case ND_COND:
     // An elvis is a runtime value; see eval2.
     if (node->is_elvis)
       break;
-    return eval_double(node->cond) ? eval_double(node->then) : eval_double(node->els);
+    return eval_double(ctx, node->cond) ? eval_double(ctx, node->then) : eval_double(ctx, node->els);
   case ND_COMMA:
-    return eval_double(node->rhs);
+    return eval_double(ctx, node->rhs);
   case ND_GENERIC:
     // The selected association's expression.
-    return eval_double(node->generic_sel);
+    return eval_double(ctx, node->generic_sel);
   case ND_CAST:
     if (is_flonum(node->lhs->ty))
-      return eval_double(node->lhs);
-    return eval(node->lhs);
+      return eval_double(ctx, node->lhs);
+    return eval(ctx, node->lhs);
   case ND_NUM:
     return node->fval;
   }
 
-  error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
+  error_tok(ctx, node->tok, "not a compile-time constant");
 }
 
 //
@@ -2792,88 +2791,88 @@ static double eval_double(Node *node) {
 // literal owns a hidden local there and an anonymous global at file
 // scope, and this is what says which: the storage class follows from
 // where the resolve pass is, not from the depth of a scope stack.
-#define resolving_body (chibicc_ctx()->resolving_body)
+#define resolving_body (ctx->resolving_body)
 
 // Walks a faithful initializer record and resolves the expressions it
 // carries (values and designator bounds); resolution and lowering of
 // the record happen later, against the declared type.
-static void resolve_init_record(Initializer *rec) {
+static void resolve_init_record(ChibiccContext *ctx, Initializer *rec) {
   if (!rec)
     return;
 
   if (rec->kind == INIT_EXPR)
-    resolve_node(rec->expr);
+    resolve_node(ctx, rec->expr);
 
   for (InitItem *it = rec->items; it; it = it->next) {
     for (InitDesig *d = it->desigs; d; d = d->next) {
-      resolve_node(d->begin);
-      resolve_node(d->end);
+      resolve_node(ctx, d->begin);
+      resolve_node(ctx, d->end);
     }
-    resolve_init_record(it->init);
+    resolve_init_record(ctx, it->init);
   }
 }
 
-static void resolve_children(Node *node) {
-  resolve_node(node->lhs);
-  resolve_node(node->rhs);
-  resolve_node(node->cond);
-  resolve_node(node->then);
-  resolve_node(node->els);
-  resolve_chain(node->init);
-  resolve_node(node->inc);
-  resolve_chain(node->body);
-  resolve_chain(node->args);
-  resolve_node(node->cas_addr);
-  resolve_node(node->cas_old);
-  resolve_node(node->cas_new);
+static void resolve_children(ChibiccContext *ctx, Node *node) {
+  resolve_node(ctx, node->lhs);
+  resolve_node(ctx, node->rhs);
+  resolve_node(ctx, node->cond);
+  resolve_node(ctx, node->then);
+  resolve_node(ctx, node->els);
+  resolve_chain(ctx, node->init);
+  resolve_node(ctx, node->inc);
+  resolve_chain(ctx, node->body);
+  resolve_chain(ctx, node->args);
+  resolve_node(ctx, node->cas_addr);
+  resolve_node(ctx, node->cas_old);
+  resolve_node(ctx, node->cas_new);
 }
 
-static void resolve_node(Node *node) {
+static void resolve_node(ChibiccContext *ctx, Node *node) {
   if (!node)
     return;
 
   // Enum constants an expression-context type defined become visible
   // at this node's position.
   if (node->spec_decls) {
-    resolve_enum_records(node->spec_decls);
+    resolve_enum_records(ctx, node->spec_decls);
     node->spec_decls = NULL;
   }
 
   switch (node->kind) {
   case ND_TYPEDEF:
-    resolve_type_exprs(node->ty);
-    resolve_type(node->ty);
+    resolve_type_exprs(ctx, node->ty);
+    resolve_type(ctx, node->ty);
     return;
   case ND_ENUM_CONST:
     if (node->ty_op)
-      resolve_enum_records(node);
+      resolve_enum_records(ctx, node);
     return;
   case ND_BLOCK:
     if (node->is_scope_block)
-      enter_scope();
-    resolve_chain(node->body);
+      enter_scope(ctx);
+    resolve_chain(ctx, node->body);
     if (node->is_scope_block)
-      leave_scope();
+      leave_scope(ctx);
     return;
   case ND_STMT_EXPR:
-    enter_scope();
-    resolve_chain(node->body);
-    leave_scope();
+    enter_scope(ctx);
+    resolve_chain(ctx, node->body);
+    leave_scope(ctx);
     return;
   case ND_FOR:
     // The init declarations share their scope with the rest of the
     // statement, and the records the init chain may start with are
     // registered inside it.
-    enter_scope();
-    resolve_chain(node->init);
-    resolve_node(node->cond);
-    resolve_node(node->inc);
-    resolve_node(node->then);
-    leave_scope();
+    enter_scope(ctx);
+    resolve_chain(ctx, node->init);
+    resolve_node(ctx, node->cond);
+    resolve_node(ctx, node->inc);
+    resolve_node(ctx, node->then);
+    leave_scope(ctx);
     return;
   case ND_DECL: {
-    resolve_type_exprs(node->ty_op);
-    resolve_type(node->ty_op);
+    resolve_type_exprs(ctx, node->ty_op);
+    resolve_type(ctx, node->ty_op);
 
     if (node->attr.is_static) {
       // A block-scope static variable lives in the global data section
@@ -2882,20 +2881,20 @@ static void resolve_node(Node *node) {
       // declaration site reported it: at the `=` if there is an
       // initializer, at the declaration position otherwise.
       Token *anchor = node->decl_init ? node->decl_init->eq_tok : node->tok;
-      check_declared_void(anchor, node->ty_op);
-      node->var = new_anon_gvar(node->ty_op);
-      push_scope(get_ident(chibicc_ctx(), node->name_tok))->var = node->var;
+      check_declared_void(ctx, anchor, node->ty_op);
+      node->var = new_anon_gvar(ctx, node->ty_op);
+      push_scope(ctx, get_ident(ctx, node->name_tok))->var = node->var;
     } else {
-      node->var = new_lvar(get_ident(chibicc_ctx(), node->name_tok),
-                           named_type(node->ty_op, node->name_tok));
-      int align = attr_align(&node->attr);
+      node->var = new_lvar(ctx, get_ident(ctx, node->name_tok),
+                           named_type(ctx, node->ty_op, node->name_tok));
+      int align = attr_align(ctx, &node->attr);
       if (align)
         node->var->align = align;
     }
 
     // The declared name is visible to its own initializer, as it was
     // when the parser created the variable before parsing the `=`.
-    resolve_init_record(node->decl_init);
+    resolve_init_record(ctx, node->decl_init);
 
     // The initializer is resolved here, at the declaration's position:
     // resolution completes the declared type (an array sized by its
@@ -2904,51 +2903,51 @@ static void resolve_node(Node *node) {
     if (node->decl_init) {
       Type *new_ty;
       node->init_resolved =
-        resolve_initializer(node->decl_init, node->var->ty, &new_ty);
+        resolve_initializer(ctx, node->decl_init, node->var->ty, &new_ty);
       node->var->ty = new_ty;
     }
     return;
   }
   case ND_GVAR_DECL: {
-    resolve_type_exprs(node->ty_op);
-    resolve_type(node->ty_op);
+    resolve_type_exprs(ctx, node->ty_op);
+    resolve_type(ctx, node->ty_op);
 
-    Obj *var = new_gvar(get_ident(chibicc_ctx(), node->name_tok),
-                        named_type(node->ty_op, node->name_tok));
+    Obj *var = new_gvar(ctx, get_ident(ctx, node->name_tok),
+                        named_type(ctx, node->ty_op, node->name_tok));
     var->is_definition = !node->attr.is_extern;
     var->is_static = node->attr.is_static;
     var->is_tls = node->attr.is_tls;
-    int align = attr_align(&node->attr);
+    int align = attr_align(ctx, &node->attr);
     if (align)
       var->align = align;
     if (!node->decl_init && !node->attr.is_extern && !node->attr.is_tls)
       var->is_tentative = true;
     node->var = var;
 
-    resolve_init_record(node->decl_init);
+    resolve_init_record(ctx, node->decl_init);
     if (node->decl_init) {
       Type *new_ty;
-      node->init_resolved = resolve_initializer(node->decl_init, var->ty, &new_ty);
+      node->init_resolved = resolve_initializer(ctx, node->decl_init, var->ty, &new_ty);
       var->ty = new_ty;
     }
     return;
   }
   case ND_FUNCDEF:
-    resolve_function(node);
+    resolve_function(ctx, node);
     return;
   case ND_COMPOUND_LITERAL:
     // The hidden variable is created here, where the resolve context
     // says whether the literal lives in an anonymous global or on the
     // stack, and before the initializer record is walked.
-    resolve_type_exprs(node->ty_op);
-    resolve_type(node->ty_op);
-    node->var = resolving_body ? new_lvar("", node->ty_op)
-                               : new_anon_gvar(node->ty_op);
-    resolve_init_record(node->decl_init);
+    resolve_type_exprs(ctx, node->ty_op);
+    resolve_type(ctx, node->ty_op);
+    node->var = resolving_body ? new_lvar(ctx, "", node->ty_op)
+                               : new_anon_gvar(ctx, node->ty_op);
+    resolve_init_record(ctx, node->decl_init);
     if (node->decl_init) {
       Type *new_ty;
       node->init_resolved =
-        resolve_initializer(node->decl_init, node->var->ty, &new_ty);
+        resolve_initializer(ctx, node->decl_init, node->var->ty, &new_ty);
       node->var->ty = new_ty;
     }
     return;
@@ -2956,7 +2955,7 @@ static void resolve_node(Node *node) {
     // The literal becomes a reference to its anonymous global here, at
     // its source position, so the globals keep the declaration order
     // the single-pass parser produced.
-    Obj *var = new_string_literal(node->tok->str, node->tok->ty);
+    Obj *var = new_string_literal(ctx, node->tok->str, node->tok->ty);
     node->kind = ND_VAR;
     node->var = var;
     node->ty = var->ty;
@@ -2968,16 +2967,16 @@ static void resolve_node(Node *node) {
     // constant is not a syntax question. They are truncated to `int`,
     // as they were when the parser wrote `begin`/`end` on its way past
     // them. `:` is where the range check is anchored.
-    resolve_node(node->begin_expr);
-    resolve_node(node->end_expr);
+    resolve_node(ctx, node->begin_expr);
+    resolve_node(ctx, node->end_expr);
     if (node->begin_expr) {
-      int begin = (int) eval(node->begin_expr);
+      int begin = (int) eval(ctx, node->begin_expr);
       int end = begin;
 
       if (node->end_expr) {
-        end = (int) eval(node->end_expr);
+        end = (int) eval(ctx, node->end_expr);
         if (end < begin)
-          error_tok(chibicc_ctx(), node->colon_tok, "empty case range specified");
+          error_tok(ctx, node->colon_tok, "empty case range specified");
       }
 
       node->begin = begin;
@@ -2985,42 +2984,42 @@ static void resolve_node(Node *node) {
       node->begin_expr = NULL;
       node->end_expr = NULL;
     }
-    resolve_node(node->lhs);
+    resolve_node(ctx, node->lhs);
     return;
   case ND_IDENT:
     // Bind the name (variable, function or enum constant), rewriting
     // the node into the shape codegen understands.
-    bind_ident(node);
+    bind_ident(ctx, node);
     return;
   case ND_CAST:
-    resolve_type_exprs(node->ty_op);
-    resolve_type(node->ty_op);
+    resolve_type_exprs(ctx, node->ty_op);
+    resolve_type(ctx, node->ty_op);
     break;
   case ND_SIZEOF:
   case ND_ALIGNOF:
   case ND_REG_CLASS:
   case ND_GENERIC_ASSOC:
     if (node->ty_op) {
-      resolve_type_exprs(node->ty_op);
-      resolve_type(node->ty_op);
+      resolve_type_exprs(ctx, node->ty_op);
+      resolve_type(ctx, node->ty_op);
     }
     break;
   case ND_TYPES_COMPATIBLE:
-    resolve_type_exprs(node->ty_op);
-    resolve_type(node->ty_op);
-    resolve_type_exprs(node->ty_op2);
-    resolve_type(node->ty_op2);
+    resolve_type_exprs(ctx, node->ty_op);
+    resolve_type(ctx, node->ty_op);
+    resolve_type_exprs(ctx, node->ty_op2);
+    resolve_type(ctx, node->ty_op2);
     break;
   default:
     break;
   }
 
-  resolve_children(node);
+  resolve_children(ctx, node);
 }
 
-static void resolve_chain(Node *node) {
+static void resolve_chain(ChibiccContext *ctx, Node *node) {
   for (; node; node = node->next)
-    resolve_node(node);
+    resolve_node(ctx, node);
 }
 
 // Declares the function a record names (checking it against a previous
@@ -3028,13 +3027,13 @@ static void resolve_chain(Node *node) {
 // first, then the statements, with the scope stack the block structure
 // gives. The variable list is captured before the annotation pass adds
 // its temporaries; analyze_function splices those in afterwards.
-static void resolve_function(Node *node) {
+static void resolve_function(ChibiccContext *ctx, Node *node) {
   Type *ty = node->ty_op;
-  resolve_type_exprs(ty);
-  resolve_type(ty);
+  resolve_type_exprs(ctx, ty);
+  resolve_type(ctx, ty);
 
-  Obj *fn = declare_function(get_ident(chibicc_ctx(), node->name_tok),
-                             named_type(ty, node->name_tok), &node->attr,
+  Obj *fn = declare_function(ctx, get_ident(ctx, node->name_tok),
+                             named_type(ctx, ty, node->name_tok), &node->attr,
                              node->tok, node->body != NULL);
   node->var = fn;
 
@@ -3056,11 +3055,11 @@ static void resolve_function(Node *node) {
   sema_fn = fn;
   resolving_body = true;
 
-  enter_scope();
-  begin_function(fn, ty);
-  resolve_node(node->body);
+  enter_scope(ctx);
+  begin_function(ctx, fn, ty);
+  resolve_node(ctx, node->body);
   set_obj_locals(fn, locals);
-  leave_scope();
+  leave_scope(ctx);
 
   resolving_body = save_body;
   sema_fn = save_fn;
@@ -3072,7 +3071,7 @@ static void resolve_function(Node *node) {
 // collected on a fresh variable list and spliced in front of the ones
 // the resolve pass captured, so that the function's frame is complete
 // and no other function's list is polluted.
-static void splice_locals(Obj *fn) {
+static void splice_locals(ChibiccContext *ctx, Obj *fn) {
   Obj *pass2 = locals;
   if (pass2) {
     Obj *tail = pass2;
@@ -3087,22 +3086,22 @@ static void splice_locals(Obj *fn) {
 // parked in the context (PLAN L3.1b): they are a sema -> codegen
 // handoff, not a layer-3/4 field of Obj. The parameter is not named
 // `gotos` because sema.c aliases that name to the context slot.
-void sema_store_label_gotos(Obj *fn, NodeArray refs) {
-  LabelGotoList *l = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(LabelGotoList));
+void sema_store_label_gotos(ChibiccContext *ctx, Obj *fn, NodeArray refs) {
+  LabelGotoList *l = chibicc_arena_calloc(ctx, 1, sizeof(LabelGotoList));
   l->fn = fn;
   l->refs = refs;
-  l->next = chibicc_ctx()->label_gotos;
-  chibicc_ctx()->label_gotos = l;
+  l->next = ctx->label_gotos;
+  ctx->label_gotos = l;
 }
 
-NodeArray *sema_label_gotos(Obj *fn) {
-  for (LabelGotoList *l = chibicc_ctx()->label_gotos; l; l = l->next)
+NodeArray *sema_label_gotos(ChibiccContext *ctx, Obj *fn) {
+  for (LabelGotoList *l = ctx->label_gotos; l; l = l->next)
     if (l->fn == fn)
       return &l->refs;
   return NULL;
 }
 
-static void analyze_function(Obj *fn) {
+static void analyze_function(ChibiccContext *ctx, Obj *fn) {
   // The return conversions read the function being annotated, and a
   // nested definition's analysis runs from inside its host's, so the
   // context is saved and restored like the local list.
@@ -3110,18 +3109,18 @@ static void analyze_function(Obj *fn) {
   sema_fn = fn;
   Obj *save = locals;
   locals = NULL;
-  add_type(fn->body);
-  check_control_flow(fn->body);
+  add_type(ctx, fn->body);
+  check_control_flow(ctx, fn->body);
 
   // Hand the collected goto and label-value references to codegen's
   // shaping pass, which pairs them with the labels it allocates. The
   // label values that sit outside the statement tree (block-scope
   // static initializers) make this the only chain that reaches them
   // all.
-  sema_store_label_gotos(fn, gotos);
+  sema_store_label_gotos(ctx, fn, gotos);
   gotos = labels = (NodeArray){};
 
-  splice_locals(fn);
+  splice_locals(ctx, fn);
   locals = save;
   sema_fn = save_fn;
 }
@@ -3131,24 +3130,24 @@ static void analyze_function(Obj *fn) {
 // codegen. A function record is resolved first, so that later records
 // see its name, and its body is annotated and descended right after -
 // the order the parser used to interleave declaration and analysis.
-Obj *sema(Node *toplevel) {
-  sema_init();
-  declare_builtin_functions();
+Obj *sema(ChibiccContext *ctx, Node *toplevel) {
+  sema_init(ctx);
+  declare_builtin_functions(ctx);
 
   for (Node *n = toplevel; n; n = n->next) {
     switch (n->kind) {
     case ND_TYPEDEF:
     case ND_ENUM_CONST:
-      resolve_node(n);
+      resolve_node(ctx, n);
       break;
     case ND_GVAR_DECL:
-      resolve_node(n);
-      serialize_gvar(n);
+      resolve_node(ctx, n);
+      serialize_gvar(ctx, n);
       break;
     case ND_FUNCDEF:
-      resolve_function(n);
+      resolve_function(ctx, n);
       if (n->body)
-        analyze_function(n->var);
+        analyze_function(ctx, n->var);
       break;
     default:
       unreachable();
@@ -3157,6 +3156,6 @@ Obj *sema(Node *toplevel) {
 
   // Mark the reachable functions live and drop the redundant tentative
   // definitions.
-  finalize_globals();
+  finalize_globals(ctx);
   return globals;
 }

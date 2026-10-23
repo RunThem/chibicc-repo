@@ -163,19 +163,19 @@ char *get_ident(ChibiccContext *ctx, Token *tok);
 
 Node *parse(ChibiccContext *ctx, Token *tok);
 void parse_init(ChibiccContext *ctx);
-void sema_store_label_gotos(Obj *fn, NodeArray gotos);
-NodeArray *sema_label_gotos(Obj *fn);
+void sema_store_label_gotos(ChibiccContext *ctx, Obj *fn, NodeArray gotos);
+NodeArray *sema_label_gotos(ChibiccContext *ctx, Obj *fn);
 void sema_state_clear(ChibiccContext *ctx);
 
 //
 // sema.c
 //
 
-Obj *sema(Node *toplevel);
+Obj *sema(ChibiccContext *ctx, Node *toplevel);
 
 // Parses and evaluates a constant expression. Used by the
 // preprocessor for `#if`; not part of the parse/sema pipeline below.
-int64_t const_expr(Token **rest, Token *tok);
+int64_t const_expr(ChibiccContext *ctx, Token **rest, Token *tok);
 
 // The parser's conditional-expression entry point (parse.c), which
 // const_expr uses to read the expression it evaluates.
@@ -185,20 +185,20 @@ Node *conditional(ChibiccContext *ctx, Token **rest, Token *tok);
 // arrive already typed: the annotation entry point, the constructors for
 // the shapes only sema produces, and the conversions that carry sema's
 // decisions.
-void add_type(Node *node);
-Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok);
-void usual_arith_conv(Node **lhs, Node **rhs);
-Type *get_common_type(Type *ty1, Type *ty2);
-Node *new_cast(Node *expr, Type *ty);
-Node *new_long(int64_t val, Token *tok);
-Node *new_ulong(long val, Token *tok);
-Node *new_var_node(Obj *var, Token *tok);
-Node *new_vla_ptr(Obj *var, Token *tok);
-Node *new_alloca(Node *sz);
+void add_type(ChibiccContext *ctx, Node *node);
+Node *new_arith(ChibiccContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok);
+void usual_arith_conv(ChibiccContext *ctx, Node **lhs, Node **rhs);
+Type *get_common_type(ChibiccContext *ctx, Type *ty1, Type *ty2);
+Node *new_cast(ChibiccContext *ctx, Node *expr, Type *ty);
+Node *new_long(ChibiccContext *ctx, int64_t val, Token *tok);
+Node *new_ulong(ChibiccContext *ctx, long val, Token *tok);
+Node *new_var_node(ChibiccContext *ctx, Obj *var, Token *tok);
+Node *new_vla_ptr(ChibiccContext *ctx, Obj *var, Token *tok);
+Node *new_alloca(ChibiccContext *ctx, Node *sz);
 
 // The next value the anonymous-name counter would hand out, without
 // consuming it.
-int unique_name_next(void);
+int unique_name_next(ChibiccContext *ctx);
 
 //
 // type.c

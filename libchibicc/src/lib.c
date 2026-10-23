@@ -381,7 +381,7 @@ Node *chibicc_parse(ChibiccContext *ctx, Token *tok) {
 
 Obj *chibicc_sema(ChibiccContext *ctx, Node *toplevel) {
   ENTER_RET(ctx, NULL);
-  Obj *r = sema(toplevel);
+  Obj *r = sema(ctx, toplevel);
   LEAVE(ctx);
   return r;
 }
