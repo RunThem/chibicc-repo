@@ -137,6 +137,16 @@ check-library-pratt: pratt/libchibicc.a libchibicc.pc
 	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/library.sh
 	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" test/public-api.sh
 
+# The implicit-context gate (PLAN-explicit-context). Report mode while
+# the line is in progress; E10 turns it strict and adds it to test-all.
+context-audit-args ?=
+
+check-context: libchibicc.a
+	CHIBICC_LIB="$(CURDIR)/libchibicc.a" test/context-audit.sh $(context-audit-args)
+
+check-context-pratt: pratt/libchibicc.a
+	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" test/context-audit.sh $(context-audit-args)
+
 # Stage 2
 
 STAGE2_LIB_OBJS=$(LIB_SRCS:$(LIB_DIR)/%.c=stage2/$(LIB_DIR)/%.o)
@@ -365,4 +375,4 @@ docker-snapshot-ndiff: docker-image
 	@rc=0; diff -ru .cache/.ndtmp/base .cache/.ndtmp/new || rc=1; rm -rf .cache/.ndtmp; \
 	  [ $$rc -eq 0 ] && echo "snapshot ndiff: empty" || { echo "snapshot ndiff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: all test clean test-stage2 test-thirdparty check-library check-library-pratt install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff test-pratt test-both test-ab test-stage2-pratt docker-test-both docker-test-pratt docker-pratt-ab docker-pratt-tinycc
+.PHONY: all test clean test-stage2 test-thirdparty check-library check-library-pratt check-context check-context-pratt install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff test-pratt test-both test-ab test-stage2-pratt docker-test-both docker-test-pratt docker-pratt-ab docker-pratt-tinycc
