@@ -1,6 +1,6 @@
 // This is an implementation of the open-addressing hash table.
 
-#include "chibicc.h"
+#include "libcp.h"
 
 // Initial hash bucket size
 #define INIT_SIZE 16
@@ -25,7 +25,7 @@ static uint64_t fnv_hash(char *s, int len) {
 
 // Make room for new entires in a given hashmap by removing
 // tombstones and possibly extending the bucket size.
-static void rehash(ChibiccContext *ctx, HashMap *map) {
+static void rehash(LibcpContext *ctx, HashMap *map) {
   // Compute the size of the new hashmap.
   int nkeys = 0;
   for (int i = 0; i < map->capacity; i++)
@@ -39,7 +39,7 @@ static void rehash(ChibiccContext *ctx, HashMap *map) {
 
   // Create a new hashmap and copy all key-values.
   HashMap map2 = {};
-  map2.buckets = chibicc_arena_calloc(ctx, cap, sizeof(HashEntry));
+  map2.buckets = libcp_arena_calloc(ctx, cap, sizeof(HashEntry));
   map2.capacity = cap;
 
   for (int i = 0; i < map->capacity; i++) {
@@ -57,7 +57,7 @@ static bool match(HashEntry *ent, char *key, int keylen) {
          ent->keylen == keylen && memcmp(ent->key, key, keylen) == 0;
 }
 
-static HashEntry *get_entry(ChibiccContext *ctx, HashMap *map, char *key, int keylen) {
+static HashEntry *get_entry(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
   if (!map->buckets)
     return NULL;
 
@@ -73,9 +73,9 @@ static HashEntry *get_entry(ChibiccContext *ctx, HashMap *map, char *key, int ke
   unreachable();
 }
 
-static HashEntry *get_or_insert_entry(ChibiccContext *ctx, HashMap *map, char *key, int keylen) {
+static HashEntry *get_or_insert_entry(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
   if (!map->buckets) {
-    map->buckets = chibicc_arena_calloc(ctx, INIT_SIZE, sizeof(HashEntry));
+    map->buckets = libcp_arena_calloc(ctx, INIT_SIZE, sizeof(HashEntry));
     map->capacity = INIT_SIZE;
   } else if ((map->used * 100) / map->capacity >= HIGH_WATERMARK) {
     rehash(ctx, map);
@@ -106,29 +106,29 @@ static HashEntry *get_or_insert_entry(ChibiccContext *ctx, HashMap *map, char *k
   unreachable();
 }
 
-void *hashmap_get(ChibiccContext *ctx, HashMap *map, char *key) {
+void *hashmap_get(LibcpContext *ctx, HashMap *map, char *key) {
   return hashmap_get2(ctx, map, key, strlen(key));
 }
 
-void *hashmap_get2(ChibiccContext *ctx, HashMap *map, char *key, int keylen) {
+void *hashmap_get2(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
   HashEntry *ent = get_entry(ctx, map, key, keylen);
   return ent ? ent->val : NULL;
 }
 
-void hashmap_put(ChibiccContext *ctx, HashMap *map, char *key, void *val) {
+void hashmap_put(LibcpContext *ctx, HashMap *map, char *key, void *val) {
    hashmap_put2(ctx, map, key, strlen(key), val);
 }
 
-void hashmap_put2(ChibiccContext *ctx, HashMap *map, char *key, int keylen, void *val) {
+void hashmap_put2(LibcpContext *ctx, HashMap *map, char *key, int keylen, void *val) {
   HashEntry *ent = get_or_insert_entry(ctx, map, key, keylen);
   ent->val = val;
 }
 
-void hashmap_delete(ChibiccContext *ctx, HashMap *map, char *key) {
+void hashmap_delete(LibcpContext *ctx, HashMap *map, char *key) {
   hashmap_delete2(ctx, map, key, strlen(key));
 }
 
-void hashmap_delete2(ChibiccContext *ctx, HashMap *map, char *key, int keylen) {
+void hashmap_delete2(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
   HashEntry *ent = get_entry(ctx, map, key, keylen);
   if (!ent)
     return;

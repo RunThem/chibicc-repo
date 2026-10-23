@@ -21,8 +21,8 @@
 
 这些是第 5 层的整形遍.
 
-输入: `chibicc_parse` 的输出.
-输出: 原地标注的同一棵树, 加上一条 `ChibiccObj` 全局对象链.
+输入: `libcp_parse` 的输出.
+输出: 原地标注的同一棵树, 加上一条 `LibcpObj` 全局对象链.
 
 ## 7.2 设计思路
 
@@ -58,7 +58,7 @@
 - 求值并注册枚举常量.
 - 补全类型记录: 数组维度, `typeof` 操作数, 对齐, 位域宽度, case 值.
 - 布局聚合类型.
-- 解析初始化器记录, 建 `ChibiccInitTree`.
+- 解析初始化器记录, 建 `LibcpInitTree`.
 - 物化语言规定存在的对象: 字符串字面量的匿名全局, 复合字面量的隐藏对象, 块域 static 的数据镜像.
 
 **第二遍: 标注**
@@ -133,7 +133,7 @@ case ND_SIZEOF:
 - 全局初始化器.
 - 预处理 `#if`.
 
-常量求值支持标签地址 `&&label`, 这是 GNU 扩展. 这类地址常量在全局初始化器里以 `ChibiccRelocation` 记录, 标签名由第 5 层分配.
+常量求值支持标签地址 `&&label`, 这是 GNU 扩展. 这类地址常量在全局初始化器里以 `LibcpRelocation` 记录, 标签名由第 5 层分配.
 
 ### 7.2.6 与第 5 层的分界
 
@@ -159,16 +159,16 @@ case ND_SIZEOF:
 
 ## 7.3 数据模型
 
-### 7.3.1 ChibiccObj
+### 7.3.1 LibcpObj
 
-`ChibiccObj` 表示一个变量或函数:
+`LibcpObj` 表示一个变量或函数:
 
 ```c
-struct chibicc_obj {
-  ChibiccObj *next;
+struct libcp_obj {
+  LibcpObj *next;
   char *name;
-  ChibiccType *ty;
-  ChibiccToken *tok;
+  LibcpType *ty;
+  LibcpToken *tok;
   bool is_local;
   int align;
 
@@ -181,20 +181,20 @@ struct chibicc_obj {
   bool is_tentative;
   bool is_tls;
   char *init_data;
-  ChibiccRelocation *rel;
+  LibcpRelocation *rel;
 
   /* 函数 */
   bool is_inline;
-  ChibiccObj *params;
-  ChibiccNode *body;
-  ChibiccObj *locals;
-  ChibiccObj *va_area;
-  ChibiccObj *alloca_bottom;
+  LibcpObj *params;
+  LibcpNode *body;
+  LibcpObj *locals;
+  LibcpObj *va_area;
+  LibcpObj *alloca_bottom;
 
   /* static inline 活跃性 */
   bool is_live;
   bool is_root;
-  ChibiccStringArray refs;
+  LibcpStringArray refs;
 };
 ```
 
@@ -213,7 +213,7 @@ struct chibicc_obj {
 - `va_area`, `alloca_bottom`: ABI 对象.
 - `is_live` / `is_root` / `refs`: static inline 函数的活跃性分析.
 
-`chibicc_sema` 返回的是 `globals` 链. 它的特点:
+`libcp_sema` 返回的是 `globals` 链. 它的特点:
 
 - 包含全局变量, 函数声明, 函数定义, 匿名全局.
 - 包含 `extern` 声明, 用 `is_definition` 区分.
@@ -225,14 +225,14 @@ struct chibicc_obj {
 消费者通常这样过滤:
 
 ```c
-for (ChibiccObj *o = prog; o; o = o->next) {
+for (LibcpObj *o = prog; o; o = o->next) {
   if (!o->is_definition)
     continue;
   /* 真正的定义 */
 }
 ```
 
-### 7.3.2 ChibiccType
+### 7.3.2 LibcpType
 
 第 4 层完成后, 类型记录包含:
 
@@ -244,7 +244,7 @@ for (ChibiccObj *o = prog; o; o = o->next) {
 - `return_ty`, `params`, `is_variadic`: 函数类型.
 - `origin`: 兼容性检查用的原始类型.
 
-成员 `ChibiccMember` 包含:
+成员 `LibcpMember` 包含:
 
 - `ty`, `name`, `idx`.
 - `offset`, `align`.
@@ -255,15 +255,15 @@ for (ChibiccObj *o = prog; o; o = o->next) {
 
 ### 7.3.3 初始化树
 
-`ChibiccInitTree` 是解析后的初始化器:
+`LibcpInitTree` 是解析后的初始化器:
 
 ```c
-struct chibicc_init_tree {
-  ChibiccType *ty;
+struct libcp_init_tree {
+  LibcpType *ty;
   bool is_flexible;
-  ChibiccNode *expr;              /* 标量初始化表达式 */
-  ChibiccInitTree **children;     /* 聚合类型的子初始化器 */
-  ChibiccMember *mem;             /* 联合的活跃成员 */
+  LibcpNode *expr;              /* 标量初始化表达式 */
+  LibcpInitTree **children;     /* 聚合类型的子初始化器 */
+  LibcpMember *mem;             /* 联合的活跃成员 */
 };
 ```
 
@@ -276,14 +276,14 @@ struct chibicc_init_tree {
 
 指针放在 `Node.init_resolved`. 这个字段是 sema 私有载荷, 消费者不得读写. 需要初始化数据时, 用 `Obj.init_data` (全局) 或自己从 `Node.decl_init` 重新解析 (局部).
 
-`ChibiccInitPath` 是局部初始化器展开时的指示符路径, 供消费者建目标表达式:
+`LibcpInitPath` 是局部初始化器展开时的指示符路径, 供消费者建目标表达式:
 
 ```c
-struct chibicc_init_path {
-  ChibiccInitPath *next;
+struct libcp_init_path {
+  LibcpInitPath *next;
   int idx;
-  ChibiccMember *member;
-  ChibiccObj *var;
+  LibcpMember *member;
+  LibcpObj *var;
 };
 ```
 
@@ -460,16 +460,16 @@ static void bind_ident(Node *node) {
 - 标量: 按类型宽度写.
 - 数组/结构体: 递归写.
 - 字符串: 直接指向字符串内容.
-- 地址常量: 写 0, 并追加一条 `ChibiccRelocation`.
+- 地址常量: 写 0, 并追加一条 `LibcpRelocation`.
 
 重定位记录:
 
 ```c
-struct chibicc_relocation {
-  ChibiccRelocation *next;
+struct libcp_relocation {
+  LibcpRelocation *next;
   int offset;
   char *label;              /* 已命名的符号 */
-  ChibiccNode *label_node;  /* &&label, 名字由 codegen 分配 */
+  LibcpNode *label_node;  /* &&label, 名字由 codegen 分配 */
   long addend;
 };
 ```
@@ -488,12 +488,12 @@ struct chibicc_relocation {
 产物分两部分:
 
 1. **原地标注的树**. 每个表达式有类型, 名字已绑定, 结论已记录.
-2. **`ChibiccObj` 全局链**. 每个全局变量和函数一项, 带类型, 初始化数据, 重定位, 局部对象链, 函数体.
+2. **`LibcpObj` 全局链**. 每个全局变量和函数一项, 带类型, 初始化数据, 重定位, 局部对象链, 函数体.
 
 此外:
 
 - 每个聚合类型的成员布局已算好.
-- 每个初始化器已解析成 `ChibiccInitTree`, 指针在 `init_resolved`.
+- 每个初始化器已解析成 `LibcpInitTree`, 指针在 `init_resolved`.
 - 每个 static inline 函数的活跃性已标记.
 - goto / label 引用已收集在 context 里, 交给 codegen 配对.
 
@@ -519,9 +519,9 @@ struct chibicc_relocation {
 ### 7.7.1 运行 sema
 
 ```c
-ChibiccNode *ast = chibicc_parse(ctx, tok);
-ChibiccObj *prog = chibicc_sema(ctx, ast);
-if (!prog && chibicc_context_failed(ctx)) {
+LibcpNode *ast = libcp_parse(ctx, tok);
+LibcpObj *prog = libcp_sema(ctx, ast);
+if (!prog && libcp_context_failed(ctx)) {
   /* 语义错误 */
 }
 ```
@@ -531,7 +531,7 @@ if (!prog && chibicc_context_failed(ctx)) {
 ### 7.7.2 遍历全局对象
 
 ```c
-for (ChibiccObj *o = prog; o; o = o->next) {
+for (LibcpObj *o = prog; o; o = o->next) {
   if (!o->is_definition)
     continue;
 
@@ -548,9 +548,9 @@ for (ChibiccObj *o = prog; o; o = o->next) {
 ### 7.7.3 读类型布局
 
 ```c
-static void print_layout(ChibiccType *ty) {
+static void print_layout(LibcpType *ty) {
   printf("size=%d align=%d\n", ty->size, ty->align);
-  for (ChibiccMember *m = ty->members; m; m = m->next) {
+  for (LibcpMember *m = ty->members; m; m = m->next) {
     printf("  %.*s offset=%d", m->name->len, m->name->loc, m->offset);
     if (m->is_bitfield)
       printf(" bit=%d..%d", m->bit_offset, m->bit_offset + m->bit_width);

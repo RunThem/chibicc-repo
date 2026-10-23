@@ -21,7 +21,7 @@
 // only consumer of the accessors besides the dump. Neither channel touches
 // the compilation path.
 
-#include "chibicc.h"
+#include "libcp.h"
 
 // A synthetic buffer (paste, stringize, builtin values) is its own raw
 // text; a real file's raw text is a separate allocation.
@@ -40,7 +40,7 @@ static void print_pos(FILE *out, Token *tok) {
     fprintf(out, "%s:%d", tok->file->name, tok->line_no - tok->line_delta);
 }
 
-void expansion_dump(ChibiccContext *ctx, Token *tok, FILE *out) {
+void expansion_dump(LibcpContext *ctx, Token *tok, FILE *out) {
   for (; tok->kind != TK_EOF; tok = tok->next) {
     fputs("T ", out);
     print_pos(out, tok);

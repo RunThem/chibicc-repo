@@ -1,35 +1,35 @@
-// The library's unit self-tests, kept out of libchibicc. They link the
+// The library's unit self-tests, kept out of libcp. They link the
 // archive directly and use its internal symbols (the .a symbol policy:
 // consumers must not call them, but a test may). The compiler driver no
 // longer carries -hashmap-test / -arena-test / -sema-state-test.
 //
 // test/self-test.sh compiles this file with the host cc against
-// CHIBICC_LIB and runs it, so the same tests exercise the default,
+// LIBCP_LIB and runs it, so the same tests exercise the default,
 // stage2, Pratt and stage2-Pratt archives.
 
-#include "chibicc.h"
+#include "libcp.h"
 
 // Verifies the realloc contract with an active context: the tail is
 // zeroed and the old bytes are preserved.
-static void arena_test(ChibiccContext *ctx) {
-  char *p = chibicc_arena_calloc(ctx, 4, 1);
+static void arena_test(LibcpContext *ctx) {
+  char *p = libcp_arena_calloc(ctx, 4, 1);
   p[0] = 1;
   p[3] = 4;
 
-  char *q = chibicc_arena_realloc(ctx, p, 4, 16);
+  char *q = libcp_arena_realloc(ctx, p, 4, 16);
   assert(q[0] == 1 && q[3] == 4);
   for (int i = 4; i < 16; i++)
     assert(q[i] == 0);
 
-  char *r = chibicc_arena_realloc(ctx, NULL, 0, 8);
+  char *r = libcp_arena_realloc(ctx, NULL, 0, 8);
   for (int i = 0; i < 8; i++)
     assert(r[i] == 0);
 
   printf("arena: ok\n");
 }
 
-static void hashmap_test(ChibiccContext *ctx) {
-  HashMap *map = chibicc_arena_calloc(ctx, 1, sizeof(HashMap));
+static void hashmap_test(LibcpContext *ctx) {
+  HashMap *map = libcp_arena_calloc(ctx, 1, sizeof(HashMap));
 
   for (int i = 0; i < 5000; i++)
     hashmap_put(ctx, map, format(ctx, "key %d", i), (void *)(size_t)i);
@@ -59,7 +59,7 @@ static void hashmap_test(ChibiccContext *ctx) {
 
   // Delete-heavy traffic must not leave tombstones behind: once they
   // outnumber the live entries the table rehashes (C8).
-  HashMap *tomb = chibicc_arena_calloc(ctx, 1, sizeof(HashMap));
+  HashMap *tomb = libcp_arena_calloc(ctx, 1, sizeof(HashMap));
   for (int i = 0; i < 1000; i++)
     hashmap_put(ctx, tomb, format(ctx, "t %d", i), (void *)(size_t)i);
   for (int i = 0; i < 900; i++)
@@ -85,16 +85,16 @@ static bool sema_state_test(void) {
     "int g(void) { goto b; b: return 2; }\n";
   char *second = "int h(void) { goto c; c: return 3; }\n";
 
-  ChibiccContext *ctx = chibicc_context_new();
+  LibcpContext *ctx = libcp_context_new();
   bool ok = true;
 
   for (int round = 0; round < 2 && ok; round++) {
     char *src = round ? second : first;
-    ChibiccToken *tok = chibicc_tokenize_buffer(ctx, "<sema-state>", src);
+    LibcpToken *tok = libcp_tokenize_buffer(ctx, "<sema-state>", src);
     if (tok)
-      tok = chibicc_preprocess(ctx, tok);
-    ChibiccNode *ast = tok ? chibicc_parse(ctx, tok) : NULL;
-    ChibiccObj *prog = ast ? chibicc_sema(ctx, ast) : NULL;
+      tok = libcp_preprocess(ctx, tok);
+    LibcpNode *ast = tok ? libcp_parse(ctx, tok) : NULL;
+    LibcpObj *prog = ast ? libcp_sema(ctx, ast) : NULL;
     if (!prog) {
       ok = false;
       break;
@@ -120,7 +120,7 @@ static bool sema_state_test(void) {
       // and __FUNCTION__.
       int anon = 0;
       int fn_named = 0;
-      for (ChibiccObj *o = prog; o; o = o->next) {
+      for (LibcpObj *o = prog; o; o = o->next) {
         if (!strcmp(o->name, "h"))
           fn_named++;
         else if (!strncmp(o->name, ".L..", 4))
@@ -147,17 +147,17 @@ static bool sema_state_test(void) {
     }
   }
 
-  chibicc_context_free(ctx);
+  libcp_context_free(ctx);
   if (ok)
     printf("sema-state: ok\n");
   return ok;
 }
 
 int main(void) {
-  ChibiccContext *ctx = chibicc_context_new();
+  LibcpContext *ctx = libcp_context_new();
   arena_test(ctx);
   hashmap_test(ctx);
-  chibicc_context_free(ctx);
+  libcp_context_free(ctx);
 
   return sema_state_test() ? 0 : 1;
 }

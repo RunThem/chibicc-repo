@@ -37,7 +37,7 @@ static StringArray std_include_paths;
 
 char *base_file;
 static char *output_file;
-static ChibiccContext *ctx;
+static LibcpContext *ctx;
 
 static StringArray input_paths;
 static StringArray tmpfiles;
@@ -61,12 +61,12 @@ static bool take_arg(char *arg) {
 static void add_default_include_paths(char *argv0) {
   // We expect that chibicc-specific include files are installed
   // to ./include relative to argv[0].
-  chibicc_context_add_include_path(ctx, format(ctx, "%s/include", dirname(strdup(argv0))));
+  libcp_context_add_include_path(ctx, format(ctx, "%s/include", dirname(strdup(argv0))));
 
   // Add standard include paths.
-  chibicc_context_add_include_path(ctx, "/usr/local/include");
-  chibicc_context_add_include_path(ctx, "/usr/include/x86_64-linux-gnu");
-  chibicc_context_add_include_path(ctx, "/usr/include");
+  libcp_context_add_include_path(ctx, "/usr/local/include");
+  libcp_context_add_include_path(ctx, "/usr/include/x86_64-linux-gnu");
+  libcp_context_add_include_path(ctx, "/usr/include");
 
   // Keep a copy of the standard include paths for -MMD option.
   for (int i = 0; i < ctx->include_paths_len; i++)
@@ -77,9 +77,9 @@ static void define(char *str) {
   char *eq = strchr(str, '=');
   if (eq) {
     char *name = strndup(str, eq - str);
-    chibicc_context_define(ctx, name, eq + 1);
+    libcp_context_define(ctx, name, eq + 1);
   } else {
-    chibicc_context_define(ctx, str, "1");
+    libcp_context_define(ctx, str, "1");
   }
 }
 
@@ -221,7 +221,7 @@ static void parse_args(int argc, char **argv) {
     }
 
     if (!strncmp(argv[i], "-I", 2)) {
-      chibicc_context_add_include_path(ctx, argv[i] + 2);
+      libcp_context_add_include_path(ctx, argv[i] + 2);
       continue;
     }
 
@@ -236,12 +236,12 @@ static void parse_args(int argc, char **argv) {
     }
 
     if (!strcmp(argv[i], "-U")) {
-      chibicc_context_undef(ctx, argv[++i]);
+      libcp_context_undef(ctx, argv[++i]);
       continue;
     }
 
     if (!strncmp(argv[i], "-U", 2)) {
-      chibicc_context_undef(ctx, argv[i] + 2);
+      libcp_context_undef(ctx, argv[i] + 2);
       continue;
     }
 
@@ -382,7 +382,7 @@ static void parse_args(int argc, char **argv) {
   }
 
   for (int i = 0; i < idirafter.len; i++)
-    chibicc_context_add_include_path(ctx, idirafter.data[i]);
+    libcp_context_add_include_path(ctx, idirafter.data[i]);
 
   if (input_paths.len == 0)
     error(ctx, "no input files");
@@ -650,7 +650,7 @@ static void print_dependencies(void) {
 }
 
 static Token *must_tokenize_file(char *path) {
-  return chibicc_tokenize_file(ctx, path);
+  return libcp_tokenize_file(ctx, path);
 }
 
 static Token *append_tokens(Token *tok1, Token *tok2) {
@@ -1114,16 +1114,16 @@ static int cc1(void) {
     if (opt_dump_tokens)
       print_token_dump(tok);
     if (opt_reconstruct)
-      chibicc_reconstruct(ctx, tok, open_file(opt_o ? opt_o : "-"));
+      libcp_reconstruct(ctx, tok, open_file(opt_o ? opt_o : "-"));
     if (opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
-      CstNode *root = chibicc_cst_parse(ctx, tok);
+      CstNode *root = libcp_cst_parse(ctx, tok);
       if (!root)
         return 1;
       if (opt_dump_cst)
-        chibicc_cst_dump(ctx, root, open_file(opt_o ? opt_o : "-"));
+        libcp_cst_dump(ctx, root, open_file(opt_o ? opt_o : "-"));
       if (opt_reconstruct_cst)
-        chibicc_cst_reconstruct(ctx, root, open_file(opt_o ? opt_o : "-"));
-      if (opt_verify_cst && !chibicc_cst_verify(ctx, root, tok))
+        libcp_cst_reconstruct(ctx, root, open_file(opt_o ? opt_o : "-"));
+      if (opt_verify_cst && !libcp_cst_verify(ctx, root, tok))
         return 1;
     }
     return 0;
@@ -1155,7 +1155,7 @@ static int cc1(void) {
   if (!tok2)
     return 1;
   tok = append_tokens(tok, tok2);
-  tok = chibicc_preprocess(ctx, tok);
+  tok = libcp_preprocess(ctx, tok);
   if (ctx->failed)
     return 1;
 
@@ -1163,8 +1163,8 @@ static int cc1(void) {
   // no object file, no assembler, no linker (plans/PLAN.md 判据 5).
   if (opt_dump_expansions || opt_verify_expansions) {
     if (opt_dump_expansions)
-      chibicc_expansion_dump(ctx, tok, open_file(opt_o ? opt_o : "-"));
-    if (opt_verify_expansions && !chibicc_expansion_verify(ctx, tok))
+      libcp_expansion_dump(ctx, tok, open_file(opt_o ? opt_o : "-"));
+    if (opt_verify_expansions && !libcp_expansion_verify(ctx, tok))
       return 1;
     return 0;
   }
@@ -1182,7 +1182,7 @@ static int cc1(void) {
     return 0;
   }
 
-  Node *ast = chibicc_parse(ctx, tok);
+  Node *ast = libcp_parse(ctx, tok);
   if (ctx->failed)
     return 1;
 
@@ -1193,7 +1193,7 @@ static int cc1(void) {
     return 0;
   }
 
-  Obj *prog = chibicc_sema(ctx, ast);
+  Obj *prog = libcp_sema(ctx, ast);
   if (ctx->failed)
     return 1;
 
@@ -1339,10 +1339,10 @@ static FileType get_file_type(char *filename) {
 
 int main(int argc, char **argv) {
   atexit(cleanup);
-  ctx = chibicc_context_new();
+  ctx = libcp_context_new();
   parse_args(argc, argv);
   if (base_file)
-    chibicc_context_set_base_file(ctx, base_file);
+    libcp_context_set_base_file(ctx, base_file);
 
   if (opt_cc1) {
     add_default_include_paths(argv[0]);

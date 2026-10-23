@@ -1,76 +1,76 @@
 # 09 API 参考与用法
 
-本章是公共 API 的逐项说明. 函数原型以 `libchibicc/include/chibicc/` 下的头文件为准. 本章只列 36 个公共函数与公共宏, 不列内部函数.
+本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 36 个公共函数与公共宏, 不列内部函数.
 
 ## 9.1 头文件, 链接与命名
 
 只需要 include 一个头:
 
 ```c
-#include <chibicc/chibicc.h>
+#include <libcp/libcp.h>
 ```
 
 它是伞头, 包含其余 9 个公共头:
 
 ```text
-chibicc.h       伞头, CHIBICC_VERSION, chibicc_version
+libcp.h       伞头, LIBCP_VERSION, libcp_version
 allocator.h     可替换的分配器宏
 context.h       context, 诊断回调, 配置, 预定义宏
-diagnostic.h    ChibiccDiagnostic, severity
-token.h         ChibiccToken, ChibiccFile, 第 1 层入口
-preprocess.h    chibicc_preprocess
+diagnostic.h    LibcpDiagnostic, severity
+token.h         LibcpToken, LibcpFile, 第 1 层入口
+preprocess.h    libcp_preprocess
 provenance.h    宏展开访问器, dump / verify
 cst.h           第 2 层
-ast.h           第 3/4 层的数据类型与 chibicc_parse
-sema.h          chibicc_sema
+ast.h           第 3/4 层的数据类型与 libcp_parse
+sema.h          libcp_sema
 ```
 
 链接:
 
 ```sh
-cc -std=c11 -I/path/to/include app.c -L/path/to/lib -lchibicc
+cc -std=c11 -I/path/to/include app.c -L/path/to/lib -lcp
 ```
 
 或直接给静态库路径:
 
 ```sh
-cc -std=c11 -Ilibchibicc/include app.c libchibicc.a
+cc -std=c11 -Ilibcp/include app.c libcp.a
 ```
 
 命名规则:
 
-- 函数一律 `chibicc_` 前缀.
-- 类型一律 `Chibicc` 前缀.
-- 结构体 tag 是 `struct chibicc_*`.
+- 函数一律 `libcp_` 前缀.
+- 类型一律 `Libcp` 前缀.
+- 结构体 tag 是 `struct libcp_*`.
 - 枚举常量保留层前缀: `TK_` (token), `ND_` (node), `TY_` (type), `CST_` (CST), `INIT_` (initializer).
-- 宏是 `CHIBICC_*`.
+- 宏是 `LIBCP_*`.
 
-`CHIBICC_API` 在 GCC/Clang 下展开为 `__attribute__((visibility("default")))`, 用于共享库导出. 消费者不需要关心它.
+`LIBCP_API` 在 GCC/Clang 下展开为 `__attribute__((visibility("default")))`, 用于共享库导出. 消费者不需要关心它.
 
-`.a` 里还有内部符号(没有 `chibicc_` 前缀的名字, 或未在任何公共头声明). 它们对该归档可见, 但不属于 API: 内部函数以 `ChibiccContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 36 个函数.
+`.a` 里还有内部符号(没有 `libcp_` 前缀的名字, 或未在任何公共头声明). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 36 个函数.
 
 ## 9.2 函数总表
 
 | 组 | 函数 |
 |---|---|
-| context | `chibicc_context_new`, `_free`, `_reset`, `_set_diagnostic`, `_failed` |
-| 配置 | `chibicc_context_add_include_path`, `_define`, `_undef`, `_set_predefined_macros`, `_predefined_count`, `_predefined_at` |
-| 第 1 层 | `chibicc_tokenize_file`, `chibicc_tokenize_buffer`, `chibicc_tokenize_buffer_len`, `chibicc_reconstruct` |
-| 预处理 | `chibicc_preprocess` |
-| 第 2 层 | `chibicc_cst_parse`, `chibicc_cst_reconstruct`, `chibicc_cst_dump`, `chibicc_cst_verify` |
-| 第 3 层 | `chibicc_parse` |
-| 第 4 层 | `chibicc_sema` |
-| provenance | `chibicc_token_provenance`, `chibicc_macro_prov_next`, `_expansion`, `_arg_index` |
-| provenance | `chibicc_macro_expansion_name`, `_end`, `_macro`, `_def`, `_arg`, `_arg_count`, `_is_builtin` |
-| provenance | `chibicc_expansion_dump`, `chibicc_expansion_verify` |
-| 版本 | `chibicc_version`, `CHIBICC_VERSION` |
+| context | `libcp_context_new`, `_free`, `_reset`, `_set_diagnostic`, `_failed` |
+| 配置 | `libcp_context_add_include_path`, `_define`, `_undef`, `_set_predefined_macros`, `_predefined_count`, `_predefined_at` |
+| 第 1 层 | `libcp_tokenize_file`, `libcp_tokenize_buffer`, `libcp_tokenize_buffer_len`, `libcp_reconstruct` |
+| 预处理 | `libcp_preprocess` |
+| 第 2 层 | `libcp_cst_parse`, `libcp_cst_reconstruct`, `libcp_cst_dump`, `libcp_cst_verify` |
+| 第 3 层 | `libcp_parse` |
+| 第 4 层 | `libcp_sema` |
+| provenance | `libcp_token_provenance`, `libcp_macro_prov_next`, `_expansion`, `_arg_index` |
+| provenance | `libcp_macro_expansion_name`, `_end`, `_macro`, `_def`, `_arg`, `_arg_count`, `_is_builtin` |
+| provenance | `libcp_expansion_dump`, `libcp_expansion_verify` |
+| 版本 | `libcp_version`, `LIBCP_VERSION` |
 
 ## 9.3 生命周期与配置
 
-### 9.3.1 chibicc_context_new
+### 9.3.1 libcp_context_new
 
 ```c
-ChibiccContext *chibicc_context_new(void);
+LibcpContext *libcp_context_new(void);
 ```
 
 创建一个 context. 一个 context 服务一个翻译单元.
@@ -84,10 +84,10 @@ ChibiccContext *chibicc_context_new(void);
 
 返回值: 正常路径上总是非 NULL. 内存分配失败没有单独的处理路径, 不构成"返回 NULL 的错误模型".
 
-### 9.3.2 chibicc_context_free
+### 9.3.2 libcp_context_free
 
 ```c
-void chibicc_context_free(ChibiccContext *ctx);
+void libcp_context_free(LibcpContext *ctx);
 ```
 
 销毁 context:
@@ -98,10 +98,10 @@ void chibicc_context_free(ChibiccContext *ctx);
 
 `ctx` 为 NULL 时安全返回. 调用后所有指针失效.
 
-### 9.3.3 chibicc_context_reset
+### 9.3.3 libcp_context_reset
 
 ```c
-void chibicc_context_reset(ChibiccContext *ctx);
+void libcp_context_reset(LibcpContext *ctx);
 ```
 
 重置 per-TU 状态, 保留配置:
@@ -119,18 +119,18 @@ void chibicc_context_reset(ChibiccContext *ctx);
 - 可以开始下一个 TU.
 - 上一个 TU 的错误状态被清除.
 
-### 9.3.4 chibicc_context_set_diagnostic
+### 9.3.4 libcp_context_set_diagnostic
 
 ```c
-void chibicc_context_set_diagnostic(ChibiccContext *ctx,
-                                    ChibiccDiagnosticFn fn, void *user);
+void libcp_context_set_diagnostic(LibcpContext *ctx,
+                                    LibcpDiagnosticFn fn, void *user);
 ```
 
 注册诊断回调.
 
 ```c
-typedef void (*ChibiccDiagnosticFn)(void *user,
-                                    const ChibiccDiagnostic *);
+typedef void (*LibcpDiagnosticFn)(void *user,
+                                    const LibcpDiagnostic *);
 ```
 
 - 注册后, 库不再向 stderr 打印.
@@ -138,10 +138,10 @@ typedef void (*ChibiccDiagnosticFn)(void *user,
 - `fn` 为 NULL 时恢复默认打印行为.
 - 回调里的字符串只保证到下一次 reset.
 
-### 9.3.5 chibicc_context_failed
+### 9.3.5 libcp_context_failed
 
 ```c
-bool chibicc_context_failed(ChibiccContext *ctx);
+bool libcp_context_failed(LibcpContext *ctx);
 ```
 
 返回上一次操作是否出错.
@@ -152,10 +152,10 @@ bool chibicc_context_failed(ChibiccContext *ctx);
 
 用途: 区分"返回 NULL 是错误"和"返回 NULL 是空翻译单元".
 
-### 9.3.6 chibicc_context_add_include_path
+### 9.3.6 libcp_context_add_include_path
 
 ```c
-void chibicc_context_add_include_path(ChibiccContext *ctx, char *path);
+void libcp_context_add_include_path(LibcpContext *ctx, char *path);
 ```
 
 追加一个 include 搜索目录.
@@ -167,10 +167,10 @@ void chibicc_context_add_include_path(ChibiccContext *ctx, char *path);
 
 库本身不读环境变量, 不加编译器的默认路径.
 
-### 9.3.7 chibicc_context_define
+### 9.3.7 libcp_context_define
 
 ```c
-void chibicc_context_define(ChibiccContext *ctx, char *name, char *buf);
+void libcp_context_define(LibcpContext *ctx, char *name, char *buf);
 ```
 
 定义一个宏.
@@ -181,10 +181,10 @@ void chibicc_context_define(ChibiccContext *ctx, char *name, char *buf);
 - 记录在配置里, reset 后重新应用.
 - 顺序很重要, 后定义的覆盖先定义的.
 
-### 9.3.8 chibicc_context_undef
+### 9.3.8 libcp_context_undef
 
 ```c
-void chibicc_context_undef(ChibiccContext *ctx, char *name);
+void libcp_context_undef(LibcpContext *ctx, char *name);
 ```
 
 取消一个宏.
@@ -193,10 +193,10 @@ void chibicc_context_undef(ChibiccContext *ctx, char *name);
 - 记录在配置里, reset 后重新应用.
 - 对未定义的宏是空操作.
 
-### 9.3.9 chibicc_context_set_predefined_macros
+### 9.3.9 libcp_context_set_predefined_macros
 
 ```c
-void chibicc_context_set_predefined_macros(ChibiccContext *ctx, bool enabled);
+void libcp_context_set_predefined_macros(LibcpContext *ctx, bool enabled);
 ```
 
 打开或关闭预定义宏集.
@@ -205,21 +205,21 @@ void chibicc_context_set_predefined_macros(ChibiccContext *ctx, bool enabled);
 - 设置在**下一次 reset** 生效.
 - 关闭后, 预定义宏不安装, 但 `-D` / `-U` 仍然应用.
 
-### 9.3.10 chibicc_context_predefined_count / _at
+### 9.3.10 libcp_context_predefined_count / _at
 
 ```c
-int chibicc_context_predefined_count(ChibiccContext *ctx);
-ChibiccPredefinedMacro chibicc_context_predefined_at(ChibiccContext *ctx,
+int libcp_context_predefined_count(LibcpContext *ctx);
+LibcpPredefinedMacro libcp_context_predefined_at(LibcpContext *ctx,
                                                      int index);
 ```
 
 枚举当前 TU 安装的预定义宏.
 
 ```c
-typedef struct chibicc_predefined_macro {
+typedef struct libcp_predefined_macro {
   const char *name;
   const char *value;
-} ChibiccPredefinedMacro;
+} LibcpPredefinedMacro;
 ```
 
 - `value` 是替换文本. 内建宏和动态宏为 NULL.
@@ -232,29 +232,29 @@ typedef struct chibicc_predefined_macro {
 `allocator.h` 定义库的分配面, 选择方式是一个构建期开关:
 
 ```c
-#ifdef CHIBICC_DEFAULT_ALLOCATOR
+#ifdef LIBCP_DEFAULT_ALLOCATOR
 /* 四个宏展开为 libc 的 malloc / calloc / realloc / free */
-#elif defined(CHIBICC_INTERNAL)
+#elif defined(LIBCP_INTERNAL)
 /* 库构建时: 四个宏必须已全部定义, 否则 #error */
 #endif
 ```
 
-- `CHIBICC_DEFAULT_ALLOCATOR` 定义时使用 C 库分配器, 四个宏全部展开为 libc 同名函数, 不做逐个宏的回退.
-- 未定义时, 嵌入方必须自己提供全部四个宏, 通常通过 `-include` shim 头. 校验只在构建 libchibicc 时进行(`CHIBICC_INTERNAL`), 缺少任一个宏会在包含处 `#error`; 只 include 公共头的消费者不需要选择分配器.
-- 默认构建在 Makefile 里定义 `CHIBICC_DEFAULT_ALLOCATOR`(`ALLOCATOR_CFLAGS`); 自定义构建覆盖 `ALLOCATOR_CFLAGS`, 只给四个宏, 见 10.11.5 的 mimalloc 例子.
-- 库拥有的每个块 - context 对象, 配置数组与字符串, arena 块及其头部 - 都从这四个宏取得, 并通过 `CHIBICC_FREE` 归还.
-- 它们是编译期配置: 在编译 libchibicc 时定义, 不是在消费者里定义. 链接预编译库时重新定义不会改变已经编译好的库.
-- 替换实现必须满足 libc 的语义: 返回满足任意类型对齐的内存(x86-64 上 `Token` / `Node` 内嵌 `long double`, 需要 16 字节), `CHIBICC_CALLOC` 清零, `CHIBICC_REALLOC` 失败时返回 NULL 且保留原块, `CHIBICC_FREE` 接受 NULL.
+- `LIBCP_DEFAULT_ALLOCATOR` 定义时使用 C 库分配器, 四个宏全部展开为 libc 同名函数, 不做逐个宏的回退.
+- 未定义时, 嵌入方必须自己提供全部四个宏, 通常通过 `-include` shim 头. 校验只在构建 libcp 时进行(`LIBCP_INTERNAL`), 缺少任一个宏会在包含处 `#error`; 只 include 公共头的消费者不需要选择分配器.
+- 默认构建在 Makefile 里定义 `LIBCP_DEFAULT_ALLOCATOR`(`ALLOCATOR_CFLAGS`); 自定义构建覆盖 `ALLOCATOR_CFLAGS`, 只给四个宏, 见 10.11.5 的 mimalloc 例子.
+- 库拥有的每个块 - context 对象, 配置数组与字符串, arena 块及其头部 - 都从这四个宏取得, 并通过 `LIBCP_FREE` 归还.
+- 它们是编译期配置: 在编译 libcp 时定义, 不是在消费者里定义. 链接预编译库时重新定义不会改变已经编译好的库.
+- 替换实现必须满足 libc 的语义: 返回满足任意类型对齐的内存(x86-64 上 `Token` / `Node` 内嵌 `long double`, 需要 16 字节), `LIBCP_CALLOC` 清零, `LIBCP_REALLOC` 失败时返回 NULL 且保留原块, `LIBCP_FREE` 接受 NULL.
 - 宏不产生符号, D7 与 `.so` 导出不变.
 - 例外: 读文件时 `open_memstream` 的缓冲区由 libc 的 `malloc` 分配并用 `free` 释放, 不属于库的自有内存.
-- `test/allocator.sh` 在不定义 `CHIBICC_DEFAULT_ALLOCATOR` 的前提下用计数分配器重编整个库, 锁定"替换确实被调用", "缺宏会被诊断"与 `chibicc_context_free` 后活块归零.
+- `test/allocator.sh` 在不定义 `LIBCP_DEFAULT_ALLOCATOR` 的前提下用计数分配器重编整个库, 锁定"替换确实被调用", "缺宏会被诊断"与 `libcp_context_free` 后活块归零.
 
 ## 9.4 第 1 层 API
 
-### 9.4.1 chibicc_tokenize_file
+### 9.4.1 libcp_tokenize_file
 
 ```c
-ChibiccToken *chibicc_tokenize_file(ChibiccContext *ctx, char *path);
+LibcpToken *libcp_tokenize_file(LibcpContext *ctx, char *path);
 ```
 
 读取文件并 tokenize.
@@ -265,10 +265,10 @@ ChibiccToken *chibicc_tokenize_file(ChibiccContext *ctx, char *path);
 - 失败返回 NULL 并报告诊断. 失败原因: 打不开, 读失败, 文件过大, 含 NUL, 非法 token.
 - 第一次调用会设置 `__BASE_FILE__` 的文件名.
 
-### 9.4.2 chibicc_tokenize_buffer
+### 9.4.2 libcp_tokenize_buffer
 
 ```c
-ChibiccToken *chibicc_tokenize_buffer(ChibiccContext *ctx, char *name,
+LibcpToken *libcp_tokenize_buffer(LibcpContext *ctx, char *name,
                                       char *contents);
 ```
 
@@ -279,10 +279,10 @@ tokenize 一个 NUL 结尾的内存字符串.
 - 不能用包含 NUL 的二进制块; 用 `_len` 版本.
 - 不做扫描缓冲改写: 不跳 BOM, 不删续行, 不改写 universal char. 见第 11.5.3 节.
 
-### 9.4.3 chibicc_tokenize_buffer_len
+### 9.4.3 libcp_tokenize_buffer_len
 
 ```c
-ChibiccToken *chibicc_tokenize_buffer_len(ChibiccContext *ctx, char *name,
+LibcpToken *libcp_tokenize_buffer_len(LibcpContext *ctx, char *name,
                                           char *contents, int len);
 ```
 
@@ -293,10 +293,10 @@ tokenize 恰好 `len` 字节.
 - 用于从文件映射, 网络缓冲等已知长度的输入.
 - 与 `tokenize_buffer` 一样, 不做扫描缓冲改写: BOM, 续行, universal char 都按原字节处理.
 
-### 9.4.4 chibicc_reconstruct
+### 9.4.4 libcp_reconstruct
 
 ```c
-void chibicc_reconstruct(ChibiccContext *ctx, ChibiccToken *tok, FILE *out);
+void libcp_reconstruct(LibcpContext *ctx, LibcpToken *tok, FILE *out);
 ```
 
 按序写出每个 token 的 trivia 和拼写.
@@ -308,10 +308,10 @@ void chibicc_reconstruct(ChibiccContext *ctx, ChibiccToken *tok, FILE *out);
 
 ## 9.5 预处理 API
 
-### 9.5.1 chibicc_preprocess
+### 9.5.1 libcp_preprocess
 
 ```c
-ChibiccToken *chibicc_preprocess(ChibiccContext *ctx, ChibiccToken *tok);
+LibcpToken *libcp_preprocess(LibcpContext *ctx, LibcpToken *tok);
 ```
 
 执行预处理.
@@ -324,10 +324,10 @@ ChibiccToken *chibicc_preprocess(ChibiccContext *ctx, ChibiccToken *tok);
 
 ## 9.6 第 2 层 API
 
-### 9.6.1 chibicc_cst_parse
+### 9.6.1 libcp_cst_parse
 
 ```c
-ChibiccCstNode *chibicc_cst_parse(ChibiccContext *ctx, ChibiccToken *tok);
+LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok);
 ```
 
 从**预处理之前**的 token 流建 lossless CST.
@@ -337,10 +337,10 @@ ChibiccCstNode *chibicc_cst_parse(ChibiccContext *ctx, ChibiccToken *tok);
 - 叶子按序覆盖输入 token, 包括 EOF.
 - 输入链在调用中不被改写.
 
-### 9.6.2 chibicc_cst_reconstruct
+### 9.6.2 libcp_cst_reconstruct
 
 ```c
-void chibicc_cst_reconstruct(ChibiccContext *ctx, ChibiccCstNode *root,
+void libcp_cst_reconstruct(LibcpContext *ctx, LibcpCstNode *root,
                              FILE *out);
 ```
 
@@ -348,19 +348,19 @@ void chibicc_cst_reconstruct(ChibiccContext *ctx, ChibiccCstNode *root,
 
 对直接 tokenize 输出, 结果等于原文件字节.
 
-### 9.6.3 chibicc_cst_dump
+### 9.6.3 libcp_cst_dump
 
 ```c
-void chibicc_cst_dump(ChibiccContext *ctx, ChibiccCstNode *root, FILE *out);
+void libcp_cst_dump(LibcpContext *ctx, LibcpCstNode *root, FILE *out);
 ```
 
 打印树形 dump, 每层缩进两格. 叶子打印种类和拼写.
 
-### 9.6.4 chibicc_cst_verify
+### 9.6.4 libcp_cst_verify
 
 ```c
-bool chibicc_cst_verify(ChibiccContext *ctx, ChibiccCstNode *root,
-                        ChibiccToken *tok);
+bool libcp_cst_verify(LibcpContext *ctx, LibcpCstNode *root,
+                        LibcpToken *tok);
 ```
 
 校验树的叶子序列与 token 流:
@@ -373,15 +373,15 @@ bool chibicc_cst_verify(ChibiccContext *ctx, ChibiccCstNode *root,
 
 ## 9.7 第 3 层 API
 
-### 9.7.1 chibicc_parse
+### 9.7.1 libcp_parse
 
 ```c
-ChibiccNode *chibicc_parse(ChibiccContext *ctx, ChibiccToken *tok);
+LibcpNode *libcp_parse(LibcpContext *ctx, LibcpToken *tok);
 ```
 
 从预处理后的 token 流建忠实语法 AST.
 
-- 输入必须是 `chibicc_preprocess` 的输出.
+- 输入必须是 `libcp_preprocess` 的输出.
 - 返回顶层声明记录链.
 - 空翻译单元返回 NULL, `failed` 为 false.
 - 语法错误返回 NULL, `failed` 为 true.
@@ -390,10 +390,10 @@ ChibiccNode *chibicc_parse(ChibiccContext *ctx, ChibiccToken *tok);
 
 ## 9.8 第 4 层 API
 
-### 9.8.1 chibicc_sema
+### 9.8.1 libcp_sema
 
 ```c
-ChibiccObj *chibicc_sema(ChibiccContext *ctx, ChibiccNode *toplevel);
+LibcpObj *libcp_sema(LibcpContext *ctx, LibcpNode *toplevel);
 ```
 
 对第 3 层的树做语义分析.
@@ -412,29 +412,29 @@ ChibiccObj *chibicc_sema(ChibiccContext *ctx, ChibiccNode *toplevel);
 ### 9.9.1 链访问器
 
 ```c
-ChibiccMacroProv *chibicc_token_provenance(ChibiccToken *tok);
-ChibiccMacroProv *chibicc_macro_prov_next(ChibiccMacroProv *p);
-ChibiccMacroExpansion *chibicc_macro_prov_expansion(ChibiccMacroProv *p);
-int chibicc_macro_prov_arg_index(ChibiccMacroProv *p);
+LibcpMacroProv *libcp_token_provenance(LibcpToken *tok);
+LibcpMacroProv *libcp_macro_prov_next(LibcpMacroProv *p);
+LibcpMacroExpansion *libcp_macro_prov_expansion(LibcpMacroProv *p);
+int libcp_macro_prov_arg_index(LibcpMacroProv *p);
 ```
 
-- `chibicc_token_provenance`: 返回 token 的链头, 源 token 返回 NULL.
-- `chibicc_macro_prov_next`: 下一层, 即更外层的调用上下文.
-- `chibicc_macro_prov_expansion`: 该层对应的展开记录.
-- `chibicc_macro_prov_arg_index`: `-1` 表示宏体, `>= 0` 表示实参序号, 0 起.
+- `libcp_token_provenance`: 返回 token 的链头, 源 token 返回 NULL.
+- `libcp_macro_prov_next`: 下一层, 即更外层的调用上下文.
+- `libcp_macro_prov_expansion`: 该层对应的展开记录.
+- `libcp_macro_prov_arg_index`: `-1` 表示宏体, `>= 0` 表示实参序号, 0 起.
 
 这些访问器不分配, 不需要错误边界. 传入 NULL 会崩溃, 调用者保证非 NULL.
 
 ### 9.9.2 展开记录访问器
 
 ```c
-ChibiccToken *chibicc_macro_expansion_name(ChibiccMacroExpansion *e);
-ChibiccToken *chibicc_macro_expansion_end(ChibiccMacroExpansion *e);
-char *chibicc_macro_expansion_macro(ChibiccMacroExpansion *e);
-ChibiccToken *chibicc_macro_expansion_def(ChibiccMacroExpansion *e);
-ChibiccToken *chibicc_macro_expansion_arg(ChibiccMacroExpansion *e, int i);
-int chibicc_macro_expansion_arg_count(ChibiccMacroExpansion *e);
-bool chibicc_macro_expansion_is_builtin(ChibiccMacroExpansion *e);
+LibcpToken *libcp_macro_expansion_name(LibcpMacroExpansion *e);
+LibcpToken *libcp_macro_expansion_end(LibcpMacroExpansion *e);
+char *libcp_macro_expansion_macro(LibcpMacroExpansion *e);
+LibcpToken *libcp_macro_expansion_def(LibcpMacroExpansion *e);
+LibcpToken *libcp_macro_expansion_arg(LibcpMacroExpansion *e, int i);
+int libcp_macro_expansion_arg_count(LibcpMacroExpansion *e);
+bool libcp_macro_expansion_is_builtin(LibcpMacroExpansion *e);
 ```
 
 - `name`: 调用点的宏名 token.
@@ -448,8 +448,8 @@ bool chibicc_macro_expansion_is_builtin(ChibiccMacroExpansion *e);
 ### 9.9.3 通道
 
 ```c
-void chibicc_expansion_dump(ChibiccContext *ctx, ChibiccToken *tok, FILE *out);
-bool chibicc_expansion_verify(ChibiccContext *ctx, ChibiccToken *tok);
+void libcp_expansion_dump(LibcpContext *ctx, LibcpToken *tok, FILE *out);
+bool libcp_expansion_verify(LibcpContext *ctx, LibcpToken *tok);
 ```
 
 - `dump`: 每个非 EOF token 一行.
@@ -458,11 +458,11 @@ bool chibicc_expansion_verify(ChibiccContext *ctx, ChibiccToken *tok);
 ## 9.10 版本 API
 
 ```c
-#define CHIBICC_VERSION "0.1.0"
-const char *chibicc_version(void);
+#define LIBCP_VERSION "0.1.0"
+const char *libcp_version(void);
 ```
 
-`CHIBICC_VERSION` 与 Makefile 的 `VERSION` 同步, 由 `test/install.sh` 校验.
+`LIBCP_VERSION` 与 Makefile 的 `VERSION` 同步, 由 `test/install.sh` 校验.
 
 只承诺源码兼容. 公共结构体字段变化就是版本变化.
 
@@ -470,25 +470,25 @@ const char *chibicc_version(void);
 
 | 入口 | 成功 | 失败 |
 |---|---|---|
-| `chibicc_tokenize_file` | token 链 | NULL + `failed` |
-| `chibicc_tokenize_buffer` | token 链 | NULL + `failed` |
-| `chibicc_tokenize_buffer_len` | token 链 | NULL + `failed` |
-| `chibicc_preprocess` | token 链 | NULL + `failed` |
-| `chibicc_cst_parse` | 树 | NULL + `failed` |
-| `chibicc_cst_verify` | true | false (或 false + `failed`) |
-| `chibicc_parse` | 树 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
-| `chibicc_sema` | `Obj` 链 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
-| `chibicc_expansion_verify` | true | false |
-| `chibicc_reconstruct` / `_cst_reconstruct` / `_cst_dump` / `_expansion_dump` | 返回 | 提前返回 |
-| `chibicc_context_*` 配置 | 返回 | 无返回; 分配失败时配置可能未生效 |
+| `libcp_tokenize_file` | token 链 | NULL + `failed` |
+| `libcp_tokenize_buffer` | token 链 | NULL + `failed` |
+| `libcp_tokenize_buffer_len` | token 链 | NULL + `failed` |
+| `libcp_preprocess` | token 链 | NULL + `failed` |
+| `libcp_cst_parse` | 树 | NULL + `failed` |
+| `libcp_cst_verify` | true | false (或 false + `failed`) |
+| `libcp_parse` | 树 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
+| `libcp_sema` | `Obj` 链 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
+| `libcp_expansion_verify` | true | false |
+| `libcp_reconstruct` / `_cst_reconstruct` / `_cst_dump` / `_expansion_dump` | 返回 | 提前返回 |
+| `libcp_context_*` 配置 | 返回 | 无返回; 分配失败时配置可能未生效 |
 
 错误处理模板:
 
 ```c
-ChibiccNode *ast = chibicc_parse(ctx, tok);
-if (chibicc_context_failed(ctx)) {
+LibcpNode *ast = libcp_parse(ctx, tok);
+if (libcp_context_failed(ctx)) {
   /* 错误已经通过回调报告 */
-  chibicc_context_reset(ctx);
+  libcp_context_reset(ctx);
   return -1;
 }
 if (!ast) {
@@ -510,45 +510,45 @@ if (!ast) {
 
 ## 9.13 完整示例
 
-下面的程序已经用 `cc -std=c11 -Ilibchibicc/include example.c libchibicc.a` 编译并运行. 它依次使用第 1 层, 第 2 层, 编译路径和 provenance.
+下面的程序已经用 `cc -std=c11 -Ilibcp/include example.c libcp.a` 编译并运行. 它依次使用第 1 层, 第 2 层, 编译路径和 provenance.
 
 ```c
-#include <chibicc/chibicc.h>
+#include <libcp/libcp.h>
 #include <stdio.h>
 #include <string.h>
 
-static void on_diag(void *user, const ChibiccDiagnostic *d) {
+static void on_diag(void *user, const LibcpDiagnostic *d) {
   (void)user;
   fprintf(stderr, "%s:%d:%d: %s\n",
           d->filename ? d->filename : "<input>",
           d->line, d->column, d->message);
 }
 
-static int count(ChibiccObj *o) {
+static int count(LibcpObj *o) {
   int n = 0;
   for (; o; o = o->next)
     n++;
   return n;
 }
 
-static int pipeline(ChibiccContext *ctx, char *src) {
-  ChibiccToken *tok = chibicc_tokenize_buffer(ctx, "<example>", src);
+static int pipeline(LibcpContext *ctx, char *src) {
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<example>", src);
   if (!tok)
     return 1;
 
-  tok = chibicc_preprocess(ctx, tok);
+  tok = libcp_preprocess(ctx, tok);
   if (!tok)
     return 1;
 
-  ChibiccNode *ast = chibicc_parse(ctx, tok);
-  if (!ast && chibicc_context_failed(ctx))
+  LibcpNode *ast = libcp_parse(ctx, tok);
+  if (!ast && libcp_context_failed(ctx))
     return 1;
 
-  ChibiccObj *prog = chibicc_sema(ctx, ast);
-  if (!prog && chibicc_context_failed(ctx))
+  LibcpObj *prog = libcp_sema(ctx, ast);
+  if (!prog && libcp_context_failed(ctx))
     return 1;
 
-  for (ChibiccObj *o = prog; o; o = o->next) {
+  for (LibcpObj *o = prog; o; o = o->next) {
     if (!o->is_definition)
       continue;
     if (o->is_function)
@@ -561,8 +561,8 @@ static int pipeline(ChibiccContext *ctx, char *src) {
 }
 
 int main(void) {
-  ChibiccContext *ctx = chibicc_context_new();
-  chibicc_context_set_diagnostic(ctx, on_diag, NULL);
+  LibcpContext *ctx = libcp_context_new();
+  libcp_context_set_diagnostic(ctx, on_diag, NULL);
 
   char *src =
       "struct point { int x; int y; };\n"
@@ -571,9 +571,9 @@ int main(void) {
       "int add(int a, int b) { return a + b; }\n";
 
   /* Layer 1: reconstruct the exact bytes. */
-  ChibiccToken *raw = chibicc_tokenize_buffer(ctx, "<example>", src);
+  LibcpToken *raw = libcp_tokenize_buffer(ctx, "<example>", src);
   FILE *f = tmpfile();
-  chibicc_reconstruct(ctx, raw, f);
+  libcp_reconstruct(ctx, raw, f);
   fflush(f);
   rewind(f);
   char buf[256];
@@ -583,31 +583,31 @@ int main(void) {
   printf("reconstruct equal: %d\n", strcmp(buf, src) == 0);
 
   /* Layer 2: build the CST from a second tokenize. */
-  ChibiccToken *raw2 = chibicc_tokenize_buffer(ctx, "<example>", src);
-  ChibiccCstNode *cst = chibicc_cst_parse(ctx, raw2);
+  LibcpToken *raw2 = libcp_tokenize_buffer(ctx, "<example>", src);
+  LibcpCstNode *cst = libcp_cst_parse(ctx, raw2);
   printf("cst root=%d children=%d verify=%d\n",
          (int)cst->kind, cst->child_count,
-         (int)chibicc_cst_verify(ctx, cst, raw2));
+         (int)libcp_cst_verify(ctx, cst, raw2));
 
   /* Compile path. */
   if (pipeline(ctx, src))
     return 1;
 
   /* Provenance of the N expansion. */
-  ChibiccToken *t = chibicc_tokenize_buffer(ctx, "<example>", src);
-  t = chibicc_preprocess(ctx, t);
+  LibcpToken *t = libcp_tokenize_buffer(ctx, "<example>", src);
+  t = libcp_preprocess(ctx, t);
   for (; t && t->kind != TK_EOF; t = t->next) {
-    ChibiccMacroProv *p = chibicc_token_provenance(t);
+    LibcpMacroProv *p = libcp_token_provenance(t);
     if (!p)
       continue;
-    ChibiccMacroExpansion *e = chibicc_macro_prov_expansion(p);
+    LibcpMacroExpansion *e = libcp_macro_prov_expansion(p);
     printf("expanded %.*s via %s (arg %d)\n",
            t->len, t->loc,
-           chibicc_macro_expansion_macro(e),
-           chibicc_macro_prov_arg_index(p));
+           libcp_macro_expansion_macro(e),
+           libcp_macro_prov_arg_index(p));
   }
 
-  chibicc_context_free(ctx);
+  libcp_context_free(ctx);
   return 0;
 }
 ```
@@ -637,8 +637,8 @@ expanded 3 via N (arg -1)
 ### 9.14.1 保留注释地读源码
 
 ```c
-ChibiccToken *raw = chibicc_tokenize_file(ctx, path);
-ChibiccCstNode *cst = chibicc_cst_parse(ctx, raw);
+LibcpToken *raw = libcp_tokenize_file(ctx, path);
+LibcpCstNode *cst = libcp_cst_parse(ctx, raw);
 /* 遍历 cst, 注释在叶子 token 的 trivia 里 */
 ```
 
@@ -647,8 +647,8 @@ ChibiccCstNode *cst = chibicc_cst_parse(ctx, raw);
 ### 9.14.2 只做词法
 
 ```c
-ChibiccToken *tok = chibicc_tokenize_file(ctx, path);
-for (ChibiccToken *t = tok; t && t->kind != TK_EOF; t = t->next) {
+LibcpToken *tok = libcp_tokenize_file(ctx, path);
+for (LibcpToken *t = tok; t && t->kind != TK_EOF; t = t->next) {
   /* 读 t->raw_loc / t->raw_len / t->trivia */
 }
 ```
@@ -660,12 +660,12 @@ for (ChibiccToken *t = tok; t && t->kind != TK_EOF; t = t->next) {
 用第 4 层:
 
 ```c
-ChibiccObj *prog = chibicc_sema(ctx, ast);
-for (ChibiccObj *o = prog; o; o = o->next) {
+LibcpObj *prog = libcp_sema(ctx, ast);
+for (LibcpObj *o = prog; o; o = o->next) {
   if (!o->is_function || !o->is_definition)
     continue;
   printf("%s(", o->name);
-  for (ChibiccObj *p = o->params; p; p = p->next)
+  for (LibcpObj *p = o->params; p; p = p->next)
     printf("%s%s", p == o->params ? "" : ", ", p->name);
   printf(")\n");
 }
@@ -676,13 +676,13 @@ for (ChibiccObj *o = prog; o; o = o->next) {
 ### 9.14.4 追踪宏展开
 
 ```c
-ChibiccToken *t = chibicc_preprocess(ctx, tok);
+LibcpToken *t = libcp_preprocess(ctx, tok);
 for (; t && t->kind != TK_EOF; t = t->next) {
-  for (ChibiccMacroProv *p = chibicc_token_provenance(t); p;
-       p = chibicc_macro_prov_next(p)) {
-    ChibiccMacroExpansion *e = chibicc_macro_prov_expansion(p);
+  for (LibcpMacroProv *p = libcp_token_provenance(t); p;
+       p = libcp_macro_prov_next(p)) {
+    LibcpMacroExpansion *e = libcp_macro_prov_expansion(p);
     printf("%.*s <- %s\n", t->len, t->loc,
-           chibicc_macro_expansion_macro(e));
+           libcp_macro_expansion_macro(e));
   }
 }
 ```
@@ -690,13 +690,13 @@ for (; t && t->kind != TK_EOF; t = t->next) {
 ### 9.14.5 批量处理多个 TU
 
 ```c
-ChibiccContext *ctx = chibicc_context_new();
+LibcpContext *ctx = libcp_context_new();
 /* 配置一次 */
 for (int i = 0; i < n; i++) {
   process(ctx, files[i]);
-  chibicc_context_reset(ctx);
+  libcp_context_reset(ctx);
 }
-chibicc_context_free(ctx);
+libcp_context_free(ctx);
 ```
 
 配置在 reset 后保留. 每个文件之间状态隔离.
@@ -704,8 +704,8 @@ chibicc_context_free(ctx);
 ### 9.14.6 出错后复用
 
 ```c
-if (chibicc_context_failed(ctx)) {
-  chibicc_context_reset(ctx);
+if (libcp_context_failed(ctx)) {
+  libcp_context_reset(ctx);
   /* 重新开始 */
 }
 ```
@@ -716,10 +716,10 @@ if (chibicc_context_failed(ctx)) {
 
 ```sh
 # pkg-config
-cc app.c $(pkg-config --cflags --libs libchibicc)
+cc app.c $(pkg-config --cflags --libs libcp)
 
 # 手工
-cc -std=c11 -I/usr/local/include app.c -L/usr/local/lib -lchibicc
+cc -std=c11 -I/usr/local/include app.c -L/usr/local/lib -lcp
 ```
 
 安装布局见第 10 章.
@@ -730,7 +730,7 @@ cc -std=c11 -I/usr/local/include app.c -L/usr/local/lib -lchibicc
 
 ```cpp
 extern "C" {
-#include <chibicc/chibicc.h>
+#include <libcp/libcp.h>
 }
 ```
 

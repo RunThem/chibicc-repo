@@ -27,7 +27,7 @@
 
 如果 CST 建在展开流上, 无论树形多细, 都无法重建原始文件. 因此 CST 的输入被固定在 `tokenize_file()` 的直接输出上.
 
-这条边界也带来一个操作约束: `chibicc_preprocess` 会破坏输入链, 所以 CST 必须在它之前建, 或者对同一个文件重新 tokenize. 公共头 `preprocess.h` 明确写了这一点.
+这条边界也带来一个操作约束: `libcp_preprocess` 会破坏输入链, 所以 CST 必须在它之前建, 或者对同一个文件重新 tokenize. 公共头 `preprocess.h` 明确写了这一点.
 
 ### 5.2.2 全函数, 不报错
 
@@ -71,19 +71,19 @@ typedef int (*T)(int);
 ### 5.3.1 节点
 
 ```c
-typedef struct chibicc_cst_node ChibiccCstNode;
+typedef struct libcp_cst_node LibcpCstNode;
 
-struct chibicc_cst_node {
-  ChibiccCstKind kind;
-  ChibiccToken *tok;          /* 叶子节点: CST_TOKEN / CST_EOF */
-  ChibiccCstNode **children;  /* 内部节点 */
+struct libcp_cst_node {
+  LibcpCstKind kind;
+  LibcpToken *tok;          /* 叶子节点: CST_TOKEN / CST_EOF */
+  LibcpCstNode **children;  /* 内部节点 */
   int child_count;
 };
 ```
 
 `children` 的容量不在公共结构里. 它在数组前有一个私有 header, 由 `cst.c` 管理. 消费者只能读 `children[0 .. child_count)`, 不能扩容或释放.
 
-叶子节点的 `tok` 直接指向第 1 层的 token. **CST 不复制 token**. 因此 `chibicc_cst_verify` 可以用指针相等比较叶子序列和 token 流.
+叶子节点的 `tok` 直接指向第 1 层的 token. **CST 不复制 token**. 因此 `libcp_cst_verify` 可以用指针相等比较叶子序列和 token 流.
 
 ### 5.3.2 55 种节点
 
@@ -107,7 +107,7 @@ struct chibicc_cst_node {
 
 ### 5.3.3 dump 格式
 
-`chibicc_cst_dump` 输出缩进两格的树:
+`libcp_cst_dump` 输出缩进两格的树:
 
 ```text
 TU
@@ -192,7 +192,7 @@ CstNode *cst_parse(Token *tok) {
 
 ## 5.5 阶段产物
 
-产物是一棵 `ChibiccCstNode` 树:
+产物是一棵 `LibcpCstNode` 树:
 
 - 根是 `CST_TRANSLATION_UNIT`.
 - 叶子按序覆盖输入 token 流, 包括 EOF.
@@ -202,9 +202,9 @@ CstNode *cst_parse(Token *tok) {
 
 配套能力:
 
-- `chibicc_cst_reconstruct`: 按叶子输出 trivia 加拼写.
-- `chibicc_cst_dump`: 树形打印.
-- `chibicc_cst_verify`: 校验叶子序列与 token 流逐指针相等.
+- `libcp_cst_reconstruct`: 按叶子输出 trivia 加拼写.
+- `libcp_cst_dump`: 树形打印.
+- `libcp_cst_verify`: 校验叶子序列与 token 流逐指针相等.
 
 ## 5.6 产物可以做什么
 
@@ -229,8 +229,8 @@ CstNode *cst_parse(Token *tok) {
 ### 5.7.1 建树
 
 ```c
-ChibiccToken *raw = chibicc_tokenize_file(ctx, "input.c");
-ChibiccCstNode *root = chibicc_cst_parse(ctx, raw);
+LibcpToken *raw = libcp_tokenize_file(ctx, "input.c");
+LibcpCstNode *root = libcp_cst_parse(ctx, raw);
 if (!root) {
   /* 解析器是全函数, 理论上只在内存不足或上下文错误时返回 NULL */
 }
@@ -242,7 +242,7 @@ if (!root) {
 
 ```c
 FILE *out = fopen("rebuilt.c", "wb");
-chibicc_cst_reconstruct(ctx, root, out);
+libcp_cst_reconstruct(ctx, root, out);
 fclose(out);
 ```
 
@@ -255,7 +255,7 @@ cmp input.c rebuilt.c
 ### 5.7.3 校验叶子
 
 ```c
-if (!chibicc_cst_verify(ctx, root, raw))
+if (!libcp_cst_verify(ctx, root, raw))
   fprintf(stderr, "CST leaves do not match the token stream\n");
 ```
 
@@ -268,7 +268,7 @@ if (!chibicc_cst_verify(ctx, root, raw))
 ### 5.7.4 遍历树
 
 ```c
-static void walk(ChibiccCstNode *n, int depth) {
+static void walk(LibcpCstNode *n, int depth) {
   for (int i = 0; i < depth; i++)
     fputs("  ", stdout);
   printf("kind=%d", (int)n->kind);

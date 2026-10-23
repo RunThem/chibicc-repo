@@ -1,28 +1,28 @@
-# The allocator build switch (chibicc/allocator.h): the default build
+# The allocator build switch (libcp/allocator.h): the default build
 # selects the C library allocator. A custom build overrides
 # ALLOCATOR_CFLAGS with an -include shim header plus the four
-# CHIBICC_* macros and leaves CHIBICC_DEFAULT_ALLOCATOR undefined.
-ALLOCATOR_CFLAGS ?= -DCHIBICC_DEFAULT_ALLOCATOR
-CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch $(ALLOCATOR_CFLAGS) -Ilibchibicc/include -Ilibchibicc/src
+# LIBCP_* macros and leaves LIBCP_DEFAULT_ALLOCATOR undefined.
+ALLOCATOR_CFLAGS ?= -DLIBCP_DEFAULT_ALLOCATOR
+CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch $(ALLOCATOR_CFLAGS) -Ilibcp/include -Ilibcp/src
 
-# Keep VERSION in sync with CHIBICC_VERSION in the public umbrella.
+# Keep VERSION in sync with LIBCP_VERSION in the public umbrella.
 VERSION=0.1.0
 PREFIX ?= /usr/local
 DESTDIR ?=
 INSTALL ?= install
 
-LIB_DIR=libchibicc/src
+LIB_DIR=libcp/src
 LIB_SRCS=$(wildcard $(LIB_DIR)/*.c)
 LIB_OBJS=$(LIB_SRCS:.c=.o)
-LIB_HDR=$(LIB_DIR)/chibicc.h
+LIB_HDR=$(LIB_DIR)/libcp.h
 DRIVER_SRCS=main.c codegen.c
 DRIVER_OBJS=$(DRIVER_SRCS:.c=.o)
-PUBLIC_HDRS=$(wildcard libchibicc/include/chibicc/*.h)
+PUBLIC_HDRS=$(wildcard libcp/include/libcp/*.h)
 
 # The Pratt expression parser build (PLAN-pratt-parse 4.1). Out-of-tree
 # objects, so the default build is never polluted by a CFLAGS switch the
 # makefile does not track.
-PRATT_CFLAGS=$(CFLAGS) -DCHIBICC_PRATT_PARSE_FEATURE=1
+PRATT_CFLAGS=$(CFLAGS) -DLIBCP_PRATT_PARSE_FEATURE=1
 PRATT_LIB_OBJS=$(LIB_SRCS:$(LIB_DIR)/%.c=pratt/$(LIB_DIR)/%.o)
 PRATT_DRIVER_OBJS=$(DRIVER_OBJS:%=pratt/%)
 PRATT_TESTS=$(TEST_SRCS:test/%.c=pratt/test/%.exe)
@@ -33,21 +33,21 @@ TESTS=$(TEST_SRCS:.c=.exe)
 # Linux also builds the shared library (PLAN L3.3b); macOS only promises
 # the archive.
 ifeq ($(shell uname -s),Linux)
-ALL=chibicc libchibicc.so
-CHECK_LIBS=libchibicc.a libchibicc.so
+ALL=chibicc libcp.so
+CHECK_LIBS=libcp.a libcp.so
 else
 ALL=chibicc
-CHECK_LIBS=libchibicc.a
+CHECK_LIBS=libcp.a
 endif
 
 all: $(ALL)
 
 # Stage 1
 
-chibicc: libchibicc.a $(DRIVER_OBJS)
-	$(CC) $(CFLAGS) -o $@ $(DRIVER_OBJS) libchibicc.a $(LDFLAGS)
+chibicc: libcp.a $(DRIVER_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(DRIVER_OBJS) libcp.a $(LDFLAGS)
 
-libchibicc.a: $(LIB_OBJS)
+libcp.a: $(LIB_OBJS)
 	$(AR) rcs $@ $^
 
 # The Pratt build: `make chibicc-pratt` is the only target that turns the
@@ -59,21 +59,21 @@ pratt/%.o: %.c $(LIB_HDR) $(PUBLIC_HDRS)
 
 pratt/main.o pratt/codegen.o: driver.h
 
-pratt/libchibicc.a: $(PRATT_LIB_OBJS)
+pratt/libcp.a: $(PRATT_LIB_OBJS)
 	$(AR) rcs $@ $^
 
-chibicc-pratt: pratt/libchibicc.a $(PRATT_DRIVER_OBJS)
-	$(CC) $(PRATT_CFLAGS) -o $@ $(PRATT_DRIVER_OBJS) pratt/libchibicc.a $(LDFLAGS)
+chibicc-pratt: pratt/libcp.a $(PRATT_DRIVER_OBJS)
+	$(CC) $(PRATT_CFLAGS) -o $@ $(PRATT_DRIVER_OBJS) pratt/libcp.a $(LDFLAGS)
 
 # The shared library (PLAN L3.3b): Linux only, PIC objects built with
-# hidden visibility, D7 exported through CHIBICC_API. macOS only
+# hidden visibility, D7 exported through LIBCP_API. macOS only
 # promises the archive.
 ifeq ($(shell uname -s),Linux)
-libchibicc.so.0: $(LIB_SRCS:.c=.pic.o)
-	$(CC) $(CFLAGS) -shared -Wl,-soname,libchibicc.so.0 -o $@ $^
+libcp.so.0: $(LIB_SRCS:.c=.pic.o)
+	$(CC) $(CFLAGS) -shared -Wl,-soname,libcp.so.0 -o $@ $^
 
-libchibicc.so: libchibicc.so.0
-	ln -sf libchibicc.so.0 $@
+libcp.so: libcp.so.0
+	ln -sf libcp.so.0 $@
 
 %.pic.o: %.c $(LIB_HDR) $(PUBLIC_HDRS)
 	$(CC) $(CFLAGS) -fPIC -fvisibility=hidden -c -o $@ $<
@@ -99,7 +99,7 @@ test: $(TESTS)
 	test/library.sh
 	test/allocator.sh
 	test/self-test.sh
-	CHIBICC_LIB="$(CURDIR)/libchibicc.a" test/context-audit.sh --strict
+	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
 
 pratt/test/%.exe: chibicc-pratt test/%.c
 	mkdir -p pratt/test
@@ -116,9 +116,9 @@ test-pratt: $(PRATT_TESTS)
 	test/trivia.sh ./chibicc-pratt
 	test/cst.sh ./chibicc-pratt
 	test/expand.sh ./chibicc-pratt
-	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/library.sh
-	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/self-test.sh
-	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" test/context-audit.sh --strict
+	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" LIBCP_PRATT_PARSE_FEATURE=1 test/library.sh
+	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" LIBCP_PRATT_PARSE_FEATURE=1 test/self-test.sh
+	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" test/context-audit.sh --strict
 
 test-both: test test-pratt
 
@@ -130,9 +130,9 @@ test-ab: chibicc chibicc-pratt
 test-all: test test-stage2
 
 # The public-surface gate (PLAN L3.1d): header self-containment, a
-# consumer that sees only libchibicc/include, the symbol checks, and the
+# consumer that sees only libcp/include, the symbol checks, and the
 # install / pkg-config layout (L3.3c).
-check-library: $(CHECK_LIBS) libchibicc.pc
+check-library: $(CHECK_LIBS) libcp.pc
 	test/library.sh
 	test/allocator.sh
 	test/public-api.sh
@@ -140,34 +140,34 @@ check-library: $(CHECK_LIBS) libchibicc.pc
 
 # The same public-surface and consumer gates against the Pratt archive.
 # The headers and the D7 set are mode-independent; this proves the archive
-# built with CHIBICC_PRATT_PARSE_FEATURE=1 still satisfies them. install.sh
+# built with LIBCP_PRATT_PARSE_FEATURE=1 still satisfies them. install.sh
 # is about the installed layout and is run once by check-library.
-check-library-pratt: pratt/libchibicc.a libchibicc.pc
-	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/library.sh
-	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" test/public-api.sh
+check-library-pratt: pratt/libcp.a libcp.pc
+	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" LIBCP_PRATT_PARSE_FEATURE=1 test/library.sh
+	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" test/public-api.sh
 
 # The implicit-context gate (PLAN-explicit-context E10): the library has
 # no thread-local accessor, and codegen carries no context pointer of its
 # own. Run by test / test-pratt and available on its own.
-check-context: libchibicc.a
-	CHIBICC_LIB="$(CURDIR)/libchibicc.a" test/context-audit.sh --strict
+check-context: libcp.a
+	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
 
-check-context-pratt: pratt/libchibicc.a
-	CHIBICC_LIB="$(CURDIR)/pratt/libchibicc.a" test/context-audit.sh --strict
+check-context-pratt: pratt/libcp.a
+	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" test/context-audit.sh --strict
 
 # Stage 2
 
 STAGE2_LIB_OBJS=$(LIB_SRCS:$(LIB_DIR)/%.c=stage2/$(LIB_DIR)/%.o)
 
-stage2/chibicc: stage2/libchibicc.a $(DRIVER_OBJS:%=stage2/%)
-	$(CC) $(CFLAGS) -o $@ $(DRIVER_OBJS:%=stage2/%) stage2/libchibicc.a $(LDFLAGS)
+stage2/chibicc: stage2/libcp.a $(DRIVER_OBJS:%=stage2/%)
+	$(CC) $(CFLAGS) -o $@ $(DRIVER_OBJS:%=stage2/%) stage2/libcp.a $(LDFLAGS)
 
-stage2/libchibicc.a: $(STAGE2_LIB_OBJS)
+stage2/libcp.a: $(STAGE2_LIB_OBJS)
 	$(AR) rcs $@ $^
 
 stage2/%.o: %.c chibicc $(LIB_HDR) $(PUBLIC_HDRS)
 	mkdir -p $(@D)
-	./chibicc -DCHIBICC_DEFAULT_ALLOCATOR -Ilibchibicc/include -Ilibchibicc/src -c -o $@ $<
+	./chibicc -DLIBCP_DEFAULT_ALLOCATOR -Ilibcp/include -Ilibcp/src -c -o $@ $<
 
 stage2/main.o stage2/codegen.o: driver.h
 
@@ -176,7 +176,7 @@ stage2/test/%.exe: stage2/chibicc test/%.c
 	./stage2/chibicc -Iinclude -Itest -c -o stage2/test/$*.o test/$*.c
 	$(CC) -pthread -o $@ stage2/test/$*.o -xc test/common
 
-test-stage2: libchibicc.a stage2/libchibicc.a $(TESTS:test/%=stage2/test/%)
+test-stage2: libcp.a stage2/libcp.a $(TESTS:test/%=stage2/test/%)
 	for i in $(TESTS:test/%=stage2/test/%); do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./stage2/chibicc
 	test/diagnostic.sh ./stage2/chibicc
@@ -186,22 +186,22 @@ test-stage2: libchibicc.a stage2/libchibicc.a $(TESTS:test/%=stage2/test/%)
 	test/trivia.sh ./stage2/chibicc
 	test/cst.sh ./stage2/chibicc
 	test/expand.sh ./stage2/chibicc
-	CHIBICC_LIB="$(CURDIR)/stage2/libchibicc.a" test/library.sh
-	CHIBICC_LIB="$(CURDIR)/stage2/libchibicc.a" test/self-test.sh
+	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/library.sh
+	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/self-test.sh
 
 # Stage 2 of the Pratt build: chibicc-pratt compiles the same sources with
 # the feature on, so the self-hosted compiler exercises the Pratt path.
 STAGE2_PRATT_LIB_OBJS=$(LIB_SRCS:$(LIB_DIR)/%.c=stage2-pratt/$(LIB_DIR)/%.o)
 
-stage2-pratt/chibicc: stage2-pratt/libchibicc.a $(DRIVER_OBJS:%=stage2-pratt/%)
-	$(CC) $(CFLAGS) -o $@ $(DRIVER_OBJS:%=stage2-pratt/%) stage2-pratt/libchibicc.a $(LDFLAGS)
+stage2-pratt/chibicc: stage2-pratt/libcp.a $(DRIVER_OBJS:%=stage2-pratt/%)
+	$(CC) $(CFLAGS) -o $@ $(DRIVER_OBJS:%=stage2-pratt/%) stage2-pratt/libcp.a $(LDFLAGS)
 
-stage2-pratt/libchibicc.a: $(STAGE2_PRATT_LIB_OBJS)
+stage2-pratt/libcp.a: $(STAGE2_PRATT_LIB_OBJS)
 	$(AR) rcs $@ $^
 
 stage2-pratt/%.o: %.c chibicc-pratt $(LIB_HDR) $(PUBLIC_HDRS)
 	mkdir -p $(@D)
-	./chibicc-pratt -DCHIBICC_PRATT_PARSE_FEATURE=1 -DCHIBICC_DEFAULT_ALLOCATOR -Ilibchibicc/include -Ilibchibicc/src -c -o $@ $<
+	./chibicc-pratt -DLIBCP_PRATT_PARSE_FEATURE=1 -DLIBCP_DEFAULT_ALLOCATOR -Ilibcp/include -Ilibcp/src -c -o $@ $<
 
 stage2-pratt/main.o stage2-pratt/codegen.o: driver.h
 
@@ -210,7 +210,7 @@ stage2-pratt/test/%.exe: stage2-pratt/chibicc test/%.c
 	./stage2-pratt/chibicc -Iinclude -Itest -c -o stage2-pratt/test/$*.o test/$*.c
 	$(CC) -pthread -o $@ stage2-pratt/test/$*.o -xc test/common
 
-test-stage2-pratt: libchibicc.a stage2-pratt/libchibicc.a $(TESTS:test/%=stage2-pratt/test/%)
+test-stage2-pratt: libcp.a stage2-pratt/libcp.a $(TESTS:test/%=stage2-pratt/test/%)
 	for i in $(TESTS:test/%=stage2-pratt/test/%); do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./stage2-pratt/chibicc
 	test/diagnostic.sh ./stage2-pratt/chibicc
@@ -220,34 +220,34 @@ test-stage2-pratt: libchibicc.a stage2-pratt/libchibicc.a $(TESTS:test/%=stage2-
 	test/trivia.sh ./stage2-pratt/chibicc
 	test/cst.sh ./stage2-pratt/chibicc
 	test/expand.sh ./stage2-pratt/chibicc
-	CHIBICC_LIB="$(CURDIR)/stage2-pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/library.sh
-	CHIBICC_LIB="$(CURDIR)/stage2-pratt/libchibicc.a" CHIBICC_PRATT_PARSE_FEATURE=1 test/self-test.sh
+	LIBCP_LIB="$(CURDIR)/stage2-pratt/libcp.a" LIBCP_PRATT_PARSE_FEATURE=1 test/library.sh
+	LIBCP_LIB="$(CURDIR)/stage2-pratt/libcp.a" LIBCP_PRATT_PARSE_FEATURE=1 test/self-test.sh
 
 # Packaging (PLAN L3.3c).
 
-libchibicc.pc: libchibicc.pc.in
+libcp.pc: libcp.pc.in
 	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(VERSION)|g' $< > $@
 
 install: all
-	$(INSTALL) -d $(DESTDIR)$(PREFIX)/include/chibicc
-	$(INSTALL) -m 644 $(PUBLIC_HDRS) $(DESTDIR)$(PREFIX)/include/chibicc
+	$(INSTALL) -d $(DESTDIR)$(PREFIX)/include/libcp
+	$(INSTALL) -m 644 $(PUBLIC_HDRS) $(DESTDIR)$(PREFIX)/include/libcp
 	$(INSTALL) -d $(DESTDIR)$(PREFIX)/lib
-	$(INSTALL) -m 644 libchibicc.a $(DESTDIR)$(PREFIX)/lib
+	$(INSTALL) -m 644 libcp.a $(DESTDIR)$(PREFIX)/lib
 ifeq ($(shell uname -s),Linux)
-	$(INSTALL) -m 755 libchibicc.so.0 $(DESTDIR)$(PREFIX)/lib
-	ln -sf libchibicc.so.0 $(DESTDIR)$(PREFIX)/lib/libchibicc.so
+	$(INSTALL) -m 755 libcp.so.0 $(DESTDIR)$(PREFIX)/lib
+	ln -sf libcp.so.0 $(DESTDIR)$(PREFIX)/lib/libcp.so
 endif
 	$(INSTALL) -d $(DESTDIR)$(PREFIX)/lib/pkgconfig
 	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(VERSION)|g' \
-	  libchibicc.pc.in > libchibicc.pc.tmp
-	$(INSTALL) -m 644 libchibicc.pc.tmp \
-	  $(DESTDIR)$(PREFIX)/lib/pkgconfig/libchibicc.pc
-	rm -f libchibicc.pc.tmp
+	  libcp.pc.in > libcp.pc.tmp
+	$(INSTALL) -m 644 libcp.pc.tmp \
+	  $(DESTDIR)$(PREFIX)/lib/pkgconfig/libcp.pc
+	rm -f libcp.pc.tmp
 
 # Misc.
 
 clean:
-	rm -rf chibicc libchibicc.a libchibicc.so libchibicc.so.0 libchibicc.pc tmp* $(TESTS) test/*.s test/*.exe stage2 pratt stage2-pratt chibicc-pratt
+	rm -rf chibicc libcp.a libcp.so libcp.so.0 libcp.pc tmp* $(TESTS) test/*.s test/*.exe stage2 pratt stage2-pratt chibicc-pratt
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 # Docker (amd64 Linux) 测试环境: 本机是 macOS ARM64, chibicc 生成的 x86-64 代码
@@ -260,7 +260,7 @@ clean:
 THIRDPARTY ?= tinycc libpng git sqlite cpython
 
 # 拷贝源码到容器可写层(排除本机构建产物与 thirdparty 缓存)
-BOOT = mkdir -p /work && tar -C /src --exclude=./.git --exclude=./.cache --exclude=./thirdparty --exclude=./chibicc --exclude=./chibicc-pratt --exclude=./libchibicc.a --exclude="./libchibicc.so*" --exclude=./stage2 --exclude=./stage2-pratt --exclude=./pratt --exclude=./compile_commands.json --exclude=./test/*.exe --exclude="*.o" --exclude="*.s" -cf - . | tar -C /work -xf -
+BOOT = mkdir -p /work && tar -C /src --exclude=./.git --exclude=./.cache --exclude=./thirdparty --exclude=./chibicc --exclude=./chibicc-pratt --exclude=./libcp.a --exclude="./libcp.so*" --exclude=./stage2 --exclude=./stage2-pratt --exclude=./pratt --exclude=./compile_commands.json --exclude=./test/*.exe --exclude="*.o" --exclude="*.s" -cf - . | tar -C /work -xf -
 
 docker-image:
 	docker build --platform linux/amd64 -t chibicc:amd64 .

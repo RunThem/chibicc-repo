@@ -9,10 +9,10 @@
 /chibicc-pratt
 /pratt
 /stage2-pratt
-/libchibicc.a
-/libchibicc.so
-/libchibicc.so.*
-/libchibicc.pc
+/libcp.a
+/libcp.so
+/libcp.so.*
+/libcp.pc
 /test/*.exe
 /stage2
 

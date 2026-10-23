@@ -32,7 +32,7 @@
 //
 // The pass also owns the label namespace and the temporary slots
 // (Obj.ret_buffer, Type::vla_size and friends); the fields it writes
-// are marked as such in chibicc.h. Everything below is the emitter:
+// are marked as such in libcp.h. Everything below is the emitter:
 // no optimization passes, by design.
 
 #include "driver.h"
@@ -158,11 +158,11 @@ static unsigned long bitfield_mask(int width) {
 static char *cur_brk_label;
 static char *cur_cont_label;
 
-static void gen_expr(ChibiccContext *ctx, Node *node);
-static void gen_stmt(ChibiccContext *ctx, Node *node);
-static Node *new_add(ChibiccContext *ctx, Node *lhs, Node *rhs, Token *tok);
-static Node *new_sub(ChibiccContext *ctx, Node *lhs, Node *rhs, Token *tok);
-static Node *lvar_init_comma(ChibiccContext *ctx, Obj *var, InitTree *init, Token *tok);
+static void gen_expr(LibcpContext *ctx, Node *node);
+static void gen_stmt(LibcpContext *ctx, Node *node);
+static Node *new_add(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok);
+static Node *new_sub(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok);
+static Node *lvar_init_comma(LibcpContext *ctx, Obj *var, InitTree *init, Token *tok);
 
 __attribute__((format(printf, 1, 2)))
 static void println(char *fmt, ...) {
@@ -203,7 +203,7 @@ static void popf(int reg) {
 // Round up `n` to the nearest multiple of `align` is in strings.c now:
 // sema needs it too, and codegen must not be the library's dependency.
 
-static char *reg_dx(ChibiccContext *ctx, int sz) {
+static char *reg_dx(LibcpContext *ctx, int sz) {
   switch (sz) {
   case 1: return "%dl";
   case 2: return "%dx";
@@ -213,7 +213,7 @@ static char *reg_dx(ChibiccContext *ctx, int sz) {
   unreachable();
 }
 
-static char *reg_ax(ChibiccContext *ctx, int sz) {
+static char *reg_ax(LibcpContext *ctx, int sz) {
   switch (sz) {
   case 1: return "%al";
   case 2: return "%ax";
@@ -225,7 +225,7 @@ static char *reg_ax(ChibiccContext *ctx, int sz) {
 
 // Compute the absolute address of a given node.
 // It's an error if a given node does not reside in memory.
-static void gen_addr(ChibiccContext *ctx, Node *node) {
+static void gen_addr(LibcpContext *ctx, Node *node) {
   switch (node->kind) {
   case ND_STRING:
     // The literal's anonymous global (PLAN A9.1: the node keeps its
@@ -631,7 +631,7 @@ static void push_struct(Type *ty) {
   }
 }
 
-static void push_args2(ChibiccContext *ctx, Node *args, bool first_pass) {
+static void push_args2(LibcpContext *ctx, Node *args, bool first_pass) {
   if (!args)
     return;
   push_args2(ctx, args->next, first_pass);
@@ -680,7 +680,7 @@ static void push_args2(ChibiccContext *ctx, Node *args, bool first_pass) {
 //
 // - If a function is variadic, set the number of floating-point type
 //   arguments to RAX.
-static int push_args(ChibiccContext *ctx, Node *node) {
+static int push_args(LibcpContext *ctx, Node *node) {
   int stack = 0, gp = 0, fp = 0;
 
   // If the return type is a large struct/union, the caller passes
@@ -868,7 +868,7 @@ static void builtin_alloca(void) {
 }
 
 // Generate code for a given node.
-static void gen_expr(ChibiccContext *ctx, Node *node) {
+static void gen_expr(LibcpContext *ctx, Node *node) {
   // A faithful `+`/`-` still carries its source shape (PLAN B2): the
   // element-size scaling, the `num + ptr` canonicalization and the
   // conversions new_arith applies are made here, at emission, by the
@@ -1466,7 +1466,7 @@ static void gen_expr(ChibiccContext *ctx, Node *node) {
   error_tok(ctx, node->tok, "invalid expression");
 }
 
-static void gen_stmt(ChibiccContext *ctx, Node *node) {
+static void gen_stmt(LibcpContext *ctx, Node *node) {
   println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
 
   switch (node->kind) {
@@ -1694,13 +1694,13 @@ static int label_seq;   // labels handed out since then
 static Node *current_switch;
 static NodeArray cg_labels;  // the labels of the function being shaped
 
-static char *new_label(ChibiccContext *ctx) {
+static char *new_label(LibcpContext *ctx) {
   return format(ctx, ".L..%d", label_base + label_seq++);
 }
 
-static void shape_node(ChibiccContext *ctx, Node *node);
-static bool expand_decl(ChibiccContext *ctx, Node *node);
-static void shape_init_exprs(ChibiccContext *ctx, InitTree *init);
+static void shape_node(LibcpContext *ctx, Node *node);
+static bool expand_decl(LibcpContext *ctx, Node *node);
+static void shape_init_exprs(LibcpContext *ctx, InitTree *init);
 
 // Whether a declaration's type involves a VLA anywhere: its runtime
 // size slot has to exist before assign_lvar_offsets runs, so such a
@@ -1722,7 +1722,7 @@ static bool decl_needs_vla_size(Node *node) {
 // unhooked here (PLAN A8.2). A nested function's body is not entered
 // from here: the program list is its home and this pass walks it from
 // there exactly once (contract 3(e)).
-static void shape_chain(ChibiccContext *ctx, Node **head) {
+static void shape_chain(LibcpContext *ctx, Node **head) {
   for (Node **pp = head; *pp;) {
     Node *n = *pp;
 
@@ -1756,7 +1756,7 @@ static void shape_chain(ChibiccContext *ctx, Node **head) {
 // Descends every subtree a node owns, statements and expressions
 // alike: a break can sit in a statement expression, which is an
 // expression node holding a statement chain.
-static void shape_children(ChibiccContext *ctx, Node *node) {
+static void shape_children(LibcpContext *ctx, Node *node) {
   shape_node(ctx, node->lhs);
   shape_node(ctx, node->rhs);
   shape_node(ctx, node->cond);
@@ -1788,7 +1788,7 @@ static Obj *new_lvar(char *name, Type *ty) {
 // The scaled operand of an additive operator on a pointer: `p + n`
 // advances by sizeof(*p) * n rather than by n, and when the pointee is
 // a VLA, by its runtime size rather than a compile-time one.
-static Node *scale_rhs(ChibiccContext *ctx, Type *ptr_ty, Node *rhs, Token *tok) {
+static Node *scale_rhs(LibcpContext *ctx, Type *ptr_ty, Node *rhs, Token *tok) {
   if (ptr_ty->base->kind == TY_VLA)
     return new_binary(ctx, ND_MUL, rhs, new_var_node(ctx, cg_type(ptr_ty->base)->vla_size, tok), tok);
   return new_binary(ctx, ND_MUL, rhs, new_long(ctx, ptr_ty->base->size, tok), tok);
@@ -1813,7 +1813,7 @@ static Node *mark_lowered(Node *node) {
 // It is both the helper codegen's own builders call and the definition
 // of the faithful lowering the emitter runs at emission (PLAN B2); its
 // product carries the mark either way.
-static Node *new_add(ChibiccContext *ctx, Node *lhs, Node *rhs, Token *tok) {
+static Node *new_add(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
   add_type(ctx, lhs);
   add_type(ctx, rhs);
 
@@ -1836,7 +1836,7 @@ static Node *new_add(ChibiccContext *ctx, Node *lhs, Node *rhs, Token *tok) {
 }
 
 // Like `+`, `-` is overloaded for the pointer type.
-static Node *new_sub(ChibiccContext *ctx, Node *lhs, Node *rhs, Token *tok) {
+static Node *new_sub(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
   add_type(ctx, lhs);
   add_type(ctx, rhs);
 
@@ -1873,7 +1873,7 @@ static Node *new_sub(ChibiccContext *ctx, Node *lhs, Node *rhs, Token *tok) {
 // from sema at A7.1 (it was the mirror of this function for one step):
 // the size variables are slots of this consumer, which is also why the
 // builder cannot live in the library any more.
-static Node *compute_vla_size(ChibiccContext *ctx, Type *ty, Token *tok) {
+static Node *compute_vla_size(LibcpContext *ctx, Type *ty, Token *tok) {
   Node *node = ty->base ? compute_vla_size(ctx, ty->base, tok) : NULL;
 
   if (ty->kind != TY_VLA)
@@ -1895,7 +1895,7 @@ static Node *compute_vla_size(ChibiccContext *ctx, Type *ty, Token *tok) {
 // `sizeof` of a VLA type: a reference to its runtime size variable,
 // computed first if this type has not had its size computed yet
 // (e.g. `sizeof(int[n])` with a fresh type).
-static Node *vla_size_expr(ChibiccContext *ctx, Type *ty, Token *tok) {
+static Node *vla_size_expr(LibcpContext *ctx, Type *ty, Token *tok) {
   if (cg_type(ty)->vla_size)
     return new_var_node(ctx, cg_type(ty)->vla_size, tok);
   Node *lhs = compute_vla_size(ctx, ty, tok);
@@ -1908,7 +1908,7 @@ static Node *vla_size_expr(ChibiccContext *ctx, Type *ty, Token *tok) {
 // dereference of the scaled addition - the shape the faithful
 // subscript would lower to - so no intermediate node needs a second
 // walk (contract 3(d)).
-static Node *init_desg_expr(ChibiccContext *ctx, InitPath *desg, Token *tok) {
+static Node *init_desg_expr(LibcpContext *ctx, InitPath *desg, Token *tok) {
   if (desg->var)
     return new_var_node(ctx, desg->var, tok);
 
@@ -1929,7 +1929,7 @@ static Node *init_desg_expr(ChibiccContext *ctx, InitPath *desg, Token *tok) {
 // resolved tree (moved from sema at A8.1). Aggregates recurse into
 // their children; a union walks only the member the record selected;
 // a partial list is preceded by the MEMZERO in lvar_init_comma below.
-static Node *create_lvar_init(ChibiccContext *ctx, InitTree *init, Type *ty, InitPath *desg, Token *tok) {
+static Node *create_lvar_init(LibcpContext *ctx, InitTree *init, Type *ty, InitPath *desg, Token *tok) {
   if (ty->kind == TY_ARRAY) {
     Node *node = new_node(ctx, ND_NULL_EXPR, tok);
     for (int i = 0; i < ty->array_len; i++) {
@@ -1971,14 +1971,14 @@ static Node *create_lvar_init(ChibiccContext *ctx, InitTree *init, Type *ty, Ini
 // - but the initializer expressions are old nodes nothing else in the
 // tree references, and an expression shared by several records (a
 // range designator) is shaped exactly once here.
-static void shape_init_exprs(ChibiccContext *ctx, InitTree *init);
+static void shape_init_exprs(LibcpContext *ctx, InitTree *init);
 
 // Build the MEMZERO + assignment comma chain that initializes a local
 // variable from its resolved initializer tree. `tok` anchors the
 // synthesized nodes; the record's first token is where the parser used
 // to anchor them. Moved from sema at A8.1 with the declaration
 // expansion; sema itself no longer builds it.
-static Node *lvar_init_comma(ChibiccContext *ctx, Obj *var, InitTree *init, Token *tok) {
+static Node *lvar_init_comma(LibcpContext *ctx, Obj *var, InitTree *init, Token *tok) {
   InitPath desg = {NULL, 0, NULL, var};
 
   // If a partial initializer list is given, the standard requires
@@ -1992,7 +1992,7 @@ static Node *lvar_init_comma(ChibiccContext *ctx, Obj *var, InitTree *init, Toke
   return new_binary(ctx, ND_COMMA, lhs, rhs, tok);
 }
 
-static void shape_init_exprs(ChibiccContext *ctx, InitTree *init) {
+static void shape_init_exprs(LibcpContext *ctx, InitTree *init) {
   if (!init)
     return;
 
@@ -2024,7 +2024,7 @@ static void shape_init_exprs(ChibiccContext *ctx, InitTree *init) {
 // initializer record resolved, and the block-scope static's data
 // image is already in .data. Moved from sema at A8.1; the VLA half
 // came over at A7.1, when the size slots did.
-static bool expand_decl(ChibiccContext *ctx, Node *node) {
+static bool expand_decl(LibcpContext *ctx, Node *node) {
   Obj *var = node->var;
   Token *tok = node->tok;
 
@@ -2087,7 +2087,7 @@ static bool expand_decl(ChibiccContext *ctx, Node *node) {
 // which is the shape `+`/`-` produce; the others are handed to add_type,
 // which converts the multiplicative and bitwise ones and leaves the
 // shifts alone.
-static Node *combine(ChibiccContext *ctx, NodeKind op, Node *lhs, Node *rhs, Token *tok) {
+static Node *combine(LibcpContext *ctx, NodeKind op, Node *lhs, Node *rhs, Token *tok) {
   // The additive case takes operands that already went through
   // new_add/new_sub (this combines a read-modify-write value with its
   // scaled operand), so it is a plain machine arithmetic node too.
@@ -2101,7 +2101,7 @@ static Node *combine(ChibiccContext *ctx, NodeKind op, Node *lhs, Node *rhs, Tok
 
 // Build the `lhs op rhs` operand expression for a compound assignment
 // driven by node->op.
-static Node *compound_op(ChibiccContext *ctx, Node *node, Node *lhs, Token *tok) {
+static Node *compound_op(LibcpContext *ctx, Node *node, Node *lhs, Token *tok) {
   Node *rhs = node->rhs;
 
   // `+=`/`-=` are routed through new_add/new_sub so that the operand
@@ -2125,7 +2125,7 @@ static Node *compound_op(ChibiccContext *ctx, Node *node, Node *lhs, Token *tok)
 // However, if a given expression is of form `A.x op= C`, the input is
 // converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
 // to bitfields.
-static Node *to_assign(ChibiccContext *ctx, Node *node) {
+static Node *to_assign(LibcpContext *ctx, Node *node) {
   add_type(ctx, node->lhs);
   add_type(ctx, node->rhs);
   Token *tok = node->tok;
@@ -2268,7 +2268,7 @@ static Node *to_assign(ChibiccContext *ctx, Node *node) {
 }
 
 // Convert A++ to `(typeof A)((A += 1) - 1)`. Moved from parse.c.
-static Node *new_inc_dec(ChibiccContext *ctx, Node *node, Token *tok, int addend) {
+static Node *new_inc_dec(LibcpContext *ctx, Node *node, Token *tok, int addend) {
   add_type(ctx, node);
   Node *expr = new_binary(ctx, ND_ASSIGN, node, new_num(ctx, addend, tok), tok);
   expr->op = ND_ADD;
@@ -2281,7 +2281,7 @@ static Node *new_inc_dec(ChibiccContext *ctx, Node *node, Token *tok, int addend
 // emitter resolves a break or a continue against the innermost one at
 // emission time (PLAN B1.2a); the descent here only makes sure every
 // loop has them.
-static void shape_node(ChibiccContext *ctx, Node *node) {
+static void shape_node(LibcpContext *ctx, Node *node) {
   if (!node)
     return;
 
@@ -2466,7 +2466,7 @@ static void shape_node(ChibiccContext *ctx, Node *node) {
 // them in the context) with the labels the descent above allocated,
 // writing the name each one jumps to. The undeclared-label check
 // already ran in sema, so every reference here matched there.
-static void resolve_label_refs(ChibiccContext *ctx, Obj *fn) {
+static void resolve_label_refs(LibcpContext *ctx, Obj *fn) {
   NodeArray *refs = sema_label_gotos(ctx, fn);
   if (!refs)
     return;
@@ -2487,7 +2487,7 @@ static void resolve_label_refs(ChibiccContext *ctx, Obj *fn) {
 // [GNU] nested function's body - which also hangs inside its host's
 // body before sema's type_chain takes the record off the chain - is
 // visited exactly once, through its own entry here.
-static void shape(ChibiccContext *ctx, Obj *prog) {
+static void shape(LibcpContext *ctx, Obj *prog) {
   for (Obj *fn = prog; fn; fn = fn->next) {
     if (!fn->is_function || !fn->is_definition)
       continue;
@@ -2651,7 +2651,7 @@ static void emit_data(Obj *prog) {
   }
 }
 
-static void store_fp(ChibiccContext *ctx, int r, int offset, int sz) {
+static void store_fp(LibcpContext *ctx, int r, int offset, int sz) {
   switch (sz) {
   case 4:
     println("  movss %%xmm%d, %d(%%rbp)", r, offset);
@@ -2686,7 +2686,7 @@ static void store_gp(int r, int offset, int sz) {
   }
 }
 
-static void emit_text(ChibiccContext *ctx, Obj *prog) {
+static void emit_text(LibcpContext *ctx, Obj *prog) {
   for (Obj *fn = prog; fn; fn = fn->next) {
     if (!fn->is_function || !fn->is_definition)
       continue;
@@ -2801,7 +2801,7 @@ static void emit_text(ChibiccContext *ctx, Obj *prog) {
   }
 }
 
-void codegen(ChibiccContext *ctx, Obj *prog, FILE *out) {
+void codegen(LibcpContext *ctx, Obj *prog, FILE *out) {
   output_file = out;
 
   File **files = get_input_files(ctx);

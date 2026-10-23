@@ -97,8 +97,8 @@
 
 ### 产物可以干什么
 
-- 语法级工具可以只调用 `chibicc_parse`.
-- 语义工具可以只关心 `chibicc_sema`.
+- 语法级工具可以只调用 `libcp_parse`.
+- 语义工具可以只关心 `libcp_sema`.
 - 后续的忠实层和 codegen 直连有了落脚点.
 
 终态: `plans/PLAN-split.md` / `plans/RESULT-split.md`.
@@ -266,7 +266,7 @@ trivia 只保留了 token 之间的字节, 没有语法结构. 格式化器还�
 
 ### 实现
 
-- `libchibicc/src/cst.c`, 55 种 `CstKind`.
+- `libcp/src/cst.c`, 55 种 `CstKind`.
 - 括号分组, 声明, 语句, 表达式, 初始化器, 指示符.
 - 指令节点: `#define`, `#undef`, `#include`, `#line`, `#pragma`, `#error`, 空指令, `#if` 分支.
 - 文件内 typedef 预扫描作为 cast/声明 oracle.
@@ -339,7 +339,7 @@ trivia 只保留了 token 之间的字节, 没有语法结构. 格式化器还�
 
 用户 2026-10-19 拍板的四件事:
 
-- 库名 `libchibicc`, 公共头 `<chibicc/...>`, 符号 `chibicc_` / `Chibicc` 前缀.
+- 库名 `libcp`, 公共头 `<libcp/...>`, 符号 `libcp_` / `Libcp` 前缀.
 - 只承诺源码兼容, 不承诺 ABI.
 - 一个 context 一个翻译单元.
 - 公共 `Node` / `Obj` 只保留第 3/4 层字段.
@@ -349,10 +349,10 @@ trivia 只保留了 token 之间的字节, 没有语法结构. 格式化器还�
 L0 到 L4, 每步一提交:
 
 - L1: codegen 字段移出公共 `Node` / `Type` / `Obj`, 进 codegen 私有表.
-- L2: `ChibiccContext`, arena, 诊断回调 + longjmp, 19 个文件域 static 收进 context.
+- L2: `LibcpContext`, arena, 诊断回调 + longjmp, 19 个文件域 static 收进 context.
 - L3.0: CST children 进 arena, reset 活字节闸门.
 - L3.1: 9 个公共头, context 不透明, 头文件卫生.
-- L3.2: `Chibicc*` 命名, `chibicc_reconstruct` 进库, D7 白名单, `.a` 内部符号策略.
+- L3.2: `Libcp*` 命名, `libcp_reconstruct` 进库, D7 白名单, `.a` 内部符号策略.
 - L3.3: `.a`, Linux `.so`, stage2 库对象, install, pkg-config, 版本.
 - L3.4: 错误模型, reset, 双 context, ASan/UBSan.
 - L3.5 / L4: 全量闸门, 文档.
@@ -365,9 +365,9 @@ L0 到 L4, 每步一提交:
 
 ### 产物
 
-- `libchibicc.a`, Linux `libchibicc.so.0`.
+- `libcp.a`, Linux `libcp.so.0`.
 - 9 个公共头, 36 个公共函数.
-- `ChibiccContext` 三态.
+- `LibcpContext` 三态.
 - `test/library.sh`, `test/public-api.sh`, `test/install.sh`.
 - `make check-library`.
 
@@ -389,7 +389,7 @@ L0 到 L4, 每步一提交:
 
 - 增加一个只读绑定力表 `InfixOp`.
 - 用一个 `expr_bp` 循环处理前缀, cast, 后缀, 二元, 赋值, `?:`, 逗号.
-- 通过 `CHIBICC_PRATT_PARSE_FEATURE` 编译期开关控制.
+- 通过 `LIBCP_PRATT_PARSE_FEATURE` 编译期开关控制.
 - 默认构建保持不变.
 - 两个模式的 AST 和汇编必须逐字节相同.
 
@@ -419,9 +419,9 @@ L0 到 L4, 每步一提交:
 
 阶段 5 和 Pratt 之后, 仓库做了三次不改变行为的整理:
 
-- `267fb6f`: 库源码搬到 `libchibicc/src/`, 根目录只留驱动器和 codegen.
+- `267fb6f`: 库源码搬到 `libcp/src/`, 根目录只留驱动器和 codegen.
 - `8976851`: 计划与执行记录搬到 `plans/`.
-- `dd3e631`: 库内自测搬到 `test/self/`, 不再编进 `libchibicc.a`.
+- `dd3e631`: 库内自测搬到 `test/self/`, 不再编进 `libcp.a`.
 
 这些整理让目录结构与"库 + 参考消费者"的定位一致.
 
@@ -458,7 +458,7 @@ L0 到 L4, 每步一提交:
 | `#if` 分支全保留 | CST 线 | 格式化需要未选中分支 |
 | token 有 trivia 和 raw 坐标 | trivia 线 | 逐字节重建 |
 | provenance 链 | provenance 线 | 宏来源不可从 AST 恢复 |
-| `ChibiccContext` 不透明 | 库边界 L3 | 公共面不泄漏内部布局 |
+| `LibcpContext` 不透明 | 库边界 L3 | 公共面不泄漏内部布局 |
 | 36 个公共函数 | 库边界 D7 | 唯一的公共 API 清单 |
 | Pratt 代码在 `#if` 下 | Pratt 线 | 默认构建不变 |
 

@@ -1,7 +1,7 @@
-#include "chibicc.h"
+#include "libcp.h"
 
 // The input file, the input file list and the current position flags
-// live in ChibiccContext (PLAN L2.2). The lexer reads them through the
+// live in LibcpContext (PLAN L2.2). The lexer reads them through the
 // active context like every other phase.
 
 // The raw offset of a position in the scan buffer (PLAN T2.1): the two
@@ -55,19 +55,19 @@ static int raw_end_of(File *file, int off) {
 
 // Formats a diagnostic message into the arena (or malloc before a
 // context exists).
-static char *vformat(ChibiccContext *ctx, char *fmt, va_list ap) {
+static char *vformat(LibcpContext *ctx, char *fmt, va_list ap) {
   va_list ap2;
   va_copy(ap2, ap);
   int n = vsnprintf(NULL, 0, fmt, ap2);
   va_end(ap2);
-  char *buf = chibicc_arena_alloc(ctx, n + 1, 1);
+  char *buf = libcp_arena_alloc(ctx, n + 1, 1);
   vsnprintf(buf, n + 1, fmt, ap);
   return buf;
 }
 
 // Unwinds to the innermost public-entry frame; without one (the
 // driver's pre-cc1 paths), exits as before.
-static noreturn void raise_error(ChibiccContext *ctx) {
+static noreturn void raise_error(LibcpContext *ctx) {
   if (ctx->jmp_top) {
     ctx->failed = true;
     longjmp(ctx->jmp_top->buf, 1);
@@ -82,8 +82,8 @@ static noreturn void raise_error(ChibiccContext *ctx) {
 //
 // A registered callback gets the structured form instead; the default
 // path below is byte-for-byte what the compiler printed before L2.6.
-static void verror_at(ChibiccContext *ctx, char *filename, char *input, int line_no, char *loc,
-                      ChibiccDiagnosticSeverity severity, char *fmt, va_list ap) {
+static void verror_at(LibcpContext *ctx, char *filename, char *input, int line_no, char *loc,
+                      LibcpDiagnosticSeverity severity, char *fmt, va_list ap) {
 
   // Find a line containing `loc`.
   char *line = loc;
@@ -92,7 +92,7 @@ static void verror_at(ChibiccContext *ctx, char *filename, char *input, int line
 
   if (ctx && ctx->diag_fn) {
     char *msg = vformat(ctx, fmt, ap);
-    ChibiccDiagnostic d = {filename, line_no,
+    LibcpDiagnostic d = {filename, line_no,
                            display_width(ctx, line, loc - line) + 1,
                            severity, msg};
     ctx->diag_fn(ctx->diag_user, &d);
@@ -118,13 +118,13 @@ static void verror_at(ChibiccContext *ctx, char *filename, char *input, int line
 
 // Reports an error; unwinds to the current public entry, or exits when
 // the driver is outside one.
-void error(ChibiccContext *ctx, char *fmt, ...) {
+void error(LibcpContext *ctx, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
 
   if (ctx && ctx->diag_fn) {
     char *msg = vformat(ctx, fmt, ap);
-    ChibiccDiagnostic d = {NULL, 0, 0, CHIBICC_DIAG_ERROR, msg};
+    LibcpDiagnostic d = {NULL, 0, 0, LIBCP_DIAG_ERROR, msg};
     ctx->diag_fn(ctx->diag_user, &d);
   } else {
     vfprintf(stderr, fmt, ap);
@@ -135,37 +135,37 @@ void error(ChibiccContext *ctx, char *fmt, ...) {
   raise_error(ctx);
 }
 
-void error_at(ChibiccContext *ctx, char *loc, char *fmt, ...) {
+void error_at(LibcpContext *ctx, char *loc, char *fmt, ...) {
   int line_no = ctx->current_file->lines[raw_off(ctx->current_file, loc)];
 
   va_list ap;
   va_start(ap, fmt);
   verror_at(ctx, ctx->current_file->name, ctx->current_file->contents, line_no,
-            loc, CHIBICC_DIAG_ERROR, fmt, ap);
+            loc, LIBCP_DIAG_ERROR, fmt, ap);
   va_end(ap);
   raise_error(ctx);
 }
 
-void error_tok(ChibiccContext *ctx, Token *tok, char *fmt, ...) {
+void error_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(ctx, tok->file->name, tok->file->contents, tok->line_no, tok->loc,
-            CHIBICC_DIAG_ERROR, fmt, ap);
+            LIBCP_DIAG_ERROR, fmt, ap);
   va_end(ap);
   raise_error(ctx);
 }
 
-void warn_tok(ChibiccContext *ctx, Token *tok, char *fmt, ...) {
+void warn_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(ctx, tok->file->name, tok->file->contents, tok->line_no, tok->loc,
-            CHIBICC_DIAG_WARNING, fmt, ap);
+            LIBCP_DIAG_WARNING, fmt, ap);
   va_end(ap);
 }
 
 // The dump name of a token kind. Lives here, not in the driver, so the
 // provenance channel can use it without main.c.
-char *token_kind_name(ChibiccContext *ctx, TokenKind kind) {
+char *token_kind_name(LibcpContext *ctx, TokenKind kind) {
   switch (kind) {
   case TK_IDENT:   return "ident";
   case TK_PUNCT:   return "punct";
@@ -186,7 +186,7 @@ bool equal(Token *tok, char *op) {
 }
 
 // Ensure that the current token is `op`.
-Token *skip(ChibiccContext *ctx, Token *tok, char *op) {
+Token *skip(LibcpContext *ctx, Token *tok, char *op) {
   if (!equal(tok, op))
     error_tok(ctx, tok, "expected '%s'", op);
   return tok->next;
@@ -203,8 +203,8 @@ bool consume(Token **rest, Token *tok, char *str) {
 
 // Create a new token. `raw_trivia` is the raw offset where the bytes
 // skipped in front of this token start (see Token.trivia).
-static Token *new_token(ChibiccContext *ctx, TokenKind kind, char *start, char *end, int raw_trivia) {
-  Token *tok = chibicc_arena_calloc(ctx, 1, sizeof(Token));
+static Token *new_token(LibcpContext *ctx, TokenKind kind, char *start, char *end, int raw_trivia) {
+  Token *tok = libcp_arena_calloc(ctx, 1, sizeof(Token));
   tok->kind = kind;
   tok->loc = start;
   tok->len = end - start;
@@ -231,7 +231,7 @@ static bool startswith(char *p, char *q) {
 
 // Read an identifier and returns the length of it.
 // If p does not point to a valid identifier, 0 is returned.
-static int read_ident(ChibiccContext *ctx, char *start) {
+static int read_ident(LibcpContext *ctx, char *start) {
   char *p = start;
   uint32_t c = decode_utf8(ctx, &p, p);
   if (!is_ident1(c))
@@ -261,7 +261,7 @@ static int read_punct(char *p) {
   return ispunct((unsigned char)*p) ? 1 : 0;
 }
 
-static bool is_keyword(ChibiccContext *ctx, Token *tok) {
+static bool is_keyword(LibcpContext *ctx, Token *tok) {
   HashMap *map = &ctx->keyword_map;
 
   if (map->capacity == 0) {
@@ -283,7 +283,7 @@ static bool is_keyword(ChibiccContext *ctx, Token *tok) {
   return hashmap_get2(ctx, map, tok->loc, tok->len);
 }
 
-static int read_escaped_char(ChibiccContext *ctx, char **new_pos, char *p) {
+static int read_escaped_char(LibcpContext *ctx, char **new_pos, char *p) {
   if ('0' <= *p && *p <= '7') {
     // Read an octal number.
     int c = *p++ - '0';
@@ -337,7 +337,7 @@ static int read_escaped_char(ChibiccContext *ctx, char **new_pos, char *p) {
 }
 
 // Find a closing double-quote.
-static char *string_literal_end(ChibiccContext *ctx, char *p) {
+static char *string_literal_end(LibcpContext *ctx, char *p) {
   char *start = p;
   for (; *p != '"'; p++) {
     if (*p == '\n' || *p == '\0')
@@ -348,9 +348,9 @@ static char *string_literal_end(ChibiccContext *ctx, char *p) {
   return p;
 }
 
-static Token *read_string_literal(ChibiccContext *ctx, char *start, char *quote, int raw_trivia) {
+static Token *read_string_literal(LibcpContext *ctx, char *start, char *quote, int raw_trivia) {
   char *end = string_literal_end(ctx, quote + 1);
-  char *buf = chibicc_arena_calloc(ctx, 1, end - quote);
+  char *buf = libcp_arena_calloc(ctx, 1, end - quote);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
@@ -373,9 +373,9 @@ static Token *read_string_literal(ChibiccContext *ctx, char *start, char *quote,
 // equal to or larger than that are encoded in 4 bytes. Each 2 bytes
 // in the 4 byte sequence is called "surrogate", and a 4 byte sequence
 // is called a "surrogate pair".
-static Token *read_utf16_string_literal(ChibiccContext *ctx, char *start, char *quote, int raw_trivia) {
+static Token *read_utf16_string_literal(LibcpContext *ctx, char *start, char *quote, int raw_trivia) {
   char *end = string_literal_end(ctx, quote + 1);
-  uint16_t *buf = chibicc_arena_calloc(ctx, 2, end - start);
+  uint16_t *buf = libcp_arena_calloc(ctx, 2, end - start);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
@@ -406,9 +406,9 @@ static Token *read_utf16_string_literal(ChibiccContext *ctx, char *start, char *
 //
 // UTF-32 is a fixed-width encoding for Unicode. Each code point is
 // encoded in 4 bytes.
-static Token *read_utf32_string_literal(ChibiccContext *ctx, char *start, char *quote, Type *ty, int raw_trivia) {
+static Token *read_utf32_string_literal(LibcpContext *ctx, char *start, char *quote, Type *ty, int raw_trivia) {
   char *end = string_literal_end(ctx, quote + 1);
-  uint32_t *buf = chibicc_arena_calloc(ctx, 4, end - quote);
+  uint32_t *buf = libcp_arena_calloc(ctx, 4, end - quote);
   int len = 0;
 
   for (char *p = quote + 1; p < end;) {
@@ -424,7 +424,7 @@ static Token *read_utf32_string_literal(ChibiccContext *ctx, char *start, char *
   return tok;
 }
 
-static Token *read_char_literal(ChibiccContext *ctx, char *start, char *quote, Type *ty, int raw_trivia) {
+static Token *read_char_literal(LibcpContext *ctx, char *start, char *quote, Type *ty, int raw_trivia) {
   char *p = quote + 1;
   if (*p == '\0')
     error_at(ctx, start, "unclosed char literal");
@@ -445,7 +445,7 @@ static Token *read_char_literal(ChibiccContext *ctx, char *start, char *quote, T
   return tok;
 }
 
-static bool convert_pp_int(ChibiccContext *ctx, Token *tok) {
+static bool convert_pp_int(LibcpContext *ctx, Token *tok) {
   char *p = tok->loc;
 
   // Read a binary, octal, decimal or hexadecimal number.
@@ -535,7 +535,7 @@ static bool convert_pp_int(ChibiccContext *ctx, Token *tok) {
 // token after preprocessing.
 //
 // This function converts a pp-number token to a regular number token.
-static void convert_pp_number(ChibiccContext *ctx, Token *tok) {
+static void convert_pp_number(LibcpContext *ctx, Token *tok) {
   // Try to parse as an integer constant.
   if (convert_pp_int(ctx, tok))
     return;
@@ -563,7 +563,7 @@ static void convert_pp_number(ChibiccContext *ctx, Token *tok) {
   tok->ty = ty;
 }
 
-void convert_pp_tokens(ChibiccContext *ctx, Token *tok) {
+void convert_pp_tokens(LibcpContext *ctx, Token *tok) {
   for (Token *t = tok; t->kind != TK_EOF; t = t->next) {
     if (is_keyword(ctx, t))
       t->kind = TK_KEYWORD;
@@ -578,7 +578,7 @@ static void add_line_numbers(Token *tok) {
     tok->line_no = tok->file->lines[raw_off(tok->file, tok->loc)];
 }
 
-Token *tokenize_string_literal(ChibiccContext *ctx, Token *tok, Type *basety) {
+Token *tokenize_string_literal(LibcpContext *ctx, Token *tok, Type *basety) {
   // The re-scan needs the raw coordinates of the token it replaces, so
   // scan against the file that token belongs to (the running
   // `current_file` is whichever file was tokenized last). The `file` and
@@ -602,7 +602,7 @@ Token *tokenize_string_literal(ChibiccContext *ctx, Token *tok, Type *basety) {
 }
 
 // Tokenize a given string and returns new tokens.
-Token *tokenize(ChibiccContext *ctx, File *file) {
+Token *tokenize(LibcpContext *ctx, File *file) {
   ctx->current_file = file;
 
   char *p = file->contents;
@@ -775,7 +775,7 @@ Token *tokenize(ChibiccContext *ctx, File *file) {
 // text is returned exactly as it is on disk: the rewrites that used to
 // happen here (a synthesized final newline, the BOM skip) moved into
 // make_scan_buffer, which can remember them in raw coordinates.
-static char *read_file(ChibiccContext *ctx, char *path, size_t *len) {
+static char *read_file(LibcpContext *ctx, char *path, size_t *len) {
   FILE *fp;
 
   if (strcmp(path, "-") == 0) {
@@ -828,10 +828,10 @@ static char *read_file(ChibiccContext *ctx, char *path, size_t *len) {
   fclose(out);
 
   // The memstream buffer belongs to the C library's malloc, not to
-  // CHIBICC_MALLOC, so it is released with free(); the text is moved
+  // LIBCP_MALLOC, so it is released with free(); the text is moved
   // into the arena so a context reset releases it with everything else.
   if (ctx) {
-    char *copy = chibicc_arena_alloc(ctx, data_len + 1, 1);
+    char *copy = libcp_arena_alloc(ctx, data_len + 1, 1);
     memcpy(copy, buf, data_len + 1);
     free(buf);
     if (strcmp(path, "-") == 0) {
@@ -843,12 +843,12 @@ static char *read_file(ChibiccContext *ctx, char *path, size_t *len) {
   return buf;
 }
 
-File **get_input_files(ChibiccContext *ctx) {
+File **get_input_files(LibcpContext *ctx) {
   return ctx->input_files;
 }
 
-File *new_file_len(ChibiccContext *ctx, char *name, int file_no, char *contents, int len) {
-  File *file = chibicc_arena_calloc(ctx, 1, sizeof(File));
+File *new_file_len(LibcpContext *ctx, char *name, int file_no, char *contents, int len) {
+  File *file = libcp_arena_calloc(ctx, 1, sizeof(File));
   file->name = name;
   file->display_name = name;
   file->file_no = file_no;
@@ -859,8 +859,8 @@ File *new_file_len(ChibiccContext *ctx, char *name, int file_no, char *contents,
   // count. (tokenize_file replaces these tables with the ones
   // make_scan_buffer builds.)
   file->raw = contents;
-  file->map = chibicc_arena_calloc(ctx, len + 2, sizeof(int));
-  file->lines = chibicc_arena_calloc(ctx, len + 2, sizeof(int));
+  file->map = libcp_arena_calloc(ctx, len + 2, sizeof(int));
+  file->lines = libcp_arena_calloc(ctx, len + 2, sizeof(int));
 
   int line = 1;
   for (int i = 0; i <= len; i++) {
@@ -872,7 +872,7 @@ File *new_file_len(ChibiccContext *ctx, char *name, int file_no, char *contents,
   return file;
 }
 
-File *new_file(ChibiccContext *ctx, char *name, int file_no, char *contents) {
+File *new_file(LibcpContext *ctx, char *name, int file_no, char *contents) {
   return new_file_len(ctx, name, file_no, contents, strlen(contents));
 }
 
@@ -899,14 +899,14 @@ int line_break_len(char *p) {
 // break inside a continuation counts at the next real break (the removed
 // pass moved those newlines down) and the synthesized final newline
 // counts at the end.
-static char *make_scan_buffer(ChibiccContext *ctx, char *raw, int len, int **map_out, int **lines_out) {
-  int *map = chibicc_arena_calloc(ctx, len + 2, sizeof(int));
-  int *lines = chibicc_arena_calloc(ctx, len + 2, sizeof(int));
-  char *buf = chibicc_arena_calloc(ctx, 1, len + 2);
+static char *make_scan_buffer(LibcpContext *ctx, char *raw, int len, int **map_out, int **lines_out) {
+  int *map = libcp_arena_calloc(ctx, len + 2, sizeof(int));
+  int *lines = libcp_arena_calloc(ctx, len + 2, sizeof(int));
+  char *buf = libcp_arena_calloc(ctx, 1, len + 2);
 
   // The text the pre-passes used to see: the raw text plus the final
   // newline for a text that does not end in one.
-  char *text = chibicc_arena_calloc(ctx, 1, len + 2);
+  char *text = libcp_arena_calloc(ctx, 1, len + 2);
   memcpy(text, raw, len);
   if (len == 0 || raw[len - 1] != '\n')
     text[len] = '\n';
@@ -1001,7 +1001,7 @@ static char *make_scan_buffer(ChibiccContext *ctx, char *raw, int len, int **map
   return buf;
 }
 
-Token *tokenize_file(ChibiccContext *ctx, char *path) {
+Token *tokenize_file(LibcpContext *ctx, char *path) {
   size_t raw_len;
   char *raw = read_file(ctx, path, &raw_len);
   if (!raw)
@@ -1031,7 +1031,7 @@ Token *tokenize_file(ChibiccContext *ctx, char *path) {
   if (ctx->input_files_cap < file_no + 2) {
     size_t old = sizeof(File *) * ctx->input_files_cap;
     int cap = file_no + 2;
-    ctx->input_files = chibicc_arena_realloc(ctx, ctx->input_files, old,
+    ctx->input_files = libcp_arena_realloc(ctx, ctx->input_files, old,
                                              sizeof(File *) * cap);
     ctx->input_files_cap = cap;
   }

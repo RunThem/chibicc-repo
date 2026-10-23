@@ -31,28 +31,28 @@
 // which is the parser's own and holds nothing else. sema keeps a
 // separate stack for the objects and enum constants it declares.
 
-#include "chibicc.h"
+#include "libcp.h"
 
-static Type *find_typedef(ChibiccContext *ctx, Token *tok);
-static Type *find_tag(ChibiccContext *ctx, Token *tok);
-static Type *find_current_tag(ChibiccContext *ctx, Token *tok);
-static void push_tag_scope(ChibiccContext *ctx, Token *tok, Type *ty);
-static void add_typedef(ChibiccContext *ctx, Node *node);
-static void add_declared_name(ChibiccContext *ctx, Token *tok);
-static void enter_scope(ChibiccContext *ctx);
-static void leave_scope(ChibiccContext *ctx);
+static Type *find_typedef(LibcpContext *ctx, Token *tok);
+static Type *find_tag(LibcpContext *ctx, Token *tok);
+static Type *find_current_tag(LibcpContext *ctx, Token *tok);
+static void push_tag_scope(LibcpContext *ctx, Token *tok, Type *ty);
+static void add_typedef(LibcpContext *ctx, Node *node);
+static void add_declared_name(LibcpContext *ctx, Token *tok);
+static void enter_scope(LibcpContext *ctx);
+static void leave_scope(LibcpContext *ctx);
 
 // Bound the parser's recursion: pathological nesting must fail with a
 // diagnostic, not a stack overflow.
 #define MAX_PARSE_DEPTH 512
 
-static bool is_typename(ChibiccContext *ctx, Token *tok);
-static Token *attribute_list(ChibiccContext *ctx, Token *tok, Type *ty);
-static Type *declspec(ChibiccContext *ctx, Token **rest, Token *tok, VarAttr *attr, Node **specs);
-static Type *typename(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs);
-static Type *enum_specifier(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs);
-static Type *typeof_specifier(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs);
-static Type *type_suffix(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty);
+static bool is_typename(LibcpContext *ctx, Token *tok);
+static Token *attribute_list(LibcpContext *ctx, Token *tok, Type *ty);
+static Type *declspec(LibcpContext *ctx, Token **rest, Token *tok, VarAttr *attr, Node **specs);
+static Type *typename(LibcpContext *ctx, Token **rest, Token *tok, Node **specs);
+static Type *enum_specifier(LibcpContext *ctx, Token **rest, Token *tok, Node **specs);
+static Type *typeof_specifier(LibcpContext *ctx, Token **rest, Token *tok, Node **specs);
+static Type *type_suffix(LibcpContext *ctx, Token **rest, Token *tok, Type *ty);
 
 // The built-in types are shared by every context (type.c), and a tag or
 // typedef type is shared by every declaration that names it. A
@@ -63,87 +63,87 @@ typedef struct {
   Token *name_pos; // where the name would go, for "name omitted"
 } DeclName;
 
-static Type *declarator(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl);
-static Node *declaration(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
-static Initializer *init_record(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *compound_stmt(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *stmt(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *expr_stmt(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *expr(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *assign(ChibiccContext *ctx, Token **rest, Token *tok);
-#if !CHIBICC_PRATT_PARSE_FEATURE
-static Node *logor(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *logand(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *bitor(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *bitxor(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *bitand(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *equality(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *relational(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *shift(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *add(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *mul(ChibiccContext *ctx, Token **rest, Token *tok);
+static Type *declarator(LibcpContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl);
+static Node *declaration(LibcpContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
+static Initializer *init_record(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *compound_stmt(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *stmt(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *expr_stmt(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *expr(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *assign(LibcpContext *ctx, Token **rest, Token *tok);
+#if !LIBCP_PRATT_PARSE_FEATURE
+static Node *logor(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *logand(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *bitor(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *bitxor(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *bitand(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *equality(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *relational(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *shift(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *add(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *mul(LibcpContext *ctx, Token **rest, Token *tok);
 #endif
-#if !CHIBICC_PRATT_PARSE_FEATURE
-static Node *cast(ChibiccContext *ctx, Token **rest, Token *tok);
+#if !LIBCP_PRATT_PARSE_FEATURE
+static Node *cast(LibcpContext *ctx, Token **rest, Token *tok);
 #endif
-static Type *struct_decl(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs);
-static Type *union_decl(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs);
-#if !CHIBICC_PRATT_PARSE_FEATURE
-static Node *postfix(ChibiccContext *ctx, Token **rest, Token *tok);
+static Type *struct_decl(LibcpContext *ctx, Token **rest, Token *tok, Node **specs);
+static Type *union_decl(LibcpContext *ctx, Token **rest, Token *tok, Node **specs);
+#if !LIBCP_PRATT_PARSE_FEATURE
+static Node *postfix(LibcpContext *ctx, Token **rest, Token *tok);
 #endif
-static Node *funcall(ChibiccContext *ctx, Token **rest, Token *tok, Node *node);
-static Node *unary(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *funcall(LibcpContext *ctx, Token **rest, Token *tok, Node *node);
+static Node *unary(LibcpContext *ctx, Token **rest, Token *tok);
 // The body behind each depth-guarded entry (the wrapper increments
 // parse_depth before calling it).
-static Type *declarator1(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl);
-static Type *abstract_declarator(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty);
-static Type *abstract_declarator1(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty);
-static Initializer *init_record1(ChibiccContext *ctx, Token **rest, Token *tok);
-#if !CHIBICC_PRATT_PARSE_FEATURE
-static Node *expr1(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *assign1(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *conditional1(ChibiccContext *ctx, Token **rest, Token *tok);
+static Type *declarator1(LibcpContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl);
+static Type *abstract_declarator(LibcpContext *ctx, Token **rest, Token *tok, Type *ty);
+static Type *abstract_declarator1(LibcpContext *ctx, Token **rest, Token *tok, Type *ty);
+static Initializer *init_record1(LibcpContext *ctx, Token **rest, Token *tok);
+#if !LIBCP_PRATT_PARSE_FEATURE
+static Node *expr1(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *assign1(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *conditional1(LibcpContext *ctx, Token **rest, Token *tok);
 #endif
-#if !CHIBICC_PRATT_PARSE_FEATURE
-static Node *cast1(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *unary1(ChibiccContext *ctx, Token **rest, Token *tok);
+#if !LIBCP_PRATT_PARSE_FEATURE
+static Node *cast1(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *unary1(LibcpContext *ctx, Token **rest, Token *tok);
 #endif
-static Node *primary(ChibiccContext *ctx, Token **rest, Token *tok);
-static Node *parse_typedef(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety);
-static bool is_function(ChibiccContext *ctx, Token *tok);
-static Node *function_def(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
-static Node *global_variable(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
+static Node *primary(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *parse_typedef(LibcpContext *ctx, Token **rest, Token *tok, Type *basety);
+static bool is_function(LibcpContext *ctx, Token *tok);
+static Node *function_def(LibcpContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
+static Node *global_variable(LibcpContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
 
-Node *new_node(ChibiccContext *ctx, NodeKind kind, Token *tok) {
-  Node *node = chibicc_arena_calloc(ctx, 1, sizeof(Node));
+Node *new_node(LibcpContext *ctx, NodeKind kind, Token *tok) {
+  Node *node = libcp_arena_calloc(ctx, 1, sizeof(Node));
   node->kind = kind;
   node->tok = tok;
   return node;
 }
 
-Node *new_binary(ChibiccContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
+Node *new_binary(LibcpContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
   Node *node = new_node(ctx, kind, tok);
   node->lhs = lhs;
   node->rhs = rhs;
   return node;
 }
 
-Node *new_unary(ChibiccContext *ctx, NodeKind kind, Node *expr, Token *tok) {
+Node *new_unary(LibcpContext *ctx, NodeKind kind, Node *expr, Token *tok) {
   Node *node = new_node(ctx, kind, tok);
   node->lhs = expr;
   return node;
 }
 
-Node *new_num(ChibiccContext *ctx, int64_t val, Token *tok) {
+Node *new_num(LibcpContext *ctx, int64_t val, Token *tok) {
   Node *node = new_node(ctx, ND_NUM, tok);
   node->val = val;
   return node;
 }
 
-char *get_ident(ChibiccContext *ctx, Token *tok) {
+char *get_ident(LibcpContext *ctx, Token *tok) {
   if (tok->kind != TK_IDENT)
     error_tok(ctx, tok, "expected an identifier");
-  return chibicc_arena_strndup(ctx, tok->loc, tok->len);
+  return libcp_arena_strndup(ctx, tok->loc, tok->len);
 }
 
 //
@@ -174,26 +174,26 @@ struct ParseScope {
   HashMap tags;
 };
 
-void parse_init(ChibiccContext *ctx) {
-  ctx->scope = chibicc_arena_calloc(ctx, 1, sizeof(ParseScope));
+void parse_init(LibcpContext *ctx) {
+  ctx->scope = libcp_arena_calloc(ctx, 1, sizeof(ParseScope));
 }
 
-// The parser's scope stack lives in ChibiccContext (PLAN L2.4).
+// The parser's scope stack lives in LibcpContext (PLAN L2.4).
 #define scope (ctx->scope)
 
-static void enter_scope(ChibiccContext *ctx) {
-  ParseScope *sc = chibicc_arena_calloc(ctx, 1, sizeof(ParseScope));
+static void enter_scope(LibcpContext *ctx) {
+  ParseScope *sc = libcp_arena_calloc(ctx, 1, sizeof(ParseScope));
   sc->next = scope;
   scope = sc;
 }
 
-static void leave_scope(ChibiccContext *ctx) {
+static void leave_scope(LibcpContext *ctx) {
   scope = scope->next;
 }
 
 // The parser's typedef-name oracle: the C grammar needs to know whether
 // an identifier names a type before it can parse a declaration.
-static Type *find_typedef(ChibiccContext *ctx, Token *tok) {
+static Type *find_typedef(LibcpContext *ctx, Token *tok) {
   if (tok->kind != TK_IDENT)
     return NULL;
 
@@ -209,8 +209,8 @@ static Type *find_typedef(ChibiccContext *ctx, Token *tok) {
 // visible immediately: the oracle has to classify the very next
 // identifier. sema completes the type when it reaches the ND_TYPEDEF
 // record this declaration also emits.
-static void add_typedef(ChibiccContext *ctx, Node *node) {
-  NameEntry *e = chibicc_arena_calloc(ctx, 1, sizeof(NameEntry));
+static void add_typedef(LibcpContext *ctx, Node *node) {
+  NameEntry *e = libcp_arena_calloc(ctx, 1, sizeof(NameEntry));
   e->type_def = node->ty;
   hashmap_put(ctx, &scope->names, get_ident(ctx, node->tok), e);
 }
@@ -218,12 +218,12 @@ static void add_typedef(ChibiccContext *ctx, Node *node) {
 // Records a name a declarator just declared (a variable, function,
 // parameter or enum constant), so that it shadows a typedef of the same
 // spelling for the rest of the parse.
-static void add_declared_name(ChibiccContext *ctx, Token *tok) {
-  hashmap_put(ctx, &scope->names, get_ident(ctx, tok), chibicc_arena_calloc(ctx, 1, sizeof(NameEntry)));
+static void add_declared_name(LibcpContext *ctx, Token *tok) {
+  hashmap_put(ctx, &scope->names, get_ident(ctx, tok), libcp_arena_calloc(ctx, 1, sizeof(NameEntry)));
 }
 
 // Find a struct/union/enum tag by name, in any enclosing scope.
-static Type *find_tag(ChibiccContext *ctx, Token *tok) {
+static Type *find_tag(LibcpContext *ctx, Token *tok) {
   for (ParseScope *sc = scope; sc; sc = sc->next) {
     Type *ty = hashmap_get2(ctx, &sc->tags, tok->loc, tok->len);
     if (ty)
@@ -235,11 +235,11 @@ static Type *find_tag(ChibiccContext *ctx, Token *tok) {
 // Find a tag declared in the current scope only; used when a tag is
 // (re)defined, so that a previous forward declaration in the same scope
 // keeps its identity.
-static Type *find_current_tag(ChibiccContext *ctx, Token *tok) {
+static Type *find_current_tag(LibcpContext *ctx, Token *tok) {
   return hashmap_get2(ctx, &scope->tags, tok->loc, tok->len);
 }
 
-static void push_tag_scope(ChibiccContext *ctx, Token *tok, Type *ty) {
+static void push_tag_scope(LibcpContext *ctx, Token *tok, Type *ty) {
   hashmap_put2(ctx, &scope->tags, tok->loc, tok->len, ty);
 }
 
@@ -301,7 +301,7 @@ static void add_spec(Node **specs, Node *node) {
 // Enum constants an enum-specifier defines along the way are declaration
 // records with no statement of their own; they are appended to `*specs`
 // for the caller to place at this position of its chain or node.
-static Type *declspec(ChibiccContext *ctx, Token **rest, Token *tok, VarAttr *attr, Node **specs) {
+static Type *declspec(LibcpContext *ctx, Token **rest, Token *tok, VarAttr *attr, Node **specs) {
   // We use a single integer as counters for all typenames.
   // For example, bits 0 and 1 represents how many times we saw the
   // keyword "void" so far. With this, we can use a switch statement
@@ -518,7 +518,7 @@ static Type *declspec(ChibiccContext *ctx, Token **rest, Token *tok, VarAttr *at
 
 // func-params = ("void" | param ("," param)* ("," "...")?)? ")"
 // param       = declspec declarator
-static Type *func_params(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
+static Type *func_params(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
   if (equal(tok, "void") && equal(tok->next, ")")) {
     *rest = tok->next->next;
     return func_type(ctx, ty);
@@ -577,7 +577,7 @@ static Type *func_params(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty
 }
 
 // array-dimensions = ("static" | "restrict")* const-expr? "]" type-suffix
-static Type *array_dimensions(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
+static Type *array_dimensions(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
   while (equal(tok, "static") || equal(tok, "restrict"))
     tok = tok->next;
 
@@ -600,7 +600,7 @@ static Type *array_dimensions(ChibiccContext *ctx, Token **rest, Token *tok, Typ
 // type-suffix = "(" func-params
 //             | "[" array-dimensions
 //             | ε
-static Type *type_suffix(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
+static Type *type_suffix(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
   if (equal(tok, "("))
     return func_params(ctx, rest, tok->next, ty);
 
@@ -612,7 +612,7 @@ static Type *type_suffix(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty
 }
 
 // pointers = ("*" ("const" | "volatile" | "restrict")*)*
-static Type *pointers(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
+static Type *pointers(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
   while (consume(&tok, tok, "*")) {
     ty = pointer_to(ctx, ty);
     while (equal(tok, "const") || equal(tok, "volatile") || equal(tok, "restrict") ||
@@ -628,7 +628,7 @@ static Type *pointers(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
 // The declarator layer builds the type shape and leaves everything it
 // cannot decide syntactically (array dimensions, typeof operands) as
 // records for sema to complete.
-static Type *declarator(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl) {
+static Type *declarator(LibcpContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     error_tok(ctx, tok, "nesting too deep");
   Type *node = declarator1(ctx, rest, tok, ty, decl);
@@ -636,7 +636,7 @@ static Type *declarator(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty,
   return node;
 }
 
-static Type *declarator1(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl) {
+static Type *declarator1(LibcpContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl) {
   ty = pointers(ctx, &tok, tok, ty);
 
   if (equal(tok, "(")) {
@@ -671,7 +671,7 @@ static Type *declarator1(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty
 }
 
 // abstract-declarator = pointers ("(" abstract-declarator ")")? type-suffix
-static Type *abstract_declarator(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
+static Type *abstract_declarator(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     error_tok(ctx, tok, "nesting too deep");
   Type *node = abstract_declarator1(ctx, rest, tok, ty);
@@ -679,7 +679,7 @@ static Type *abstract_declarator(ChibiccContext *ctx, Token **rest, Token *tok, 
   return node;
 }
 
-static Type *abstract_declarator1(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
+static Type *abstract_declarator1(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
   ty = pointers(ctx, &tok, tok, ty);
 
   if (equal(tok, "(")) {
@@ -699,7 +699,7 @@ static Type *abstract_declarator1(ChibiccContext *ctx, Token **rest, Token *tok,
 }
 
 // type-name = declspec abstract-declarator
-static Type *typename(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+static Type *typename(LibcpContext *ctx, Token **rest, Token *tok, Node **specs) {
   Type *ty = declspec(ctx, &tok, tok, NULL, specs);
   return abstract_declarator(ctx, rest, tok, ty);
 }
@@ -722,7 +722,7 @@ static bool consume_end(Token **rest, Token *tok) {
 //                | ident ("{" enum-list? "}")?
 //
 // enum-list      = ident ("=" num)? ("," ident ("=" num)?)* ","?
-static Type *enum_specifier(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+static Type *enum_specifier(LibcpContext *ctx, Token **rest, Token *tok, Node **specs) {
   Type *ty = enum_type(ctx);
 
   // Read a struct tag.
@@ -771,7 +771,7 @@ static Type *enum_specifier(ChibiccContext *ctx, Token **rest, Token *tok, Node 
 }
 
 // typeof-specifier = "(" (expr | typename) ")"
-static Type *typeof_specifier(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+static Type *typeof_specifier(LibcpContext *ctx, Token **rest, Token *tok, Node **specs) {
   tok = skip(ctx, tok, "(");
 
   Type *ty;
@@ -800,7 +800,7 @@ static Type *typeof_specifier(ChibiccContext *ctx, Token **rest, Token *tok, Nod
 // resolves the record and lowers the node when it types it - including
 // the VLA-size sibling statement and the block-scope static's data
 // image, whose shapes it reproduces exactly.
-static Node *declaration(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr) {
+static Node *declaration(LibcpContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr) {
   Node head = {};
   Node *cur = &head;
   int i = 0;
@@ -870,13 +870,13 @@ static Node *declaration(ChibiccContext *ctx, Token **rest, Token *tok, Type *ba
 // Designators are recorded as written: index expressions stay
 // unevaluated and member names stay unbound; sema evaluates and
 // applies them against the target type.
-static InitDesig *designators(ChibiccContext *ctx, Token **rest, Token *tok) {
+static InitDesig *designators(LibcpContext *ctx, Token **rest, Token *tok) {
   InitDesig head = {};
   InitDesig *cur = &head;
 
   while (1) {
     if (equal(tok, "[")) {
-      InitDesig *desig = chibicc_arena_calloc(ctx, 1, sizeof(InitDesig));
+      InitDesig *desig = libcp_arena_calloc(ctx, 1, sizeof(InitDesig));
       desig->tok = tok;
       desig->begin = conditional(ctx, &tok, tok->next);
       desig->after_begin = tok;
@@ -889,7 +889,7 @@ static InitDesig *designators(ChibiccContext *ctx, Token **rest, Token *tok) {
     }
 
     if (equal(tok, ".")) {
-      InitDesig *desig = chibicc_arena_calloc(ctx, 1, sizeof(InitDesig));
+      InitDesig *desig = libcp_arena_calloc(ctx, 1, sizeof(InitDesig));
       desig->tok = tok;
       tok = tok->next;
       if (tok->kind != TK_IDENT)
@@ -915,7 +915,7 @@ static InitDesig *designators(ChibiccContext *ctx, Token **rest, Token *tok) {
 // sublist, string literal or expression) and no decision that needs
 // the target type is made here. Brace elision, string expansion,
 // designator application and flexible-array sizing all happen in sema.
-static Initializer *init_record(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Initializer *init_record(LibcpContext *ctx, Token **rest, Token *tok) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     error_tok(ctx, tok, "nesting too deep");
   Initializer *node = init_record1(ctx, rest, tok);
@@ -923,8 +923,8 @@ static Initializer *init_record(ChibiccContext *ctx, Token **rest, Token *tok) {
   return node;
 }
 
-static Initializer *init_record1(ChibiccContext *ctx, Token **rest, Token *tok) {
-  Initializer *rec = chibicc_arena_calloc(ctx, 1, sizeof(Initializer));
+static Initializer *init_record1(LibcpContext *ctx, Token **rest, Token *tok) {
+  Initializer *rec = libcp_arena_calloc(ctx, 1, sizeof(Initializer));
   rec->tok = tok;
 
   if (equal(tok, "{")) {
@@ -936,7 +936,7 @@ static Initializer *init_record1(ChibiccContext *ctx, Token **rest, Token *tok) 
     bool first = true;
 
     while (!consume_end(&tok, tok)) {
-      InitItem *item = chibicc_arena_calloc(ctx, 1, sizeof(InitItem));
+      InitItem *item = libcp_arena_calloc(ctx, 1, sizeof(InitItem));
       if (!first) {
         item->comma_tok = tok;
         tok = skip(ctx, tok, ",");
@@ -974,7 +974,7 @@ static Initializer *init_record1(ChibiccContext *ctx, Token **rest, Token *tok) 
 }
 
 // Returns true if a given token represents a type.
-static bool is_typename(ChibiccContext *ctx, Token *tok) {
+static bool is_typename(LibcpContext *ctx, Token *tok) {
   HashMap *map = &ctx->typename_map;
 
   if (map->capacity == 0) {
@@ -994,7 +994,7 @@ static bool is_typename(ChibiccContext *ctx, Token *tok) {
 }
 
 // asm-stmt = "asm" ("volatile" | "inline")* "(" string-literal ")"
-static Node *asm_stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *asm_stmt(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = new_node(ctx, ND_ASM, tok);
   tok = tok->next;
 
@@ -1024,7 +1024,7 @@ static Node *asm_stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
 //      | ident ":" stmt
 //      | "{" compound-stmt
 //      | expr-stmt
-static Node *stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *stmt(LibcpContext *ctx, Token **rest, Token *tok) {
   if (equal(tok, "return")) {
     // The implicit conversion to the return type is sema's: the parser
     // does not know the enclosing function.
@@ -1169,7 +1169,7 @@ static Node *stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
 
   if (tok->kind == TK_IDENT && equal(tok->next, ":")) {
     Node *node = new_node(ctx, ND_LABEL, tok);
-    node->label = chibicc_arena_strndup(ctx, tok->loc, tok->len);
+    node->label = libcp_arena_strndup(ctx, tok->loc, tok->len);
     node->lhs = stmt(ctx, rest, tok->next->next);
     return node;
   }
@@ -1186,7 +1186,7 @@ static Node *stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
 // enum constants, block-scope extern declarations and [GNU] nested
 // function definitions) enter the chain at their source position; sema
 // removes them again before codegen sees the chain.
-static Node *compound_stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *compound_stmt(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = new_node(ctx, ND_BLOCK, tok);
   node->is_scope_block = true;
   Node head = {};
@@ -1230,7 +1230,7 @@ static Node *compound_stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
 }
 
 // expr-stmt = expr? ";"
-static Node *expr_stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *expr_stmt(LibcpContext *ctx, Token **rest, Token *tok) {
   if (equal(tok, ";")) {
     *rest = tok->next;
     return new_node(ctx, ND_BLOCK, tok);
@@ -1242,9 +1242,9 @@ static Node *expr_stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
   return node;
 }
 
-#if !CHIBICC_PRATT_PARSE_FEATURE
+#if !LIBCP_PRATT_PARSE_FEATURE
 // expr = assign ("," expr)?
-static Node *expr(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *expr(LibcpContext *ctx, Token **rest, Token *tok) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     error_tok(ctx, tok, "nesting too deep");
   Node *node = expr1(ctx, rest, tok);
@@ -1252,7 +1252,7 @@ static Node *expr(ChibiccContext *ctx, Token **rest, Token *tok) {
   return node;
 }
 
-static Node *expr1(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *expr1(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = assign(ctx, &tok, tok);
 
   // Comma is left-associative: `a, b, c` is `(a, b), c`, the shape the C
@@ -1272,7 +1272,7 @@ static Node *expr1(ChibiccContext *ctx, Token **rest, Token *tok) {
 //
 // A compound assignment keeps its operator in `op`; sema rewrites it to
 // the read-modify-write form (handling the bitfield and atomic cases).
-static Node *assign(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *assign(LibcpContext *ctx, Token **rest, Token *tok) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     error_tok(ctx, tok, "nesting too deep");
   Node *node = assign1(ctx, rest, tok);
@@ -1280,7 +1280,7 @@ static Node *assign(ChibiccContext *ctx, Token **rest, Token *tok) {
   return node;
 }
 
-static Node *assign1(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *assign1(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = conditional(ctx, &tok, tok);
 
   if (equal(tok, "="))
@@ -1351,7 +1351,7 @@ static Node *assign1(ChibiccContext *ctx, Token **rest, Token *tok) {
 }
 
 // conditional = logor ("?" expr? ":" conditional)?
-Node *conditional(ChibiccContext *ctx, Token **rest, Token *tok) {
+Node *conditional(LibcpContext *ctx, Token **rest, Token *tok) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     error_tok(ctx, tok, "nesting too deep");
   Node *node = conditional1(ctx, rest, tok);
@@ -1359,7 +1359,7 @@ Node *conditional(ChibiccContext *ctx, Token **rest, Token *tok) {
   return node;
 }
 
-static Node *conditional1(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *conditional1(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *cond = logor(ctx, &tok, tok);
 
   if (!equal(tok, "?")) {
@@ -1386,7 +1386,7 @@ static Node *conditional1(ChibiccContext *ctx, Token **rest, Token *tok) {
 }
 
 // logor = logand ("||" logand)*
-static Node *logor(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *logor(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = logand(ctx, &tok, tok);
   while (equal(tok, "||")) {
     Token *start = tok;
@@ -1397,7 +1397,7 @@ static Node *logor(ChibiccContext *ctx, Token **rest, Token *tok) {
 }
 
 // logand = bitor ("&&" bitor)*
-static Node *logand(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *logand(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = bitor(ctx, &tok, tok);
   while (equal(tok, "&&")) {
     Token *start = tok;
@@ -1408,7 +1408,7 @@ static Node *logand(ChibiccContext *ctx, Token **rest, Token *tok) {
 }
 
 // bitor = bitxor ("|" bitxor)*
-static Node *bitor(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *bitor(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = bitxor(ctx, &tok, tok);
   while (equal(tok, "|")) {
     Token *start = tok;
@@ -1419,7 +1419,7 @@ static Node *bitor(ChibiccContext *ctx, Token **rest, Token *tok) {
 }
 
 // bitxor = bitand ("^" bitand)*
-static Node *bitxor(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *bitxor(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = bitand(ctx, &tok, tok);
   while (equal(tok, "^")) {
     Token *start = tok;
@@ -1430,7 +1430,7 @@ static Node *bitxor(ChibiccContext *ctx, Token **rest, Token *tok) {
 }
 
 // bitand = equality ("&" equality)*
-static Node *bitand(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *bitand(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = equality(ctx, &tok, tok);
   while (equal(tok, "&")) {
     Token *start = tok;
@@ -1441,7 +1441,7 @@ static Node *bitand(ChibiccContext *ctx, Token **rest, Token *tok) {
 }
 
 // equality = relational ("==" relational | "!=" relational)*
-static Node *equality(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *equality(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = relational(ctx, &tok, tok);
 
   for (;;) {
@@ -1463,7 +1463,7 @@ static Node *equality(ChibiccContext *ctx, Token **rest, Token *tok) {
 }
 
 // relational = shift ("<" shift | "<=" shift | ">" shift | ">=" shift)*
-static Node *relational(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *relational(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = shift(ctx, &tok, tok);
 
   for (;;) {
@@ -1495,7 +1495,7 @@ static Node *relational(ChibiccContext *ctx, Token **rest, Token *tok) {
 }
 
 // shift = add ("<<" add | ">>" add)*
-static Node *shift(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *shift(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = add(ctx, &tok, tok);
 
   for (;;) {
@@ -1516,7 +1516,7 @@ static Node *shift(ChibiccContext *ctx, Token **rest, Token *tok) {
   }
 }
 // add = mul ("+" mul | "-" mul)*
-static Node *add(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *add(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = mul(ctx, &tok, tok);
 
   for (;;) {
@@ -1538,7 +1538,7 @@ static Node *add(ChibiccContext *ctx, Token **rest, Token *tok) {
 }
 
 // mul = cast ("*" cast | "/" cast | "%" cast)*
-static Node *mul(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *mul(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = cast(ctx, &tok, tok);
 
   for (;;) {
@@ -1563,11 +1563,11 @@ static Node *mul(ChibiccContext *ctx, Token **rest, Token *tok) {
     return node;
   }
 }
-#endif // !CHIBICC_PRATT_PARSE_FEATURE
+#endif // !LIBCP_PRATT_PARSE_FEATURE
 
-#if !CHIBICC_PRATT_PARSE_FEATURE
+#if !LIBCP_PRATT_PARSE_FEATURE
 // cast = "(" type-name ")" cast | unary
-static Node *cast(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *cast(LibcpContext *ctx, Token **rest, Token *tok) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     error_tok(ctx, tok, "nesting too deep");
   Node *node = cast1(ctx, rest, tok);
@@ -1575,7 +1575,7 @@ static Node *cast(ChibiccContext *ctx, Token **rest, Token *tok) {
   return node;
 }
 
-static Node *cast1(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *cast1(LibcpContext *ctx, Token **rest, Token *tok) {
   if (equal(tok, "(") && is_typename(ctx, tok->next)) {
     Token *start = tok;
     Node *specs = NULL;
@@ -1604,7 +1604,7 @@ static Node *cast1(ChibiccContext *ctx, Token **rest, Token *tok) {
 //       | ("++" | "--") unary
 //       | "&&" ident
 //       | postfix
-static Node *unary(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *unary(LibcpContext *ctx, Token **rest, Token *tok) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     error_tok(ctx, tok, "nesting too deep");
   Node *node = unary1(ctx, rest, tok);
@@ -1612,7 +1612,7 @@ static Node *unary(ChibiccContext *ctx, Token **rest, Token *tok) {
   return node;
 }
 
-static Node *unary1(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *unary1(LibcpContext *ctx, Token **rest, Token *tok) {
   if (equal(tok, "+"))
     return cast(ctx, rest, tok->next);
 
@@ -1665,7 +1665,7 @@ static Node *unary1(ChibiccContext *ctx, Token **rest, Token *tok) {
 
   return postfix(ctx, rest, tok);
 }
-#endif // !CHIBICC_PRATT_PARSE_FEATURE
+#endif // !LIBCP_PRATT_PARSE_FEATURE
 
 // struct-members = (declspec declarator (","  declarator)* ";")*
 //
@@ -1673,7 +1673,7 @@ static Node *unary1(ChibiccContext *ctx, Token **rest, Token *tok) {
 // flexible-array-member conversion are sema's; the member list here is
 // the syntax shape, with `_Alignas` and bitfield widths recorded
 // unevaluated.
-static void struct_members(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty, Node **specs) {
+static void struct_members(LibcpContext *ctx, Token **rest, Token *tok, Type *ty, Node **specs) {
   Member head = {};
   Member *cur = &head;
   int idx = 0;
@@ -1691,7 +1691,7 @@ static void struct_members(ChibiccContext *ctx, Token **rest, Token *tok, Type *
     if ((basety->kind == TY_STRUCT || basety->kind == TY_UNION ||
          basety->kind == TY_TYPEOF) &&
         consume(&tok, tok, ";")) {
-      Member *mem = chibicc_arena_calloc(ctx, 1, sizeof(Member));
+      Member *mem = libcp_arena_calloc(ctx, 1, sizeof(Member));
       mem->tok = decl_start;
       mem->ty = basety;
       mem->idx = idx++;
@@ -1707,7 +1707,7 @@ static void struct_members(ChibiccContext *ctx, Token **rest, Token *tok, Type *
         tok = skip(ctx, tok, ",");
       first = false;
 
-      Member *mem = chibicc_arena_calloc(ctx, 1, sizeof(Member));
+      Member *mem = libcp_arena_calloc(ctx, 1, sizeof(Member));
       mem->tok = tok;
       DeclName decl = {};
       mem->ty = declarator(ctx, &tok, tok, basety, &decl);
@@ -1736,7 +1736,7 @@ static void struct_members(ChibiccContext *ctx, Token **rest, Token *tok, Type *
 //
 // `packed` and `aligned` are applied when a type record is given; the
 // known declaration/function attributes are recognized and ignored.
-static Token *skip_attribute_args(ChibiccContext *ctx, Token *tok) {
+static Token *skip_attribute_args(LibcpContext *ctx, Token *tok) {
   if (!equal(tok, "("))
     return tok;
 
@@ -1770,7 +1770,7 @@ static bool is_ignored_attribute(Token *tok) {
   return false;
 }
 
-static Token *attribute_list(ChibiccContext *ctx, Token *tok, Type *ty) {
+static Token *attribute_list(LibcpContext *ctx, Token *tok, Type *ty) {
   while (consume(&tok, tok, "__attribute__")) {
     tok = skip(ctx, tok, "(");
     tok = skip(ctx, tok, "(");
@@ -1823,7 +1823,7 @@ static Token *attribute_list(ChibiccContext *ctx, Token *tok, Type *ty) {
 }
 
 // struct-union-decl = attribute? ident? ("{" struct-members)?
-static Type *struct_union_decl(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+static Type *struct_union_decl(LibcpContext *ctx, Token **rest, Token *tok, Node **specs) {
   Type *ty = struct_type(ctx);
   tok = attribute_list(ctx, tok, ty);
 
@@ -1878,14 +1878,14 @@ static Type *struct_union_decl(ChibiccContext *ctx, Token **rest, Token *tok, No
 }
 
 // struct-decl = struct-union-decl
-static Type *struct_decl(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+static Type *struct_decl(LibcpContext *ctx, Token **rest, Token *tok, Node **specs) {
   Type *ty = struct_union_decl(ctx, rest, tok, specs);
   ty->kind = TY_STRUCT;
   return ty;
 }
 
 // union-decl = struct-union-decl
-static Type *union_decl(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+static Type *union_decl(LibcpContext *ctx, Token **rest, Token *tok, Node **specs) {
   Type *ty = struct_union_decl(ctx, rest, tok, specs);
   ty->kind = TY_UNION;
   return ty;
@@ -1908,13 +1908,13 @@ static Type *union_decl(ChibiccContext *ctx, Token **rest, Token *tok, Node **sp
 // `->` token in `arrow_tok`. sema finds the member (flattening the
 // anonymous ones in between), checks the operand and re-inserts the
 // dereference.
-static Node *struct_ref(ChibiccContext *ctx, Node *node, Token *tok, Token *arrow) {
+static Node *struct_ref(LibcpContext *ctx, Node *node, Token *tok, Token *arrow) {
   Node *mem = new_unary(ctx, ND_MEMBER, node, tok);
   mem->arrow_tok = arrow;
   return mem;
 }
 
-#if !CHIBICC_PRATT_PARSE_FEATURE
+#if !LIBCP_PRATT_PARSE_FEATURE
 // postfix = "(" type-name ")" "{" initializer-list "}"
 //         = ident "(" func-args ")" postfix-tail*
 //         | primary postfix-tail*
@@ -1925,7 +1925,7 @@ static Node *struct_ref(ChibiccContext *ctx, Node *node, Token *tok, Token *arro
 //              | "->" ident
 //              | "++"
 //              | "--"
-static Node *postfix(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *postfix(LibcpContext *ctx, Token **rest, Token *tok) {
   if (equal(tok, "(") && is_typename(ctx, tok->next)) {
     // Compound literal. Kept faithful: the type and the initializer
     // record ride on the node, and sema materializes the hidden
@@ -1999,14 +1999,14 @@ static Node *postfix(ChibiccContext *ctx, Token **rest, Token *tok) {
     return node;
   }
 }
-#endif // !CHIBICC_PRATT_PARSE_FEATURE
+#endif // !LIBCP_PRATT_PARSE_FEATURE
 
 // funcall = (assign ("," assign)*)? ")"
 //
 // The callee check, the argument conversions and the struct-return
 // buffer are sema's; the node stays faithful, anchored at the closing
 // paren where the argument-count diagnostics point.
-static Node *funcall(ChibiccContext *ctx, Token **rest, Token *tok, Node *fn) {
+static Node *funcall(LibcpContext *ctx, Token **rest, Token *tok, Node *fn) {
   Node head = {};
   Node *cur = &head;
 
@@ -2033,7 +2033,7 @@ static Node *funcall(ChibiccContext *ctx, Token **rest, Token *tok, Node *fn) {
 // syntax question, so the selection is left to sema: the node keeps the
 // controlling expression in `cond` and one ND_GENERIC_ASSOC per
 // association in `args`.
-static Node *generic_selection(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *generic_selection(LibcpContext *ctx, Token **rest, Token *tok) {
   Node *node = new_node(ctx, ND_GENERIC, tok);
 
   tok = skip(ctx, tok, "(");
@@ -2077,7 +2077,7 @@ static Node *generic_selection(ChibiccContext *ctx, Token **rest, Token *tok) {
 //         | ident
 //         | str
 //         | num
-static Node *primary(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *primary(LibcpContext *ctx, Token **rest, Token *tok) {
   Token *start = tok;
 
   if (equal(tok, "(") && equal(tok->next, "{")) {
@@ -2214,7 +2214,7 @@ static Node *primary(ChibiccContext *ctx, Token **rest, Token *tok) {
   error_tok(ctx, tok, "expected an expression");
 }
 
-#if CHIBICC_PRATT_PARSE_FEATURE
+#if LIBCP_PRATT_PARSE_FEATURE
 //
 // The Pratt expression parser (PLAN-pratt-parse).
 //
@@ -2309,13 +2309,13 @@ static bool infix_bp(Token *tok, NodeKind *kind, NodeKind *assign_op,
   return false;
 }
 
-static Node *expr_bp(ChibiccContext *ctx, Token **rest, Token *tok, int min_bp);
+static Node *expr_bp(LibcpContext *ctx, Token **rest, Token *tok, int min_bp);
 
 // The prefix (nud) forms: a cast or compound literal (the `(` type-name
 // lookahead), the unary operators, labels-as-values, then the shared
 // primary parser for everything atomic. Unary `+` is transparent and
 // builds no node, exactly as the cascade did.
-static Node *expr_nud(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *expr_nud(LibcpContext *ctx, Token **rest, Token *tok) {
   if (equal(tok, "(") && is_typename(ctx, tok->next)) {
     Token *start = tok;
     Node *specs = NULL;
@@ -2388,7 +2388,7 @@ static Node *expr_nud(ChibiccContext *ctx, Token **rest, Token *tok) {
 
 // The one expression loop. The depth gate counts here and only here in
 // the Pratt build; the entry wrappers below do not add a frame.
-static Node *expr_bp(ChibiccContext *ctx, Token **rest, Token *tok, int min_bp) {
+static Node *expr_bp(LibcpContext *ctx, Token **rest, Token *tok, int min_bp) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     error_tok(ctx, tok, "nesting too deep");
 
@@ -2493,27 +2493,27 @@ static Node *expr_bp(ChibiccContext *ctx, Token **rest, Token *tok, int min_bp) 
 
 // primary's `sizeof expr` and `_Alignof expr` forms parse their operand
 // through the old `unary` name; in the Pratt build that is the cast layer.
-static Node *unary(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *unary(LibcpContext *ctx, Token **rest, Token *tok) {
   return expr_bp(ctx, rest, tok, BP_CAST);
 }
 
-static Node *expr(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *expr(LibcpContext *ctx, Token **rest, Token *tok) {
   return expr_bp(ctx, rest, tok, 0);
 }
 
-static Node *assign(ChibiccContext *ctx, Token **rest, Token *tok) {
+static Node *assign(LibcpContext *ctx, Token **rest, Token *tok) {
   return expr_bp(ctx, rest, tok, BP_ASSIGN - 1);
 }
 
-Node *conditional(ChibiccContext *ctx, Token **rest, Token *tok) {
+Node *conditional(LibcpContext *ctx, Token **rest, Token *tok) {
   return expr_bp(ctx, rest, tok, BP_COND - 1);
 }
-#endif // CHIBICC_PRATT_PARSE_FEATURE
+#endif // LIBCP_PRATT_PARSE_FEATURE
 
 // Parses typedef declarators into ND_TYPEDEF records. The name also
 // goes into the typedef-name oracle immediately: the grammar needs it
 // to classify the very next identifier.
-static Node *parse_typedef(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety) {
+static Node *parse_typedef(LibcpContext *ctx, Token **rest, Token *tok, Type *basety) {
   Node head = {};
   Node *cur = &head;
   bool first = true;
@@ -2541,7 +2541,7 @@ static Node *parse_typedef(ChibiccContext *ctx, Token **rest, Token *tok, Type *
 // Parses a function declarator, and its body if one follows, into an
 // ND_FUNCDEF record. sema declares the function (checking it against a
 // previous declaration, anchored at `tok`) and analyzes the body.
-static Node *function_def(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr) {
+static Node *function_def(LibcpContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr) {
   DeclName decl = {};
   Type *ty = declarator(ctx, &tok, tok, basety, &decl);
   if (!decl.name)
@@ -2576,7 +2576,7 @@ static Node *function_def(ChibiccContext *ctx, Token **rest, Token *tok, Type *b
 // Parses global-variable declarators (at file scope, or `extern` ones
 // inside a block) into ND_GVAR_DECL records; sema declares the objects
 // and serializes their initializers.
-static Node *global_variable(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr) {
+static Node *global_variable(LibcpContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr) {
   Node head = {};
   Node *cur = &head;
   bool first = true;
@@ -2609,7 +2609,7 @@ static Node *global_variable(ChibiccContext *ctx, Token **rest, Token *tok, Type
 
 // Lookahead tokens and returns true if a given token is a start
 // of a function definition or declaration.
-static bool is_function(ChibiccContext *ctx, Token *tok) {
+static bool is_function(LibcpContext *ctx, Token *tok) {
   if (equal(tok, ";"))
     return false;
 
@@ -2623,7 +2623,7 @@ static bool is_function(ChibiccContext *ctx, Token *tok) {
 // The top-level declaration-record chain this returns is what sema
 // walks, in source order, to declare the objects and analyze the
 // function bodies.
-Node *parse(ChibiccContext *ctx, Token *tok) {
+Node *parse(LibcpContext *ctx, Token *tok) {
   parse_init(ctx);
   Node head = {};
   Node *cur = &head;

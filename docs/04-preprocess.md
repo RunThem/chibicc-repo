@@ -4,7 +4,7 @@
 
 预处理是第 1 层和第 3 层之间的一条横切步骤. 它消费 token 链, 执行 C 预处理语言, 输出展开后的 token 链. 它同时是库唯一会**破坏输入链**的阶段, 也是唯一记录宏展开来源的阶段.
 
-输入: `chibicc_tokenize_*` 的直接输出.
+输入: `libcp_tokenize_*` 的直接输出.
 输出: 一条新的 token 链, 宏已展开, 条件指令已消解, include 已拼接.
 附带产物: 每个非源 token 上的 provenance 链.
 
@@ -12,13 +12,13 @@
 
 ### 4.2.1 token 进, token 出
 
-预处理器不建树, 也不输出字符串. 它的输入和输出都是 `ChibiccToken` 链, 指令用 token 拼写识别. 好处是:
+预处理器不建树, 也不输出字符串. 它的输入和输出都是 `LibcpToken` 链, 指令用 token 拼写识别. 好处是:
 
 - 不需要在预处理阶段引入新的中间表示.
 - 输出可以直接喂给解析器.
 - 宏展开可以复用 token 的位置信息.
 
-代价是预处理必须原地操作输入链. `chibicc_preprocess` 在拼接 include 和展开宏时会改写输入 token 的 `next` 指针. 调用之后, 原来那条链不再完整.
+代价是预处理必须原地操作输入链. `libcp_preprocess` 在拼接 include 和展开宏时会改写输入 token 的 `next` 指针. 调用之后, 原来那条链不再完整.
 
 ### 4.2.2 宏展开必须终止
 
@@ -32,7 +32,7 @@ A
 
 不能无限展开. 库沿用上游的 hideset 算法: 每个 token 携带一组宏名, 表示"这些宏已经应用过". 展开一个宏时, 把宏名加入所有产物的 hideset. 一个 token 不会再被同一个宏展开.
 
-这个算法来自 Dave Prosser 的 cpp 算法, 也是标准措辞的基础. 实现里 `ChibiccHideset` 是一条链表, 成员查找是 O(n), 因为 n 通常很小.
+这个算法来自 Dave Prosser 的 cpp 算法, 也是标准措辞的基础. 实现里 `LibcpHideset` 是一条链表, 成员查找是 O(n), 因为 n 通常很小.
 
 ### 4.2.3 为什么要 provenance
 
@@ -71,17 +71,17 @@ provenance 记录每次宏展开:
 
 ### 4.3.1 私有类型
 
-`Macro`, `MacroParam`, `MacroArg` 只在 `libchibicc/src/preprocess.c` 内部使用, 不出现在公共头. 公共面只有两个不透明类型和访问器:
+`Macro`, `MacroParam`, `MacroArg` 只在 `libcp/src/preprocess.c` 内部使用, 不出现在公共头. 公共面只有两个不透明类型和访问器:
 
 ```c
-typedef struct chibicc_macro_expansion ChibiccMacroExpansion;
-/* ChibiccMacroProv 在 token.h 中前向声明 */
+typedef struct libcp_macro_expansion LibcpMacroExpansion;
+/* LibcpMacroProv 在 token.h 中前向声明 */
 ```
 
-`ChibiccMacroExpansion` 的内部布局:
+`LibcpMacroExpansion` 的内部布局:
 
 ```c
-struct chibicc_macro_expansion {
+struct libcp_macro_expansion {
   Token *name;      /* 调用点的宏名 token */
   Token *rparen;    /* function-like 的右括号, 否则 NULL */
   Macro *macro;     /* 展开时生效的宏定义 */
@@ -91,10 +91,10 @@ struct chibicc_macro_expansion {
 };
 ```
 
-`ChibiccMacroProv` 是链节点:
+`LibcpMacroProv` 是链节点:
 
 ```c
-struct chibicc_macro_prov {
+struct libcp_macro_prov {
   MacroExpansion *exp;
   int arg_index;    /* -1 表示宏体, >= 0 表示实参序号, 0 起 */
   MacroProv *next;  /* 调用本身所在的上下文 */
@@ -113,13 +113,13 @@ int x = OUTER;
 
 `1` 这个 token 的链是: 最内层 `INNER` 的展开, 然后是 `OUTER` 的展开. 最外层是源码里的 `OUTER`.
 
-`chibicc_macro_prov_next` 往链尾走, 也就是往更外层的调用上下文走.
+`libcp_macro_prov_next` 往链尾走, 也就是往更外层的调用上下文走.
 
 ### 4.3.3 实参列表
 
-`chibicc_macro_expansion_arg(e, i)` 返回第 i 个实参的 token 链. 这个链以 `TK_EOF` 结尾, 不是以 NULL 结尾. 空实参只有 EOF 标记.
+`libcp_macro_expansion_arg(e, i)` 返回第 i 个实参的 token 链. 这个链以 `TK_EOF` 结尾, 不是以 NULL 结尾. 空实参只有 EOF 标记.
 
-`chibicc_macro_prov_arg_index(p)` 返回这个产物属于宏体还是某个实参:
+`libcp_macro_prov_arg_index(p)` 返回这个产物属于宏体还是某个实参:
 
 - `-1`: 宏体.
 - `0` 或更大: 实参序号, 从 0 开始.
@@ -199,13 +199,13 @@ context 默认安装 47 个预定义宏, 分四类:
 
 注意 `__chibicc__` 默认定义. 被预处理代码如果检查这个宏, 会走 chibicc 分支.
 
-`chibicc_context_set_predefined_macros(ctx, false)` 关闭整个集合, 但**下一次 reset 才生效**. 关闭后, `chibicc_context_predefined_count` 返回 0.
+`libcp_context_set_predefined_macros(ctx, false)` 关闭整个集合, 但**下一次 reset 才生效**. 关闭后, `libcp_context_predefined_count` 返回 0.
 
 ### 4.4.5 命令行宏
 
 ```c
-chibicc_context_define(ctx, "NAME", "value");
-chibicc_context_undef(ctx, "NAME");
+libcp_context_define(ctx, "NAME", "value");
+libcp_context_undef(ctx, "NAME");
 ```
 
 两个函数都立即生效, 并把操作记录在 context 的配置里. reset 后重新按顺序应用. 因此 `-D` / `-U` 的顺序对最终宏表有影响.
@@ -216,13 +216,13 @@ chibicc_context_undef(ctx, "NAME");
 
 预处理的产物有两层:
 
-1. **展开后的 token 链**. 所有宏已展开, 条件指令已消解, include 已拼接, 关键字和数值已分类. 这条链可以直接给 `chibicc_parse`.
+1. **展开后的 token 链**. 所有宏已展开, 条件指令已消解, include 已拼接, 关键字和数值已分类. 这条链可以直接给 `libcp_parse`.
 2. **每个非源 token 的 provenance 链**. 源 token 的 `prov` 为 NULL.
 
 此外还有可观察的调试通道:
 
-- `chibicc_expansion_dump(ctx, tok, out)`.
-- `chibicc_expansion_verify(ctx, tok)`.
+- `libcp_expansion_dump(ctx, tok, out)`.
+- `libcp_expansion_verify(ctx, tok)`.
 - 驱动器 `-dump-expansions` / `-verify-expansions`.
 
 dump 格式:
@@ -276,8 +276,8 @@ T m.c:2 punct } -
 ### 4.7.1 基本调用
 
 ```c
-ChibiccToken *tok = chibicc_tokenize_file(ctx, "input.c");
-tok = chibicc_preprocess(ctx, tok);
+LibcpToken *tok = libcp_tokenize_file(ctx, "input.c");
+tok = libcp_preprocess(ctx, tok);
 if (!tok) {
   /* 诊断已报告, ctx 已失败 */
 }
@@ -286,29 +286,29 @@ if (!tok) {
 输入链在调用后不再可用. 需要原始流时先取走:
 
 ```c
-ChibiccToken *raw = chibicc_tokenize_file(ctx, "input.c");
-ChibiccCstNode *cst = chibicc_cst_parse(ctx, raw);   /* 先建 CST */
-ChibiccToken *expanded = chibicc_preprocess(ctx, raw); /* 再预处理 */
+LibcpToken *raw = libcp_tokenize_file(ctx, "input.c");
+LibcpCstNode *cst = libcp_cst_parse(ctx, raw);   /* 先建 CST */
+LibcpToken *expanded = libcp_preprocess(ctx, raw); /* 再预处理 */
 ```
 
-或者对同一个文件 tokenize 两次. 两次得到的 `ChibiccFile` 是不同对象, 文件编号也不同.
+或者对同一个文件 tokenize 两次. 两次得到的 `LibcpFile` 是不同对象, 文件编号也不同.
 
 ### 4.7.2 遍历 provenance
 
 ```c
-ChibiccToken *t = expanded;
+LibcpToken *t = expanded;
 for (; t && t->kind != TK_EOF; t = t->next) {
-  ChibiccMacroProv *p = chibicc_token_provenance(t);
+  LibcpMacroProv *p = libcp_token_provenance(t);
   if (!p)
     continue;
 
-  for (; p; p = chibicc_macro_prov_next(p)) {
-    ChibiccMacroExpansion *e = chibicc_macro_prov_expansion(p);
-    int arg = chibicc_macro_prov_arg_index(p);
+  for (; p; p = libcp_macro_prov_next(p)) {
+    LibcpMacroExpansion *e = libcp_macro_prov_expansion(p);
+    int arg = libcp_macro_prov_arg_index(p);
     printf("token %.*s: macro=%s, arg=%d, builtin=%d\n",
            t->len, t->loc,
-           chibicc_macro_expansion_macro(e), arg,
-           chibicc_macro_expansion_is_builtin(e));
+           libcp_macro_expansion_macro(e), arg,
+           libcp_macro_expansion_is_builtin(e));
   }
 }
 ```
@@ -316,25 +316,25 @@ for (; t && t->kind != TK_EOF; t = t->next) {
 ### 4.7.3 定位调用点和定义点
 
 ```c
-ChibiccMacroExpansion *e = chibicc_macro_prov_expansion(p);
-ChibiccToken *call = chibicc_macro_expansion_name(e);
-ChibiccToken *end  = chibicc_macro_expansion_end(e);
-ChibiccToken *def  = chibicc_macro_expansion_def(e);
+LibcpMacroExpansion *e = libcp_macro_prov_expansion(p);
+LibcpToken *call = libcp_macro_expansion_name(e);
+LibcpToken *end  = libcp_macro_expansion_end(e);
+LibcpToken *def  = libcp_macro_expansion_def(e);
 
 printf("call at %s:%d\n", call->filename, call->line_no);
 if (def)
   printf("defined at %s:%d\n", def->filename, def->line_no);
 ```
 
-`chibicc_macro_expansion_end` 对函数宏返回右括号 token, 对对象宏返回宏名 token.
+`libcp_macro_expansion_end` 对函数宏返回右括号 token, 对对象宏返回宏名 token.
 
 ### 4.7.4 取实参
 
 ```c
-int n = chibicc_macro_expansion_arg_count(e);
+int n = libcp_macro_expansion_arg_count(e);
 for (int i = 0; i < n; i++) {
-  ChibiccToken *arg = chibicc_macro_expansion_arg(e, i);
-  for (ChibiccToken *t = arg; t && t->kind != TK_EOF; t = t->next)
+  LibcpToken *arg = libcp_macro_expansion_arg(e, i);
+  for (LibcpToken *t = arg; t && t->kind != TK_EOF; t = t->next)
     printf("arg %d token: %.*s\n", i, t->len, t->loc);
 }
 ```
@@ -344,7 +344,7 @@ for (int i = 0; i < n; i++) {
 ### 4.7.5 校验
 
 ```c
-if (!chibicc_expansion_verify(ctx, expanded)) {
+if (!libcp_expansion_verify(ctx, expanded)) {
   /* 链损坏: 深度超限, 节点重复, 实参越界, 名字不一致 */
 }
 ```
@@ -354,22 +354,22 @@ if (!chibicc_expansion_verify(ctx, expanded)) {
 ### 4.7.6 关闭预定义宏
 
 ```c
-chibicc_context_set_predefined_macros(ctx, false);
-chibicc_context_reset(ctx);   /* 生效 */
+libcp_context_set_predefined_macros(ctx, false);
+libcp_context_reset(ctx);   /* 生效 */
 ```
 
 用于构造干净的预处理环境, 例如测试一个头文件在最小宏集下的行为. 记录下来的 `-D` / `-U` 仍然生效.
 
 ## 4.8 边界与已知限制
 
-- **输入链被破坏**. 这是最重要的限制. `chibicc_preprocess` 之后不要再用原来的 token 指针, 除非你确定它们没有被拼接影响. CST 必须在它之前建.
-- **展开流不能重建原文件**. 对展开流调用 `chibicc_reconstruct` 得到的是展开产物的 raw 坐标拼接. 例如 `int x = A;` 会被重建为 `int x = 42;`, 而 `#define A 42` 那一行消失. 这是预期行为, 不是 bug.
+- **输入链被破坏**. 这是最重要的限制. `libcp_preprocess` 之后不要再用原来的 token 指针, 除非你确定它们没有被拼接影响. CST 必须在它之前建.
+- **展开流不能重建原文件**. 对展开流调用 `libcp_reconstruct` 得到的是展开产物的 raw 坐标拼接. 例如 `int x = A;` 会被重建为 `int x = 42;`, 而 `#define A 42` 那一行消失. 这是预期行为, 不是 bug.
 - **没有宏调用节点**. 语法树上看不到"这里调用了一个宏". 需要知道来源就查 provenance.
 - **零产出展开不可见**. `#define E` 后面的 `E` 展开成空, 不产生任何 token, 因此没有 token 可以挂 provenance. 这类展开在展开流里完全不可见.
 - **`#if` 的分支丢弃**. 未选中分支不进 output. 需要保留全部分支时用第 2 层 CST.
 - **实参之间的 trivia 丢失**. 宏调用 `M(a, b)` 中逗号两边的空白和注释不进入展开流. 产物的 trivia 指向宏体或实参内部.
 - **合成位置**. 粘贴或字符串化产生的 token 位置是合成缓冲. dump 显示 `@synth`, 诊断位置可能指向宏定义或合成位置, 而不是调用点.
-- **内存中的输入也被标成 `@synth`**. `chibicc_tokenize_buffer` 的 `raw == contents`, provenance 的 `is_synthetic` 判定会把它当作合成缓冲. 用文件输入才有真实行号.
+- **内存中的输入也被标成 `@synth`**. `libcp_tokenize_buffer` 的 `raw == contents`, provenance 的 `is_synthetic` 判定会把它当作合成缓冲. 用文件输入才有真实行号.
 - **不支持的指令**. `#warning` 等未知指令报 `invalid preprocessor directive`. `#pragma` 除 `once` 外忽略.
 - **include 只走文件系统**. 没有虚拟文件系统或内存 include 回调. 内存中的源码可以 `#include` 磁盘上的头, 但不能 include 另一个内存字符串.
 - **预定义宏假设 x86-64 Linux**. `__linux__`, `__ELF__`, `_LP64`, `__x86_64__` 无条件定义, 即使库在 macOS 上构建. 做跨目标语义分析时要注意.

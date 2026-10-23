@@ -2,7 +2,7 @@
 
 ## 1.1 一句话定位
 
-`libchibicc` 把一个 C11 前端的四个中间表示层做成可复用的 C 库: 保真的 token 流, lossless CST, 忠实语法 AST, 以及 sema 标注树. 它不带编译器驱动器, 也不带 x86-64 代码生成器. 仓库里的 `chibicc` 二进制是这个库的参考消费者.
+`libcp` 把一个 C11 前端的四个中间表示层做成可复用的 C 库: 保真的 token 流, lossless CST, 忠实语法 AST, 以及 sema 标注树. 它不带编译器驱动器, 也不带 x86-64 代码生成器. 仓库里的 `chibicc` 二进制是这个库的参考消费者.
 
 ## 1.2 为什么需要这个库
 
@@ -23,19 +23,19 @@
 
 | 层 | 能力 | 主要入口 | 产物 |
 |---|---|---|---|
-| 第 1 层 | 词法, 保留 trivia | `chibicc_tokenize_file` / `_buffer` / `_buffer_len` | `ChibiccToken` 链, 可逐字节重建输入 |
-| 预处理 | 宏展开, 条件编译, include | `chibicc_preprocess` | 展开后的 token 链 + provenance 链 |
-| 第 2 层 | lossless 具体语法树 | `chibicc_cst_parse` | `ChibiccCstNode` 树, `CST_*` 55 种节点 |
-| 第 3 层 | 忠实语法 AST | `chibicc_parse` | `ChibiccNode` 树, `ND_*` 69 种节点 |
-| 第 4 层 | 语义标注 | `chibicc_sema` | 原地标注的树 + `ChibiccObj` 全局对象链 |
+| 第 1 层 | 词法, 保留 trivia | `libcp_tokenize_file` / `_buffer` / `_buffer_len` | `LibcpToken` 链, 可逐字节重建输入 |
+| 预处理 | 宏展开, 条件编译, include | `libcp_preprocess` | 展开后的 token 链 + provenance 链 |
+| 第 2 层 | lossless 具体语法树 | `libcp_cst_parse` | `LibcpCstNode` 树, `CST_*` 55 种节点 |
+| 第 3 层 | 忠实语法 AST | `libcp_parse` | `LibcpNode` 树, `ND_*` 69 种节点 |
+| 第 4 层 | 语义标注 | `libcp_sema` | 原地标注的树 + `LibcpObj` 全局对象链 |
 
 此外还有:
 
-- `chibicc_reconstruct`: 从第 1 层的 token 流重建原始字节.
-- 宏展开 provenance 的 11 个访问器, 以及 `chibicc_expansion_dump` / `_verify`.
-- 一个不透明的 `ChibiccContext`, 管理一个翻译单元的全部状态和内存.
-- 一套可替换的分配器宏 (`<chibicc/allocator.h>`).
-- 10 个公共头, 36 个公共函数. 公共符号一律 `chibicc_` / `Chibicc` 前缀.
+- `libcp_reconstruct`: 从第 1 层的 token 流重建原始字节.
+- 宏展开 provenance 的 11 个访问器, 以及 `libcp_expansion_dump` / `_verify`.
+- 一个不透明的 `LibcpContext`, 管理一个翻译单元的全部状态和内存.
+- 一套可替换的分配器宏 (`<libcp/allocator.h>`).
+- 10 个公共头, 36 个公共函数. 公共符号一律 `libcp_` / `Libcp` 前缀.
 
 库的实现约 1.2 万行 C, 公共头约 2.3 千行. 它没有外部依赖, 除 C 标准库外只要求 POSIX 的文件与线程基础能力.
 
@@ -77,7 +77,7 @@
 - `x += 1` 是带 `op` 的 `ND_ASSIGN`, 不展开成读改写.
 - `while` 是 `ND_WHILE`, 不降级成 `ND_FOR`.
 - 隐式 cast 有 `is_implicit` 标记, 与源码写出的 cast 区分.
-- 初始化器保留为 `ChibiccInitializer` 记录, 不拍平成赋值链.
+- 初始化器保留为 `LibcpInitializer` 记录, 不拍平成赋值链.
 
 第 4 层在此之上绑定名字, 计算类型, 求值常量, 布局聚合类型, 并把编译期结论记录在节点上. 它不改变源码写法.
 
@@ -110,9 +110,9 @@ CST 进一步把每个标点变成叶子, 保证叶子按序重建等于输入. 
 
 ### 1.5.7 一个 context 对应一个翻译单元
 
-所有 per-TU 状态收进 `ChibiccContext`: 文件表, 宏表, 条件编译栈, 作用域, 语义状态, arena. 公共入口显式接收 context.
+所有 per-TU 状态收进 `LibcpContext`: 文件表, 宏表, 条件编译栈, 作用域, 语义状态, arena. 公共入口显式接收 context.
 
-库层没有隐式上下文: 每个触碰 arena, 诊断, 格式化或 context 字段的内部函数以 `ChibiccContext *ctx` 作为首参, 需要它的函数再把它传给调用者. 公共入口本来就把 context 作为首参. 契约是:
+库层没有隐式上下文: 每个触碰 arena, 诊断, 格式化或 context 字段的内部函数以 `LibcpContext *ctx` 作为首参, 需要它的函数再把它传给调用者. 公共入口本来就把 context 作为首参. 契约是:
 
 - 不同 context 可以在不同线程并存, 结构上互不可见.
 - 同一个 context 不能跨线程并发.
@@ -165,9 +165,9 @@ CST 进一步把每个标点变成叶子, 保证叶子按序重建等于输入. 
 
 本仓库是 Rui Ueyama 的 chibicc 的 fork. 上游仍是一个教学编译器, 目标是让读者按 commit 学习 C 编译器怎么实现. 本 fork 保留了它的代码风格和大部分实现, 但把目标改成了库:
 
-- 源码搬到 `libchibicc/src/`, 公共头在 `libchibicc/include/chibicc/`.
+- 源码搬到 `libcp/src/`, 公共头在 `libcp/include/libcp/`.
 - 根目录只留驱动器 `main.c`, 代码生成器 `codegen.c` 和驱动器内部头 `driver.h`.
-- 所有跨层状态收进 `ChibiccContext`, 错误改走诊断回调.
+- 所有跨层状态收进 `LibcpContext`, 错误改走诊断回调.
 - 新增了 trivia, CST, provenance, 忠实语法层和 sema 标注层.
 - 上游 README 描述的是编译器, 与本仓库冲突时以 `AGENTS.md` 和本文档为准.
 

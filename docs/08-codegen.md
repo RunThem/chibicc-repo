@@ -4,7 +4,7 @@
 
 第 5 层是 `codegen.c`, 把第 4 层的标注树翻译成 x86-64 System V 汇编. 它**不属于库**:
 
-- 不在 `libchibicc.a` / `libchibicc.so` 里.
+- 不在 `libcp.a` / `libcp.so` 里.
 - 不导出公共函数.
 - 不承诺 API 稳定性.
 - 只支持 x86-64 Linux (GAS 语法, ELF 目标).
@@ -40,7 +40,7 @@
 
 输入:
 
-- `ChibiccObj *prog`: `chibicc_sema` 返回的全局对象链.
+- `LibcpObj *prog`: `libcp_sema` 返回的全局对象链.
 - 每个函数的 `body`: 标注树.
 - 每个全局变量的 `init_data` / `rel`: 已序列化的数据.
 
@@ -147,7 +147,7 @@ void codegen(Obj *prog, FILE *out) {
 - `stack_size`.
 - `Type.vla_size`.
 
-这些字段不在公共 `ChibiccNode` / `ChibiccObj` / `ChibiccType` 里, 而是保存在 `codegen.c` 的私有指针键表:
+这些字段不在公共 `LibcpNode` / `LibcpObj` / `LibcpType` 里, 而是保存在 `codegen.c` 的私有指针键表:
 
 - `CgNode`: 按 `Node *` 查.
 - `ObjInfo`: 按 `Obj *` 查.
@@ -234,7 +234,7 @@ void codegen(Obj *prog, FILE *out) {
 
 如果你要用第 4 层做自己的代码生成器, 需要处理:
 
-- `ChibiccObj` 链, 过滤 `is_definition`.
+- `LibcpObj` 链, 过滤 `is_definition`.
 - 声明记录 `ND_DECL` / `ND_GVAR_DECL` / `ND_FUNCDEF` / `ND_TYPEDEF` / `ND_ENUM_CONST` 仍在语句链上.
 - 忠实节点: `ND_SUBSCRIPT`, `ND_WHILE`, `ND_GT`, `ND_GE`, `ND_INCDEC`, 带 `op` 的 `ND_ASSIGN`, `ND_STRING` 已变成 `ND_VAR`, `ND_COMPOUND_LITERAL` 带隐藏对象.
 - 需要自己决定: 指针缩放, 复合赋值展开, 自增自减, 控制流标签, 临时槽, 初始化器展开.

@@ -1,4 +1,4 @@
-#include "chibicc.h"
+#include "libcp.h"
 
 // Lossless concrete syntax tree over the raw token stream (plans/PLAN.md stage
 // C1/C2/C3). Every token of the input becomes one leaf, in order; the
@@ -43,20 +43,20 @@
 // unparsed group; every token stays, so reconstruction remains lossless.
 #define MAX_CST_DEPTH 512
 
-static CstNode *new_cst_node(ChibiccContext *ctx, CstKind kind) {
-  CstNode *node = chibicc_arena_calloc(ctx, 1, sizeof(CstNode));
+static CstNode *new_cst_node(LibcpContext *ctx, CstKind kind) {
+  CstNode *node = libcp_arena_calloc(ctx, 1, sizeof(CstNode));
   node->kind = kind;
   return node;
 }
 
-static void cst_add_child(ChibiccContext *ctx, CstNode *node, CstNode *child) {
+static void cst_add_child(LibcpContext *ctx, CstNode *node, CstNode *child) {
   // The capacity lives in a size_t header just before `children`; the
   // public node exposes only child_count and the live entries.
   size_t cap = node->children ? ((size_t *)node->children)[-1] : 0;
   if ((size_t)node->child_count == cap) {
     cap = cap ? cap * 2 : 8;
     size_t bytes = sizeof(size_t) + cap * sizeof(CstNode *);
-    char *p = chibicc_arena_alloc(ctx, bytes, 8);
+    char *p = libcp_arena_alloc(ctx, bytes, 8);
     *(size_t *)p = cap;
     CstNode **children = (CstNode **)(p + sizeof(size_t));
     if (node->children)
@@ -67,7 +67,7 @@ static void cst_add_child(ChibiccContext *ctx, CstNode *node, CstNode *child) {
   node->children[node->child_count++] = child;
 }
 
-static CstNode *cst_add_leaf(ChibiccContext *ctx, CstNode *parent, Token *tok) {
+static CstNode *cst_add_leaf(LibcpContext *ctx, CstNode *parent, Token *tok) {
   CstNode *leaf = new_cst_node(ctx, tok->kind == TK_EOF ? CST_EOF : CST_TOKEN);
   leaf->tok = tok;
   cst_add_child(ctx, parent, leaf);
@@ -95,7 +95,7 @@ typedef struct {
 // only nested delimiters are grouped. On a missing closer or a depth
 // overrun the node becomes CST_UNPARSED but keeps the opener and
 // everything it consumed.
-static CstNode *cst_parse_group(ChibiccContext *ctx, CstContext *cst, Token **rest, Token *tok) {
+static CstNode *cst_parse_group(LibcpContext *ctx, CstContext *cst, Token **rest, Token *tok) {
   char *closer = equal(tok, "(") ? ")" : equal(tok, "[") ? "]" : "}";
   CstKind kind = equal(tok, "(") ? CST_GROUP_PAREN
                : equal(tok, "[") ? CST_GROUP_BRACKET
@@ -232,8 +232,8 @@ static bool cst_is_decl_start(Token *tok, CstContext *cst) {
   return cst_in_list(tok, kw) || cst_is_typedef_name(cst, tok);
 }
 
-static void cst_add_typedef(ChibiccContext *ctx, CstContext *cst, Token *tok) {
-  strarray_push(ctx, &cst->typedefs, chibicc_arena_strndup(ctx, tok->loc, tok->len));
+static void cst_add_typedef(LibcpContext *ctx, CstContext *cst, Token *tok) {
+  strarray_push(ctx, &cst->typedefs, libcp_arena_strndup(ctx, tok->loc, tok->len));
 }
 
 // A conservative pre-scan for file-local typedef names. Names introduced
@@ -242,7 +242,7 @@ static void cst_add_typedef(ChibiccContext *ctx, CstContext *cst, Token *tok) {
 // are collected; parameter names and struct tags are not. This is the
 // cast / declaration oracle the plan allows - an include-provided name
 // stays unknown and is not guessed.
-static void cst_collect_typedefs(ChibiccContext *ctx, CstContext *cst, Token *tok) {
+static void cst_collect_typedefs(LibcpContext *ctx, CstContext *cst, Token *tok) {
   Token *p = tok;
 
   while (p && p->kind != TK_EOF) {
@@ -280,30 +280,30 @@ static void cst_collect_typedefs(ChibiccContext *ctx, CstContext *cst, Token *to
   }
 }
 
-static CstNode *cst_parse_comma(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_assign(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_conditional(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_unary(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_postfix(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_postfix_tail(ChibiccContext *ctx, CstParser *p, CstNode *node);
-static CstNode *cst_parse_primary(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_arg_list(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_init_list(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_type_name(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_declarator(ChibiccContext *ctx, CstParser *p, bool allow_abstract);
-static CstNode *cst_parse_decl(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_comma(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_assign(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_conditional(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_unary(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_postfix(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_postfix_tail(LibcpContext *ctx, CstParser *p, CstNode *node);
+static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_arg_list(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_init_list(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_type_name(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_declarator(LibcpContext *ctx, CstParser *p, bool allow_abstract);
+static CstNode *cst_parse_decl(LibcpContext *ctx, CstParser *p);
 // The body behind each depth-guarded expression/declarator entry.
-static CstNode *cst_parse_comma1(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_assign1(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_conditional1(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_unary1(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_init_list1(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_declarator1(ChibiccContext *ctx, CstParser *p, bool allow_abstract);
+static CstNode *cst_parse_comma1(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_assign1(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_conditional1(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_unary1(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_init_list1(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_declarator1(LibcpContext *ctx, CstParser *p, bool allow_abstract);
 
 // Consume one balanced group in raw mode, for a type name in a cast or
 // sizeof. An unclosed group fails the expression: the statement falls
 // back to the skeleton, where the span becomes UNPARSED.
-static CstNode *cst_parse_raw_group(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_raw_group(LibcpContext *ctx, CstParser *p) {
   Token *rest = NULL;
   CstNode *group = cst_parse_group(ctx, p->cst, &rest, p->tok);
 
@@ -316,7 +316,7 @@ static CstNode *cst_parse_raw_group(ChibiccContext *ctx, CstParser *p) {
 }
 
 // primary = ident | number | char | string+ | "(" expr ")"
-static CstNode *cst_parse_primary(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p) {
   if (!p->ok)
     return NULL;
 
@@ -363,7 +363,7 @@ static CstNode *cst_parse_primary(ChibiccContext *ctx, CstParser *p) {
 }
 
 // arg-list = "(" (assign ("," assign)*)? ")"
-static CstNode *cst_parse_arg_list(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_arg_list(LibcpContext *ctx, CstParser *p) {
   CstNode *args = new_cst_node(ctx, CST_ARG_LIST);
   cst_add_leaf(ctx, args, p->tok); // '('
   p->tok = p->tok->next;
@@ -392,7 +392,7 @@ static CstNode *cst_parse_arg_list(ChibiccContext *ctx, CstParser *p) {
 }
 
 // designator = "[" conditional ("..." conditional)? "]" | "." ident
-static CstNode *cst_parse_designator(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_designator(LibcpContext *ctx, CstParser *p) {
   CstNode *desig = new_cst_node(ctx, CST_DESIGNATOR);
 
   if (cst_at(p, "[")) {
@@ -439,7 +439,7 @@ static CstNode *cst_parse_designator(ChibiccContext *ctx, CstParser *p) {
 }
 
 // initializer = brace-list | string+ | assign
-static CstNode *cst_parse_initializer(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_initializer(LibcpContext *ctx, CstParser *p) {
   if (cst_at(p, "{"))
     return cst_parse_init_list(ctx, p);
 
@@ -461,7 +461,7 @@ static CstNode *cst_parse_initializer(ChibiccContext *ctx, CstParser *p) {
 // The written shape is kept: designators are explicit nodes, a braced
 // sublist is a nested CST_INIT_LIST, and no target-type decision is made
 // here (brace elision belongs to a later consumer).
-static CstNode *cst_parse_init_list(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_init_list(LibcpContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
@@ -472,7 +472,7 @@ static CstNode *cst_parse_init_list(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_init_list1(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_init_list1(LibcpContext *ctx, CstParser *p) {
   CstNode *list = new_cst_node(ctx, CST_INIT_LIST);
   cst_add_leaf(ctx, list, p->tok); // '{'
   p->tok = p->tok->next;
@@ -523,7 +523,7 @@ static CstNode *cst_parse_init_list1(ChibiccContext *ctx, CstParser *p) {
 
 // postfix-tail = ("(" arg-list | "[" expr "]" | "." ident | "->" ident
 //                | "++" | "--")*
-static CstNode *cst_parse_postfix_tail(ChibiccContext *ctx, CstParser *p, CstNode *node) {
+static CstNode *cst_parse_postfix_tail(LibcpContext *ctx, CstParser *p, CstNode *node) {
   for (;;) {
     if (!p->ok)
       return NULL;
@@ -589,7 +589,7 @@ static CstNode *cst_parse_postfix_tail(ChibiccContext *ctx, CstParser *p, CstNod
 }
 
 // postfix = primary postfix-tail
-static CstNode *cst_parse_postfix(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_postfix(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_primary(ctx, p);
   if (!p->ok)
     return NULL;
@@ -601,7 +601,7 @@ static CstNode *cst_parse_postfix(ChibiccContext *ctx, CstParser *p) {
 //       | "(" type-name ")" unary                    // cast
 //       | "(" type-name ")" "{" init-list "}"        // compound literal
 //       | postfix
-static CstNode *cst_parse_unary(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_unary(LibcpContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
@@ -612,7 +612,7 @@ static CstNode *cst_parse_unary(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_unary1(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_unary1(LibcpContext *ctx, CstParser *p) {
   if (!p->ok)
     return NULL;
 
@@ -683,7 +683,7 @@ static CstNode *cst_parse_unary1(ChibiccContext *ctx, CstParser *p) {
 // binary-level <name> = <operand-level> (op <operand-level>)*, left
 // associative. Each level keeps the operator as an explicit leaf.
 
-static CstNode *cst_parse_mul(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_mul(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_unary(ctx, p);
   while (p->ok && (cst_at(p, "*") || cst_at(p, "/") || cst_at(p, "%"))) {
     CstNode *bin = new_cst_node(ctx, CST_BINARY);
@@ -700,7 +700,7 @@ static CstNode *cst_parse_mul(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_add(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_add(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_mul(ctx, p);
   while (p->ok && (cst_at(p, "+") || cst_at(p, "-"))) {
     CstNode *bin = new_cst_node(ctx, CST_BINARY);
@@ -717,7 +717,7 @@ static CstNode *cst_parse_add(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_shift(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_shift(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_add(ctx, p);
   while (p->ok && (cst_at(p, "<<") || cst_at(p, ">>"))) {
     CstNode *bin = new_cst_node(ctx, CST_BINARY);
@@ -734,7 +734,7 @@ static CstNode *cst_parse_shift(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_relational(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_relational(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_shift(ctx, p);
   while (p->ok && (cst_at(p, "<") || cst_at(p, "<=") ||
                    cst_at(p, ">") || cst_at(p, ">="))) {
@@ -752,7 +752,7 @@ static CstNode *cst_parse_relational(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_equality(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_equality(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_relational(ctx, p);
   while (p->ok && (cst_at(p, "==") || cst_at(p, "!="))) {
     CstNode *bin = new_cst_node(ctx, CST_BINARY);
@@ -769,7 +769,7 @@ static CstNode *cst_parse_equality(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_bitand(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_bitand(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_equality(ctx, p);
   while (p->ok && cst_at(p, "&")) {
     CstNode *bin = new_cst_node(ctx, CST_BINARY);
@@ -786,7 +786,7 @@ static CstNode *cst_parse_bitand(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_bitxor(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_bitxor(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_bitand(ctx, p);
   while (p->ok && cst_at(p, "^")) {
     CstNode *bin = new_cst_node(ctx, CST_BINARY);
@@ -803,7 +803,7 @@ static CstNode *cst_parse_bitxor(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_bitor(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_bitor(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_bitxor(ctx, p);
   while (p->ok && cst_at(p, "|")) {
     CstNode *bin = new_cst_node(ctx, CST_BINARY);
@@ -820,7 +820,7 @@ static CstNode *cst_parse_bitor(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_logand(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_logand(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_bitor(ctx, p);
   while (p->ok && cst_at(p, "&&")) {
     CstNode *bin = new_cst_node(ctx, CST_BINARY);
@@ -837,7 +837,7 @@ static CstNode *cst_parse_logand(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_logor(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_logor(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_logand(ctx, p);
   while (p->ok && cst_at(p, "||")) {
     CstNode *bin = new_cst_node(ctx, CST_BINARY);
@@ -855,7 +855,7 @@ static CstNode *cst_parse_logor(ChibiccContext *ctx, CstParser *p) {
 }
 
 // conditional = logor ("?" expr ":" conditional | "?" ":" conditional)?
-static CstNode *cst_parse_conditional(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_conditional(LibcpContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
@@ -866,7 +866,7 @@ static CstNode *cst_parse_conditional(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_conditional1(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_conditional1(LibcpContext *ctx, CstParser *p) {
   CstNode *cond = cst_parse_logor(ctx, p);
   if (!p->ok || !cst_at(p, "?"))
     return cond;
@@ -912,7 +912,7 @@ static bool cst_at_assign_op(CstParser *p) {
 }
 
 // assign = conditional (assign-op assign)?
-static CstNode *cst_parse_assign(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_assign(LibcpContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
@@ -923,7 +923,7 @@ static CstNode *cst_parse_assign(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_assign1(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_assign1(LibcpContext *ctx, CstParser *p) {
   CstNode *lhs = cst_parse_conditional(ctx, p);
   if (!p->ok || !cst_at_assign_op(p))
     return lhs;
@@ -941,7 +941,7 @@ static CstNode *cst_parse_assign1(ChibiccContext *ctx, CstParser *p) {
 }
 
 // comma = assign ("," assign)*
-static CstNode *cst_parse_comma(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_comma(LibcpContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
@@ -952,7 +952,7 @@ static CstNode *cst_parse_comma(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_comma1(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_comma1(LibcpContext *ctx, CstParser *p) {
   CstNode *node = cst_parse_assign(ctx, p);
   while (p->ok && cst_at(p, ",")) {
     CstNode *comma = new_cst_node(ctx, CST_COMMA);
@@ -973,14 +973,14 @@ static CstNode *cst_parse_comma1(ChibiccContext *ctx, CstParser *p) {
 // Declaration layer (C2.2)
 //
 
-static void cst_parse_compound(ChibiccContext *ctx, CstParser *p, CstNode *block);
-static CstNode *cst_parse_param_list(ChibiccContext *ctx, CstParser *p);
+static void cst_parse_compound(LibcpContext *ctx, CstParser *p, CstNode *block);
+static CstNode *cst_parse_param_list(LibcpContext *ctx, CstParser *p);
 
 // Consume one balanced group in raw mode from `start`, resetting the
 // parser on failure. Used where a structured attempt did not fit and the
 // tokens must still stay in the tree (K&R parameter lists, array
 // dimensions, attributes).
-static CstNode *cst_parse_raw_group_at(ChibiccContext *ctx, CstParser *p, Token *start) {
+static CstNode *cst_parse_raw_group_at(LibcpContext *ctx, CstParser *p, Token *start) {
   p->tok = start;
   p->ok = true;
 
@@ -1000,7 +1000,7 @@ static CstNode *cst_parse_raw_group_at(ChibiccContext *ctx, CstParser *p, Token 
 // _Atomic / _Alignas arguments and attributes stay raw groups. A
 // user-defined type name is a specifier only while no other specifier
 // has been seen, so `T T;` leaves the second T to the declarator.
-static CstNode *cst_parse_decl_specs(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_decl_specs(LibcpContext *ctx, CstParser *p) {
   CstNode *specs = new_cst_node(ctx, CST_DECL_SPECS);
   bool has_type = false;
 
@@ -1155,7 +1155,7 @@ static CstNode *cst_parse_decl_specs(ChibiccContext *ctx, CstParser *p) {
 
 // Consume `__attribute__((...))` pairs after a declarator, keeping them
 // on the declarator node.
-static bool cst_parse_attributes(ChibiccContext *ctx, CstParser *p, CstNode *node) {
+static bool cst_parse_attributes(LibcpContext *ctx, CstParser *p, CstNode *node) {
   while (cst_at(p, "__attribute__")) {
     cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
@@ -1172,7 +1172,7 @@ static bool cst_parse_attributes(ChibiccContext *ctx, CstParser *p, CstNode *nod
 // array-dimension = "[" ("static" | "restrict" | "*")* expr? "]"
 // The expression is parsed when it fits; otherwise the bracket keeps its
 // raw tokens.
-static CstNode *cst_parse_dimension(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_dimension(LibcpContext *ctx, CstParser *p) {
   Token *start = p->tok;
   CstNode *bracket = new_cst_node(ctx, CST_GROUP_BRACKET);
   cst_add_leaf(ctx, bracket, p->tok); // '['
@@ -1212,7 +1212,7 @@ static CstNode *cst_parse_dimension(ChibiccContext *ctx, CstParser *p) {
 // The written grouping is kept: pointer stars, an inner declarator in a
 // GROUP_PAREN, the name, and the suffixes in source order. No type is
 // built and no name is bound.
-static CstNode *cst_parse_declarator(ChibiccContext *ctx, CstParser *p, bool allow_abstract) {
+static CstNode *cst_parse_declarator(LibcpContext *ctx, CstParser *p, bool allow_abstract) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
@@ -1223,7 +1223,7 @@ static CstNode *cst_parse_declarator(ChibiccContext *ctx, CstParser *p, bool all
   return node;
 }
 
-static CstNode *cst_parse_declarator1(ChibiccContext *ctx, CstParser *p, bool allow_abstract) {
+static CstNode *cst_parse_declarator1(LibcpContext *ctx, CstParser *p, bool allow_abstract) {
   CstNode *decl = new_cst_node(ctx, CST_DECLARATOR);
 
   while (cst_at(p, "*")) {
@@ -1285,7 +1285,7 @@ static CstNode *cst_parse_declarator1(ChibiccContext *ctx, CstParser *p, bool al
 }
 
 // parameter = decl-specs declarator?
-static CstNode *cst_parse_param(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_param(LibcpContext *ctx, CstParser *p) {
   CstNode *specs = cst_parse_decl_specs(ctx, p);
   if (!p->ok)
     return NULL;
@@ -1304,7 +1304,7 @@ static CstNode *cst_parse_param(ChibiccContext *ctx, CstParser *p) {
 // param-list = "(" (param ("," param)* | "..." | raw)? ")"
 // A parameter list the declaration grammar cannot explain keeps its raw
 // tokens in a GROUP_PAREN (K&R identifier lists are the common case).
-static CstNode *cst_parse_param_list(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_param_list(LibcpContext *ctx, CstParser *p) {
   Token *start = p->tok;
   CstNode *list = new_cst_node(ctx, CST_PARAM_LIST);
   cst_add_leaf(ctx, list, p->tok); // '('
@@ -1341,7 +1341,7 @@ static CstNode *cst_parse_param_list(ChibiccContext *ctx, CstParser *p) {
 }
 
 // type-name = "(" decl-specs abstract-declarator? ")"
-static CstNode *cst_parse_type_name(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_type_name(LibcpContext *ctx, CstParser *p) {
   Token *open = p->tok;
   CstNode *node = new_cst_node(ctx, CST_TYPE_NAME);
   cst_add_leaf(ctx, node, open); // '('
@@ -1370,7 +1370,7 @@ static CstNode *cst_parse_type_name(ChibiccContext *ctx, CstParser *p) {
 // declaration = decl-specs init-declarator ("," init-declarator)* ";"
 //             | decl-specs ";"
 // function-definition = decl-specs declarator compound-stmt
-static CstNode *cst_parse_decl(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_decl(LibcpContext *ctx, CstParser *p) {
   CstNode *specs = cst_parse_decl_specs(ctx, p);
   if (!p->ok)
     return NULL;
@@ -1447,10 +1447,10 @@ static CstNode *cst_parse_decl(ChibiccContext *ctx, CstParser *p) {
 
 static bool cst_is_directive(Token *tok);
 static bool cst_is_pp_terminator(Token *tok);
-static CstNode *cst_parse_directive_line(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_pp_if(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_item(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_item1(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_directive_line(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_pp_if(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_item(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_item1(LibcpContext *ctx, CstParser *p);
 
 // Parse one statement into the fallback shape: tokens up to and
 // including a ';' at this level, a raw group per delimiter, and stop
@@ -1459,7 +1459,7 @@ static CstNode *cst_parse_item1(ChibiccContext *ctx, CstParser *p);
 // where it should have ended. The node is CST_UNPARSED: the expression
 // grammar did not explain the span (a declaration is one such span until
 // C2.2), and the children are exactly the raw pieces, not a guess.
-static CstNode *cst_parse_fallback_statement(ChibiccContext *ctx, CstContext *cst, Token **rest,
+static CstNode *cst_parse_fallback_statement(LibcpContext *ctx, CstContext *cst, Token **rest,
                                              Token *tok) {
   CstNode *stmt = new_cst_node(ctx, CST_UNPARSED);
 
@@ -1491,7 +1491,7 @@ static CstNode *cst_parse_fallback_statement(ChibiccContext *ctx, CstContext *cs
 // A statement whose whole span is an expression followed by ';' becomes
 // CST_EXPR_STMT. On any failure the caller uses the raw skeleton instead;
 // the failed attempt's nodes are unreachable, which is allowed.
-static CstNode *cst_try_expr_stmt(ChibiccContext *ctx, Token **rest, Token *tok, CstContext *cst) {
+static CstNode *cst_try_expr_stmt(LibcpContext *ctx, Token **rest, Token *tok, CstContext *cst) {
   CstParser p = {tok, true, cst};
 
   CstNode *expr = cst_parse_comma(ctx, &p);
@@ -1505,8 +1505,8 @@ static CstNode *cst_try_expr_stmt(ChibiccContext *ctx, Token **rest, Token *tok,
   return stmt;
 }
 
-static CstNode *cst_parse_statement(ChibiccContext *ctx, CstParser *p);
-static CstNode *cst_parse_statement1(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_statement(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_statement1(LibcpContext *ctx, CstParser *p);
 
 // statement = "return" expr? ";"
 //           | "if" "(" expr ")" statement ("else" statement)?
@@ -1521,7 +1521,7 @@ static CstNode *cst_parse_statement1(ChibiccContext *ctx, CstParser *p);
 //           | "asm" qualifiers* "(" raw ")" ";"
 //           | ident ":" statement
 //           | compound-stmt | declaration | expr-stmt
-static CstNode *cst_parse_simple_stmt(ChibiccContext *ctx, CstParser *p, CstKind kind) {
+static CstNode *cst_parse_simple_stmt(LibcpContext *ctx, CstParser *p, CstKind kind) {
   CstNode *node = new_cst_node(ctx, kind);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1535,7 +1535,7 @@ static CstNode *cst_parse_simple_stmt(ChibiccContext *ctx, CstParser *p, CstKind
   return node;
 }
 
-static CstNode *cst_parse_return(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_return(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_RETURN);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1556,7 +1556,7 @@ static CstNode *cst_parse_return(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_if(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_if(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_IF);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1594,7 +1594,7 @@ static CstNode *cst_parse_if(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_switch(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_switch(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_SWITCH);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1622,7 +1622,7 @@ static CstNode *cst_parse_switch(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_while(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_while(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_WHILE);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1650,7 +1650,7 @@ static CstNode *cst_parse_while(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_do(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_do(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_DO);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1692,7 +1692,7 @@ static CstNode *cst_parse_do(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_for(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_for(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_FOR);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1757,7 +1757,7 @@ static CstNode *cst_parse_for(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_case(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_case(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_CASE);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1791,7 +1791,7 @@ static CstNode *cst_parse_case(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_default(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_default(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_DEFAULT);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1810,7 +1810,7 @@ static CstNode *cst_parse_default(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_label(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_label(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_LABEL);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1825,7 +1825,7 @@ static CstNode *cst_parse_label(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_goto(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_goto(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_GOTO);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1856,7 +1856,7 @@ static CstNode *cst_parse_goto(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_asm(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_asm(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_ASM);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
@@ -1884,7 +1884,7 @@ static CstNode *cst_parse_asm(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_statement(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_statement(LibcpContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
@@ -1895,7 +1895,7 @@ static CstNode *cst_parse_statement(ChibiccContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_statement1(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_statement1(LibcpContext *ctx, CstParser *p) {
   if (!p->ok || !p->tok || p->tok->kind == TK_EOF)
     return NULL;
 
@@ -2045,7 +2045,7 @@ static CstKind cst_pp_kind(Token *tok) {
 // not past the end of the line. Parameters do not nest in valid input,
 // so the group is flat; a missing ')' stops at the line's end and turns
 // the group into UNPARSED.
-static CstNode *cst_parse_pp_params(ChibiccContext *ctx, Token **rest, Token *tok, Token *end) {
+static CstNode *cst_parse_pp_params(LibcpContext *ctx, Token **rest, Token *tok, Token *end) {
   CstNode *group = new_cst_node(ctx, CST_GROUP_PAREN);
   cst_add_leaf(ctx, group, tok);
 
@@ -2077,7 +2077,7 @@ static CstNode *cst_parse_pp_params(ChibiccContext *ctx, Token **rest, Token *to
 // the directive node. For #define the macro name is followed by a
 // GROUP_PAREN only when '(' comes with no space - the object / function
 // macro boundary of preprocess.c - so the dump records the distinction.
-static CstNode *cst_parse_directive_line(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_directive_line(LibcpContext *ctx, CstParser *p) {
   Token *hash = p->tok;
   Token *end = cst_directive_end(hash);
   CstNode *node = new_cst_node(ctx, cst_pp_kind(hash));
@@ -2115,7 +2115,7 @@ static CstNode *cst_parse_directive_line(ChibiccContext *ctx, CstParser *p) {
 // nesting recurses through cst_parse_item and every branch keeps its
 // tokens. An unterminated group ends at EOF or at an enclosing closer;
 // an orphan #elif / #else / #endif is an ordinary directive line.
-static CstNode *cst_parse_pp_if(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_pp_if(LibcpContext *ctx, CstParser *p) {
   CstNode *node = new_cst_node(ctx, CST_PP_IF);
   CstNode *branch = new_cst_node(ctx, CST_PP_BRANCH);
   cst_add_child(ctx, branch, cst_parse_directive_line(ctx, p));
@@ -2150,7 +2150,7 @@ static CstNode *cst_parse_pp_if(ChibiccContext *ctx, CstParser *p) {
 // One item at statement level: a directive line (conditionals recurse),
 // or a statement / declaration with the raw fallback. Every path
 // consumes at least one token when one is available.
-static CstNode *cst_parse_item(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_item(LibcpContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     Token *start = p->tok;
@@ -2165,7 +2165,7 @@ static CstNode *cst_parse_item(ChibiccContext *ctx, CstParser *p) {
   return item;
 }
 
-static CstNode *cst_parse_item1(ChibiccContext *ctx, CstParser *p) {
+static CstNode *cst_parse_item1(LibcpContext *ctx, CstParser *p) {
   if (cst_is_directive(p->tok)) {
     if (cst_is_pp_if(p->tok))
       return cst_parse_pp_if(ctx, p);
@@ -2190,7 +2190,7 @@ static CstNode *cst_parse_item1(ChibiccContext *ctx, CstParser *p) {
 // A failed item is rebuilt from its first token with the raw fallback, so
 // one malformed construct does not cost the rest of the block. A missing
 // '}' turns the block itself into UNPARSED; parsing continues at EOF.
-static void cst_parse_compound(ChibiccContext *ctx, CstParser *p, CstNode *block) {
+static void cst_parse_compound(LibcpContext *ctx, CstParser *p, CstNode *block) {
   cst_add_leaf(ctx, block, p->tok); // '{'
   p->tok = p->tok->next;
 
@@ -2216,7 +2216,7 @@ static void cst_parse_compound(ChibiccContext *ctx, CstParser *p, CstNode *block
 
 // Split the top level into items. The EOF token is left for cst_parse so
 // that it stays the tree's last leaf whatever the items do.
-static void cst_parse_items(ChibiccContext *ctx, CstNode *parent, CstParser *p) {
+static void cst_parse_items(LibcpContext *ctx, CstNode *parent, CstParser *p) {
   while (p->ok && p->tok && p->tok->kind != TK_EOF) {
     if (cst_is_close(p->tok)) {
       CstNode *unparsed = new_cst_node(ctx, CST_UNPARSED);
@@ -2232,7 +2232,7 @@ static void cst_parse_items(ChibiccContext *ctx, CstNode *parent, CstParser *p) 
 
 // Build the CST for tokenize_file()'s output. The EOF marker has its own
 // kind because it carries the file's trailing trivia and no spelling.
-CstNode *cst_parse(ChibiccContext *ctx, Token *tok) {
+CstNode *cst_parse(LibcpContext *ctx, Token *tok) {
   CstContext cst = {};
   cst_collect_typedefs(ctx, &cst, tok);
 
@@ -2263,7 +2263,7 @@ void cst_reconstruct(CstNode *root, FILE *out) {
   cst_reconstruct_node(root, out);
 }
 
-static char *cst_kind_name(ChibiccContext *ctx, CstKind kind) {
+static char *cst_kind_name(LibcpContext *ctx, CstKind kind) {
   switch (kind) {
   case CST_TRANSLATION_UNIT: return "TU";
   case CST_TOKEN:            return "TOKEN";
@@ -2347,7 +2347,7 @@ static void cst_print_escaped(FILE *out, char *p, int len) {
   }
 }
 
-static void cst_dump_node(ChibiccContext *ctx, CstNode *node, FILE *out, int depth) {
+static void cst_dump_node(LibcpContext *ctx, CstNode *node, FILE *out, int depth) {
   for (int i = 0; i < depth; i++)
     fputs("  ", out);
 
@@ -2366,7 +2366,7 @@ static void cst_dump_node(ChibiccContext *ctx, CstNode *node, FILE *out, int dep
 // Print the tree shape, two spaces per level. Leaf text is the token's
 // raw spelling (not its trivia); the dump locks the tree, the round-trip
 // locks the bytes.
-void cst_dump(ChibiccContext *ctx, CstNode *root, FILE *out) {
+void cst_dump(LibcpContext *ctx, CstNode *root, FILE *out) {
   cst_dump_node(ctx, root, out, 0);
 }
 

@@ -1,14 +1,14 @@
 #!/bin/bash
 # AST 形态锁定测试 (PLAN-pratt-parse P1.3): 逐字节锁定 -dump-ast 的输出.
 #
-# -dump-ast 是驱动器的只读通道: 在 chibicc_parse 之后, chibicc_sema 之前早退,
+# -dump-ast 是驱动器的只读通道: 在 libcp_parse 之后, libcp_sema 之前早退,
 # 不写目标文件, 不汇编. 输出只含 parse 阶段写的字段 (节点种类, 锚点 token 的
 # 文件/行/列与拼写, 复合赋值的 op, 自增自减的方向, elvis, 箭头成员, 标签名,
 # storage class 与 _Alignas, 目标类型签名, 初始化器记录), 不含地址与 sema 结论.
 # 宏展开产物打印 @synth: 它们的位置在宏体或合成缓冲里, 不是表达式的源码位置.
 #
 # 本测试是 Pratt 重写的判据 7: 形态锁必须先于任何 Pratt 代码落地并跑绿, 之后两个
-# 构建 (默认级联与 CHIBICC_PRATT_PARSE_FEATURE=1) 的输出都必须与这里逐字节相同.
+# 构建 (默认级联与 LIBCP_PRATT_PARSE_FEATURE=1) 的输出都必须与这里逐字节相同.
 #
 # 覆盖: 全部二元运算符; 十个复合赋值与普通 =; 结合性; 逗号在语句/括号/实参/初始化器与
 # ?: 中段的区别; elvis; 前缀与后缀自增自减; 一元 + 透明; 嵌套 cast; sizeof 与

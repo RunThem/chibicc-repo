@@ -10,8 +10,8 @@
 - 不做常量求值.
 - 不做任何为后端服务的整形.
 
-输入: `chibicc_preprocess` 的输出.
-输出: `ChibiccNode` 树, 顶层是声明记录链.
+输入: `libcp_preprocess` 的输出.
+输出: `LibcpNode` 树, 顶层是声明记录链.
 消费者: C 转 C 工具, 语法级 linter, 重构工具, 以及第 4 层.
 
 这一层是"语法"而不是"语义"的分界线. 一个只关心代码结构, 不关心类型的工具, 到这一层就够了.
@@ -42,7 +42,7 @@
 | `x++` | `ND_INCDEC`, `is_post = true` | 复合赋值 |
 | `while (c) ...` | `ND_WHILE` | `ND_FOR` |
 | `sizeof(T)` | `ND_SIZEOF` 且 `ty_op = T` | `ND_NUM` |
-| `int a[2] = {1, 2}` | `ND_DECL` + `ChibiccInitializer` | 赋值链 |
+| `int a[2] = {1, 2}` | `ND_DECL` + `LibcpInitializer` | 赋值链 |
 | `"abc"` | `ND_STRING` | `ND_VAR` 指向匿名全局 |
 | `p->x` | `ND_MEMBER` 且 `arrow_tok` 非 NULL | `ND_DEREF` + `ND_MEMBER` |
 | `a ?: b` | `ND_COND` 且 `is_elvis = true` | 完整 `?:` |
@@ -83,7 +83,7 @@ C 文法不是上下文无关的. 最典型的例子:
 
 ### 6.2.4 待补全的类型记录
 
-解析器会构造 `ChibiccType`, 但有些部分它不完成:
+解析器会构造 `LibcpType`, 但有些部分它不完成:
 
 - 数组维度: `array_len` 可能是 0, 维度表达式放在 `dim_len`, 等第 4 层求值.
 - `typeof(expr)`: 操作数放在 `typeof_expr`, 等第 4 层标注.
@@ -103,7 +103,7 @@ C 文法不是上下文无关的. 最典型的例子:
 
 ### 6.3.1 69 种节点
 
-`ChibiccNodeKind` 共 69 种. 按用途分组:
+`LibcpNodeKind` 共 69 种. 按用途分组:
 
 | 组 | 节点 |
 |---|---|
@@ -127,57 +127,57 @@ C 文法不是上下文无关的. 最典型的例子:
 - `ND_VLA_PTR`: 第 4 层处理 VLA 时产生.
 - `ND_MEMZERO`: 第 5 层展开初始化器时产生.
 
-### 6.3.2 ChibiccNode
+### 6.3.2 LibcpNode
 
-公共 `ChibiccNode` 是一个大结构体, 所有节点共用字段. 不同种类只使用其中一部分. 主要字段:
+公共 `LibcpNode` 是一个大结构体, 所有节点共用字段. 不同种类只使用其中一部分. 主要字段:
 
 ```c
-struct chibicc_node {
-  ChibiccNodeKind kind;
-  ChibiccNode *next;
-  ChibiccType *ty;       /* 第 3 层大多为 NULL, 例外见正文 */
-  ChibiccToken *tok;     /* 代表 token */
+struct libcp_node {
+  LibcpNodeKind kind;
+  LibcpNode *next;
+  LibcpType *ty;       /* 第 3 层大多为 NULL, 例外见正文 */
+  LibcpToken *tok;     /* 代表 token */
 
-  ChibiccNode *lhs, *rhs;
+  LibcpNode *lhs, *rhs;
 
-  ChibiccNodeKind op;    /* ND_ASSIGN 的复合运算符, 0 表示 = */
+  LibcpNodeKind op;    /* ND_ASSIGN 的复合运算符, 0 表示 = */
   bool is_post;          /* ND_INCDEC: 后缀 */
   int addend;            /* ND_INCDEC: +1 或 -1 */
 
-  ChibiccNode *cond, *then, *els, *init, *inc;
-  ChibiccNode *body;
+  LibcpNode *cond, *then, *els, *init, *inc;
+  LibcpNode *body;
   bool is_scope_block;   /* ND_BLOCK 是否引入作用域 */
 
-  ChibiccMember *member;
-  ChibiccToken *arrow_tok; /* ND_MEMBER 的 ->, 普通 . 为 NULL */
+  LibcpMember *member;
+  LibcpToken *arrow_tok; /* ND_MEMBER 的 ->, 普通 . 为 NULL */
 
-  ChibiccType *func_ty;
-  ChibiccNode *args;
+  LibcpType *func_ty;
+  LibcpNode *args;
   char *label;           /* goto / label 的名字 */
   bool is_elvis;
 
-  ChibiccType *ty_op;    /* sizeof / cast / 声明记录的目标类型 */
-  ChibiccType *ty_op2;
-  ChibiccNode *generic_sel;
+  LibcpType *ty_op;    /* sizeof / cast / 声明记录的目标类型 */
+  LibcpType *ty_op2;
+  LibcpNode *generic_sel;
   bool is_implicit;      /* ND_CAST 是否是 sema 插入 */
 
-  ChibiccVarAttr attr;
-  ChibiccToken *name_tok;
-  ChibiccNode *spec_decls;
-  ChibiccInitializer *decl_init;
+  LibcpVarAttr attr;
+  LibcpToken *name_tok;
+  LibcpNode *spec_decls;
+  LibcpInitializer *decl_init;
   void *init_resolved;   /* sema 私有, 消费者不要碰 */
 
   long begin, end;
   bool is_default;
-  ChibiccNode *begin_expr, *end_expr;
-  ChibiccToken *colon_tok;
+  LibcpNode *begin_expr, *end_expr;
+  LibcpToken *colon_tok;
 
   char *asm_str;
-  ChibiccNode *cas_addr, *cas_old, *cas_new;
-  ChibiccObj *atomic_addr;
-  ChibiccNode *atomic_expr;
+  LibcpNode *cas_addr, *cas_old, *cas_new;
+  LibcpObj *atomic_addr;
+  LibcpNode *atomic_expr;
 
-  ChibiccObj *var;
+  LibcpObj *var;
   int64_t val;
   long double fval;
 };
@@ -192,33 +192,33 @@ struct chibicc_node {
 
 ### 6.3.3 类型
 
-第 3 层会建 `ChibiccType`:
+第 3 层会建 `LibcpType`:
 
 - 基本类型是共享单例.
 - 指针, 数组, 函数类型由 `type_suffix` 构造.
 - 结构体/联合/枚举的成员列表在解析时收集, 布局留给第 4 层.
 - 数组维度, typeof 操作数, 对齐, 位域宽度可能未完成.
 
-`ChibiccType.kind` 共 17 种, 包括 `TY_VLA` 和 `TY_TYPEOF`.
+`LibcpType.kind` 共 17 种, 包括 `TY_VLA` 和 `TY_TYPEOF`.
 
 ### 6.3.4 初始化器记录
 
 ```c
 enum { INIT_LIST, INIT_EXPR, INIT_STR };
 
-struct chibicc_initializer {
+struct libcp_initializer {
   int kind;
-  ChibiccToken *tok;
-  ChibiccInitItem *items;   /* INIT_LIST */
-  ChibiccNode *expr;        /* INIT_EXPR */
-  ChibiccToken *str_tok;    /* INIT_STR */
-  ChibiccToken *eq_tok;     /* 顶层记录的 = */
+  LibcpToken *tok;
+  LibcpInitItem *items;   /* INIT_LIST */
+  LibcpNode *expr;        /* INIT_EXPR */
+  LibcpToken *str_tok;    /* INIT_STR */
+  LibcpToken *eq_tok;     /* 顶层记录的 = */
 };
 ```
 
-`INIT_LIST` 的每个元素是一个 `ChibiccInitItem`, 带逗号 token, 指示符链和值. 指示符 `ChibiccInitDesig` 记录 `[expr]`, `[begin ... end]`, `.name` 三种形式, 索引表达式**未求值**.
+`INIT_LIST` 的每个元素是一个 `LibcpInitItem`, 带逗号 token, 指示符链和值. 指示符 `LibcpInitDesig` 记录 `[expr]`, `[begin ... end]`, `.name` 三种形式, 索引表达式**未求值**.
 
-这是"源码写法"的记录, 不是初始化树. 第 4 层把它解析成 `ChibiccInitTree`.
+这是"源码写法"的记录, 不是初始化树. 第 4 层把它解析成 `LibcpInitTree`.
 
 ## 6.4 实现流程
 
@@ -235,7 +235,7 @@ static Node *expr(Token **rest, Token *tok);
 
 声明层:
 
-- `declspec`: 解析类型说明符和存储类, 填 `ChibiccVarAttr`.
+- `declspec`: 解析类型说明符和存储类, 填 `LibcpVarAttr`.
 - `declarator`: 解析声明符, 用 `DeclName` 载体携带标识符, 不写进共享类型记录.
 - `type_suffix`: 解析数组和函数后缀.
 - `struct_decl` / `union_decl` / `enum_specifier`: 解析聚合类型和枚举.
@@ -258,9 +258,9 @@ assign -> conditional -> logor -> logand -> bitor -> bitxor -> bitand
        -> unary -> postfix -> primary
 ```
 
-`CHIBICC_PRATT_PARSE_FEATURE=1` 时, 表达式层换成一个 `expr_bp` 绑定力循环, 覆盖前缀, cast, 后缀, 二元, 赋值, `?:` 和逗号. 旧函数保留在 `#if !CHIBICC_PRATT_PARSE_FEATURE` 下.
+`LIBCP_PRATT_PARSE_FEATURE=1` 时, 表达式层换成一个 `expr_bp` 绑定力循环, 覆盖前缀, cast, 后缀, 二元, 赋值, `?:` 和逗号. 旧函数保留在 `#if !LIBCP_PRATT_PARSE_FEATURE` 下.
 
-两种构建的公共 API 相同, 树的形状也相同. `test/pratt-ab.sh` 在 41 个语料文件和 tinycc 真实构建上比较 `-dump-ast` 与 `-S`, 要求逐字节一致. 消费者链接哪个库, 就得到哪个解析器; 默认 `libchibicc.a` 是旧路径.
+两种构建的公共 API 相同, 树的形状也相同. `test/pratt-ab.sh` 在 41 个语料文件和 tinycc 真实构建上比较 `-dump-ast` 与 `-S`, 要求逐字节一致. 消费者链接哪个库, 就得到哪个解析器; 默认 `libcp.a` 是旧路径.
 
 ### 6.4.3 声明记录
 
@@ -298,7 +298,7 @@ assign -> conditional -> logor -> logand -> bitor -> bitxor -> bitand
 
 ## 6.5 阶段产物
 
-产物是一棵 `ChibiccNode` 树:
+产物是一棵 `LibcpNode` 树:
 
 - 顶层是声明记录链, 以 `NULL` 结尾.
 - 函数体是 `ND_BLOCK`, 内含语句链.
@@ -357,14 +357,14 @@ ND_FUNCDEF @input.c:1:14 "{" ty_op=func(int) name="f" attr=none
 ### 6.7.1 解析
 
 ```c
-ChibiccToken *tok = chibicc_tokenize_file(ctx, "input.c");
-tok = chibicc_preprocess(ctx, tok);
-ChibiccNode *ast = chibicc_parse(ctx, tok);
+LibcpToken *tok = libcp_tokenize_file(ctx, "input.c");
+tok = libcp_preprocess(ctx, tok);
+LibcpNode *ast = libcp_parse(ctx, tok);
 
-if (!ast && chibicc_context_failed(ctx)) {
+if (!ast && libcp_context_failed(ctx)) {
   /* 语法错误 */
 }
-if (!ast && !chibicc_context_failed(ctx)) {
+if (!ast && !libcp_context_failed(ctx)) {
   /* 空翻译单元 */
 }
 ```
@@ -372,7 +372,7 @@ if (!ast && !chibicc_context_failed(ctx)) {
 ### 6.7.2 遍历顶层
 
 ```c
-for (ChibiccNode *n = ast; n; n = n->next) {
+for (LibcpNode *n = ast; n; n = n->next) {
   switch (n->kind) {
   case ND_FUNCDEF:
     printf("function %.*s, body=%s\n",
@@ -394,7 +394,7 @@ for (ChibiccNode *n = ast; n; n = n->next) {
 ### 6.7.3 表达式
 
 ```c
-static void dump_expr(ChibiccNode *n) {
+static void dump_expr(LibcpNode *n) {
   if (!n)
     return;
   printf("%d", (int)n->kind);
@@ -410,20 +410,20 @@ static void dump_expr(ChibiccNode *n) {
 
 ```c
 if (n->kind == ND_DECL && n->decl_init) {
-  ChibiccInitializer *init = n->decl_init;
+  LibcpInitializer *init = n->decl_init;
   if (init->kind == INIT_LIST) {
-    for (ChibiccInitItem *it = init->items; it; it = it->next) {
+    for (LibcpInitItem *it = init->items; it; it = it->next) {
       /* it->desigs, it->init */
     }
   }
 }
 ```
 
-设计符里的索引表达式没有求值. 要值就自己调用第 4 层, 或用 `chibicc_sema` 的结论.
+设计符里的索引表达式没有求值. 要值就自己调用第 4 层, 或用 `libcp_sema` 的结论.
 
 ### 6.7.5 配置参数
 
-`chibicc_parse` 没有额外参数. 解析深度和作用域状态都在 context 里, 每次调用前由 `parse_init` 重建.
+`libcp_parse` 没有额外参数. 解析深度和作用域状态都在 context 里, 每次调用前由 `parse_init` 重建.
 
 ## 6.8 边界与已知限制
 
@@ -438,5 +438,5 @@ if (n->kind == ND_DECL && n->decl_init) {
 - **宏调用不可见**. 树上只有展开后的结构. 来源查 provenance.
 - **语法检查范围有限**. 只有文法可判的 15 类诊断. 类型错误在第 4 层.
 - **深度上限 512**. 超深嵌套报诊断, 不返回部分树.
-- **两套表达式解析器**. 默认构建是级联, `CHIBICC_PRATT_PARSE_FEATURE=1` 是绑定力循环. 两者的 AST 由 A/B 测试锁定为相同, 但消费者必须知道自己链接的是哪一个构建.
+- **两套表达式解析器**. 默认构建是级联, `LIBCP_PRATT_PARSE_FEATURE=1` 是绑定力循环. 两者的 AST 由 A/B 测试锁定为相同, 但消费者必须知道自己链接的是哪一个构建.
 - **GNU 扩展支持不完整**. `typeof`, 语句表达式, `&&label`, 范围 case, `asm` 有节点, 但不是每个细节都与 GCC 一致.

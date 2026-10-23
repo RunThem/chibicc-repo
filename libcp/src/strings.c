@@ -1,14 +1,14 @@
-#include "chibicc.h"
+#include "libcp.h"
 
-void strarray_push(ChibiccContext *ctx, StringArray *arr, char *s) {
+void strarray_push(LibcpContext *ctx, StringArray *arr, char *s) {
   if (!arr->data) {
-    arr->data = chibicc_arena_calloc(ctx, 8, sizeof(char *));
+    arr->data = libcp_arena_calloc(ctx, 8, sizeof(char *));
     arr->capacity = 8;
   }
 
   if (arr->capacity == arr->len) {
     int oldcap = arr->capacity;
-    arr->data = chibicc_arena_realloc(ctx, arr->data, sizeof(char *) * oldcap,
+    arr->data = libcp_arena_realloc(ctx, arr->data, sizeof(char *) * oldcap,
                                       sizeof(char *) * oldcap * 2);
     arr->capacity = oldcap * 2;
   }
@@ -16,15 +16,15 @@ void strarray_push(ChibiccContext *ctx, StringArray *arr, char *s) {
   arr->data[arr->len++] = s;
 }
 
-void nodearray_push(ChibiccContext *ctx, NodeArray *arr, Node *node) {
+void nodearray_push(LibcpContext *ctx, NodeArray *arr, Node *node) {
   if (!arr->data) {
-    arr->data = chibicc_arena_calloc(ctx, 8, sizeof(Node *));
+    arr->data = libcp_arena_calloc(ctx, 8, sizeof(Node *));
     arr->capacity = 8;
   }
 
   if (arr->capacity == arr->len) {
     int oldcap = arr->capacity;
-    arr->data = chibicc_arena_realloc(ctx, arr->data, sizeof(Node *) * oldcap,
+    arr->data = libcp_arena_realloc(ctx, arr->data, sizeof(Node *) * oldcap,
                                       sizeof(Node *) * oldcap * 2);
     arr->capacity = oldcap * 2;
   }
@@ -67,7 +67,7 @@ bool file_exists(char *path) {
 
 // Takes a printf-style format string and returns a formatted string in
 // the context's arena.
-char *format(ChibiccContext *ctx, char *fmt, ...) {
+char *format(LibcpContext *ctx, char *fmt, ...) {
   va_list ap;
   va_list ap2;
   va_start(ap, fmt);
@@ -75,7 +75,7 @@ char *format(ChibiccContext *ctx, char *fmt, ...) {
   int len = vsnprintf(NULL, 0, fmt, ap2);
   va_end(ap2);
 
-  char *buf = chibicc_arena_alloc(ctx, len + 1, 1);
+  char *buf = libcp_arena_alloc(ctx, len + 1, 1);
   vsnprintf(buf, len + 1, fmt, ap);
   va_end(ap);
   return buf;

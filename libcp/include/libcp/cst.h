@@ -4,12 +4,12 @@
 // every grammar token and punctuator is an explicit leaf, and the leaves
 // rebuild the input file byte for byte.
 
-#ifndef CHIBICC_CST_H
-#define CHIBICC_CST_H
+#ifndef LIBCP_CST_H
+#define LIBCP_CST_H
 
 #include <stdio.h>
 
-#include <chibicc/token.h>
+#include <libcp/token.h>
 
 typedef enum {
   CST_TRANSLATION_UNIT,
@@ -67,21 +67,21 @@ typedef enum {
   CST_PP_NULL,
   CST_PP_IF,
   CST_PP_BRANCH,
-} ChibiccCstKind;
+} LibcpCstKind;
 
-typedef struct chibicc_cst_node ChibiccCstNode;
-struct chibicc_cst_node {
-  ChibiccCstKind kind;
-  ChibiccToken *tok;          // Set on leaves (CST_TOKEN / CST_EOF)
+typedef struct libcp_cst_node LibcpCstNode;
+struct libcp_cst_node {
+  LibcpCstKind kind;
+  LibcpToken *tok;          // Set on leaves (CST_TOKEN / CST_EOF)
   // `children[0..child_count)` are the live children; the array's
   // capacity is private to cst.c.
-  ChibiccCstNode **children;  // Set on inner nodes
+  LibcpCstNode **children;  // Set on inner nodes
   int child_count;
 };
 
-CHIBICC_API ChibiccCstNode *chibicc_cst_parse(ChibiccContext *ctx, ChibiccToken *tok);
-CHIBICC_API void chibicc_cst_reconstruct(ChibiccContext *ctx, ChibiccCstNode *root, FILE *out);
-CHIBICC_API void chibicc_cst_dump(ChibiccContext *ctx, ChibiccCstNode *root, FILE *out);
-CHIBICC_API bool chibicc_cst_verify(ChibiccContext *ctx, ChibiccCstNode *root, ChibiccToken *tok);
+LIBCP_API LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok);
+LIBCP_API void libcp_cst_reconstruct(LibcpContext *ctx, LibcpCstNode *root, FILE *out);
+LIBCP_API void libcp_cst_dump(LibcpContext *ctx, LibcpCstNode *root, FILE *out);
+LIBCP_API bool libcp_cst_verify(LibcpContext *ctx, LibcpCstNode *root, LibcpToken *tok);
 
 #endif

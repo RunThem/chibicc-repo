@@ -6,11 +6,11 @@
 // unexpanded stream or its CST must take it before this call, or tokenize
 // the file a second time.
 
-#ifndef CHIBICC_PREPROCESS_H
-#define CHIBICC_PREPROCESS_H
+#ifndef LIBCP_PREPROCESS_H
+#define LIBCP_PREPROCESS_H
 
-#include <chibicc/token.h>
+#include <libcp/token.h>
 
-CHIBICC_API ChibiccToken *chibicc_preprocess(ChibiccContext *ctx, ChibiccToken *tok);
+LIBCP_API LibcpToken *libcp_preprocess(LibcpContext *ctx, LibcpToken *tok);
 
 #endif

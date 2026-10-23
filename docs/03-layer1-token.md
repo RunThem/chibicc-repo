@@ -59,13 +59,13 @@ for each token:
 
 文件末尾的 trivia 属于 `TK_EOF`. 文件输入时, 第一个 token 的前置 trivia 包含 BOM, 如果文件有 BOM.
 
-内存输入不同: `chibicc_tokenize_buffer*` 不经过 `make_scan_buffer`, 不做 BOM 跳过. BOM 会留在第一个 token 的拼写里, 例如 `\xEF\xBB\xBFint` 被读成一个标识符. 从内存传入带 BOM 的文本时, 调用者要自己剥离 BOM.
+内存输入不同: `libcp_tokenize_buffer*` 不经过 `make_scan_buffer`, 不做 BOM 跳过. BOM 会留在第一个 token 的拼写里, 例如 `\xEF\xBB\xBFint` 被读成一个标识符. 从内存传入带 BOM 的文本时, 调用者要自己剥离 BOM.
 
 `make_scan_buffer` 为了扫描方便可能在扫描缓冲末尾补一个换行, 这个换行不属于 raw 文本, 因此不出现在任何 token 的 raw 切片里. 所以重建结果等于磁盘上的文件, 不是等于扫描缓冲.
 
 ## 3.3 数据模型
 
-### 3.3.1 ChibiccToken
+### 3.3.1 LibcpToken
 
 ```c
 typedef enum {
@@ -76,11 +76,11 @@ typedef enum {
   TK_NUM,     /* 数值字面量 */
   TK_PP_NUM,  /* 预处理数字 */
   TK_EOF,     /* 文件结束 */
-} ChibiccTokenKind;
+} LibcpTokenKind;
 
-struct chibicc_token {
-  ChibiccTokenKind kind;
-  ChibiccToken *next;
+struct libcp_token {
+  LibcpTokenKind kind;
+  LibcpToken *next;
   int64_t val;        /* TK_NUM 的整数值 */
   long double fval;   /* TK_NUM 的浮点值 */
   char *loc;          /* 拼写在扫描缓冲中的起点 */
@@ -91,19 +91,19 @@ struct chibicc_token {
   char *raw_loc;      /* 拼写在 raw 文本中的起点 */
   int raw_len;
 
-  ChibiccType *ty;    /* TK_NUM / TK_STR 的类型 */
+  LibcpType *ty;    /* TK_NUM / TK_STR 的类型 */
   char *str;          /* 字符串字面量的解码内容, 以 NUL 结尾 */
 
-  ChibiccFile *file;
+  LibcpFile *file;
   char *filename;     /* 显示文件名, 受 #line 影响 */
   int line_no;
   int line_delta;
   bool at_bol;        /* 是否位于逻辑行首 */
   bool has_space;     /* 前面是否有空白 */
 
-  ChibiccHideset *hideset;  /* 宏展开用 */
-  ChibiccToken *origin;     /* 宏展开的最外层调用点 token */
-  ChibiccMacroProv *prov;   /* 展开来源链, 源 token 为 NULL */
+  LibcpHideset *hideset;  /* 宏展开用 */
+  LibcpToken *origin;     /* 宏展开的最外层调用点 token */
+  LibcpMacroProv *prov;   /* 展开来源链, 源 token 为 NULL */
 };
 ```
 
@@ -118,10 +118,10 @@ struct chibicc_token {
 - `at_bol` / `has_space` 是词法状态, 预处理用它们判断指令是否在行首.
 - `hideset` / `origin` / `prov` 在预处理时填写, 第 1 层消费者通常不读.
 
-### 3.3.2 ChibiccFile
+### 3.3.2 LibcpFile
 
 ```c
-struct chibicc_file {
+struct libcp_file {
   char *name;          /* 物理文件名 */
   int file_no;         /* 文件编号, codegen 的 .file 指令用 */
   int include_depth;   /* include 深度 */
@@ -138,11 +138,11 @@ struct chibicc_file {
 
 `map` 和 `lines` 的长度是字节数加 1, 最后一项覆盖文件末尾.
 
-对 `chibicc_tokenize_buffer` 的输入, 没有磁盘文件, 也没有改写: `raw == contents`, `map` 是恒等映射, `lines` 直接数换行. 这类 token 在 provenance dump 里显示为 `@synth`, 见第 4 章.
+对 `libcp_tokenize_buffer` 的输入, 没有磁盘文件, 也没有改写: `raw == contents`, `map` 是恒等映射, `lines` 直接数换行. 这类 token 在 provenance dump 里显示为 `@synth`, 见第 4 章.
 
 ### 3.3.3 关键字的时机
 
-**原始 token 流里的关键字是 `TK_IDENT`**. `int`, `return`, `while` 都先按标识符读入. 关键字分类发生在 `convert_pp_tokens`, 由 `chibicc_preprocess` 调用.
+**原始 token 流里的关键字是 `TK_IDENT`**. `int`, `return`, `while` 都先按标识符读入. 关键字分类发生在 `convert_pp_tokens`, 由 `libcp_preprocess` 调用.
 
 这意味着:
 
@@ -161,9 +161,9 @@ struct chibicc_file {
 1. 调用 `read_file` 读入整个文件. 读 stdin 时只读一次, 内容缓存在 context 里, 第二次 tokenize `-` 会拿到同一份文本.
 2. 检查文件大小不超过 `INT32_MAX`, 因为词法器用 `int` 存偏移.
 3. 检查 NUL 字节. 源文件里出现 NUL 是诊断, 不是静默截断.
-4. 分配 `ChibiccFile`, 编号并登记到 context 的输入文件表.
+4. 分配 `LibcpFile`, 编号并登记到 context 的输入文件表.
 
-`tokenize_buffer(name, contents)` 走另一条路: 把传入的字节复制进 arena, 直接构造一个没有改写的 `ChibiccFile`. 内存中的输入不经过 `make_scan_buffer`.
+`tokenize_buffer(name, contents)` 走另一条路: 把传入的字节复制进 arena, 直接构造一个没有改写的 `LibcpFile`. 内存中的输入不经过 `make_scan_buffer`.
 
 ### 3.4.2 构造扫描缓冲
 
@@ -205,7 +205,7 @@ struct chibicc_file {
 
 ### 3.4.4 重建
 
-`chibicc_reconstruct(ctx, tok, out)` 就是前面那段循环:
+`libcp_reconstruct(ctx, tok, out)` 就是前面那段循环:
 
 ```c
 for (; tok; tok = tok->next) {
@@ -218,7 +218,7 @@ for (; tok; tok = tok->next) {
 
 ## 3.5 阶段产物
 
-第 1 层的产物是一条 `ChibiccToken` 链:
+第 1 层的产物是一条 `LibcpToken` 链:
 
 - 以 `TK_EOF` 结尾, 不会为 NULL.
 - 每个 token 带 raw 坐标的 trivia 和拼写.
@@ -228,7 +228,7 @@ for (; tok; tok = tok->next) {
 
 产物之外还有两个可观察能力:
 
-- `chibicc_reconstruct` 重建原始字节.
+- `libcp_reconstruct` 重建原始字节.
 - 驱动器 `-dump-tokens` 打印 token 与 trivia, 用于调试.
 
 ## 3.6 产物可以做什么
@@ -237,7 +237,7 @@ for (; tok; tok = tok->next) {
 - **词法级搜索**: 找到所有标识符, 字符串, 数字, 注释边界.
 - **格式化器的底层数据**: 决定两个 token 之间保留几个空格, 注释放在哪.
 - **行号映射**: 从 token 的 raw 坐标算物理行, 从 `line_no` 算显示行.
-- **自定义预处理**: 消费者可以只做词法, 自己实现宏展开或条件编译, 不走 `chibicc_preprocess`.
+- **自定义预处理**: 消费者可以只做词法, 自己实现宏展开或条件编译, 不走 `libcp_preprocess`.
 - **输入检查**: NUL 字节, 文件过大, 非法 token 都会报告.
 
 不能做:
@@ -251,11 +251,11 @@ for (; tok; tok = tok->next) {
 ### 3.7.1 从文件 tokenize
 
 ```c
-ChibiccContext *ctx = chibicc_context_new();
-ChibiccToken *tok = chibicc_tokenize_file(ctx, "input.c");
+LibcpContext *ctx = libcp_context_new();
+LibcpToken *tok = libcp_tokenize_file(ctx, "input.c");
 if (!tok) {
   /* 错误已经通过回调报告, ctx 已失败 */
-  chibicc_context_free(ctx);
+  libcp_context_free(ctx);
   return 1;
 }
 ```
@@ -264,13 +264,13 @@ if (!tok) {
 
 ```c
 char *src = "int x = 1; /* comment */\n";
-ChibiccToken *tok = chibicc_tokenize_buffer(ctx, "<memory>", src);
+LibcpToken *tok = libcp_tokenize_buffer(ctx, "<memory>", src);
 ```
 
-`chibicc_tokenize_buffer` 用 `strlen` 求长度, 不能包含 NUL. 已知长度时用:
+`libcp_tokenize_buffer` 用 `strlen` 求长度, 不能包含 NUL. 已知长度时用:
 
 ```c
-ChibiccToken *tok = chibicc_tokenize_buffer_len(ctx, "<memory>", buf, len);
+LibcpToken *tok = libcp_tokenize_buffer_len(ctx, "<memory>", buf, len);
 ```
 
 `len` 是精确字节数. 缓冲区里有 NUL 会得到一条 `NUL byte in source file` 诊断, 入口返回 NULL.
@@ -278,7 +278,7 @@ ChibiccToken *tok = chibicc_tokenize_buffer_len(ctx, "<memory>", buf, len);
 ### 3.7.3 遍历 token 并打印 trivia
 
 ```c
-for (ChibiccToken *t = tok; t && t->kind != TK_EOF; t = t->next) {
+for (LibcpToken *t = tok; t && t->kind != TK_EOF; t = t->next) {
   printf("line %d: trivia=%d bytes, token=%.*s\n",
          t->line_no, t->trivia_len, t->raw_len, t->raw_loc);
 }
@@ -288,7 +288,7 @@ for (ChibiccToken *t = tok; t && t->kind != TK_EOF; t = t->next) {
 
 ```c
 FILE *out = fopen("rebuilt.c", "wb");
-chibicc_reconstruct(ctx, tok, out);
+libcp_reconstruct(ctx, tok, out);
 fclose(out);
 ```
 
@@ -306,12 +306,12 @@ cmp input.c rebuilt.c
 
 ## 3.8 边界与已知限制
 
-- **trivia 契约只覆盖直接输出**. 宏展开, 字符串化, 粘贴, 内建宏产生的 token 是合成 token. 它们的 `trivia` / `raw_loc` 指向派生来源或合成缓冲. 对预处理后的流调用 `chibicc_reconstruct` 不会还原原文件, 而是输出展开流在 raw 坐标上的拼接. 第 4 章有例子.
+- **trivia 契约只覆盖直接输出**. 宏展开, 字符串化, 粘贴, 内建宏产生的 token 是合成 token. 它们的 `trivia` / `raw_loc` 指向派生来源或合成缓冲. 对预处理后的流调用 `libcp_reconstruct` 不会还原原文件, 而是输出展开流在 raw 坐标上的拼接. 第 4 章有例子.
 - **关键字后置分类**. 原始流里 `TK_IDENT` 包含关键字. 只用第 1/2 层时要按拼写判断.
 - **注释没有分类**. trivia 是原始字节. 库不告诉你"这是文档注释"或"这是行尾注释". 需要的话自己解析 trivia.
 - **`loc` 不是 C 字符串**. 它是扫描缓冲里的切片, 可能没有 NUL. 用 `len` 限界, 或复制出来.
 - **`#line` 只影响行号, 不影响 `file->name`**. 诊断显示的文件名仍是物理路径, 行号可能已被 `#line` 偏移. 见第 11 章.
 - **内存中的输入被复制**. `tokenize_buffer` 会把字节复制进 arena, 调用者的缓冲区可以立即释放. 代价是同一份源码在内存里有两份.
-- **内存输入不经过扫描缓冲改写**. `chibicc_tokenize_buffer*` 按字节扫描: 不跳过 BOM, 不删除反斜杠续行, 不把 `\uXXXX` 改写成 UTF-8, 不做换行归一 (CRLF 仍能扫描, 孤立 CR 的行号会错), 不补末尾换行. 反斜杠续行会变成一个 `\` token, `\u00e9` 会变成 `\` 加 `u00e9`. 真实源码优先用 `chibicc_tokenize_file`; 内存输入应当是已经处于"扫描缓冲形态"的文本.
+- **内存输入不经过扫描缓冲改写**. `libcp_tokenize_buffer*` 按字节扫描: 不跳过 BOM, 不删除反斜杠续行, 不把 `\uXXXX` 改写成 UTF-8, 不做换行归一 (CRLF 仍能扫描, 孤立 CR 的行号会错), 不补末尾换行. 反斜杠续行会变成一个 `\` token, `\u00e9` 会变成 `\` 加 `u00e9`. 真实源码优先用 `libcp_tokenize_file`; 内存输入应当是已经处于"扫描缓冲形态"的文本.
 - **文件大小上限**. 超过 `INT32_MAX` 字节的文件被拒绝, 不是分块处理.
 - **没有字符集转换**. 文件按字节读入, 标识符支持 UTF-8. 其他编码需要调用者先转成 UTF-8.

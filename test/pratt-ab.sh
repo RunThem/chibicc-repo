@@ -1,7 +1,7 @@
 #!/bin/bash
 # A/B equivalence harness for the two expression parsers (PLAN-pratt-parse
 # 4.8 and 判据 2/3). Two builds of the compiler - the default cascade and
-# CHIBICC_PRATT_PARSE_FEATURE=1 - must produce byte-identical layer-3 trees
+# LIBCP_PRATT_PARSE_FEATURE=1 - must produce byte-identical layer-3 trees
 # and byte-identical assembly.
 #
 # Corpus mode (default): all 41 test/*.c through -dump-ast and -S, with

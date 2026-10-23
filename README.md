@@ -1,5 +1,10 @@
 # chibicc: A Small C Compiler
 
+> **Fork status**: this repository maintains `libcp`, a reusable, lossless C
+> front end (tokenize, preprocess, CST, AST, sema). The `chibicc` binary is
+> its reference consumer. `libcp` reads as "Library C Parse"; the name is a
+> brand token, not a description - the sentence above is.
+
 (The old master has moved to
 [historical/old](https://github.com/rui314/chibicc/tree/historical/old)
 branch. This is a new one uploaded in September 2020.)
@@ -16,9 +21,9 @@ suites. So, chibicc actually supports a wide variety of C11 features
 and is able to compile hundreds of thousands of lines of real-world C
 code correctly.
 
-## libchibicc: the C front end as a library
+## libcp: the C front end as a library
 
-This fork turns the front end into a reusable library. `libchibicc`
+This fork turns the front end into a reusable library. `libcp`
 exports four layers - the lossless token stream, the lossless concrete
 syntax tree, the faithful syntax-only AST and the sema-annotated tree -
 so formatters, source-to-source tools, linters and analyzers can use
@@ -29,45 +34,45 @@ design, each layer's product, API usage and the current limitations -
 is under `docs/` (start at `docs/README.md`).
 
 ```c
-#include <chibicc/chibicc.h>
+#include <libcp/libcp.h>
 
-ChibiccContext *ctx = chibicc_context_new();
-chibicc_context_set_diagnostic(ctx, on_diagnostic, NULL);
+LibcpContext *ctx = libcp_context_new();
+libcp_context_set_diagnostic(ctx, on_diagnostic, NULL);
 
-ChibiccToken *tok = chibicc_tokenize_buffer(ctx, "<input>", src);
-tok = chibicc_preprocess(ctx, tok);
-ChibiccNode *ast = chibicc_parse(ctx, tok);
-ChibiccObj *prog = chibicc_sema(ctx, ast);   /* layer 4 */
-/* or: chibicc_cst_parse(ctx, raw) for the lossless CST (layer 2) */
+LibcpToken *tok = libcp_tokenize_buffer(ctx, "<input>", src);
+tok = libcp_preprocess(ctx, tok);
+LibcpNode *ast = libcp_parse(ctx, tok);
+LibcpObj *prog = libcp_sema(ctx, ast);   /* layer 4 */
+/* or: libcp_cst_parse(ctx, raw) for the lossless CST (layer 2) */
 
-chibicc_context_free(ctx);
+libcp_context_free(ctx);
 ```
 
-One context is one translation unit. `chibicc_context_reset` releases all
+One context is one translation unit. `libcp_context_reset` releases all
 per-translation-unit memory (the arena) while keeping the include paths,
 the command-line macros and the diagnostic callback; every pointer the
 context returned is invalid afterwards. Errors are reported through the
-registered `ChibiccDiagnosticFn` and make the entry return NULL (the
-process does not exit). `chibicc_reconstruct` rebuilds the exact input
+registered `LibcpDiagnosticFn` and make the entry return NULL (the
+process does not exit). `libcp_reconstruct` rebuilds the exact input
 bytes from the token stream.
 
-`chibicc_tokenize_buffer` takes a NUL-terminated string; when the input
-length is already known, `chibicc_tokenize_buffer_len` reads exactly that
+`libcp_tokenize_buffer` takes a NUL-terminated string; when the input
+length is already known, `libcp_tokenize_buffer_len` reads exactly that
 many bytes. An embedded NUL is a diagnostic, not a silent truncation.
 
 The predefined macro set is installed by default. After
-`chibicc_context_set_predefined_macros(ctx, false)` and a reset the
+`libcp_context_set_predefined_macros(ctx, false)` and a reset the
 context starts without it; the recorded `-D`/`-U` operations still
-apply. `chibicc_context_predefined_count` and
-`chibicc_context_predefined_at` enumerate the installed set, and the
+apply. `libcp_context_predefined_count` and
+`libcp_context_predefined_at` enumerate the installed set, and the
 `__SIZEOF_*` values are derived from the type records.
 
-Build with `make libchibicc.a` (or plain `make`, which also builds
-`libchibicc.so` on Linux), install with `make install PREFIX=...`, or
-use `pkg-config --cflags --libs libchibicc`. The public headers live in
-`libchibicc/include/chibicc/`; include the umbrella
-`<chibicc/chibicc.h>`. The library version is `CHIBICC_VERSION`
-(`chibicc_version()`).
+Build with `make libcp.a` (or plain `make`, which also builds
+`libcp.so` on Linux), install with `make install PREFIX=...`, or
+use `pkg-config --cflags --libs libcp`. The public headers live in
+`libcp/include/libcp/`; include the umbrella
+`<libcp/libcp.h>`. The library version is `LIBCP_VERSION`
+(`libcp_version()`).
 
 chibicc is developed as the reference implementation for a book I'm
 currently writing about the C compiler and the low-level programming.

@@ -1,6 +1,6 @@
 # 11 缺陷, 限制与坑
 
-本章列出使用 `libchibicc` 时必须知道的边界. 这些大多是设计限制, 不是未修复的崩溃缺陷. 已修复的历史缺陷记录在第 12 章.
+本章列出使用 `libcp` 时必须知道的边界. 这些大多是设计限制, 不是未修复的崩溃缺陷. 已修复的历史缺陷记录在第 12 章.
 
 ## 11.1 先看清承诺
 
@@ -17,7 +17,7 @@
 
 ### 11.2.1 reset 后所有指针失效
 
-这不是"可能失效", 是契约. `chibicc_context_reset` 释放整个 arena. token, AST, Obj, 类型, CST, 诊断字符串全部失效.
+这不是"可能失效", 是契约. `libcp_context_reset` 释放整个 arena. token, AST, Obj, 类型, CST, 诊断字符串全部失效.
 
 规避:
 
@@ -74,11 +74,11 @@ arena 分配失败时, 库没有完整的 OOM 恢复策略. 部分路径可能�
 空翻译单元:
 
 ```c
-ChibiccNode *ast = chibicc_parse(ctx, tok);   /* NULL */
-bool failed = chibicc_context_failed(ctx);    /* false */
+LibcpNode *ast = libcp_parse(ctx, tok);   /* NULL */
+bool failed = libcp_context_failed(ctx);    /* false */
 ```
 
-必须用 `chibicc_context_failed` 区分.
+必须用 `libcp_context_failed` 区分.
 
 ### 11.3.3 failed 是粘性的
 
@@ -88,7 +88,7 @@ bool failed = chibicc_context_failed(ctx);    /* false */
 
 ### 11.3.4 警告不置位 failed
 
-警告走回调, 流程继续. 不要用 `failed` 判断"有没有警告". 需要自己统计 `severity == CHIBICC_DIAG_WARNING`.
+警告走回调, 流程继续. 不要用 `failed` 判断"有没有警告". 需要自己统计 `severity == LIBCP_DIAG_WARNING`.
 
 ### 11.3.5 错误后 context 不一致
 
@@ -98,8 +98,8 @@ bool failed = chibicc_context_failed(ctx);    /* false */
 
 - 一个 context 不能跨线程并发.
 - 不同 context 可以在不同线程并存: 内部函数只看见参数里收到的 context.
-- 库层没有线程局部存储, 也没有 `chibicc_ctx()` 访问器; 同一线程的嵌套调用各用各的指针.
-- `chibicc_context_new` / `reset` / `free` 只操作自己的 context, 不修改全局状态.
+- 库层没有线程局部存储, 也没有 `libcp_ctx()` 访问器; 同一线程的嵌套调用各用各的指针.
+- `libcp_context_new` / `reset` / `free` 只操作自己的 context, 不修改全局状态.
 
 规避:
 
@@ -111,14 +111,14 @@ bool failed = chibicc_context_failed(ctx);    /* false */
 
 ### 11.5.1 没有默认 include 路径
 
-`chibicc_context_new` 不添加 `/usr/include` 或任何系统路径. 库不知道目标平台.
+`libcp_context_new` 不添加 `/usr/include` 或任何系统路径. 库不知道目标平台.
 
 规避:
 
 ```c
-chibicc_context_add_include_path(ctx, "/usr/local/include");
-chibicc_context_add_include_path(ctx, "/usr/include/x86_64-linux-gnu");
-chibicc_context_add_include_path(ctx, "/usr/include");
+libcp_context_add_include_path(ctx, "/usr/local/include");
+libcp_context_add_include_path(ctx, "/usr/include/x86_64-linux-gnu");
+libcp_context_add_include_path(ctx, "/usr/include");
 ```
 
 顺序就是搜索顺序. 参考 `main.c` 的 `add_default_include_paths`.
@@ -134,7 +134,7 @@ chibicc_context_add_include_path(ctx, "/usr/include");
 
 ### 11.5.3 内存输入不经过扫描缓冲改写
 
-`chibicc_tokenize_file` 在扫描前做五项改写:
+`libcp_tokenize_file` 在扫描前做五项改写:
 
 1. 跳过 BOM.
 2. CRLF 和孤立 CR 归一成 `\n`.
@@ -142,7 +142,7 @@ chibicc_context_add_include_path(ctx, "/usr/include");
 4. 把 `\uXXXX` / `\UXXXXXXXX` 改写成 UTF-8.
 5. 保证末尾有换行.
 
-`chibicc_tokenize_buffer*` 一项都不做, 按字节扫描. 后果:
+`libcp_tokenize_buffer*` 一项都不做, 按字节扫描. 后果:
 
 - BOM 留在第一个 token 的拼写里, 可能让 `int` 变成标识符 `\xEF\xBB\xBFint`.
 - 反斜杠续行会生成一个 `\` 标点 token, 而不是把两行连起来.
@@ -151,15 +151,15 @@ chibicc_context_add_include_path(ctx, "/usr/include");
 
 规避:
 
-- 真实源码优先用 `chibicc_tokenize_file`.
+- 真实源码优先用 `libcp_tokenize_file`.
 - 必须用内存输入时, 自己先做这五项改写, 或至少剥离 BOM 和续行.
 - 或者把内容写进临时文件再 tokenize.
 
 ### 11.5.4 内存中的输入被标记为 `@synth`
 
-`chibicc_tokenize_buffer` 的 `raw == contents`, provenance dump 会把它当成合成缓冲, 位置显示 `@synth`.
+`libcp_tokenize_buffer` 的 `raw == contents`, provenance dump 会把它当成合成缓冲, 位置显示 `@synth`.
 
-规避: 需要真实的文件与行号时用 `chibicc_tokenize_file`.
+规避: 需要真实的文件与行号时用 `libcp_tokenize_file`.
 
 ### 11.5.5 文件大小上限
 
@@ -167,7 +167,7 @@ chibicc_context_add_include_path(ctx, "/usr/include");
 
 ### 11.5.6 stdin 只读一次
 
-`chibicc_tokenize_file(ctx, "-")` 第一次读 stdin, 内容缓存. 第二次拿到同一份文本, 不是新的输入.
+`libcp_tokenize_file(ctx, "-")` 第一次读 stdin, 内容缓存. 第二次拿到同一份文本, 不是新的输入.
 
 ### 11.5.7 源文件含 NUL 会报错
 
@@ -205,13 +205,13 @@ NUL 被视为诊断, 不是静默截断. 二进制文件不能直接 tokenize.
 
 ### 11.7.2 展开流不能还原原文件
 
-`chibicc_preprocess` 之后:
+`libcp_preprocess` 之后:
 
 - 宏调用的拼写和实参布局消失.
 - 指令行消失.
 - 未选中分支消失.
 
-对预处理后的流调用 `chibicc_reconstruct` 得到的是展开流的拼接, 不是原文件.
+对预处理后的流调用 `libcp_reconstruct` 得到的是展开流的拼接, 不是原文件.
 
 规避: 需要原文件就用第 1/2 层, 并且不要预处理.
 
@@ -235,7 +235,7 @@ NUL 被视为诊断, 不是静默截断. 二进制文件不能直接 tokenize.
 
 `__linux__`, `__ELF__`, `_LP64`, `__x86_64__` 无条件定义, 即使库在 macOS 上构建. 做跨目标语义分析时, 这些宏会误导被分析的代码.
 
-规避: `chibicc_context_set_predefined_macros(ctx, false)` 后 reset, 自己定义需要的宏.
+规避: `libcp_context_set_predefined_macros(ctx, false)` 后 reset, 自己定义需要的宏.
 
 ## 11.8 CST
 
@@ -387,7 +387,7 @@ filename = NULL, line = 0, column = 0
 
 ### 11.11.2 `.a` 暴露内部符号
 
-静态库不重命名内部函数. `nm libchibicc.a` 能看到大量非 `chibicc_` 前缀的 `T` 符号.
+静态库不重命名内部函数. `nm libcp.a` 能看到大量非 `libcp_` 前缀的 `T` 符号.
 
 - 公共头不声明它们.
 - 消费者不得调用.
@@ -401,15 +401,15 @@ C++ 消费者要自己包:
 
 ```cpp
 extern "C" {
-#include <chibicc/chibicc.h>
+#include <libcp/libcp.h>
 }
 ```
 
-此外, `chibicc_tokenize_buffer` / `chibicc_context_add_include_path` / `_define` 等入口的参数类型是 `char *`, 不是 `const char *`. C++ 里传字符串字面量需要显式转换. C 里不要求.
+此外, `libcp_tokenize_buffer` / `libcp_context_add_include_path` / `_define` 等入口的参数类型是 `char *`, 不是 `const char *`. C++ 里传字符串字面量需要显式转换. C 里不要求.
 
 ### 11.11.4 版本宏与 Makefile 必须同步
 
-`CHIBICC_VERSION` 和 `VERSION` 不一致会被 `test/install.sh` 抓到. 手改时要同时改.
+`LIBCP_VERSION` 和 `VERSION` 不一致会被 `test/install.sh` 抓到. 手改时要同时改.
 
 ## 11.12 性能
 
@@ -454,8 +454,8 @@ extern "C" {
 | `_Static_assert` | 报语法错误 |
 | `#warning` | 报 `invalid preprocessor directive` |
 | `asm("nop")` | 解析并把字符串原样发射 |
-| `chibicc_preprocess` 之后 | 输入链不再完整 |
-| `chibicc_context_failed` | 粘性, 直到 reset |
+| `libcp_preprocess` 之后 | 输入链不再完整 |
+| `libcp_context_failed` | 粘性, 直到 reset |
 | `set_predefined_macros` | 下一次 reset 生效 |
 | `tokenize_buffer` | 复制输入, 调用者可立即释放 |
 | `tokenize_file("-")` | stdin 只读一次, 之后用缓存 |

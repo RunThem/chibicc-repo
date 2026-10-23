@@ -1,14 +1,15 @@
-# libchibicc 文档
+# libcp 文档
 
-`libchibicc` 是 chibicc 的 C 前端库. 本文档面向要在自己的软件里嵌入 C 词法, 预处理, 语法树或语义分析能力的第三方开发者, 说明这个库的设计, 分层, 每一层的产物与用法, 以及当前版本的真实缺陷.
+`libcp` 是 chibicc 的 C 前端库. 本文档面向要在自己的软件里嵌入 C 词法, 预处理, 语法树或语义分析能力的第三方开发者, 说明这个库的设计, 分层, 每一层的产物与用法, 以及当前版本的真实缺陷.
 
-本文档不是公共头的替代品. 公共头是最终事实来源, 位于 `libchibicc/include/chibicc/`, 入口是 `<chibicc/chibicc.h>`. 当文档与头文件冲突时, 以头文件为准, 并应该把文档当作缺陷修掉.
+本文档不是公共头的替代品. 公共头是最终事实来源, 位于 `libcp/include/libcp/`, 入口是 `<libcp/libcp.h>`. 当文档与头文件冲突时, 以头文件为准, 并应该把文档当作缺陷修掉.
 
 ## 版本与状态
 
-- 库版本: `0.1.0` (`CHIBICC_VERSION`, `chibicc_version()`).
-- 文档对应的代码基线: `main` 分支 `dd3e631` 之后的文档提交.
-- 路线图阶段 5, 即库边界固化, 已完成: 公共头拆分, 不透明 context, arena 生命周期, 诊断回调, `libchibicc.a`, Linux 下的 `libchibicc.so`, install 与 pkg-config, 以及 36 个公共函数的白名单, 都有测试闸门.
+- 库版本: `0.1.0` (`LIBCP_VERSION`, `libcp_version()`).
+- 文档对应的代码基线: `main` 分支 2026-10-23 的 libcp 改名提交.
+- 2026-10-23 库从 `libchibicc` 改名为 `libcp`: 包名, 头路径 (`<libcp/...>`) 与符号前缀 (`libcp_` / `Libcp` / `LIBCP_`) 一起改; 二进制仍叫 `chibicc`, `__chibicc__` 预定义宏不变, 行为零变化. 记录见 `plans/RESULT-rename-libcp.md`.
+- 路线图阶段 5, 即库边界固化, 已完成: 公共头拆分, 不透明 context, arena 生命周期, 诊断回调, `libcp.a`, Linux 下的 `libcp.so`, install 与 pkg-config, 以及 36 个公共函数的白名单, 都有测试闸门.
 - 阶段 6, 即 L5 产品化验证, **尚未开工**. 目前没有随库发布的 formatter, 没有 AST 到源码的映射 API, 没有诊断展开点字段. 第 11 章会逐项说明这些缺口对使用者的影响.
 - 只承诺源码兼容, 不承诺 ABI. 公共结构体字段直接暴露, 换字段就是换版本.
 
@@ -55,10 +56,10 @@
 下面的程序验证过可以编译并运行. 输入是内存里的字符串, 不需要文件.
 
 ```c
-#include <chibicc/chibicc.h>
+#include <libcp/libcp.h>
 #include <stdio.h>
 
-static void on_diagnostic(void *user, const ChibiccDiagnostic *d) {
+static void on_diagnostic(void *user, const LibcpDiagnostic *d) {
   (void)user;
   fprintf(stderr, "%s:%d:%d: %s\n",
           d->filename ? d->filename : "<input>", d->line, d->column,
@@ -66,20 +67,20 @@ static void on_diagnostic(void *user, const ChibiccDiagnostic *d) {
 }
 
 int main(void) {
-  ChibiccContext *ctx = chibicc_context_new();
-  chibicc_context_set_diagnostic(ctx, on_diagnostic, NULL);
+  LibcpContext *ctx = libcp_context_new();
+  libcp_context_set_diagnostic(ctx, on_diagnostic, NULL);
 
   char *src = "int square(int x) { return x * x; }\n";
 
-  ChibiccToken *tok = chibicc_tokenize_buffer(ctx, "<demo>", src);
-  tok = chibicc_preprocess(ctx, tok);
-  ChibiccNode *ast = chibicc_parse(ctx, tok);
-  ChibiccObj *prog = chibicc_sema(ctx, ast);
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<demo>", src);
+  tok = libcp_preprocess(ctx, tok);
+  LibcpNode *ast = libcp_parse(ctx, tok);
+  LibcpObj *prog = libcp_sema(ctx, ast);
 
-  for (ChibiccObj *o = prog; o; o = o->next)
+  for (LibcpObj *o = prog; o; o = o->next)
     printf("global: %s, function=%d\n", o->name, o->is_function);
 
-  chibicc_context_free(ctx);
+  libcp_context_free(ctx);
   return 0;
 }
 ```
@@ -87,8 +88,8 @@ int main(void) {
 在仓库根目录构建并运行:
 
 ```sh
-make libchibicc.a
-cc -std=c11 -Ilibchibicc/include demo.c libchibicc.a -o demo
+make libcp.a
+cc -std=c11 -Ilibcp/include demo.c libcp.a -o demo
 ./demo
 ```
 
@@ -102,7 +103,7 @@ global: square, function=1
 
 - 本文里的"层"指中间表示层, 即第 1 到第 5 层; "阶段"指工程实施阶段, 即路线图里的阶段 0 到 6 以及若干附加线. 两者不是同一个概念.
 - 代码路径一律相对于仓库根目录.
-- `ctx` 指 `ChibiccContext *`.
+- `ctx` 指 `LibcpContext *`.
 - "TU" 指一个翻译单元. 一个 context 服务一个 TU.
 - 文中所有 API 名称与 C 标识符保留英文原文.
 - 文档里的示例最小化到能独立编译, 省略的错误处理会在正文说明.
