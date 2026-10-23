@@ -1,6 +1,6 @@
 # PLAN-rename-libcp.md - 库改名 libcp
 
-> 状态: 执行中 (2026-10-23); 执行记录见 `plans/RESULT-rename-libcp.md`
+> 状态: 已完成 (2026-10-23); 执行记录见 `plans/RESULT-rename-libcp.md`
 > 基线: `main` @ `e0e6884`
 > 分支: `main` (单条机械改名, 不分阶段)
 > 范围: 库的包名 / 路径 / 公共符号 / 打包身份; 二进制名与上游血统名不变
@@ -167,56 +167,56 @@ C 前端库有自己的身份, 同时保留参考消费者的名字与上游血�
 
 ### R0 - 基线与准备
 
-- [ ] R0.1 记录 `git rev-parse HEAD`, 确认工作区干净 (`main` 与
+- [x] R0.1 记录 `git rev-parse HEAD`, 确认工作区干净 (`main` 与
   `origin/main` 齐平), `.cache/snapshot` 基线存在.
-- [ ] R0.2 写本计划并单独提交.
+- [x] R0.2 写本计划并单独提交.
 
 ### R1 - 路径改名 (git mv)
 
-- [ ] R1.1 `libchibicc/` -> `libcp/`.
-- [ ] R1.2 `libcp/include/chibicc/` -> `libcp/include/libcp/`.
-- [ ] R1.3 `libcp/include/libcp/chibicc.h` -> `libcp/include/libcp/libcp.h`.
-- [ ] R1.4 `libcp/src/chibicc.h` -> `libcp/src/libcp.h`.
-- [ ] R1.5 `libchibicc.pc.in` -> `libcp.pc.in`.
+- [x] R1.1 `libchibicc/` -> `libcp/`.
+- [x] R1.2 `libcp/include/chibicc/` -> `libcp/include/libcp/`.
+- [x] R1.3 `libcp/include/libcp/chibicc.h` -> `libcp/include/libcp/libcp.h`.
+- [x] R1.4 `libcp/src/chibicc.h` -> `libcp/src/libcp.h`.
+- [x] R1.5 `libchibicc.pc.in` -> `libcp.pc.in`.
 
 ### R2 - 标识符替换
 
-- [ ] R2.1 用 4.2 的顺序与 4.3 的保护, 对活文件跑替换脚本; 归档目录排除.
-- [ ] R2.2 逐条核对残留: `git grep -i chibicc` 的结果全部能归入 4.4.
+- [x] R2.1 用 4.2 的顺序与 4.3 的保护, 对活文件跑替换脚本; 归档目录排除.
+- [x] R2.2 逐条核对残留: `git grep -i chibicc` 的结果全部能归入 4.4.
 
 ### R3 - 手工修正
 
-- [ ] R3.1 `Makefile`: `LIB_HDR` 指向 `libcp.h`; `install` 的
+- [x] R3.1 `Makefile`: `LIB_HDR` 指向 `libcp.h`; `install` 的
   `include/libcp` 与 `libcp.pc.tmp`; `clean` 与 `BOOT` 的排除项; SONAME.
-- [ ] R3.2 `test/install.sh` 与 `test/public-api.sh` 的头文件列表:
+- [x] R3.2 `test/install.sh` 与 `test/public-api.sh` 的头文件列表:
   umbrella 项从 `chibicc` 改为 `libcp`, `libcp/include/libcp` 的复制路径.
-- [ ] R3.3 `test/allocator.sh` 的分配器宏与重编路径; `test/library.sh` 的
+- [x] R3.3 `test/allocator.sh` 的分配器宏与重编路径; `test/library.sh` 的
   `-lcp` 与 ASan 重编命令; `test/self-test.sh` 与 `test/self/self-test.c`.
-- [ ] R3.4 `test/context-audit.sh` 与 `test/public-api.sh` 的
+- [x] R3.4 `test/context-audit.sh` 与 `test/public-api.sh` 的
   **禁名模式**改为 `libcp_ctx` / `libcp_active_ctx` /
   `libcp_context_activate` / `libcp_arena_*`; 改名后要确认这些模式仍然
   能命中目标 (负向用例: 手写一个 `libcp_ctx` 声明应被报告).
-- [ ] R3.5 `.gitignore` 的产物名.
+- [x] R3.5 `.gitignore` 的产物名.
 
 ### R4 - 文档
 
-- [ ] R4.1 `README.md` 的库小节与顶部身份说明.
-- [ ] R4.2 `AGENTS.md` 的命名约定、路线图、构建与测试、代码地图, 加决策记录.
-- [ ] R4.3 `docs/**` 的机械替换与 prose 校对.
+- [x] R4.1 `README.md` 的库小节与顶部身份说明.
+- [x] R4.2 `AGENTS.md` 的命名约定、路线图、构建与测试、代码地图, 加决策记录.
+- [x] R4.3 `docs/**` 的机械替换与 prose 校对.
 
 ### R5 - 闸门
 
-- [ ] R5.1 `make` (macOS 只保证 `.a`), `make check-context`,
+- [x] R5.1 `make` (macOS 只保证 `.a`), `make check-context`,
   `make check-library`.
-- [ ] R5.2 `make docker-test` (含自举).
-- [ ] R5.3 `make docker-snapshot-diff` 为空.
-- [ ] R5.4 Pratt 面: `make test-ab` 或 `make docker-test-both` 的默认集合
+- [x] R5.2 `make docker-test` (含自举).
+- [x] R5.3 `make docker-snapshot-diff` 为空.
+- [x] R5.4 Pratt 面: `make test-ab` 或 `make docker-test-both` 的默认集合
   (改名同时触及两条表达式路径的宏 `CHIBICC_PRATT_PARSE_FEATURE`).
 
 ### R6 - 收尾
 
-- [ ] R6.1 写 `plans/RESULT-rename-libcp.md`, 勾完本计划的复选框.
-- [ ] R6.2 提交并推送.
+- [x] R6.1 写 `plans/RESULT-rename-libcp.md`, 勾完本计划的复选框.
+- [x] R6.2 提交并推送.
 
 ## 6. 闸门
 
