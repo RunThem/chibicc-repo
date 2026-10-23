@@ -105,7 +105,7 @@ static bool is_hash(Token *tok) {
 static Token *skip_line(Token *tok) {
   if (tok->at_bol)
     return tok;
-  warn_tok(tok, "extra token");
+  warn_tok(chibicc_ctx(), tok, "extra token");
   while (tok->at_bol)
     tok = tok->next;
   return tok;
@@ -342,7 +342,7 @@ static Token *read_const_expr(Token **rest, Token *tok) {
       bool has_paren = consume(&tok, tok->next, "(");
 
       if (tok->kind != TK_IDENT)
-        error_tok(start, "macro name must be an identifier");
+        error_tok(chibicc_ctx(), start, "macro name must be an identifier");
       Macro *m = find_macro(tok);
       tok = tok->next;
 
@@ -368,7 +368,7 @@ static long eval_const_expr(Token **rest, Token *tok) {
   expr = preprocess2(expr);
 
   if (expr->kind == TK_EOF)
-    error_tok(start, "no expression");
+    error_tok(chibicc_ctx(), start, "no expression");
 
   // [https://www.sigbus.info/n1570#6.10.1p4] The standard requires
   // we replace remaining non-macro identifiers with "0" before
@@ -388,7 +388,7 @@ static long eval_const_expr(Token **rest, Token *tok) {
   Token *rest2;
   long val = const_expr(&rest2, expr);
   if (rest2->kind != TK_EOF)
-    error_tok(rest2, "extra token");
+    error_tok(chibicc_ctx(), rest2, "extra token");
   return val;
 }
 
@@ -432,7 +432,7 @@ static MacroParam *read_macro_params(Token **rest, Token *tok, char **va_args_na
     }
 
     if (tok->kind != TK_IDENT)
-      error_tok(tok, "expected an identifier");
+      error_tok(chibicc_ctx(), tok, "expected an identifier");
 
     if (equal(tok->next, "...")) {
       *va_args_name = chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len);
@@ -452,7 +452,7 @@ static MacroParam *read_macro_params(Token **rest, Token *tok, char **va_args_na
 
 static void read_macro_definition(Token **rest, Token *tok) {
   if (tok->kind != TK_IDENT)
-    error_tok(tok, "macro name must be an identifier");
+    error_tok(chibicc_ctx(), tok, "macro name must be an identifier");
   Token *name_tok = tok;
   char *name = chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len);
   tok = tok->next;
@@ -485,7 +485,7 @@ static MacroArg *read_macro_arg_one(Token **rest, Token *tok, bool read_rest) {
       break;
 
     if (tok->kind == TK_EOF)
-      error_tok(tok, "premature end of input");
+      error_tok(chibicc_ctx(), tok, "premature end of input");
 
     if (equal(tok, "("))
       level++;
@@ -537,7 +537,7 @@ read_macro_args(Token **rest, Token *tok, MacroParam *params, char *va_args_name
     arg->index = index;
     cur = cur->next = arg;
   } else if (pp) {
-    error_tok(start, "too many arguments");
+    error_tok(chibicc_ctx(), start, "too many arguments");
   }
 
   skip(tok, ")");
@@ -594,7 +594,7 @@ static Token *paste(Token *lhs, Token *rhs) {
   // Tokenize the resulting string.
   Token *tok = tokenize_nested(new_file(lhs->file->name, lhs->file->file_no, buf));
   if (tok->next->kind != TK_EOF)
-    error_tok(lhs, "pasting forms '%s', an invalid token", buf);
+    error_tok(chibicc_ctx(), lhs, "pasting forms '%s', an invalid token", buf);
   return tok;
 }
 
@@ -623,7 +623,7 @@ static Token *subst(Token *tok, MacroArg *args, MacroExpansion *e) {
     if (equal(tok, "#")) {
       MacroArg *arg = find_arg(args, tok->next);
       if (!arg)
-        error_tok(tok->next, "'#' is not followed by a macro parameter");
+        error_tok(chibicc_ctx(), tok->next, "'#' is not followed by a macro parameter");
       cur = cur->next = stringize(tok, arg->tok);
       cur->prov = new_prov(e, -1, body_base);
       tok = tok->next->next;
@@ -649,10 +649,10 @@ static Token *subst(Token *tok, MacroArg *args, MacroExpansion *e) {
 
     if (equal(tok, "##")) {
       if (cur == &head)
-        error_tok(tok, "'##' cannot appear at start of macro expansion");
+        error_tok(chibicc_ctx(), tok, "'##' cannot appear at start of macro expansion");
 
       if (tok->next->kind == TK_EOF)
-        error_tok(tok, "'##' cannot appear at end of macro expansion");
+        error_tok(chibicc_ctx(), tok, "'##' cannot appear at end of macro expansion");
 
       MacroArg *arg = find_arg(args, tok->next);
       if (arg) {
@@ -874,7 +874,7 @@ static char *read_include_filename(Token **rest, Token *tok, bool *is_dquote) {
     // Find closing ">".
     for (; !equal(tok, ">"); tok = tok->next)
       if (tok->at_bol || tok->kind == TK_EOF)
-        error_tok(tok, "expected '>'");
+        error_tok(chibicc_ctx(), tok, "expected '>'");
 
     *is_dquote = false;
     *rest = skip_line(tok->next);
@@ -889,7 +889,7 @@ static char *read_include_filename(Token **rest, Token *tok, bool *is_dquote) {
     return read_include_filename(&tok2, tok2, is_dquote);
   }
 
-  error_tok(tok, "expected a filename");
+  error_tok(chibicc_ctx(), tok, "expected a filename");
 }
 
 // Detect the following "include guard" pattern.
@@ -953,13 +953,13 @@ static Token *include_file(Token *tok, char *path, Token *filename_tok,
     return tok;
 
   if (parent->include_depth >= MAX_INCLUDE_DEPTH)
-    error_tok(filename_tok, "include depth exceeded");
+    error_tok(chibicc_ctx(), filename_tok, "include depth exceeded");
   if (++ctx->include_count > MAX_INCLUDE_COUNT)
-    error_tok(filename_tok, "too many includes");
+    error_tok(chibicc_ctx(), filename_tok, "too many includes");
 
   Token *tok2 = tokenize_file_nested(path);
   if (!tok2)
-    error_tok(filename_tok, "%s: cannot open file: %s", path, strerror(errno));
+    error_tok(chibicc_ctx(), filename_tok, "%s: cannot open file: %s", path, strerror(errno));
   tok2->file->include_depth = parent->include_depth + 1;
 
   guard_name = detect_include_guard(tok2);
@@ -975,7 +975,7 @@ static void read_line_marker(Token **rest, Token *tok) {
   tok = preprocess(copy_line(rest, tok));
 
   if (tok->kind != TK_NUM || tok->ty->kind != TY_INT)
-    error_tok(tok, "invalid line marker");
+    error_tok(chibicc_ctx(), tok, "invalid line marker");
   start->file->line_delta = tok->val - start->line_no;
 
   tok = tok->next;
@@ -983,7 +983,7 @@ static void read_line_marker(Token **rest, Token *tok) {
     return;
 
   if (tok->kind != TK_STR)
-    error_tok(tok, "filename expected");
+    error_tok(chibicc_ctx(), tok, "filename expected");
   start->file->display_name = tok->str;
 }
 
@@ -1045,7 +1045,7 @@ static Token *preprocess2(Token *tok) {
     if (equal(tok, "undef")) {
       tok = tok->next;
       if (tok->kind != TK_IDENT)
-        error_tok(tok, "macro name must be an identifier");
+        error_tok(chibicc_ctx(), tok, "macro name must be an identifier");
       undef_macro(chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len));
       tok = skip_line(tok->next);
       continue;
@@ -1079,7 +1079,7 @@ static Token *preprocess2(Token *tok) {
 
     if (equal(tok, "elif")) {
       if (!cond_incl || cond_incl->ctx == IN_ELSE)
-        error_tok(start, "stray #elif");
+        error_tok(chibicc_ctx(), start, "stray #elif");
       cond_incl->ctx = IN_ELIF;
 
       if (!cond_incl->included && eval_const_expr(&tok, tok))
@@ -1091,7 +1091,7 @@ static Token *preprocess2(Token *tok) {
 
     if (equal(tok, "else")) {
       if (!cond_incl || cond_incl->ctx == IN_ELSE)
-        error_tok(start, "stray #else");
+        error_tok(chibicc_ctx(), start, "stray #else");
       cond_incl->ctx = IN_ELSE;
       tok = skip_line(tok->next);
 
@@ -1102,7 +1102,7 @@ static Token *preprocess2(Token *tok) {
 
     if (equal(tok, "endif")) {
       if (!cond_incl)
-        error_tok(start, "stray #endif");
+        error_tok(chibicc_ctx(), start, "stray #endif");
       cond_incl = cond_incl->next;
       tok = skip_line(tok->next);
       continue;
@@ -1132,13 +1132,13 @@ static Token *preprocess2(Token *tok) {
     }
 
     if (equal(tok, "error"))
-      error_tok(tok, "error");
+      error_tok(chibicc_ctx(), tok, "error");
 
     // `#`-only line is legal. It's called a null directive.
     if (tok->at_bol)
       continue;
 
-    error_tok(tok, "invalid preprocessor directive");
+    error_tok(chibicc_ctx(), tok, "invalid preprocessor directive");
   }
 
   cur->next = tok;
@@ -1403,7 +1403,7 @@ static void join_adjacent_string_literals(Token *tok) {
         kind = k;
         basety = t->ty->base;
       } else if (k != STR_NONE && kind != k) {
-        error_tok(t, "unsupported non-standard concatenation of string literals");
+        error_tok(chibicc_ctx(), t, "unsupported non-standard concatenation of string literals");
       }
     }
 
@@ -1456,7 +1456,7 @@ static void join_adjacent_string_literals(Token *tok) {
 Token *preprocess(Token *tok) {
   tok = preprocess2(tok);
   if (cond_incl)
-    error_tok(cond_incl->tok, "unterminated conditional directive");
+    error_tok(chibicc_ctx(), cond_incl->tok, "unterminated conditional directive");
   convert_pp_tokens(tok);
   join_adjacent_string_literals(tok);
 

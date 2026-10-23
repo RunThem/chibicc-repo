@@ -55,21 +55,20 @@ static int raw_end_of(File *file, int off) {
 
 // Formats a diagnostic message into the arena (or malloc before a
 // context exists).
-static char *vformat(char *fmt, va_list ap) {
+static char *vformat(ChibiccContext *ctx, char *fmt, va_list ap) {
   va_list ap2;
   va_copy(ap2, ap);
   int n = vsnprintf(NULL, 0, fmt, ap2);
   va_end(ap2);
-  char *buf = chibicc_arena_alloc(chibicc_ctx(), n + 1, 1);
+  char *buf = chibicc_arena_alloc(ctx, n + 1, 1);
   vsnprintf(buf, n + 1, fmt, ap);
   return buf;
 }
 
 // Unwinds to the innermost public-entry frame; without one (the
 // driver's pre-cc1 paths), exits as before.
-static noreturn void raise_error(void) {
-  ChibiccContext *ctx = chibicc_ctx();
-  if (ctx && ctx->jmp_top) {
+static noreturn void raise_error(ChibiccContext *ctx) {
+  if (ctx->jmp_top) {
     ctx->failed = true;
     longjmp(ctx->jmp_top->buf, 1);
   }
@@ -83,9 +82,8 @@ static noreturn void raise_error(void) {
 //
 // A registered callback gets the structured form instead; the default
 // path below is byte-for-byte what the compiler printed before L2.6.
-static void verror_at(char *filename, char *input, int line_no, char *loc,
+static void verror_at(ChibiccContext *ctx, char *filename, char *input, int line_no, char *loc,
                       ChibiccDiagnosticSeverity severity, char *fmt, va_list ap) {
-  ChibiccContext *ctx = chibicc_ctx();
 
   // Find a line containing `loc`.
   char *line = loc;
@@ -93,7 +91,7 @@ static void verror_at(char *filename, char *input, int line_no, char *loc,
     line--;
 
   if (ctx && ctx->diag_fn) {
-    char *msg = vformat(fmt, ap);
+    char *msg = vformat(ctx, fmt, ap);
     ChibiccDiagnostic d = {filename, line_no,
                            display_width(line, loc - line) + 1,
                            severity, msg};
@@ -120,13 +118,12 @@ static void verror_at(char *filename, char *input, int line_no, char *loc,
 
 // Reports an error; unwinds to the current public entry, or exits when
 // the driver is outside one.
-void error(char *fmt, ...) {
+void error(ChibiccContext *ctx, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
 
-  ChibiccContext *ctx = chibicc_ctx();
   if (ctx && ctx->diag_fn) {
-    char *msg = vformat(fmt, ap);
+    char *msg = vformat(ctx, fmt, ap);
     ChibiccDiagnostic d = {NULL, 0, 0, CHIBICC_DIAG_ERROR, msg};
     ctx->diag_fn(ctx->diag_user, &d);
   } else {
@@ -135,34 +132,33 @@ void error(char *fmt, ...) {
   }
 
   va_end(ap);
-  raise_error();
+  raise_error(ctx);
 }
 
-void error_at(char *loc, char *fmt, ...) {
-  ChibiccContext *ctx = chibicc_ctx();
+void error_at(ChibiccContext *ctx, char *loc, char *fmt, ...) {
   int line_no = ctx->current_file->lines[raw_off(ctx->current_file, loc)];
 
   va_list ap;
   va_start(ap, fmt);
-  verror_at(ctx->current_file->name, ctx->current_file->contents, line_no,
+  verror_at(ctx, ctx->current_file->name, ctx->current_file->contents, line_no,
             loc, CHIBICC_DIAG_ERROR, fmt, ap);
   va_end(ap);
-  raise_error();
+  raise_error(ctx);
 }
 
-void error_tok(Token *tok, char *fmt, ...) {
+void error_tok(ChibiccContext *ctx, Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc,
+  verror_at(ctx, tok->file->name, tok->file->contents, tok->line_no, tok->loc,
             CHIBICC_DIAG_ERROR, fmt, ap);
   va_end(ap);
-  raise_error();
+  raise_error(ctx);
 }
 
-void warn_tok(Token *tok, char *fmt, ...) {
+void warn_tok(ChibiccContext *ctx, Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc,
+  verror_at(ctx, tok->file->name, tok->file->contents, tok->line_no, tok->loc,
             CHIBICC_DIAG_WARNING, fmt, ap);
   va_end(ap);
 }
@@ -192,7 +188,7 @@ bool equal(Token *tok, char *op) {
 // Ensure that the current token is `op`.
 Token *skip(Token *tok, char *op) {
   if (!equal(tok, op))
-    error_tok(tok, "expected '%s'", op);
+    error_tok(chibicc_ctx(), tok, "expected '%s'", op);
   return tok->next;
 }
 
@@ -305,7 +301,7 @@ static int read_escaped_char(char **new_pos, char *p) {
     // Read a hexadecimal number.
     p++;
     if (!isxdigit((unsigned char)*p))
-      error_at(p, "invalid hex escape sequence");
+      error_at(chibicc_ctx(), p, "invalid hex escape sequence");
 
     int c = 0;
     for (; isxdigit((unsigned char)*p); p++)
@@ -346,7 +342,7 @@ static char *string_literal_end(char *p) {
   char *start = p;
   for (; *p != '"'; p++) {
     if (*p == '\n' || *p == '\0')
-      error_at(start, "unclosed string literal");
+      error_at(chibicc_ctx(), start, "unclosed string literal");
     if (*p == '\\')
       p++;
   }
@@ -432,7 +428,7 @@ static Token *read_utf32_string_literal(char *start, char *quote, Type *ty, int 
 static Token *read_char_literal(char *start, char *quote, Type *ty, int raw_trivia) {
   char *p = quote + 1;
   if (*p == '\0')
-    error_at(start, "unclosed char literal");
+    error_at(chibicc_ctx(), start, "unclosed char literal");
 
   int c;
   if (*p == '\\')
@@ -442,7 +438,7 @@ static Token *read_char_literal(char *start, char *quote, Type *ty, int raw_triv
 
   char *end = strchr(p, '\'');
   if (!end)
-    error_at(p, "unclosed char literal");
+    error_at(chibicc_ctx(), p, "unclosed char literal");
 
   Token *tok = new_token(TK_NUM, start, end + 1, raw_trivia);
   tok->val = c;
@@ -470,7 +466,7 @@ static bool convert_pp_int(Token *tok) {
   errno = 0;
   int64_t val = strtoul(p, &p, base);
   if (errno == ERANGE)
-    error_tok(tok, "integer literal is too large");
+    error_tok(chibicc_ctx(), tok, "integer literal is too large");
 
   // Read U, L or LL suffixes.
   bool l = false;
@@ -561,7 +557,7 @@ static void convert_pp_number(Token *tok) {
   }
 
   if (tok->loc + tok->len != end)
-    error_tok(tok, "invalid numeric constant");
+    error_tok(chibicc_ctx(), tok, "invalid numeric constant");
 
   tok->kind = TK_NUM;
   tok->fval = val;
@@ -637,7 +633,7 @@ Token *tokenize(File *file) {
     if (startswith(p, "/*")) {
       char *q = strstr(p + 2, "*/");
       if (!q)
-        error_at(p, "unclosed block comment");
+        error_at(chibicc_ctx(), p, "unclosed block comment");
       p = q + 2;
       chibicc_ctx()->has_space = true;
       continue;
@@ -767,7 +763,7 @@ Token *tokenize(File *file) {
       continue;
     }
 
-    error_at(p, "invalid token");
+    error_at(chibicc_ctx(), p, "invalid token");
   }
 
   // The trailing trivia of the file belongs to the EOF token.
@@ -823,7 +819,7 @@ static char *read_file(char *path, size_t *len) {
   if (buflen > INT32_MAX) {
     fclose(out);
     free(buf);
-    error("file too large: %s", path);
+    error(chibicc_ctx(), "file too large: %s", path);
   }
 
   // fputc below grows the memstream's length by the terminator; keep the
@@ -1029,7 +1025,7 @@ Token *tokenize_file(char *path) {
   // the first one before tokenizing.
   if (memchr(raw, 0, raw_len)) {
     chibicc_ctx()->current_file = file;
-    error_at(memchr(contents, 0, raw_len + 2), "NUL byte in source file");
+    error_at(chibicc_ctx(), memchr(contents, 0, raw_len + 2), "NUL byte in source file");
   }
 
   // Save the filename for assembler .file directive.

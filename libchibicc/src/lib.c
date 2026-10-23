@@ -323,7 +323,7 @@ Token *chibicc_tokenize_file(ChibiccContext *ctx, char *path) {
   // facades report it, so a library consumer never sees a silent NULL
   // (PLAN D4/L3.4b).
   if (!tok)
-    error("cannot open %s: %s", path, strerror(errno));
+    error(ctx, "cannot open %s: %s", path, strerror(errno));
   LEAVE(ctx);
   return tok;
 }
@@ -332,7 +332,7 @@ Token *chibicc_tokenize_buffer_len(ChibiccContext *ctx, char *name,
                                    char *contents, int len) {
   ENTER_RET(ctx, NULL);
   if (len < 0)
-    error("invalid buffer length");
+    error(ctx, "invalid buffer length");
   if (!ctx->base_file)
     ctx->base_file = chibicc_arena_strdup(ctx, name);
 
@@ -344,7 +344,7 @@ Token *chibicc_tokenize_buffer_len(ChibiccContext *ctx, char *name,
   char *nul = memchr(copy, 0, len);
   if (nul) {
     ctx->current_file = file;
-    error_at(nul, "NUL byte in source file");
+    error_at(ctx, nul, "NUL byte in source file");
   }
 
   Token *tok = tokenize(file);

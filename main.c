@@ -90,7 +90,7 @@ static FileType parse_opt_x(char *s) {
     return FILE_ASM;
   if (!strcmp(s, "none"))
     return FILE_NONE;
-  error("<command line>: unknown argument for -x: %s", s);
+  error(ctx, "<command line>: unknown argument for -x: %s", s);
 }
 
 static char *quote_makefile(char *s) {
@@ -376,7 +376,7 @@ static void parse_args(int argc, char **argv) {
       continue;
 
     if (argv[i][0] == '-' && argv[i][1] != '\0')
-      error("unknown argument: %s", argv[i]);
+      error(ctx, "unknown argument: %s", argv[i]);
 
     strarray_push(ctx, &input_paths, argv[i]);
   }
@@ -385,7 +385,7 @@ static void parse_args(int argc, char **argv) {
     chibicc_context_add_include_path(ctx, idirafter.data[i]);
 
   if (input_paths.len == 0)
-    error("no input files");
+    error(ctx, "no input files");
 
   // -E implies that the input is the C macro language.
   if (opt_E)
@@ -398,7 +398,7 @@ static FILE *open_file(char *path) {
 
   FILE *out = fopen(path, "w");
   if (!out)
-    error("cannot open output file: %s: %s", path, strerror(errno));
+    error(ctx, "cannot open output file: %s: %s", path, strerror(errno));
   return out;
 }
 
@@ -426,7 +426,7 @@ static char *create_tmpfile(void) {
   char *path = strdup("/tmp/chibicc-XXXXXX");
   int fd = mkstemp(path);
   if (fd == -1)
-    error("mkstemp failed: %s", strerror(errno));
+    error(ctx, "mkstemp failed: %s", strerror(errno));
   close(fd);
 
   strarray_push(ctx, &tmpfiles, path);
@@ -444,7 +444,7 @@ static void run_subprocess(char **argv) {
 
   pid_t pid = fork();
   if (pid < 0)
-    error("fork failed: %s", strerror(errno));
+    error(ctx, "fork failed: %s", strerror(errno));
 
   if (pid == 0) {
     // Child process. Run a new command.
@@ -460,7 +460,7 @@ static void run_subprocess(char **argv) {
   int status;
   while (waitpid(pid, &status, 0) == -1) {
     if (errno != EINTR)
-      error("waitpid failed: %s", strerror(errno));
+      error(ctx, "waitpid failed: %s", strerror(errno));
   }
 
   // A signal death is a failure just like a nonzero exit status.
@@ -1141,7 +1141,7 @@ static int cc1(void) {
     } else {
       path = search_include_paths(incl);
       if (!path)
-        error("-include: %s: %s", incl, strerror(errno));
+        error(ctx, "-include: %s: %s", incl, strerror(errno));
     }
 
     Token *tok2 = must_tokenize_file(path);
@@ -1233,7 +1233,7 @@ static char *find_libpath(void) {
     return "/usr/lib/x86_64-linux-gnu";
   if (file_exists("/usr/lib64/crti.o"))
     return "/usr/lib64";
-  error("library path is not found");
+  error(ctx, "library path is not found");
 }
 
 static char *find_gcc_libpath(void) {
@@ -1249,7 +1249,7 @@ static char *find_gcc_libpath(void) {
       return dirname(path);
   }
 
-  error("gcc library path is not found");
+  error(ctx, "gcc library path is not found");
 }
 
 static void run_linker(StringArray *inputs, char *output) {
@@ -1334,7 +1334,7 @@ static FileType get_file_type(char *filename) {
   if (endswith(filename, ".s"))
     return FILE_ASM;
 
-  error("<command line>: unknown file extension: %s", filename);
+  error(ctx, "<command line>: unknown file extension: %s", filename);
 }
 
 int main(int argc, char **argv) {
@@ -1350,7 +1350,7 @@ int main(int argc, char **argv) {
   }
 
   if (input_paths.len > 1 && opt_o && (opt_c || opt_S || opt_E))
-    error("cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
+    error(ctx, "cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
 
   StringArray ld_args = {};
 

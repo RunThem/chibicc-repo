@@ -48,7 +48,7 @@ uint32_t decode_utf8(char **new_pos, char *p) {
     // Valid four-byte leads stop at F4; F5..FF cannot encode a code
     // point and would otherwise alias a valid range.
     if ((unsigned char)*p > 0b11110100)
-      error_at(start, "invalid UTF-8 sequence");
+      error_at(chibicc_ctx(), start, "invalid UTF-8 sequence");
     len = 4;
     c = *p & 0b111;
   } else if ((unsigned char)*p >= 0b11100000) {
@@ -58,12 +58,12 @@ uint32_t decode_utf8(char **new_pos, char *p) {
     len = 2;
     c = *p & 0b11111;
   } else {
-    error_at(start, "invalid UTF-8 sequence");
+    error_at(chibicc_ctx(), start, "invalid UTF-8 sequence");
   }
 
   for (int i = 1; i < len; i++) {
     if ((unsigned char)p[i] >> 6 != 0b10)
-      error_at(start, "invalid UTF-8 sequence");
+      error_at(chibicc_ctx(), start, "invalid UTF-8 sequence");
     c = (c << 6) | (p[i] & 0b111111);
   }
 
@@ -72,7 +72,7 @@ uint32_t decode_utf8(char **new_pos, char *p) {
   // the Unicode maximum.
   static uint32_t min[] = {0, 0, 0x80, 0x800, 0x10000};
   if (c < min[len] || (c >= 0xD800 && c <= 0xDFFF) || c > 0x10FFFF)
-    error_at(start, "invalid UTF-8 sequence");
+    error_at(chibicc_ctx(), start, "invalid UTF-8 sequence");
 
   *new_pos = p + len;
   return c;

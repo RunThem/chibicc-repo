@@ -357,7 +357,7 @@ static void gen_addr(Node *node) {
     return;
   }
 
-  error_tok(node->tok, "not an lvalue");
+  error_tok(chibicc_ctx(), node->tok, "not an lvalue");
 }
 
 // Load a value from where %rax is pointing to.
@@ -1331,7 +1331,7 @@ static void gen_expr(Node *node) {
       return;
     }
 
-    error_tok(node->tok, "invalid expression");
+    error_tok(chibicc_ctx(), node->tok, "invalid expression");
   }
   case TY_LDOUBLE: {
     gen_expr(node->lhs);
@@ -1370,7 +1370,7 @@ static void gen_expr(Node *node) {
       return;
     }
 
-    error_tok(node->tok, "invalid expression");
+    error_tok(chibicc_ctx(), node->tok, "invalid expression");
   }
   }
 
@@ -1463,7 +1463,7 @@ static void gen_expr(Node *node) {
     return;
   }
 
-  error_tok(node->tok, "invalid expression");
+  error_tok(chibicc_ctx(), node->tok, "invalid expression");
 }
 
 static void gen_stmt(Node *node) {
@@ -1660,7 +1660,7 @@ static void gen_stmt(Node *node) {
     return;
   }
 
-  error_tok(node->tok, "invalid statement");
+  error_tok(chibicc_ctx(), node->tok, "invalid statement");
 }
 
 // The shaping pass, at its terminal shape: the control-flow half of
@@ -1822,7 +1822,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
     return mark_lowered(new_arith(ND_ADD, lhs, rhs, tok));
 
   if (lhs->ty->base && rhs->ty->base)
-    error_tok(tok, "invalid operands");
+    error_tok(chibicc_ctx(), tok, "invalid operands");
 
   // Canonicalize `num + ptr` to `ptr + num`.
   if (!lhs->ty->base && rhs->ty->base) {
@@ -1864,7 +1864,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
     return new_arith(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
   }
 
-  error_tok(tok, "invalid operands");
+  error_tok(chibicc_ctx(), tok, "invalid operands");
 }
 
 // Generate code for computing a VLA size: one assignment per VLA the

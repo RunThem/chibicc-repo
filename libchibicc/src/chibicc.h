@@ -85,10 +85,10 @@ char *format(ChibiccContext *ctx, char *fmt, ...) __attribute__((format(printf, 
 // tokenize.c
 //
 
-noreturn void error(char *fmt, ...) __attribute__((format(printf, 1, 2)));
-noreturn void error_at(char *loc, char *fmt, ...) __attribute__((format(printf, 2, 3)));
-noreturn void error_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
-void warn_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
+noreturn void error(ChibiccContext *ctx, char *fmt, ...) __attribute__((format(printf, 2, 3)));
+noreturn void error_at(ChibiccContext *ctx, char *loc, char *fmt, ...) __attribute__((format(printf, 3, 4)));
+noreturn void error_tok(ChibiccContext *ctx, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
+void warn_tok(ChibiccContext *ctx, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
 bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *op);
 bool consume(Token **rest, Token *tok, char *str);
@@ -103,7 +103,7 @@ Token *tokenize(File *file);
 Token *tokenize_file(char *filename);
 
 #define unreachable() \
-  error("internal error at %s:%d", __FILE__, __LINE__)
+  error(chibicc_ctx(), "internal error at %s:%d", __FILE__, __LINE__)
 
 //
 // cst.c

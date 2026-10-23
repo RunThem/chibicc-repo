@@ -232,7 +232,7 @@ static VarScope *push_scope(char *name) {
 // position of the declaration, anchored exactly as the parser used to.
 static void check_declared_void(Token *tok, Type *ty) {
   if (ty->kind == TY_VOID)
-    error_tok(tok, "variable declared void");
+    error_tok(chibicc_ctx(), tok, "variable declared void");
 }
 
 // Looks up a function in the file scope.
@@ -260,11 +260,11 @@ static Obj *declare_function(char *name, Type *ty, VarAttr *attr, Token *tok,
     // fn->is_function is always true here (the diagnostic lock
     // leaves it uncovered for exactly that reason).
     if (!fn->is_function)
-      error_tok(tok, "redeclared as a different kind of symbol");
+      error_tok(chibicc_ctx(), tok, "redeclared as a different kind of symbol");
     if (fn->is_definition && is_definition)
-      error_tok(tok, "redefinition of %s", name);
+      error_tok(chibicc_ctx(), tok, "redefinition of %s", name);
     if (!fn->is_static && attr->is_static)
-      error_tok(tok, "static declaration follows a non-static declaration");
+      error_tok(chibicc_ctx(), tok, "static declaration follows a non-static declaration");
     fn->is_definition = fn->is_definition || is_definition;
   } else {
     fn = new_gvar(name, ty);
@@ -300,7 +300,7 @@ static void check_labels(void) {
         break;
       }
     if (!found)
-      error_tok(x->tok->next, "use of undeclared label");
+      error_tok(chibicc_ctx(), x->tok->next, "use of undeclared label");
   }
 }
 
@@ -361,16 +361,16 @@ static void check_node(Node *node) {
     return;
   case ND_CASE:
     if (!switch_depth)
-      error_tok(node->tok, node->is_default ? "stray default" : "stray case");
+      error_tok(chibicc_ctx(), node->tok, node->is_default ? "stray default" : "stray case");
     check_node(node->lhs);
     return;
   case ND_BREAK:
     if (!loop_depth && !switch_depth)
-      error_tok(node->tok, "stray break");
+      error_tok(chibicc_ctx(), node->tok, "stray break");
     return;
   case ND_CONTINUE:
     if (!loop_depth)
-      error_tok(node->tok, "stray continue");
+      error_tok(chibicc_ctx(), node->tok, "stray continue");
     return;
   case ND_GOTO:
     nodearray_push(chibicc_ctx(), &gotos, node);
@@ -483,7 +483,7 @@ static void resolve_enum_records(Node *recs) {
         val = eval(recs->lhs);
       }
       if (val < INT32_MIN || val > INT32_MAX)
-        error_tok(recs->lhs ? recs->lhs->tok : recs->tok,
+        error_tok(chibicc_ctx(), recs->lhs ? recs->lhs->tok : recs->tok,
                   "enum constant value is out of range for int");
       recs->val = val++;
       recs->ty_op = NULL;
@@ -729,13 +729,13 @@ static void eval_bitfield_widths(Type *ty) {
       // The mask builders below shift by this value, so an unchecked
       // width is both UB and a silent miscompile.
       if (!is_integer(mem->ty))
-        error_tok(mem->tok, "bit-field has non-integer type");
+        error_tok(chibicc_ctx(), mem->tok, "bit-field has non-integer type");
 
       int64_t width = eval(mem->width_expr);
       if (width < 0)
-        error_tok(mem->width_expr->tok, "negative width in bit-field");
+        error_tok(chibicc_ctx(), mem->width_expr->tok, "negative width in bit-field");
       if (width > mem->ty->size * 8)
-        error_tok(mem->width_expr->tok,
+        error_tok(chibicc_ctx(), mem->width_expr->tok,
                   "width of bit-field exceeds its type");
 
       mem->bit_width = width;
@@ -840,8 +840,8 @@ static void bind_ident(Node *node) {
   }
 
   if (equal(tok->next, "("))
-    error_tok(tok, "implicit declaration of a function");
-  error_tok(tok, "undefined variable");
+    error_tok(chibicc_ctx(), tok, "implicit declaration of a function");
+  error_tok(chibicc_ctx(), tok, "undefined variable");
 }
 
 static Obj *new_var(char *name, Type *ty) {
@@ -937,7 +937,7 @@ static void create_param_lvars(Type *param) {
   if (param) {
     create_param_lvars(param->next);
     if (!param->name)
-      error_tok(param->name_pos, "parameter name omitted");
+      error_tok(chibicc_ctx(), param->name_pos, "parameter name omitted");
     new_lvar(get_ident(param->name), param);
   }
 }
@@ -1027,7 +1027,7 @@ static void lower_funcall(Node *node, Token *tok) {
 
   if (ty->kind != TY_FUNC &&
       (ty->kind != TY_PTR || ty->base->kind != TY_FUNC))
-    error_tok(fn->tok, "not a function");
+    error_tok(chibicc_ctx(), fn->tok, "not a function");
 
   if (ty->kind != TY_FUNC)
     ty = ty->base;
@@ -1043,7 +1043,7 @@ static void lower_funcall(Node *node, Token *tok) {
     add_type(arg);
 
     if (!param_ty && !ty->is_variadic)
-      error_tok(tok, "too many arguments");
+      error_tok(chibicc_ctx(), tok, "too many arguments");
 
     if (param_ty) {
       if (param_ty->kind != TY_STRUCT && param_ty->kind != TY_UNION)
@@ -1061,7 +1061,7 @@ static void lower_funcall(Node *node, Token *tok) {
   }
 
   if (param_ty)
-    error_tok(tok, "too few arguments");
+    error_tok(chibicc_ctx(), tok, "too few arguments");
 
   node->args = head.next;
   node->ty = ty->return_ty;
@@ -1139,14 +1139,14 @@ static int eval_desig_index(Node *expr) {
 static void eval_array_desig(InitDesig *d, Type *ty, int *begin, int *end) {
   *begin = eval_desig_index(d->begin);
   if (*begin >= ty->array_len)
-    error_tok(d->after_begin, "array designator index exceeds array bounds");
+    error_tok(chibicc_ctx(), d->after_begin, "array designator index exceeds array bounds");
 
   if (d->end) {
     *end = eval_desig_index(d->end);
     if (*end >= ty->array_len)
-      error_tok(d->rbracket, "array designator index exceeds array bounds");
+      error_tok(chibicc_ctx(), d->rbracket, "array designator index exceeds array bounds");
     if (*end < *begin)
-      error_tok(d->rbracket, "array designator range [%d, %d] is empty", *begin, *end);
+      error_tok(chibicc_ctx(), d->rbracket, "array designator range [%d, %d] is empty", *begin, *end);
   } else {
     *end = *begin;
   }
@@ -1175,7 +1175,7 @@ static Member *find_init_member(Type *ty, Token *name) {
       return mem;
   }
 
-  error_tok(name, "struct has no such member");
+  error_tok(chibicc_ctx(), name, "struct has no such member");
 }
 
 // Turn a recorded string literal into an expression node referencing
@@ -1249,7 +1249,7 @@ static void resolve_desig(InitTree *init, InitDesig *d, Initializer *rec, InitIt
 
   if (!d->name) {
     if (init->ty->kind != TY_ARRAY)
-      error_tok(d->tok, "array index in non-array initializer");
+      error_tok(chibicc_ctx(), d->tok, "array index in non-array initializer");
 
     int begin, end;
     eval_array_desig(d, init->ty, &begin, &end);
@@ -1284,7 +1284,7 @@ static void resolve_desig(InitTree *init, InitDesig *d, Initializer *rec, InitIt
     return;
   }
 
-  error_tok(d->tok, "field name not in struct or union initializer");
+  error_tok(chibicc_ctx(), d->tok, "field name not in struct or union initializer");
 }
 
 // Fill array elements from sibling items (brace-elision continuation
@@ -1318,7 +1318,7 @@ static void resolve_array1(Initializer *rec, InitTree *init) {
     if (i < init->ty->array_len) {
       resolve_item(&cursor, init->children[i]);
     } else {
-      warn_tok(it->init->tok, "excess elements in array initializer");
+      warn_tok(chibicc_ctx(), it->init->tok, "excess elements in array initializer");
       cursor = it->next;
     }
     i++;
@@ -1388,7 +1388,7 @@ static void resolve_union(Initializer *rec, InitTree *init, InitItem **cursor) {
       else
         resolve_desig(init->children[mem->idx], it->desigs, it->init, &next);
       if (next)
-        error_tok(next->comma_tok, "expected '}'");
+        error_tok(chibicc_ctx(), next->comma_tok, "expected '}'");
       return;
     }
 
@@ -1397,14 +1397,14 @@ static void resolve_union(Initializer *rec, InitTree *init, InitItem **cursor) {
       // The old parser dispatched on the closing brace here; only an
       // array first member came out of `{}` without an error.
       if (init->ty->members->ty->kind != TY_ARRAY)
-        error_tok(rec->tok->next, "expected an expression");
+        error_tok(chibicc_ctx(), rec->tok->next, "expected an expression");
       return;
     }
 
     InitItem *next = it->next;
     resolve_desig(init->children[0], it->desigs, it->init, &next);
     if (next)
-      error_tok(next->desigs ? next->desigs->tok : next->init->tok, "expected '}'");
+      error_tok(chibicc_ctx(), next->desigs ? next->desigs->tok : next->init->tok, "expected '}'");
     return;
   }
 
@@ -1528,13 +1528,13 @@ static void resolve_value(Initializer *rec, InitTree *init, InitItem **cursor) {
     // element, no designators.
     InitItem *it = rec->items;
     if (!it)
-      error_tok(rec->tok->next, "expected an expression");
+      error_tok(chibicc_ctx(), rec->tok->next, "expected an expression");
     if (it->desigs)
-      error_tok(it->desigs->tok, "expected an expression");
+      error_tok(chibicc_ctx(), it->desigs->tok, "expected an expression");
     InitItem *next = it->next;
     resolve_value(it->init, init, &next);
     if (next)
-      error_tok(next->comma_tok, "expected '}'");
+      error_tok(chibicc_ctx(), next->comma_tok, "expected '}'");
     return;
   }
 
@@ -1781,14 +1781,14 @@ static void resolve_member(Node *node) {
   // make, anchored at the arrow.
   if (arrow) {
     if (ty->kind != TY_PTR || !ty->base)
-      error_tok(arrow, "invalid pointer dereference");
+      error_tok(chibicc_ctx(), arrow, "invalid pointer dereference");
     if (ty->base->kind == TY_VOID)
-      error_tok(arrow, "dereferencing a void pointer");
+      error_tok(chibicc_ctx(), arrow, "dereferencing a void pointer");
     if (ty->base->kind != TY_STRUCT && ty->base->kind != TY_UNION)
-      error_tok(arrow, "not a struct nor a union");
+      error_tok(chibicc_ctx(), arrow, "not a struct nor a union");
     ty = ty->base;
   } else if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) {
-    error_tok(operand->tok, "not a struct nor a union");
+    error_tok(chibicc_ctx(), operand->tok, "not a struct nor a union");
   }
 
   // The access needs the members placed. A bare `struct S {...};`
@@ -1801,7 +1801,7 @@ static void resolve_member(Node *node) {
   for (;;) {
     Member *mem = get_struct_member(ty, node->tok);
     if (!mem)
-      error_tok(node->tok, "no such member");
+      error_tok(chibicc_ctx(), node->tok, "no such member");
 
     Node *link = new_unary(ND_MEMBER, cur, node->tok);
     link->member = mem;
@@ -1865,7 +1865,7 @@ static void select_generic(Node *node) {
   }
 
   if (!sel)
-    error_tok(node->tok, "controlling expression type not compatible with"
+    error_tok(chibicc_ctx(), node->tok, "controlling expression type not compatible with"
               " any generic association type");
 
   for (Node *assoc = node->args; assoc; assoc = assoc->next)
@@ -2015,7 +2015,7 @@ void add_type(Node *node) {
     Type *rt = node->rhs->ty;
     if (node->kind == ND_ADD) {
       if (lt->base && rt->base)
-        error_tok(node->tok, "invalid operands");
+        error_tok(chibicc_ctx(), node->tok, "invalid operands");
     } else {
       if (lt->base && rt->base) {
         // The difference itself is an element count, so it is typed
@@ -2025,7 +2025,7 @@ void add_type(Node *node) {
       }
       if (!((is_numeric(lt) && is_numeric(rt)) ||
             (lt->base && (lt->base->kind == TY_VLA || is_integer(rt)))))
-        error_tok(node->tok, "invalid operands");
+        error_tok(chibicc_ctx(), node->tok, "invalid operands");
     }
     node->ty = get_common_type(lt, rt);
     return;
@@ -2057,7 +2057,7 @@ void add_type(Node *node) {
       return;
     }
     if (node->lhs->ty->kind == TY_ARRAY)
-      error_tok(node->lhs->tok, "not an lvalue");
+      error_tok(chibicc_ctx(), node->lhs->tok, "not an lvalue");
     if (node->lhs->ty->kind != TY_STRUCT)
       node->rhs = new_cast(node->rhs, node->lhs->ty);
     node->ty = node->lhs->ty;
@@ -2217,7 +2217,7 @@ void add_type(Node *node) {
     return;
   case ND_ADDR: {
     if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield)
-      error_tok(node->tok, "cannot take address of bitfield");
+      error_tok(chibicc_ctx(), node->tok, "cannot take address of bitfield");
 
     Type *ty = node->lhs->ty;
     if (ty->kind == TY_ARRAY)
@@ -2237,15 +2237,15 @@ void add_type(Node *node) {
     Type *rt = node->rhs->ty;
 
     if (!(is_numeric(lt) && is_numeric(rt)) && !lt->base && !rt->base)
-      error_tok(node->tok, "invalid operands");
+      error_tok(chibicc_ctx(), node->tok, "invalid operands");
     if (lt->base && rt->base)
-      error_tok(node->tok, "invalid operands");
+      error_tok(chibicc_ctx(), node->tok, "invalid operands");
 
     Type *base = lt->base ? lt->base : rt->base;
     if (!base)
-      error_tok(node->tok, "invalid pointer dereference");
+      error_tok(chibicc_ctx(), node->tok, "invalid pointer dereference");
     if (base->kind == TY_VOID)
-      error_tok(node->tok, "dereferencing a void pointer");
+      error_tok(chibicc_ctx(), node->tok, "dereferencing a void pointer");
     node->ty = base;
     return;
   }
@@ -2261,9 +2261,9 @@ void add_type(Node *node) {
       return;
     }
     if (!node->lhs->ty->base)
-      error_tok(node->tok, "invalid pointer dereference");
+      error_tok(chibicc_ctx(), node->tok, "invalid pointer dereference");
     if (node->lhs->ty->base->kind == TY_VOID)
-      error_tok(node->tok, "dereferencing a void pointer");
+      error_tok(chibicc_ctx(), node->tok, "dereferencing a void pointer");
 
     node->ty = node->lhs->ty->base;
     // A struct or union read through a pointer is used by value from
@@ -2297,13 +2297,13 @@ void add_type(Node *node) {
     node->ty = ty_bool;
 
     if (node->cas_addr->ty->kind != TY_PTR)
-      error_tok(node->cas_addr->tok, "pointer expected");
+      error_tok(chibicc_ctx(), node->cas_addr->tok, "pointer expected");
     if (node->cas_old->ty->kind != TY_PTR)
-      error_tok(node->cas_old->tok, "pointer expected");
+      error_tok(chibicc_ctx(), node->cas_old->tok, "pointer expected");
     return;
   case ND_EXCH:
     if (node->lhs->ty->kind != TY_PTR)
-      error_tok(node->lhs->tok, "pointer expected");
+      error_tok(chibicc_ctx(), node->lhs->tok, "pointer expected");
     node->ty = node->lhs->ty->base;
     return;
   case ND_CAST:
@@ -2348,14 +2348,14 @@ void add_type(Node *node) {
       // the two standing side by side because whether a declaration is a
       // VLA one depends on the dimension being a constant expression;
       // the `=` is where that used to be reported.
-      error_tok(node->decl_init->eq_tok,
+      error_tok(chibicc_ctx(), node->decl_init->eq_tok,
                 "variable-sized object may not be initialized");
 
     if (var->ty->kind != TY_VLA) {
       // A declared object must have a complete, non-void type.
       check_declared_void(tok, var->ty);
       if (var->ty->size < 0)
-        error_tok(node->name_tok, "variable has incomplete type");
+        error_tok(chibicc_ctx(), node->name_tok, "variable has incomplete type");
     }
 
     annotate_init_exprs(node->init_resolved);
@@ -2426,15 +2426,15 @@ static int64_t eval2(Node *node, LabelRef *label) {
     Type *lt = node->lhs->ty;
     Type *rt = node->rhs->ty;
     if (lt->base && rt->base)
-      error_tok(node->tok, "invalid operands");
+      error_tok(chibicc_ctx(), node->tok, "invalid operands");
     if (lt->base && !rt->base) {
       if (lt->base->kind == TY_VLA)
-        error_tok(node->tok, "not a compile-time constant");
+        error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
       return eval2(node->lhs, label) + eval(node->rhs) * lt->base->size;
     }
     if (!lt->base && rt->base) {
       if (rt->base->kind == TY_VLA)
-        error_tok(node->tok, "not a compile-time constant");
+        error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
       // The pointer side goes through eval2 with the caller's label
       // and unscaled, the numeric side carries the scale - the same
       // split the canonicalized lowered form had, with the pointer
@@ -2459,10 +2459,10 @@ static int64_t eval2(Node *node, LabelRef *label) {
       return (lhs - rhs) / lt->base->size;
     }
     if (rt->base && !lt->base)
-      error_tok(node->tok, "invalid operands");
+      error_tok(chibicc_ctx(), node->tok, "invalid operands");
     if (lt->base) {
       if (lt->base->kind == TY_VLA)
-        error_tok(node->tok, "not a compile-time constant");
+        error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
       return eval2(node->lhs, label) - eval(node->rhs) * lt->base->size;
     }
     return eval2(node->lhs, label) - eval(node->rhs);
@@ -2564,21 +2564,21 @@ static int64_t eval2(Node *node, LabelRef *label) {
     // A plain `.` member takes the address of its operand instead.
     if (node->arrow_tok) {
       if (!label)
-        error_tok(node->tok, "not a compile-time constant");
+        error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
       if (node->ty->kind != TY_ARRAY)
-        error_tok(node->tok, "invalid initializer");
+        error_tok(chibicc_ctx(), node->tok, "invalid initializer");
       return eval2(node->lhs, label) + node->member->offset;
     }
     if (!label)
-      error_tok(node->tok, "not a compile-time constant");
+      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
     if (node->ty->kind != TY_ARRAY)
-      error_tok(node->tok, "invalid initializer");
+      error_tok(chibicc_ctx(), node->tok, "invalid initializer");
     return eval_rval(node->lhs, label) + node->member->offset;
   case ND_VAR:
     if (!label)
-      error_tok(node->tok, "not a compile-time constant");
+      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
     if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
-      error_tok(node->tok, "invalid initializer");
+      error_tok(chibicc_ctx(), node->tok, "invalid initializer");
     label->name = node->var->name;
     return 0;
   case ND_STRING:
@@ -2586,7 +2586,7 @@ static int64_t eval2(Node *node, LabelRef *label) {
     // is annotated; the node keeps its kind and points at the
     // object, so the address is read off the object directly.
     if (!label)
-      error_tok(node->tok, "not a compile-time constant");
+      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_COMPOUND_LITERAL:
@@ -2594,7 +2594,7 @@ static int64_t eval2(Node *node, LabelRef *label) {
     // annotation pass serialized; the consumer reads the object -
     // the node keeps its kind since A9.2, like a string.
     if (node->var->is_local)
-      error_tok(node->tok, "not a compile-time constant");
+      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_SIZEOF:
@@ -2604,7 +2604,7 @@ static int64_t eval2(Node *node, LabelRef *label) {
     // that one is not a constant; an alignment always is.
     Type *ty = node->ty_op ? node->ty_op : node->lhs->ty;
     if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
-      error_tok(node->tok, "not a compile-time constant");
+      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
     return node->val;
   }
   case ND_TYPES_COMPATIBLE:
@@ -2619,14 +2619,14 @@ static int64_t eval2(Node *node, LabelRef *label) {
     return node->val;
   }
 
-  error_tok(node->tok, "not a compile-time constant");
+  error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
 }
 
 static int64_t eval_rval(Node *node, LabelRef *label) {
   switch (node->kind) {
   case ND_VAR:
     if (node->var->is_local)
-      error_tok(node->tok, "not a compile-time constant");
+      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_DEREF:
@@ -2639,7 +2639,7 @@ static int64_t eval_rval(Node *node, LabelRef *label) {
     // The file-scope literal's hidden global, as above: its address
     // is the object's, and a block-scope one is not a constant.
     if (node->var->is_local)
-      error_tok(node->tok, "not a compile-time constant");
+      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_SUBSCRIPT: {
@@ -2649,7 +2649,7 @@ static int64_t eval_rval(Node *node, LabelRef *label) {
     // the lowered `*(x+y)` evaluated to for that shape.
     Type *base = node->lhs->ty->base;
     if (base && base->kind == TY_VLA)
-      error_tok(node->tok, "not a compile-time constant");
+      error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
     if (!base)
       return eval2(node->lhs, label) + eval(node->rhs);
     return eval2(node->lhs, label) + eval(node->rhs) * base->size;
@@ -2665,7 +2665,7 @@ static int64_t eval_rval(Node *node, LabelRef *label) {
     return eval_rval(node->lhs, label) + node->member->offset;
   }
 
-  error_tok(node->tok, "invalid initializer");
+  error_tok(chibicc_ctx(), node->tok, "invalid initializer");
 }
 
 // Annotates first, like eval2, so it walks whatever shapes the
@@ -2776,7 +2776,7 @@ static double eval_double(Node *node) {
     return node->fval;
   }
 
-  error_tok(node->tok, "not a compile-time constant");
+  error_tok(chibicc_ctx(), node->tok, "not a compile-time constant");
 }
 
 //
@@ -2977,7 +2977,7 @@ static void resolve_node(Node *node) {
       if (node->end_expr) {
         end = (int) eval(node->end_expr);
         if (end < begin)
-          error_tok(node->colon_tok, "empty case range specified");
+          error_tok(chibicc_ctx(), node->colon_tok, "empty case range specified");
       }
 
       node->begin = begin;

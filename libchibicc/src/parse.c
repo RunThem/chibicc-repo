@@ -142,7 +142,7 @@ Node *new_num(int64_t val, Token *tok) {
 
 char *get_ident(Token *tok) {
   if (tok->kind != TK_IDENT)
-    error_tok(tok, "expected an identifier");
+    error_tok(chibicc_ctx(), tok, "expected an identifier");
   return chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len);
 }
 
@@ -336,7 +336,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
     if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern") ||
         equal(tok, "inline") || equal(tok, "_Thread_local") || equal(tok, "__thread")) {
       if (!attr)
-        error_tok(tok, "storage class specifier is not allowed in this context");
+        error_tok(chibicc_ctx(), tok, "storage class specifier is not allowed in this context");
 
       if (equal(tok, "typedef"))
         attr->is_typedef = true;
@@ -351,7 +351,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
 
       if (attr->is_typedef &&
           attr->is_static + attr->is_extern + attr->is_inline + attr->is_tls > 1)
-        error_tok(tok, "typedef may not be used together with static,"
+        error_tok(chibicc_ctx(), tok, "typedef may not be used together with static,"
                   " extern, inline, __thread or _Thread_local");
       tok = tok->next;
       continue;
@@ -376,7 +376,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
 
     if (equal(tok, "_Alignas")) {
       if (!attr)
-        error_tok(tok, "_Alignas is not allowed in this context");
+        error_tok(chibicc_ctx(), tok, "_Alignas is not allowed in this context");
       tok = skip(tok->next, "(");
 
       // The `_Alignas(type)` form asks for a property of a type that
@@ -501,7 +501,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
       ty = ty_ldouble;
       break;
     default:
-      error_tok(tok, "invalid type");
+      error_tok(chibicc_ctx(), tok, "invalid type");
     }
 
     tok = tok->next;
@@ -630,7 +630,7 @@ static Type *pointers(Token **rest, Token *tok, Type *ty) {
 // records for sema to complete.
 static Type *declarator(Token **rest, Token *tok, Type *ty, DeclName *decl) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(tok, "nesting too deep");
+    error_tok(chibicc_ctx(), tok, "nesting too deep");
   Type *node = declarator1(rest, tok, ty, decl);
   chibicc_ctx()->parse_depth--;
   return node;
@@ -673,7 +673,7 @@ static Type *declarator1(Token **rest, Token *tok, Type *ty, DeclName *decl) {
 // abstract-declarator = pointers ("(" abstract-declarator ")")? type-suffix
 static Type *abstract_declarator(Token **rest, Token *tok, Type *ty) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(tok, "nesting too deep");
+    error_tok(chibicc_ctx(), tok, "nesting too deep");
   Type *node = abstract_declarator1(rest, tok, ty);
   chibicc_ctx()->parse_depth--;
   return node;
@@ -735,9 +735,9 @@ static Type *enum_specifier(Token **rest, Token *tok, Node **specs) {
   if (tag && !equal(tok, "{")) {
     Type *ty = find_tag(tag);
     if (!ty)
-      error_tok(tag, "unknown enum type");
+      error_tok(chibicc_ctx(), tag, "unknown enum type");
     if (ty->kind != TY_ENUM)
-      error_tok(tag, "not an enum tag");
+      error_tok(chibicc_ctx(), tag, "not an enum tag");
     *rest = tok;
     return ty;
   }
@@ -812,7 +812,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     DeclName decl_name = {};
     Type *ty = declarator(&tok, tok, basety, &decl_name);
     if (!decl_name.name)
-      error_tok(decl_name.name_pos, "variable name omitted");
+      error_tok(chibicc_ctx(), decl_name.name_pos, "variable name omitted");
 
     // The declared name shadows a typedef of the same name for the rest
     // of the parse - before the initializer is parsed, as the old
@@ -893,7 +893,7 @@ static InitDesig *designators(Token **rest, Token *tok) {
       desig->tok = tok;
       tok = tok->next;
       if (tok->kind != TK_IDENT)
-        error_tok(tok, "expected a field designator");
+        error_tok(chibicc_ctx(), tok, "expected a field designator");
       desig->name = tok;
       tok = tok->next;
       cur = cur->next = desig;
@@ -917,7 +917,7 @@ static InitDesig *designators(Token **rest, Token *tok) {
 // designator application and flexible-array sizing all happen in sema.
 static Initializer *init_record(Token **rest, Token *tok) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(tok, "nesting too deep");
+    error_tok(chibicc_ctx(), tok, "nesting too deep");
   Initializer *node = init_record1(rest, tok);
   chibicc_ctx()->parse_depth--;
   return node;
@@ -1003,7 +1003,7 @@ static Node *asm_stmt(Token **rest, Token *tok) {
 
   tok = skip(tok, "(");
   if (tok->kind != TK_STR || tok->ty->base->kind != TY_CHAR)
-    error_tok(tok, "expected string literal");
+    error_tok(chibicc_ctx(), tok, "expected string literal");
   node->asm_str = tok->str;
   *rest = skip(tok->next, ")");
   return node;
@@ -1246,7 +1246,7 @@ static Node *expr_stmt(Token **rest, Token *tok) {
 // expr = assign ("," expr)?
 static Node *expr(Token **rest, Token *tok) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(tok, "nesting too deep");
+    error_tok(chibicc_ctx(), tok, "nesting too deep");
   Node *node = expr1(rest, tok);
   chibicc_ctx()->parse_depth--;
   return node;
@@ -1274,7 +1274,7 @@ static Node *expr1(Token **rest, Token *tok) {
 // the read-modify-write form (handling the bitfield and atomic cases).
 static Node *assign(Token **rest, Token *tok) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(tok, "nesting too deep");
+    error_tok(chibicc_ctx(), tok, "nesting too deep");
   Node *node = assign1(rest, tok);
   chibicc_ctx()->parse_depth--;
   return node;
@@ -1353,7 +1353,7 @@ static Node *assign1(Token **rest, Token *tok) {
 // conditional = logor ("?" expr? ":" conditional)?
 Node *conditional(Token **rest, Token *tok) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(tok, "nesting too deep");
+    error_tok(chibicc_ctx(), tok, "nesting too deep");
   Node *node = conditional1(rest, tok);
   chibicc_ctx()->parse_depth--;
   return node;
@@ -1569,7 +1569,7 @@ static Node *mul(Token **rest, Token *tok) {
 // cast = "(" type-name ")" cast | unary
 static Node *cast(Token **rest, Token *tok) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(tok, "nesting too deep");
+    error_tok(chibicc_ctx(), tok, "nesting too deep");
   Node *node = cast1(rest, tok);
   chibicc_ctx()->parse_depth--;
   return node;
@@ -1606,7 +1606,7 @@ static Node *cast1(Token **rest, Token *tok) {
 //       | postfix
 static Node *unary(Token **rest, Token *tok) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(tok, "nesting too deep");
+    error_tok(chibicc_ctx(), tok, "nesting too deep");
   Node *node = unary1(rest, tok);
   chibicc_ctx()->parse_depth--;
   return node;
@@ -1749,7 +1749,7 @@ static Token *skip_attribute_args(Token *tok) {
         return tok->next;
     }
   }
-  error_tok(tok, "unclosed attribute");
+  error_tok(chibicc_ctx(), tok, "unclosed attribute");
   return tok;
 }
 
@@ -1803,7 +1803,7 @@ static Token *attribute_list(Token *tok, Type *ty) {
       }
 
       if (equal(tok, "cleanup")) {
-        warn_tok(tok, "cleanup attribute is ignored");
+        warn_tok(chibicc_ctx(), tok, "cleanup attribute is ignored");
         tok = skip_attribute_args(tok->next);
         continue;
       }
@@ -1813,7 +1813,7 @@ static Token *attribute_list(Token *tok, Type *ty) {
         continue;
       }
 
-      error_tok(tok, "unknown attribute");
+      error_tok(chibicc_ctx(), tok, "unknown attribute");
     }
 
     tok = skip(tok, ")");
@@ -1866,7 +1866,7 @@ static Type *struct_union_decl(Token **rest, Token *tok, Node **specs) {
       // definition of the same tag in the same scope is a constraint
       // violation (C11 6.7.2.3p1), not a silent replacement.
       if (ty2->size >= 0)
-        error_tok(tag, "redefinition of tag");
+        error_tok(chibicc_ctx(), tag, "redefinition of tag");
       *ty2 = *ty;
       ret = ty2;
     } else {
@@ -2211,7 +2211,7 @@ static Node *primary(Token **rest, Token *tok) {
     return node;
   }
 
-  error_tok(tok, "expected an expression");
+  error_tok(chibicc_ctx(), tok, "expected an expression");
 }
 
 #if CHIBICC_PRATT_PARSE_FEATURE
@@ -2390,7 +2390,7 @@ static Node *expr_nud(Token **rest, Token *tok) {
 // the Pratt build; the entry wrappers below do not add a frame.
 static Node *expr_bp(Token **rest, Token *tok, int min_bp) {
   if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(tok, "nesting too deep");
+    error_tok(chibicc_ctx(), tok, "nesting too deep");
 
   Node *node = expr_nud(rest, tok);
 
@@ -2526,7 +2526,7 @@ static Node *parse_typedef(Token **rest, Token *tok, Type *basety) {
     DeclName decl = {};
     Type *ty = declarator(&tok, tok, basety, &decl);
     if (!decl.name)
-      error_tok(decl.name_pos, "typedef name omitted");
+      error_tok(chibicc_ctx(), decl.name_pos, "typedef name omitted");
 
     Node *node = new_node(ND_TYPEDEF, decl.name);
     node->ty = ty;
@@ -2545,7 +2545,7 @@ static Node *function_def(Token **rest, Token *tok, Type *basety, VarAttr *attr)
   DeclName decl = {};
   Type *ty = declarator(&tok, tok, basety, &decl);
   if (!decl.name)
-    error_tok(decl.name_pos, "function name omitted");
+    error_tok(chibicc_ctx(), decl.name_pos, "function name omitted");
 
   Node *node = new_node(ND_FUNCDEF, tok);
   node->ty_op = ty;
@@ -2589,7 +2589,7 @@ static Node *global_variable(Token **rest, Token *tok, Type *basety, VarAttr *at
     DeclName decl = {};
     Type *ty = declarator(&tok, tok, basety, &decl);
     if (!decl.name)
-      error_tok(decl.name_pos, "variable name omitted");
+      error_tok(chibicc_ctx(), decl.name_pos, "variable name omitted");
 
     Token *name = decl.name;
     add_declared_name(name);

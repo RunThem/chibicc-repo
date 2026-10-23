@@ -599,6 +599,53 @@ static int check_nested(ChibiccContext *a) {
   return ok ? 0 : 1;
 }
 
+// A diagnostic callback creates, configures, uses, and frees another
+// context; the outer error must still unwind to the outer context's own
+// frame, and the outer context must keep working afterwards
+// (PLAN-explicit-context E2.3). With the old thread-local accessor the
+// inner free left the active pointer NULL and the outer error exited.
+static int scope_ok;
+
+static void scope_diag(void *user, const ChibiccDiagnostic *d) {
+  (void)user;
+  if (!d->message || !*d->message)
+    scope_ok = 0;
+
+  ChibiccContext *inner = chibicc_context_new();
+  if (!inner) {
+    scope_ok = 0;
+    return;
+  }
+  chibicc_context_define(inner, "SCOPED", "1");
+  ChibiccToken *t = chibicc_tokenize_buffer(inner, "<scope>", "int SCOPED;\n");
+  if (t)
+    t = chibicc_preprocess(inner, t);
+  if (!t || chibicc_context_failed(inner))
+    scope_ok = 0;
+  chibicc_context_free(inner);
+}
+
+static int check_context_scope(ChibiccContext *a) {
+  ChibiccContext *b = chibicc_context_new();
+  scope_ok = 1;
+  chibicc_context_set_diagnostic(b, scope_diag, NULL);
+
+  ChibiccToken *t = chibicc_tokenize_buffer(b, "<scope>", "int x = ;\n");
+  if (!t)
+    return 1;
+  t = chibicc_preprocess(b, t);
+  if (!t)
+    return 1;
+  (void)chibicc_parse(b, t);
+  int ok = scope_ok && chibicc_context_failed(b);
+  chibicc_context_free(b);
+
+  ChibiccObj *prog = NULL;
+  if (!compile(a, "int scope_z;\n", &prog) || !prog)
+    ok = 0;
+  return ok ? 0 : 1;
+}
+
 // Two contexts in two threads (PLAN L3.4b). The active context is
 // thread-local, so the two pipelines never see each other.
 static void *thread_main(void *arg) {
@@ -736,6 +783,8 @@ int main(int argc, char **argv) {
   if (check_errors(ctx))
     return 1;
   if (check_nested(ctx))
+    return 1;
+  if (check_context_scope(ctx))
     return 1;
   if (check_threads())
     return 1;
