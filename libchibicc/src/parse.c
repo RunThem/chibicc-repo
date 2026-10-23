@@ -955,7 +955,13 @@ static Initializer *init_record1(Token **rest, Token *tok) {
     return rec;
   }
 
-  if (tok->kind == TK_STR) {
+  // A string literal is a string initializer only when it is the whole
+  // initializer. If an operator or a postfix follows, the literal starts
+  // an ordinary expression (`"ab" + 1`, `"8.6" ? 0 : 1`, `"ab"[0]`).
+  if (tok->kind == TK_STR && (equal(tok->next, ",") ||
+                              equal(tok->next, "}") ||
+                              equal(tok->next, ";") ||
+                              tok->next->kind == TK_EOF)) {
     rec->kind = INIT_STR;
     rec->str_tok = tok;
     *rest = tok->next;

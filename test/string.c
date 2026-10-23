@@ -4,6 +4,12 @@ int main() {
   ASSERT(0, ""[0]);
   ASSERT(1, sizeof(""));
 
+  // A string literal at the start of an initializer can be the operand of
+  // a larger expression, not only the whole initializer.
+  { int x = "abc"[0]; ASSERT(97, x); }
+  { int x = "abc" ? 1 : 0; ASSERT(1, x); }
+  { char *p = "abc" + 1; ASSERT(98, p[0]); }
+
   ASSERT(97, "abc"[0]);
   ASSERT(98, "abc"[1]);
   ASSERT(99, "abc"[2]);
