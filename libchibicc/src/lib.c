@@ -388,7 +388,7 @@ Obj *chibicc_sema(ChibiccContext *ctx, Node *toplevel) {
 
 CstNode *chibicc_cst_parse(ChibiccContext *ctx, Token *tok) {
   ENTER_RET(ctx, NULL);
-  CstNode *r = cst_parse(tok);
+  CstNode *r = cst_parse(ctx, tok);
   LEAVE(ctx);
   return r;
 }
@@ -401,7 +401,7 @@ void chibicc_cst_reconstruct(ChibiccContext *ctx, CstNode *root, FILE *out) {
 
 void chibicc_cst_dump(ChibiccContext *ctx, CstNode *root, FILE *out) {
   ENTER_VOID(ctx);
-  cst_dump(root, out);
+  cst_dump(ctx, root, out);
   LEAVE(ctx);
 }
 

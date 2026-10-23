@@ -109,9 +109,9 @@ Token *tokenize_file(ChibiccContext *ctx, char *filename);
 // cst.c
 //
 
-CstNode *cst_parse(Token *tok);
+CstNode *cst_parse(ChibiccContext *ctx, Token *tok);
 void cst_reconstruct(CstNode *root, FILE *out);
-void cst_dump(CstNode *root, FILE *out);
+void cst_dump(ChibiccContext *ctx, CstNode *root, FILE *out);
 bool cst_verify(CstNode *root, Token *tok);
 
 //

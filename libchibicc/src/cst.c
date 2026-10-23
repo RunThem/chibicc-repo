@@ -43,20 +43,20 @@
 // unparsed group; every token stays, so reconstruction remains lossless.
 #define MAX_CST_DEPTH 512
 
-static CstNode *new_cst_node(CstKind kind) {
-  CstNode *node = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(CstNode));
+static CstNode *new_cst_node(ChibiccContext *ctx, CstKind kind) {
+  CstNode *node = chibicc_arena_calloc(ctx, 1, sizeof(CstNode));
   node->kind = kind;
   return node;
 }
 
-static void cst_add_child(CstNode *node, CstNode *child) {
+static void cst_add_child(ChibiccContext *ctx, CstNode *node, CstNode *child) {
   // The capacity lives in a size_t header just before `children`; the
   // public node exposes only child_count and the live entries.
   size_t cap = node->children ? ((size_t *)node->children)[-1] : 0;
   if ((size_t)node->child_count == cap) {
     cap = cap ? cap * 2 : 8;
     size_t bytes = sizeof(size_t) + cap * sizeof(CstNode *);
-    char *p = chibicc_arena_alloc(chibicc_ctx(), bytes, 8);
+    char *p = chibicc_arena_alloc(ctx, bytes, 8);
     *(size_t *)p = cap;
     CstNode **children = (CstNode **)(p + sizeof(size_t));
     if (node->children)
@@ -67,10 +67,10 @@ static void cst_add_child(CstNode *node, CstNode *child) {
   node->children[node->child_count++] = child;
 }
 
-static CstNode *cst_add_leaf(CstNode *parent, Token *tok) {
-  CstNode *leaf = new_cst_node(tok->kind == TK_EOF ? CST_EOF : CST_TOKEN);
+static CstNode *cst_add_leaf(ChibiccContext *ctx, CstNode *parent, Token *tok) {
+  CstNode *leaf = new_cst_node(ctx, tok->kind == TK_EOF ? CST_EOF : CST_TOKEN);
   leaf->tok = tok;
-  cst_add_child(parent, leaf);
+  cst_add_child(ctx, parent, leaf);
   return leaf;
 }
 
@@ -95,14 +95,14 @@ typedef struct {
 // only nested delimiters are grouped. On a missing closer or a depth
 // overrun the node becomes CST_UNPARSED but keeps the opener and
 // everything it consumed.
-static CstNode *cst_parse_group(CstContext *cst, Token **rest, Token *tok) {
+static CstNode *cst_parse_group(ChibiccContext *ctx, CstContext *cst, Token **rest, Token *tok) {
   char *closer = equal(tok, "(") ? ")" : equal(tok, "[") ? "]" : "}";
   CstKind kind = equal(tok, "(") ? CST_GROUP_PAREN
                : equal(tok, "[") ? CST_GROUP_BRACKET
                : CST_GROUP_BRACE;
 
-  CstNode *group = new_cst_node(kind);
-  cst_add_leaf(group, tok);
+  CstNode *group = new_cst_node(ctx, kind);
+  cst_add_leaf(ctx, group, tok);
 
   Token *p = tok->next;
   if (++cst->depth > MAX_CST_DEPTH) {
@@ -111,11 +111,11 @@ static CstNode *cst_parse_group(CstContext *cst, Token **rest, Token *tok) {
     // reconstruction) is unchanged.
     group->kind = CST_UNPARSED;
     while (p && p->kind != TK_EOF && !equal(p, closer)) {
-      cst_add_leaf(group, p);
+      cst_add_leaf(ctx, group, p);
       p = p->next;
     }
     if (p && p->kind != TK_EOF && equal(p, closer)) {
-      cst_add_leaf(group, p);
+      cst_add_leaf(ctx, group, p);
       p = p->next;
     }
     cst->depth--;
@@ -125,15 +125,15 @@ static CstNode *cst_parse_group(CstContext *cst, Token **rest, Token *tok) {
 
   while (p && p->kind != TK_EOF && !equal(p, closer)) {
     if (cst_is_open(p)) {
-      cst_add_child(group, cst_parse_group(cst, &p, p));
+      cst_add_child(ctx, group, cst_parse_group(ctx, cst, &p, p));
       continue;
     }
-    cst_add_leaf(group, p);
+    cst_add_leaf(ctx, group, p);
     p = p->next;
   }
 
   if (p && p->kind != TK_EOF && equal(p, closer)) {
-    cst_add_leaf(group, p);
+    cst_add_leaf(ctx, group, p);
     p = p->next;
   } else {
     group->kind = CST_UNPARSED;
@@ -232,8 +232,8 @@ static bool cst_is_decl_start(Token *tok, CstContext *cst) {
   return cst_in_list(tok, kw) || cst_is_typedef_name(cst, tok);
 }
 
-static void cst_add_typedef(CstContext *cst, Token *tok) {
-  strarray_push(chibicc_ctx(), &cst->typedefs, chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len));
+static void cst_add_typedef(ChibiccContext *ctx, CstContext *cst, Token *tok) {
+  strarray_push(ctx, &cst->typedefs, chibicc_arena_strndup(ctx, tok->loc, tok->len));
 }
 
 // A conservative pre-scan for file-local typedef names. Names introduced
@@ -242,7 +242,7 @@ static void cst_add_typedef(CstContext *cst, Token *tok) {
 // are collected; parameter names and struct tags are not. This is the
 // cast / declaration oracle the plan allows - an include-provided name
 // stays unknown and is not guessed.
-static void cst_collect_typedefs(CstContext *cst, Token *tok) {
+static void cst_collect_typedefs(ChibiccContext *ctx, CstContext *cst, Token *tok) {
   Token *p = tok;
 
   while (p && p->kind != TK_EOF) {
@@ -271,41 +271,41 @@ static void cst_collect_typedefs(CstContext *cst, Token *tok) {
 
       if (depth == 0 &&
           (equal(q->next, ";") || equal(q->next, ",") || equal(q->next, "[")))
-        cst_add_typedef(cst, q);
+        cst_add_typedef(ctx, cst, q);
       else if (depth == 1 && equal(prev, "*") && equal(q->next, ")"))
-        cst_add_typedef(cst, q);
+        cst_add_typedef(ctx, cst, q);
     }
 
     p = q ? q : p->next;
   }
 }
 
-static CstNode *cst_parse_comma(CstParser *p);
-static CstNode *cst_parse_assign(CstParser *p);
-static CstNode *cst_parse_conditional(CstParser *p);
-static CstNode *cst_parse_unary(CstParser *p);
-static CstNode *cst_parse_postfix(CstParser *p);
-static CstNode *cst_parse_postfix_tail(CstParser *p, CstNode *node);
-static CstNode *cst_parse_primary(CstParser *p);
-static CstNode *cst_parse_arg_list(CstParser *p);
-static CstNode *cst_parse_init_list(CstParser *p);
-static CstNode *cst_parse_type_name(CstParser *p);
-static CstNode *cst_parse_declarator(CstParser *p, bool allow_abstract);
-static CstNode *cst_parse_decl(CstParser *p);
+static CstNode *cst_parse_comma(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_assign(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_conditional(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_unary(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_postfix(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_postfix_tail(ChibiccContext *ctx, CstParser *p, CstNode *node);
+static CstNode *cst_parse_primary(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_arg_list(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_init_list(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_type_name(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_declarator(ChibiccContext *ctx, CstParser *p, bool allow_abstract);
+static CstNode *cst_parse_decl(ChibiccContext *ctx, CstParser *p);
 // The body behind each depth-guarded expression/declarator entry.
-static CstNode *cst_parse_comma1(CstParser *p);
-static CstNode *cst_parse_assign1(CstParser *p);
-static CstNode *cst_parse_conditional1(CstParser *p);
-static CstNode *cst_parse_unary1(CstParser *p);
-static CstNode *cst_parse_init_list1(CstParser *p);
-static CstNode *cst_parse_declarator1(CstParser *p, bool allow_abstract);
+static CstNode *cst_parse_comma1(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_assign1(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_conditional1(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_unary1(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_init_list1(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_declarator1(ChibiccContext *ctx, CstParser *p, bool allow_abstract);
 
 // Consume one balanced group in raw mode, for a type name in a cast or
 // sizeof. An unclosed group fails the expression: the statement falls
 // back to the skeleton, where the span becomes UNPARSED.
-static CstNode *cst_parse_raw_group(CstParser *p) {
+static CstNode *cst_parse_raw_group(ChibiccContext *ctx, CstParser *p) {
   Token *rest = NULL;
-  CstNode *group = cst_parse_group(p->cst, &rest, p->tok);
+  CstNode *group = cst_parse_group(ctx, p->cst, &rest, p->tok);
 
   if (group->kind == CST_UNPARSED) {
     cst_fail(p);
@@ -316,7 +316,7 @@ static CstNode *cst_parse_raw_group(CstParser *p) {
 }
 
 // primary = ident | number | char | string+ | "(" expr ")"
-static CstNode *cst_parse_primary(CstParser *p) {
+static CstNode *cst_parse_primary(ChibiccContext *ctx, CstParser *p) {
   if (!p->ok)
     return NULL;
 
@@ -327,18 +327,18 @@ static CstNode *cst_parse_primary(CstParser *p) {
   }
 
   if (equal(tok, "(")) {
-    CstNode *node = new_cst_node(CST_PAREN);
-    cst_add_leaf(node, tok);
+    CstNode *node = new_cst_node(ctx, CST_PAREN);
+    cst_add_leaf(ctx, node, tok);
 
     p->tok = tok->next;
-    CstNode *inner = cst_parse_comma(p);
+    CstNode *inner = cst_parse_comma(ctx, p);
     if (!p->ok || !cst_at(p, ")")) {
       cst_fail(p);
       return NULL;
     }
 
-    cst_add_child(node, inner);
-    cst_add_leaf(node, p->tok);
+    cst_add_child(ctx, node, inner);
+    cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
     return node;
   }
@@ -351,33 +351,33 @@ static CstNode *cst_parse_primary(CstParser *p) {
   // Identifiers (keywords are still identifiers here), numbers, char and
   // string literals. Adjacent string literals are one primary; each stays
   // an explicit leaf.
-  CstNode *node = new_cst_node(CST_PRIMARY);
-  cst_add_leaf(node, tok);
+  CstNode *node = new_cst_node(ctx, CST_PRIMARY);
+  cst_add_leaf(ctx, node, tok);
   p->tok = tok->next;
 
   while (p->tok && p->tok->kind == TK_STR) {
-    cst_add_leaf(node, p->tok);
+    cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
   }
   return node;
 }
 
 // arg-list = "(" (assign ("," assign)*)? ")"
-static CstNode *cst_parse_arg_list(CstParser *p) {
-  CstNode *args = new_cst_node(CST_ARG_LIST);
-  cst_add_leaf(args, p->tok); // '('
+static CstNode *cst_parse_arg_list(ChibiccContext *ctx, CstParser *p) {
+  CstNode *args = new_cst_node(ctx, CST_ARG_LIST);
+  cst_add_leaf(ctx, args, p->tok); // '('
   p->tok = p->tok->next;
 
   if (!cst_at(p, ")")) {
     for (;;) {
-      CstNode *arg = cst_parse_assign(p);
+      CstNode *arg = cst_parse_assign(ctx, p);
       if (!p->ok)
         return NULL;
-      cst_add_child(args, arg);
+      cst_add_child(ctx, args, arg);
 
       if (!cst_at(p, ","))
         break;
-      cst_add_leaf(args, p->tok);
+      cst_add_leaf(ctx, args, p->tok);
       p->tok = p->tok->next;
     }
   }
@@ -386,38 +386,38 @@ static CstNode *cst_parse_arg_list(CstParser *p) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(args, p->tok);
+  cst_add_leaf(ctx, args, p->tok);
   p->tok = p->tok->next;
   return args;
 }
 
 // designator = "[" conditional ("..." conditional)? "]" | "." ident
-static CstNode *cst_parse_designator(CstParser *p) {
-  CstNode *desig = new_cst_node(CST_DESIGNATOR);
+static CstNode *cst_parse_designator(ChibiccContext *ctx, CstParser *p) {
+  CstNode *desig = new_cst_node(ctx, CST_DESIGNATOR);
 
   if (cst_at(p, "[")) {
-    cst_add_leaf(desig, p->tok); // '['
+    cst_add_leaf(ctx, desig, p->tok); // '['
     p->tok = p->tok->next;
 
-    CstNode *begin = cst_parse_conditional(p);
+    CstNode *begin = cst_parse_conditional(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(desig, begin);
+    cst_add_child(ctx, desig, begin);
 
     if (cst_at(p, "...")) {
-      cst_add_leaf(desig, p->tok);
+      cst_add_leaf(ctx, desig, p->tok);
       p->tok = p->tok->next;
-      CstNode *end = cst_parse_conditional(p);
+      CstNode *end = cst_parse_conditional(ctx, p);
       if (!p->ok)
         return NULL;
-      cst_add_child(desig, end);
+      cst_add_child(ctx, desig, end);
     }
 
     if (!cst_at(p, "]")) {
       cst_fail(p);
       return NULL;
     }
-    cst_add_leaf(desig, p->tok);
+    cst_add_leaf(ctx, desig, p->tok);
     p->tok = p->tok->next;
     return desig;
   }
@@ -428,8 +428,8 @@ static CstNode *cst_parse_designator(CstParser *p) {
       cst_fail(p);
       return NULL;
     }
-    cst_add_leaf(desig, p->tok);
-    cst_add_leaf(desig, name);
+    cst_add_leaf(ctx, desig, p->tok);
+    cst_add_leaf(ctx, desig, name);
     p->tok = name->next;
     return desig;
   }
@@ -439,20 +439,20 @@ static CstNode *cst_parse_designator(CstParser *p) {
 }
 
 // initializer = brace-list | string+ | assign
-static CstNode *cst_parse_initializer(CstParser *p) {
+static CstNode *cst_parse_initializer(ChibiccContext *ctx, CstParser *p) {
   if (cst_at(p, "{"))
-    return cst_parse_init_list(p);
+    return cst_parse_init_list(ctx, p);
 
   if (p->tok && p->tok->kind == TK_STR) {
-    CstNode *node = new_cst_node(CST_PRIMARY);
+    CstNode *node = new_cst_node(ctx, CST_PRIMARY);
     while (p->tok && p->tok->kind == TK_STR) {
-      cst_add_leaf(node, p->tok);
+      cst_add_leaf(ctx, node, p->tok);
       p->tok = p->tok->next;
     }
     return node;
   }
 
-  return cst_parse_assign(p);
+  return cst_parse_assign(ctx, p);
 }
 
 // init-list = "{" (init-item ("," init-item)* ","?)? "}"
@@ -461,52 +461,52 @@ static CstNode *cst_parse_initializer(CstParser *p) {
 // The written shape is kept: designators are explicit nodes, a braced
 // sublist is a nested CST_INIT_LIST, and no target-type decision is made
 // here (brace elision belongs to a later consumer).
-static CstNode *cst_parse_init_list(CstParser *p) {
+static CstNode *cst_parse_init_list(ChibiccContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_init_list1(p);
+  CstNode *node = cst_parse_init_list1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_init_list1(CstParser *p) {
-  CstNode *list = new_cst_node(CST_INIT_LIST);
-  cst_add_leaf(list, p->tok); // '{'
+static CstNode *cst_parse_init_list1(ChibiccContext *ctx, CstParser *p) {
+  CstNode *list = new_cst_node(ctx, CST_INIT_LIST);
+  cst_add_leaf(ctx, list, p->tok); // '{'
   p->tok = p->tok->next;
 
   if (cst_at(p, "}")) {
-    cst_add_leaf(list, p->tok);
+    cst_add_leaf(ctx, list, p->tok);
     p->tok = p->tok->next;
     return list;
   }
 
   for (;;) {
-    CstNode *item = new_cst_node(CST_INITIALIZER);
+    CstNode *item = new_cst_node(ctx, CST_INITIALIZER);
 
     while (cst_at(p, "[") || cst_at(p, ".")) {
-      CstNode *desig = cst_parse_designator(p);
+      CstNode *desig = cst_parse_designator(ctx, p);
       if (!p->ok)
         return NULL;
-      cst_add_child(item, desig);
+      cst_add_child(ctx, item, desig);
     }
 
     if (cst_at(p, "=")) {
-      cst_add_leaf(item, p->tok);
+      cst_add_leaf(ctx, item, p->tok);
       p->tok = p->tok->next;
     }
 
-    CstNode *value = cst_parse_initializer(p);
+    CstNode *value = cst_parse_initializer(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(item, value);
-    cst_add_child(list, item);
+    cst_add_child(ctx, item, value);
+    cst_add_child(ctx, list, item);
 
     if (!cst_at(p, ","))
       break;
-    cst_add_leaf(list, p->tok);
+    cst_add_leaf(ctx, list, p->tok);
     p->tok = p->tok->next;
     if (cst_at(p, "}"))
       break;
@@ -516,25 +516,25 @@ static CstNode *cst_parse_init_list1(CstParser *p) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(list, p->tok);
+  cst_add_leaf(ctx, list, p->tok);
   p->tok = p->tok->next;
   return list;
 }
 
 // postfix-tail = ("(" arg-list | "[" expr "]" | "." ident | "->" ident
 //                | "++" | "--")*
-static CstNode *cst_parse_postfix_tail(CstParser *p, CstNode *node) {
+static CstNode *cst_parse_postfix_tail(ChibiccContext *ctx, CstParser *p, CstNode *node) {
   for (;;) {
     if (!p->ok)
       return NULL;
 
     if (cst_at(p, "(")) {
-      CstNode *args = cst_parse_arg_list(p);
+      CstNode *args = cst_parse_arg_list(ctx, p);
       if (!p->ok)
         return NULL;
-      CstNode *call = new_cst_node(CST_POSTFIX);
-      cst_add_child(call, node);
-      cst_add_child(call, args);
+      CstNode *call = new_cst_node(ctx, CST_POSTFIX);
+      cst_add_child(ctx, call, node);
+      cst_add_child(ctx, call, args);
       node = call;
       continue;
     }
@@ -542,17 +542,17 @@ static CstNode *cst_parse_postfix_tail(CstParser *p, CstNode *node) {
     if (cst_at(p, "[")) {
       Token *open = p->tok;
       p->tok = open->next;
-      CstNode *idx = cst_parse_comma(p);
+      CstNode *idx = cst_parse_comma(ctx, p);
       if (!p->ok || !cst_at(p, "]")) {
         cst_fail(p);
         return NULL;
       }
 
-      CstNode *sub = new_cst_node(CST_POSTFIX);
-      cst_add_child(sub, node);
-      cst_add_leaf(sub, open);
-      cst_add_child(sub, idx);
-      cst_add_leaf(sub, p->tok);
+      CstNode *sub = new_cst_node(ctx, CST_POSTFIX);
+      cst_add_child(ctx, sub, node);
+      cst_add_leaf(ctx, sub, open);
+      cst_add_child(ctx, sub, idx);
+      cst_add_leaf(ctx, sub, p->tok);
       p->tok = p->tok->next;
       node = sub;
       continue;
@@ -566,19 +566,19 @@ static CstNode *cst_parse_postfix_tail(CstParser *p, CstNode *node) {
         return NULL;
       }
 
-      CstNode *member = new_cst_node(CST_POSTFIX);
-      cst_add_child(member, node);
-      cst_add_leaf(member, op);
-      cst_add_leaf(member, name);
+      CstNode *member = new_cst_node(ctx, CST_POSTFIX);
+      cst_add_child(ctx, member, node);
+      cst_add_leaf(ctx, member, op);
+      cst_add_leaf(ctx, member, name);
       p->tok = name->next;
       node = member;
       continue;
     }
 
     if (cst_at(p, "++") || cst_at(p, "--")) {
-      CstNode *inc = new_cst_node(CST_POSTFIX);
-      cst_add_child(inc, node);
-      cst_add_leaf(inc, p->tok);
+      CstNode *inc = new_cst_node(ctx, CST_POSTFIX);
+      cst_add_child(ctx, inc, node);
+      cst_add_leaf(ctx, inc, p->tok);
       p->tok = p->tok->next;
       node = inc;
       continue;
@@ -589,11 +589,11 @@ static CstNode *cst_parse_postfix_tail(CstParser *p, CstNode *node) {
 }
 
 // postfix = primary postfix-tail
-static CstNode *cst_parse_postfix(CstParser *p) {
-  CstNode *node = cst_parse_primary(p);
+static CstNode *cst_parse_postfix(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_primary(ctx, p);
   if (!p->ok)
     return NULL;
-  return cst_parse_postfix_tail(p, node);
+  return cst_parse_postfix_tail(ctx, p, node);
 }
 
 // unary = ("+" | "-" | "!" | "~" | "*" | "&" | "&&" | "++" | "--") unary
@@ -601,18 +601,18 @@ static CstNode *cst_parse_postfix(CstParser *p) {
 //       | "(" type-name ")" unary                    // cast
 //       | "(" type-name ")" "{" init-list "}"        // compound literal
 //       | postfix
-static CstNode *cst_parse_unary(CstParser *p) {
+static CstNode *cst_parse_unary(ChibiccContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_unary1(p);
+  CstNode *node = cst_parse_unary1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_unary1(CstParser *p) {
+static CstNode *cst_parse_unary1(ChibiccContext *ctx, CstParser *p) {
   if (!p->ok)
     return NULL;
 
@@ -624,14 +624,14 @@ static CstNode *cst_parse_unary1(CstParser *p) {
 
     CstNode *operand = (cst_at(p, "(") && p->tok->next &&
                         cst_is_type_start(p->tok->next, p->cst))
-                         ? cst_parse_type_name(p)
-                         : cst_parse_unary(p);
+                         ? cst_parse_type_name(ctx, p)
+                         : cst_parse_unary(ctx, p);
     if (!p->ok)
       return NULL;
 
-    CstNode *node = new_cst_node(CST_UNARY);
-    cst_add_leaf(node, op);
-    cst_add_child(node, operand);
+    CstNode *node = new_cst_node(ctx, CST_UNARY);
+    cst_add_leaf(ctx, node, op);
+    cst_add_child(ctx, node, operand);
     return node;
   }
 
@@ -641,265 +641,265 @@ static CstNode *cst_parse_unary1(CstParser *p) {
     Token *op = p->tok;
     p->tok = op->next;
 
-    CstNode *operand = cst_parse_unary(p);
+    CstNode *operand = cst_parse_unary(ctx, p);
     if (!p->ok)
       return NULL;
 
-    CstNode *node = new_cst_node(CST_UNARY);
-    cst_add_leaf(node, op);
-    cst_add_child(node, operand);
+    CstNode *node = new_cst_node(ctx, CST_UNARY);
+    cst_add_leaf(ctx, node, op);
+    cst_add_child(ctx, node, operand);
     return node;
   }
 
   if (cst_at(p, "(") && p->tok->next &&
       cst_is_type_start(p->tok->next, p->cst)) {
-    CstNode *type = cst_parse_type_name(p);
+    CstNode *type = cst_parse_type_name(ctx, p);
     if (!p->ok)
       return NULL;
 
     if (cst_at(p, "{")) {
-      CstNode *init = cst_parse_init_list(p);
+      CstNode *init = cst_parse_init_list(ctx, p);
       if (!p->ok)
         return NULL;
-      CstNode *lit = new_cst_node(CST_COMPOUND_LITERAL);
-      cst_add_child(lit, type);
-      cst_add_child(lit, init);
-      return cst_parse_postfix_tail(p, lit);
+      CstNode *lit = new_cst_node(ctx, CST_COMPOUND_LITERAL);
+      cst_add_child(ctx, lit, type);
+      cst_add_child(ctx, lit, init);
+      return cst_parse_postfix_tail(ctx, p, lit);
     }
 
-    CstNode *operand = cst_parse_unary(p);
+    CstNode *operand = cst_parse_unary(ctx, p);
     if (!p->ok)
       return NULL;
 
-    CstNode *cast = new_cst_node(CST_CAST);
-    cst_add_child(cast, type);
-    cst_add_child(cast, operand);
+    CstNode *cast = new_cst_node(ctx, CST_CAST);
+    cst_add_child(ctx, cast, type);
+    cst_add_child(ctx, cast, operand);
     return cast;
   }
 
-  return cst_parse_postfix(p);
+  return cst_parse_postfix(ctx, p);
 }
 
 // binary-level <name> = <operand-level> (op <operand-level>)*, left
 // associative. Each level keeps the operator as an explicit leaf.
 
-static CstNode *cst_parse_mul(CstParser *p) {
-  CstNode *node = cst_parse_unary(p);
+static CstNode *cst_parse_mul(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_unary(ctx, p);
   while (p->ok && (cst_at(p, "*") || cst_at(p, "/") || cst_at(p, "%"))) {
-    CstNode *bin = new_cst_node(CST_BINARY);
-    cst_add_child(bin, node);
-    cst_add_leaf(bin, p->tok);
+    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    cst_add_child(ctx, bin, node);
+    cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_unary(p);
+    CstNode *rhs = cst_parse_unary(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(bin, rhs);
+    cst_add_child(ctx, bin, rhs);
     node = bin;
   }
   return node;
 }
 
-static CstNode *cst_parse_add(CstParser *p) {
-  CstNode *node = cst_parse_mul(p);
+static CstNode *cst_parse_add(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_mul(ctx, p);
   while (p->ok && (cst_at(p, "+") || cst_at(p, "-"))) {
-    CstNode *bin = new_cst_node(CST_BINARY);
-    cst_add_child(bin, node);
-    cst_add_leaf(bin, p->tok);
+    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    cst_add_child(ctx, bin, node);
+    cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_mul(p);
+    CstNode *rhs = cst_parse_mul(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(bin, rhs);
+    cst_add_child(ctx, bin, rhs);
     node = bin;
   }
   return node;
 }
 
-static CstNode *cst_parse_shift(CstParser *p) {
-  CstNode *node = cst_parse_add(p);
+static CstNode *cst_parse_shift(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_add(ctx, p);
   while (p->ok && (cst_at(p, "<<") || cst_at(p, ">>"))) {
-    CstNode *bin = new_cst_node(CST_BINARY);
-    cst_add_child(bin, node);
-    cst_add_leaf(bin, p->tok);
+    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    cst_add_child(ctx, bin, node);
+    cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_add(p);
+    CstNode *rhs = cst_parse_add(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(bin, rhs);
+    cst_add_child(ctx, bin, rhs);
     node = bin;
   }
   return node;
 }
 
-static CstNode *cst_parse_relational(CstParser *p) {
-  CstNode *node = cst_parse_shift(p);
+static CstNode *cst_parse_relational(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_shift(ctx, p);
   while (p->ok && (cst_at(p, "<") || cst_at(p, "<=") ||
                    cst_at(p, ">") || cst_at(p, ">="))) {
-    CstNode *bin = new_cst_node(CST_BINARY);
-    cst_add_child(bin, node);
-    cst_add_leaf(bin, p->tok);
+    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    cst_add_child(ctx, bin, node);
+    cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_shift(p);
+    CstNode *rhs = cst_parse_shift(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(bin, rhs);
+    cst_add_child(ctx, bin, rhs);
     node = bin;
   }
   return node;
 }
 
-static CstNode *cst_parse_equality(CstParser *p) {
-  CstNode *node = cst_parse_relational(p);
+static CstNode *cst_parse_equality(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_relational(ctx, p);
   while (p->ok && (cst_at(p, "==") || cst_at(p, "!="))) {
-    CstNode *bin = new_cst_node(CST_BINARY);
-    cst_add_child(bin, node);
-    cst_add_leaf(bin, p->tok);
+    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    cst_add_child(ctx, bin, node);
+    cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_relational(p);
+    CstNode *rhs = cst_parse_relational(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(bin, rhs);
+    cst_add_child(ctx, bin, rhs);
     node = bin;
   }
   return node;
 }
 
-static CstNode *cst_parse_bitand(CstParser *p) {
-  CstNode *node = cst_parse_equality(p);
+static CstNode *cst_parse_bitand(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_equality(ctx, p);
   while (p->ok && cst_at(p, "&")) {
-    CstNode *bin = new_cst_node(CST_BINARY);
-    cst_add_child(bin, node);
-    cst_add_leaf(bin, p->tok);
+    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    cst_add_child(ctx, bin, node);
+    cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_equality(p);
+    CstNode *rhs = cst_parse_equality(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(bin, rhs);
+    cst_add_child(ctx, bin, rhs);
     node = bin;
   }
   return node;
 }
 
-static CstNode *cst_parse_bitxor(CstParser *p) {
-  CstNode *node = cst_parse_bitand(p);
+static CstNode *cst_parse_bitxor(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_bitand(ctx, p);
   while (p->ok && cst_at(p, "^")) {
-    CstNode *bin = new_cst_node(CST_BINARY);
-    cst_add_child(bin, node);
-    cst_add_leaf(bin, p->tok);
+    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    cst_add_child(ctx, bin, node);
+    cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_bitand(p);
+    CstNode *rhs = cst_parse_bitand(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(bin, rhs);
+    cst_add_child(ctx, bin, rhs);
     node = bin;
   }
   return node;
 }
 
-static CstNode *cst_parse_bitor(CstParser *p) {
-  CstNode *node = cst_parse_bitxor(p);
+static CstNode *cst_parse_bitor(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_bitxor(ctx, p);
   while (p->ok && cst_at(p, "|")) {
-    CstNode *bin = new_cst_node(CST_BINARY);
-    cst_add_child(bin, node);
-    cst_add_leaf(bin, p->tok);
+    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    cst_add_child(ctx, bin, node);
+    cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_bitxor(p);
+    CstNode *rhs = cst_parse_bitxor(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(bin, rhs);
+    cst_add_child(ctx, bin, rhs);
     node = bin;
   }
   return node;
 }
 
-static CstNode *cst_parse_logand(CstParser *p) {
-  CstNode *node = cst_parse_bitor(p);
+static CstNode *cst_parse_logand(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_bitor(ctx, p);
   while (p->ok && cst_at(p, "&&")) {
-    CstNode *bin = new_cst_node(CST_BINARY);
-    cst_add_child(bin, node);
-    cst_add_leaf(bin, p->tok);
+    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    cst_add_child(ctx, bin, node);
+    cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_bitor(p);
+    CstNode *rhs = cst_parse_bitor(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(bin, rhs);
+    cst_add_child(ctx, bin, rhs);
     node = bin;
   }
   return node;
 }
 
-static CstNode *cst_parse_logor(CstParser *p) {
-  CstNode *node = cst_parse_logand(p);
+static CstNode *cst_parse_logor(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_logand(ctx, p);
   while (p->ok && cst_at(p, "||")) {
-    CstNode *bin = new_cst_node(CST_BINARY);
-    cst_add_child(bin, node);
-    cst_add_leaf(bin, p->tok);
+    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    cst_add_child(ctx, bin, node);
+    cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_logand(p);
+    CstNode *rhs = cst_parse_logand(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(bin, rhs);
+    cst_add_child(ctx, bin, rhs);
     node = bin;
   }
   return node;
 }
 
 // conditional = logor ("?" expr ":" conditional | "?" ":" conditional)?
-static CstNode *cst_parse_conditional(CstParser *p) {
+static CstNode *cst_parse_conditional(ChibiccContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_conditional1(p);
+  CstNode *node = cst_parse_conditional1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_conditional1(CstParser *p) {
-  CstNode *cond = cst_parse_logor(p);
+static CstNode *cst_parse_conditional1(ChibiccContext *ctx, CstParser *p) {
+  CstNode *cond = cst_parse_logor(ctx, p);
   if (!p->ok || !cst_at(p, "?"))
     return cond;
 
-  CstNode *node = new_cst_node(CST_COND);
-  cst_add_child(node, cond);
-  cst_add_leaf(node, p->tok); // '?'
+  CstNode *node = new_cst_node(ctx, CST_COND);
+  cst_add_child(ctx, node, cond);
+  cst_add_leaf(ctx, node, p->tok); // '?'
   p->tok = p->tok->next;
 
   // [GNU] `a ?: b` has no middle operand.
   if (cst_at(p, ":")) {
-    cst_add_leaf(node, p->tok);
+    cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
-    CstNode *els = cst_parse_conditional(p);
+    CstNode *els = cst_parse_conditional(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(node, els);
+    cst_add_child(ctx, node, els);
     return node;
   }
 
-  CstNode *then = cst_parse_comma(p);
+  CstNode *then = cst_parse_comma(ctx, p);
   if (!p->ok || !cst_at(p, ":")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_child(node, then);
-  cst_add_leaf(node, p->tok); // ':'
+  cst_add_child(ctx, node, then);
+  cst_add_leaf(ctx, node, p->tok); // ':'
   p->tok = p->tok->next;
 
-  CstNode *els = cst_parse_conditional(p);
+  CstNode *els = cst_parse_conditional(ctx, p);
   if (!p->ok)
     return NULL;
-  cst_add_child(node, els);
+  cst_add_child(ctx, node, els);
   return node;
 }
 
@@ -912,58 +912,58 @@ static bool cst_at_assign_op(CstParser *p) {
 }
 
 // assign = conditional (assign-op assign)?
-static CstNode *cst_parse_assign(CstParser *p) {
+static CstNode *cst_parse_assign(ChibiccContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_assign1(p);
+  CstNode *node = cst_parse_assign1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_assign1(CstParser *p) {
-  CstNode *lhs = cst_parse_conditional(p);
+static CstNode *cst_parse_assign1(ChibiccContext *ctx, CstParser *p) {
+  CstNode *lhs = cst_parse_conditional(ctx, p);
   if (!p->ok || !cst_at_assign_op(p))
     return lhs;
 
-  CstNode *node = new_cst_node(CST_ASSIGN);
-  cst_add_child(node, lhs);
-  cst_add_leaf(node, p->tok);
+  CstNode *node = new_cst_node(ctx, CST_ASSIGN);
+  cst_add_child(ctx, node, lhs);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *rhs = cst_parse_assign(p);
+  CstNode *rhs = cst_parse_assign(ctx, p);
   if (!p->ok)
     return NULL;
-  cst_add_child(node, rhs);
+  cst_add_child(ctx, node, rhs);
   return node;
 }
 
 // comma = assign ("," assign)*
-static CstNode *cst_parse_comma(CstParser *p) {
+static CstNode *cst_parse_comma(ChibiccContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_comma1(p);
+  CstNode *node = cst_parse_comma1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_comma1(CstParser *p) {
-  CstNode *node = cst_parse_assign(p);
+static CstNode *cst_parse_comma1(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = cst_parse_assign(ctx, p);
   while (p->ok && cst_at(p, ",")) {
-    CstNode *comma = new_cst_node(CST_COMMA);
-    cst_add_child(comma, node);
-    cst_add_leaf(comma, p->tok);
+    CstNode *comma = new_cst_node(ctx, CST_COMMA);
+    cst_add_child(ctx, comma, node);
+    cst_add_leaf(ctx, comma, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_assign(p);
+    CstNode *rhs = cst_parse_assign(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(comma, rhs);
+    cst_add_child(ctx, comma, rhs);
     node = comma;
   }
   return node;
@@ -973,19 +973,19 @@ static CstNode *cst_parse_comma1(CstParser *p) {
 // Declaration layer (C2.2)
 //
 
-static void cst_parse_compound(CstParser *p, CstNode *block);
-static CstNode *cst_parse_param_list(CstParser *p);
+static void cst_parse_compound(ChibiccContext *ctx, CstParser *p, CstNode *block);
+static CstNode *cst_parse_param_list(ChibiccContext *ctx, CstParser *p);
 
 // Consume one balanced group in raw mode from `start`, resetting the
 // parser on failure. Used where a structured attempt did not fit and the
 // tokens must still stay in the tree (K&R parameter lists, array
 // dimensions, attributes).
-static CstNode *cst_parse_raw_group_at(CstParser *p, Token *start) {
+static CstNode *cst_parse_raw_group_at(ChibiccContext *ctx, CstParser *p, Token *start) {
   p->tok = start;
   p->ok = true;
 
   Token *rest = NULL;
-  CstNode *group = cst_parse_group(p->cst, &rest, start);
+  CstNode *group = cst_parse_group(ctx, p->cst, &rest, start);
   if (group->kind == CST_UNPARSED) {
     cst_fail(p);
     return NULL;
@@ -1000,8 +1000,8 @@ static CstNode *cst_parse_raw_group_at(CstParser *p, Token *start) {
 // _Atomic / _Alignas arguments and attributes stay raw groups. A
 // user-defined type name is a specifier only while no other specifier
 // has been seen, so `T T;` leaves the second T to the declarator.
-static CstNode *cst_parse_decl_specs(CstParser *p) {
-  CstNode *specs = new_cst_node(CST_DECL_SPECS);
+static CstNode *cst_parse_decl_specs(ChibiccContext *ctx, CstParser *p) {
+  CstNode *specs = new_cst_node(ctx, CST_DECL_SPECS);
   bool has_type = false;
 
   for (;;) {
@@ -1016,7 +1016,7 @@ static CstNode *cst_parse_decl_specs(CstParser *p) {
       NULL,
     };
     if (cst_in_list(tok, plain)) {
-      cst_add_leaf(specs, tok);
+      cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       continue;
     }
@@ -1028,7 +1028,7 @@ static CstNode *cst_parse_decl_specs(CstParser *p) {
       NULL,
     };
     if (cst_in_list(tok, builtin)) {
-      cst_add_leaf(specs, tok);
+      cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       has_type = true;
       continue;
@@ -1037,21 +1037,21 @@ static CstNode *cst_parse_decl_specs(CstParser *p) {
     if (equal(tok, "struct") || equal(tok, "union")) {
       if (has_type)
         break;
-      cst_add_leaf(specs, tok);
+      cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       if (p->tok && p->tok->kind == TK_IDENT && !cst_is_keyword(p->tok)) {
-        cst_add_leaf(specs, p->tok);
+        cst_add_leaf(ctx, specs, p->tok);
         p->tok = p->tok->next;
       }
       if (cst_at(p, "{")) {
         Token *rest = NULL;
-        CstNode *body = cst_parse_group(p->cst, &rest, p->tok);
+        CstNode *body = cst_parse_group(ctx, p->cst, &rest, p->tok);
         if (body->kind == CST_UNPARSED) {
           cst_fail(p);
           return NULL;
         }
         p->tok = rest;
-        cst_add_child(specs, body);
+        cst_add_child(ctx, specs, body);
       }
       has_type = true;
       continue;
@@ -1060,21 +1060,21 @@ static CstNode *cst_parse_decl_specs(CstParser *p) {
     if (equal(tok, "enum")) {
       if (has_type)
         break;
-      cst_add_leaf(specs, tok);
+      cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       if (p->tok && p->tok->kind == TK_IDENT && !cst_is_keyword(p->tok)) {
-        cst_add_leaf(specs, p->tok);
+        cst_add_leaf(ctx, specs, p->tok);
         p->tok = p->tok->next;
       }
       if (cst_at(p, "{")) {
         Token *rest = NULL;
-        CstNode *body = cst_parse_group(p->cst, &rest, p->tok);
+        CstNode *body = cst_parse_group(ctx, p->cst, &rest, p->tok);
         if (body->kind == CST_UNPARSED) {
           cst_fail(p);
           return NULL;
         }
         p->tok = rest;
-        cst_add_child(specs, body);
+        cst_add_child(ctx, specs, body);
       }
       has_type = true;
       continue;
@@ -1084,52 +1084,52 @@ static CstNode *cst_parse_decl_specs(CstParser *p) {
         equal(tok, "__typeof")) {
       if (has_type)
         break;
-      cst_add_leaf(specs, tok);
+      cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       if (cst_at(p, "(")) {
-        CstNode *operand = cst_parse_raw_group(p);
+        CstNode *operand = cst_parse_raw_group(ctx, p);
         if (!p->ok)
           return NULL;
-        cst_add_child(specs, operand);
+        cst_add_child(ctx, specs, operand);
       }
       has_type = true;
       continue;
     }
 
     if (equal(tok, "_Atomic")) {
-      cst_add_leaf(specs, tok);
+      cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       if (cst_at(p, "(")) {
-        CstNode *operand = cst_parse_raw_group(p);
+        CstNode *operand = cst_parse_raw_group(ctx, p);
         if (!p->ok)
           return NULL;
-        cst_add_child(specs, operand);
+        cst_add_child(ctx, specs, operand);
         has_type = true;
       }
       continue;
     }
 
     if (equal(tok, "_Alignas")) {
-      cst_add_leaf(specs, tok);
+      cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       if (cst_at(p, "(")) {
-        CstNode *operand = cst_parse_raw_group(p);
+        CstNode *operand = cst_parse_raw_group(ctx, p);
         if (!p->ok)
           return NULL;
-        cst_add_child(specs, operand);
+        cst_add_child(ctx, specs, operand);
       }
       continue;
     }
 
     if (equal(tok, "__attribute__") || equal(tok, "__extension__")) {
       bool attr = equal(tok, "__attribute__");
-      cst_add_leaf(specs, tok);
+      cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       if (attr && cst_at(p, "(")) {
-        CstNode *group = cst_parse_raw_group(p);
+        CstNode *group = cst_parse_raw_group(ctx, p);
         if (!p->ok)
           return NULL;
-        cst_add_child(specs, group);
+        cst_add_child(ctx, specs, group);
       }
       continue;
     }
@@ -1137,7 +1137,7 @@ static CstNode *cst_parse_decl_specs(CstParser *p) {
     if (cst_is_typedef_name(p->cst, tok)) {
       if (has_type)
         break;
-      cst_add_leaf(specs, tok);
+      cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       has_type = true;
       continue;
@@ -1155,15 +1155,15 @@ static CstNode *cst_parse_decl_specs(CstParser *p) {
 
 // Consume `__attribute__((...))` pairs after a declarator, keeping them
 // on the declarator node.
-static bool cst_parse_attributes(CstParser *p, CstNode *node) {
+static bool cst_parse_attributes(ChibiccContext *ctx, CstParser *p, CstNode *node) {
   while (cst_at(p, "__attribute__")) {
-    cst_add_leaf(node, p->tok);
+    cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
     if (cst_at(p, "(")) {
-      CstNode *group = cst_parse_raw_group(p);
+      CstNode *group = cst_parse_raw_group(ctx, p);
       if (!p->ok)
         return false;
-      cst_add_child(node, group);
+      cst_add_child(ctx, node, group);
     }
   }
   return true;
@@ -1172,37 +1172,37 @@ static bool cst_parse_attributes(CstParser *p, CstNode *node) {
 // array-dimension = "[" ("static" | "restrict" | "*")* expr? "]"
 // The expression is parsed when it fits; otherwise the bracket keeps its
 // raw tokens.
-static CstNode *cst_parse_dimension(CstParser *p) {
+static CstNode *cst_parse_dimension(ChibiccContext *ctx, CstParser *p) {
   Token *start = p->tok;
-  CstNode *bracket = new_cst_node(CST_GROUP_BRACKET);
-  cst_add_leaf(bracket, p->tok); // '['
+  CstNode *bracket = new_cst_node(ctx, CST_GROUP_BRACKET);
+  cst_add_leaf(ctx, bracket, p->tok); // '['
   p->tok = p->tok->next;
 
   while (cst_at(p, "static") || cst_at(p, "restrict") ||
          cst_at(p, "const") || cst_at(p, "volatile")) {
-    cst_add_leaf(bracket, p->tok);
+    cst_add_leaf(ctx, bracket, p->tok);
     p->tok = p->tok->next;
   }
 
   if (cst_at(p, "]")) {
-    cst_add_leaf(bracket, p->tok);
+    cst_add_leaf(ctx, bracket, p->tok);
     p->tok = p->tok->next;
     return bracket;
   }
 
   if (cst_at(p, "*")) {
-    cst_add_leaf(bracket, p->tok);
+    cst_add_leaf(ctx, bracket, p->tok);
     p->tok = p->tok->next;
   } else {
-    CstNode *expr = cst_parse_assign(p);
+    CstNode *expr = cst_parse_assign(ctx, p);
     if (!p->ok)
-      return cst_parse_raw_group_at(p, start);
-    cst_add_child(bracket, expr);
+      return cst_parse_raw_group_at(ctx, p, start);
+    cst_add_child(ctx, bracket, expr);
   }
 
   if (!cst_at(p, "]"))
-    return cst_parse_raw_group_at(p, start);
-  cst_add_leaf(bracket, p->tok);
+    return cst_parse_raw_group_at(ctx, p, start);
+  cst_add_leaf(ctx, bracket, p->tok);
   p->tok = p->tok->next;
   return bracket;
 }
@@ -1212,27 +1212,27 @@ static CstNode *cst_parse_dimension(CstParser *p) {
 // The written grouping is kept: pointer stars, an inner declarator in a
 // GROUP_PAREN, the name, and the suffixes in source order. No type is
 // built and no name is bound.
-static CstNode *cst_parse_declarator(CstParser *p, bool allow_abstract) {
+static CstNode *cst_parse_declarator(ChibiccContext *ctx, CstParser *p, bool allow_abstract) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_declarator1(p, allow_abstract);
+  CstNode *node = cst_parse_declarator1(ctx, p, allow_abstract);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_declarator1(CstParser *p, bool allow_abstract) {
-  CstNode *decl = new_cst_node(CST_DECLARATOR);
+static CstNode *cst_parse_declarator1(ChibiccContext *ctx, CstParser *p, bool allow_abstract) {
+  CstNode *decl = new_cst_node(ctx, CST_DECLARATOR);
 
   while (cst_at(p, "*")) {
-    cst_add_leaf(decl, p->tok);
+    cst_add_leaf(ctx, decl, p->tok);
     p->tok = p->tok->next;
     while (cst_at(p, "const") || cst_at(p, "volatile") ||
            cst_at(p, "restrict") || cst_at(p, "__restrict") ||
            cst_at(p, "__restrict__")) {
-      cst_add_leaf(decl, p->tok);
+      cst_add_leaf(ctx, decl, p->tok);
       p->tok = p->tok->next;
     }
   }
@@ -1241,20 +1241,20 @@ static CstNode *cst_parse_declarator1(CstParser *p, bool allow_abstract) {
     Token *open = p->tok;
     p->tok = open->next;
 
-    CstNode *inner = cst_parse_declarator(p, allow_abstract);
+    CstNode *inner = cst_parse_declarator(ctx, p, allow_abstract);
     if (!p->ok || !cst_at(p, ")")) {
       cst_fail(p);
       return NULL;
     }
 
-    CstNode *group = new_cst_node(CST_GROUP_PAREN);
-    cst_add_leaf(group, open);
-    cst_add_child(group, inner);
-    cst_add_leaf(group, p->tok);
+    CstNode *group = new_cst_node(ctx, CST_GROUP_PAREN);
+    cst_add_leaf(ctx, group, open);
+    cst_add_child(ctx, group, inner);
+    cst_add_leaf(ctx, group, p->tok);
     p->tok = p->tok->next;
-    cst_add_child(decl, group);
+    cst_add_child(ctx, decl, group);
   } else if (p->tok && p->tok->kind == TK_IDENT && !cst_is_keyword(p->tok)) {
-    cst_add_leaf(decl, p->tok);
+    cst_add_leaf(ctx, decl, p->tok);
     p->tok = p->tok->next;
   } else if (!allow_abstract) {
     cst_fail(p);
@@ -1263,106 +1263,106 @@ static CstNode *cst_parse_declarator1(CstParser *p, bool allow_abstract) {
 
   for (;;) {
     if (cst_at(p, "(")) {
-      CstNode *params = cst_parse_param_list(p);
+      CstNode *params = cst_parse_param_list(ctx, p);
       if (!p->ok)
         return NULL;
-      cst_add_child(decl, params);
+      cst_add_child(ctx, decl, params);
       continue;
     }
     if (cst_at(p, "[")) {
-      CstNode *dim = cst_parse_dimension(p);
+      CstNode *dim = cst_parse_dimension(ctx, p);
       if (!p->ok)
         return NULL;
-      cst_add_child(decl, dim);
+      cst_add_child(ctx, decl, dim);
       continue;
     }
     break;
   }
 
-  if (!cst_parse_attributes(p, decl))
+  if (!cst_parse_attributes(ctx, p, decl))
     return NULL;
   return decl;
 }
 
 // parameter = decl-specs declarator?
-static CstNode *cst_parse_param(CstParser *p) {
-  CstNode *specs = cst_parse_decl_specs(p);
+static CstNode *cst_parse_param(ChibiccContext *ctx, CstParser *p) {
+  CstNode *specs = cst_parse_decl_specs(ctx, p);
   if (!p->ok)
     return NULL;
 
-  CstNode *decl = cst_parse_declarator(p, true);
+  CstNode *decl = cst_parse_declarator(ctx, p, true);
   if (!p->ok)
     return NULL;
 
-  CstNode *param = new_cst_node(CST_PARAM);
-  cst_add_child(param, specs);
+  CstNode *param = new_cst_node(ctx, CST_PARAM);
+  cst_add_child(ctx, param, specs);
   if (decl->child_count)
-    cst_add_child(param, decl);
+    cst_add_child(ctx, param, decl);
   return param;
 }
 
 // param-list = "(" (param ("," param)* | "..." | raw)? ")"
 // A parameter list the declaration grammar cannot explain keeps its raw
 // tokens in a GROUP_PAREN (K&R identifier lists are the common case).
-static CstNode *cst_parse_param_list(CstParser *p) {
+static CstNode *cst_parse_param_list(ChibiccContext *ctx, CstParser *p) {
   Token *start = p->tok;
-  CstNode *list = new_cst_node(CST_PARAM_LIST);
-  cst_add_leaf(list, p->tok); // '('
+  CstNode *list = new_cst_node(ctx, CST_PARAM_LIST);
+  cst_add_leaf(ctx, list, p->tok); // '('
   p->tok = p->tok->next;
 
   if (cst_at(p, ")")) {
-    cst_add_leaf(list, p->tok);
+    cst_add_leaf(ctx, list, p->tok);
     p->tok = p->tok->next;
     return list;
   }
 
   if (cst_at(p, "...")) {
-    cst_add_leaf(list, p->tok);
+    cst_add_leaf(ctx, list, p->tok);
     p->tok = p->tok->next;
   } else {
     for (;;) {
-      CstNode *param = cst_parse_param(p);
+      CstNode *param = cst_parse_param(ctx, p);
       if (!param)
-        return cst_parse_raw_group_at(p, start);
-      cst_add_child(list, param);
+        return cst_parse_raw_group_at(ctx, p, start);
+      cst_add_child(ctx, list, param);
 
       if (!cst_at(p, ","))
         break;
-      cst_add_leaf(list, p->tok);
+      cst_add_leaf(ctx, list, p->tok);
       p->tok = p->tok->next;
     }
   }
 
   if (!cst_at(p, ")"))
-    return cst_parse_raw_group_at(p, start);
-  cst_add_leaf(list, p->tok);
+    return cst_parse_raw_group_at(ctx, p, start);
+  cst_add_leaf(ctx, list, p->tok);
   p->tok = p->tok->next;
   return list;
 }
 
 // type-name = "(" decl-specs abstract-declarator? ")"
-static CstNode *cst_parse_type_name(CstParser *p) {
+static CstNode *cst_parse_type_name(ChibiccContext *ctx, CstParser *p) {
   Token *open = p->tok;
-  CstNode *node = new_cst_node(CST_TYPE_NAME);
-  cst_add_leaf(node, open); // '('
+  CstNode *node = new_cst_node(ctx, CST_TYPE_NAME);
+  cst_add_leaf(ctx, node, open); // '('
   p->tok = open->next;
 
-  CstNode *specs = cst_parse_decl_specs(p);
+  CstNode *specs = cst_parse_decl_specs(ctx, p);
   if (!p->ok)
     return NULL;
-  cst_add_child(node, specs);
+  cst_add_child(ctx, node, specs);
 
-  CstNode *decl = cst_parse_declarator(p, true);
+  CstNode *decl = cst_parse_declarator(ctx, p, true);
   if (!p->ok)
     return NULL;
   if (decl->child_count)
-    cst_add_child(node, decl);
+    cst_add_child(ctx, node, decl);
 
   if (!cst_at(p, ")")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
   return node;
 }
@@ -1370,64 +1370,64 @@ static CstNode *cst_parse_type_name(CstParser *p) {
 // declaration = decl-specs init-declarator ("," init-declarator)* ";"
 //             | decl-specs ";"
 // function-definition = decl-specs declarator compound-stmt
-static CstNode *cst_parse_decl(CstParser *p) {
-  CstNode *specs = cst_parse_decl_specs(p);
+static CstNode *cst_parse_decl(ChibiccContext *ctx, CstParser *p) {
+  CstNode *specs = cst_parse_decl_specs(ctx, p);
   if (!p->ok)
     return NULL;
 
   // A tag or specifier with no declarator: `struct S {...};`, `int;`.
   if (cst_at(p, ";")) {
-    CstNode *decl = new_cst_node(CST_DECL);
-    cst_add_child(decl, specs);
-    cst_add_leaf(decl, p->tok);
+    CstNode *decl = new_cst_node(ctx, CST_DECL);
+    cst_add_child(ctx, decl, specs);
+    cst_add_leaf(ctx, decl, p->tok);
     p->tok = p->tok->next;
     return decl;
   }
 
-  CstNode *declr = cst_parse_declarator(p, false);
+  CstNode *declr = cst_parse_declarator(ctx, p, false);
   if (!p->ok)
     return NULL;
 
   // `declarator {` is a function definition. GNU nested functions are
   // allowed too; nothing here checks the scope.
   if (cst_at(p, "{")) {
-    CstNode *body = new_cst_node(CST_BLOCK);
-    cst_parse_compound(p, body);
+    CstNode *body = new_cst_node(ctx, CST_BLOCK);
+    cst_parse_compound(ctx, p, body);
     if (!p->ok)
       return NULL;
 
-    CstNode *fn = new_cst_node(CST_FUNC_DEF);
-    cst_add_child(fn, specs);
-    cst_add_child(fn, declr);
-    cst_add_child(fn, body);
+    CstNode *fn = new_cst_node(ctx, CST_FUNC_DEF);
+    cst_add_child(ctx, fn, specs);
+    cst_add_child(ctx, fn, declr);
+    cst_add_child(ctx, fn, body);
     return fn;
   }
 
-  CstNode *decl = new_cst_node(CST_DECL);
-  cst_add_child(decl, specs);
+  CstNode *decl = new_cst_node(ctx, CST_DECL);
+  cst_add_child(ctx, decl, specs);
 
   for (;;) {
     if (cst_at(p, "=")) {
-      CstNode *init_decl = new_cst_node(CST_INIT_DECLARATOR);
-      cst_add_child(init_decl, declr);
-      cst_add_leaf(init_decl, p->tok); // '='
+      CstNode *init_decl = new_cst_node(ctx, CST_INIT_DECLARATOR);
+      cst_add_child(ctx, init_decl, declr);
+      cst_add_leaf(ctx, init_decl, p->tok); // '='
       p->tok = p->tok->next;
 
-      CstNode *init = cst_parse_initializer(p);
+      CstNode *init = cst_parse_initializer(ctx, p);
       if (!p->ok)
         return NULL;
-      cst_add_child(init_decl, init);
-      cst_add_child(decl, init_decl);
+      cst_add_child(ctx, init_decl, init);
+      cst_add_child(ctx, decl, init_decl);
     } else {
-      cst_add_child(decl, declr);
+      cst_add_child(ctx, decl, declr);
     }
 
     if (!cst_at(p, ","))
       break;
-    cst_add_leaf(decl, p->tok);
+    cst_add_leaf(ctx, decl, p->tok);
     p->tok = p->tok->next;
 
-    declr = cst_parse_declarator(p, false);
+    declr = cst_parse_declarator(ctx, p, false);
     if (!p->ok)
       return NULL;
   }
@@ -1436,7 +1436,7 @@ static CstNode *cst_parse_decl(CstParser *p) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(decl, p->tok);
+  cst_add_leaf(ctx, decl, p->tok);
   p->tok = p->tok->next;
   return decl;
 }
@@ -1447,10 +1447,10 @@ static CstNode *cst_parse_decl(CstParser *p) {
 
 static bool cst_is_directive(Token *tok);
 static bool cst_is_pp_terminator(Token *tok);
-static CstNode *cst_parse_directive_line(CstParser *p);
-static CstNode *cst_parse_pp_if(CstParser *p);
-static CstNode *cst_parse_item(CstParser *p);
-static CstNode *cst_parse_item1(CstParser *p);
+static CstNode *cst_parse_directive_line(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_pp_if(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_item(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_item1(ChibiccContext *ctx, CstParser *p);
 
 // Parse one statement into the fallback shape: tokens up to and
 // including a ';' at this level, a raw group per delimiter, and stop
@@ -1459,9 +1459,9 @@ static CstNode *cst_parse_item1(CstParser *p);
 // where it should have ended. The node is CST_UNPARSED: the expression
 // grammar did not explain the span (a declaration is one such span until
 // C2.2), and the children are exactly the raw pieces, not a guess.
-static CstNode *cst_parse_fallback_statement(CstContext *cst, Token **rest,
+static CstNode *cst_parse_fallback_statement(ChibiccContext *ctx, CstContext *cst, Token **rest,
                                              Token *tok) {
-  CstNode *stmt = new_cst_node(CST_UNPARSED);
+  CstNode *stmt = new_cst_node(ctx, CST_UNPARSED);
 
   Token *p = tok;
   while (p && p->kind != TK_EOF) {
@@ -1471,17 +1471,17 @@ static CstNode *cst_parse_fallback_statement(CstContext *cst, Token **rest,
     if (p != tok && cst_is_directive(p))
       break;
     if (equal(p, ";")) {
-      cst_add_leaf(stmt, p);
+      cst_add_leaf(ctx, stmt, p);
       p = p->next;
       break;
     }
     if (cst_is_close(p))
       break;
     if (cst_is_open(p)) {
-      cst_add_child(stmt, cst_parse_group(cst, &p, p));
+      cst_add_child(ctx, stmt, cst_parse_group(ctx, cst, &p, p));
       continue;
     }
-    cst_add_leaf(stmt, p);
+    cst_add_leaf(ctx, stmt, p);
     p = p->next;
   }
   *rest = p;
@@ -1491,22 +1491,22 @@ static CstNode *cst_parse_fallback_statement(CstContext *cst, Token **rest,
 // A statement whose whole span is an expression followed by ';' becomes
 // CST_EXPR_STMT. On any failure the caller uses the raw skeleton instead;
 // the failed attempt's nodes are unreachable, which is allowed.
-static CstNode *cst_try_expr_stmt(Token **rest, Token *tok, CstContext *cst) {
+static CstNode *cst_try_expr_stmt(ChibiccContext *ctx, Token **rest, Token *tok, CstContext *cst) {
   CstParser p = {tok, true, cst};
 
-  CstNode *expr = cst_parse_comma(&p);
+  CstNode *expr = cst_parse_comma(ctx, &p);
   if (!p.ok || !equal(p.tok, ";"))
     return NULL;
 
-  CstNode *stmt = new_cst_node(CST_EXPR_STMT);
-  cst_add_child(stmt, expr);
-  cst_add_leaf(stmt, p.tok);
+  CstNode *stmt = new_cst_node(ctx, CST_EXPR_STMT);
+  cst_add_child(ctx, stmt, expr);
+  cst_add_leaf(ctx, stmt, p.tok);
   *rest = p.tok->next;
   return stmt;
 }
 
-static CstNode *cst_parse_statement(CstParser *p);
-static CstNode *cst_parse_statement1(CstParser *p);
+static CstNode *cst_parse_statement(ChibiccContext *ctx, CstParser *p);
+static CstNode *cst_parse_statement1(ChibiccContext *ctx, CstParser *p);
 
 // statement = "return" expr? ";"
 //           | "if" "(" expr ")" statement ("else" statement)?
@@ -1521,329 +1521,329 @@ static CstNode *cst_parse_statement1(CstParser *p);
 //           | "asm" qualifiers* "(" raw ")" ";"
 //           | ident ":" statement
 //           | compound-stmt | declaration | expr-stmt
-static CstNode *cst_parse_simple_stmt(CstParser *p, CstKind kind) {
-  CstNode *node = new_cst_node(kind);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_simple_stmt(ChibiccContext *ctx, CstParser *p, CstKind kind) {
+  CstNode *node = new_cst_node(ctx, kind);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (!cst_at(p, ";")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
   return node;
 }
 
-static CstNode *cst_parse_return(CstParser *p) {
-  CstNode *node = new_cst_node(CST_RETURN);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_return(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_RETURN);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (!cst_at(p, ";")) {
-    CstNode *expr = cst_parse_comma(p);
+    CstNode *expr = cst_parse_comma(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(node, expr);
+    cst_add_child(ctx, node, expr);
   }
 
   if (!cst_at(p, ";")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
   return node;
 }
 
-static CstNode *cst_parse_if(CstParser *p) {
-  CstNode *node = new_cst_node(CST_IF);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_if(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_IF);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (!cst_at(p, "(")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *cond = cst_parse_comma(p);
+  CstNode *cond = cst_parse_comma(ctx, p);
   if (!p->ok || !cst_at(p, ")")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_child(node, cond);
-  cst_add_leaf(node, p->tok);
+  cst_add_child(ctx, node, cond);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *then = cst_parse_statement(p);
+  CstNode *then = cst_parse_statement(ctx, p);
   if (!then)
     return NULL;
-  cst_add_child(node, then);
+  cst_add_child(ctx, node, then);
 
   if (cst_at(p, "else")) {
-    cst_add_leaf(node, p->tok);
+    cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *els = cst_parse_statement(p);
+    CstNode *els = cst_parse_statement(ctx, p);
     if (!els)
       return NULL;
-    cst_add_child(node, els);
+    cst_add_child(ctx, node, els);
   }
   return node;
 }
 
-static CstNode *cst_parse_switch(CstParser *p) {
-  CstNode *node = new_cst_node(CST_SWITCH);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_switch(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_SWITCH);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (!cst_at(p, "(")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *cond = cst_parse_comma(p);
+  CstNode *cond = cst_parse_comma(ctx, p);
   if (!p->ok || !cst_at(p, ")")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_child(node, cond);
-  cst_add_leaf(node, p->tok);
+  cst_add_child(ctx, node, cond);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(p);
+  CstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
-  cst_add_child(node, body);
+  cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_while(CstParser *p) {
-  CstNode *node = new_cst_node(CST_WHILE);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_while(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_WHILE);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (!cst_at(p, "(")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *cond = cst_parse_comma(p);
+  CstNode *cond = cst_parse_comma(ctx, p);
   if (!p->ok || !cst_at(p, ")")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_child(node, cond);
-  cst_add_leaf(node, p->tok);
+  cst_add_child(ctx, node, cond);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(p);
+  CstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
-  cst_add_child(node, body);
+  cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_do(CstParser *p) {
-  CstNode *node = new_cst_node(CST_DO);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_do(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_DO);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(p);
+  CstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
-  cst_add_child(node, body);
+  cst_add_child(ctx, node, body);
 
   if (!cst_at(p, "while")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (!cst_at(p, "(")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *cond = cst_parse_comma(p);
+  CstNode *cond = cst_parse_comma(ctx, p);
   if (!p->ok || !cst_at(p, ")")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_child(node, cond);
-  cst_add_leaf(node, p->tok);
+  cst_add_child(ctx, node, cond);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (!cst_at(p, ";")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
   return node;
 }
 
-static CstNode *cst_parse_for(CstParser *p) {
-  CstNode *node = new_cst_node(CST_FOR);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_for(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_FOR);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (!cst_at(p, "(")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   // Init: a declaration owns its terminating ';', an expression does not.
   if (cst_at(p, ";")) {
-    cst_add_leaf(node, p->tok);
+    cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
   } else if (cst_is_decl_start(p->tok, p->cst)) {
-    CstNode *decl = cst_parse_decl(p);
+    CstNode *decl = cst_parse_decl(ctx, p);
     if (!decl)
       return NULL;
-    cst_add_child(node, decl);
+    cst_add_child(ctx, node, decl);
   } else {
-    CstNode *init = cst_parse_comma(p);
+    CstNode *init = cst_parse_comma(ctx, p);
     if (!p->ok || !cst_at(p, ";")) {
       cst_fail(p);
       return NULL;
     }
-    cst_add_child(node, init);
-    cst_add_leaf(node, p->tok);
+    cst_add_child(ctx, node, init);
+    cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
   }
 
   if (!cst_at(p, ";")) {
-    CstNode *cond = cst_parse_comma(p);
+    CstNode *cond = cst_parse_comma(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(node, cond);
+    cst_add_child(ctx, node, cond);
   }
   if (!cst_at(p, ";")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (!cst_at(p, ")")) {
-    CstNode *inc = cst_parse_comma(p);
+    CstNode *inc = cst_parse_comma(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(node, inc);
+    cst_add_child(ctx, node, inc);
   }
   if (!cst_at(p, ")")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(p);
+  CstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
-  cst_add_child(node, body);
+  cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_case(CstParser *p) {
-  CstNode *node = new_cst_node(CST_CASE);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_case(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_CASE);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *begin = cst_parse_conditional(p);
+  CstNode *begin = cst_parse_conditional(ctx, p);
   if (!p->ok)
     return NULL;
-  cst_add_child(node, begin);
+  cst_add_child(ctx, node, begin);
 
   if (cst_at(p, "...")) {
-    cst_add_leaf(node, p->tok);
+    cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *end = cst_parse_conditional(p);
+    CstNode *end = cst_parse_conditional(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(node, end);
+    cst_add_child(ctx, node, end);
   }
 
   if (!cst_at(p, ":")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(p);
+  CstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
-  cst_add_child(node, body);
+  cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_default(CstParser *p) {
-  CstNode *node = new_cst_node(CST_DEFAULT);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_default(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_DEFAULT);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (!cst_at(p, ":")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(p);
+  CstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
-  cst_add_child(node, body);
+  cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_label(CstParser *p) {
-  CstNode *node = new_cst_node(CST_LABEL);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_label(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_LABEL);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  cst_add_leaf(node, p->tok); // ':'
+  cst_add_leaf(ctx, node, p->tok); // ':'
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(p);
+  CstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
-  cst_add_child(node, body);
+  cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_goto(CstParser *p) {
-  CstNode *node = new_cst_node(CST_GOTO);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_goto(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_GOTO);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (cst_at(p, "*")) {
-    cst_add_leaf(node, p->tok);
+    cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *expr = cst_parse_comma(p);
+    CstNode *expr = cst_parse_comma(ctx, p);
     if (!p->ok)
       return NULL;
-    cst_add_child(node, expr);
+    cst_add_child(ctx, node, expr);
   } else {
     if (!p->tok || p->tok->kind != TK_IDENT) {
       cst_fail(p);
       return NULL;
     }
-    cst_add_leaf(node, p->tok);
+    cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
   }
 
@@ -1851,18 +1851,18 @@ static CstNode *cst_parse_goto(CstParser *p) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
   return node;
 }
 
-static CstNode *cst_parse_asm(CstParser *p) {
-  CstNode *node = new_cst_node(CST_ASM);
-  cst_add_leaf(node, p->tok);
+static CstNode *cst_parse_asm(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_ASM);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   while (cst_at(p, "volatile") || cst_at(p, "inline")) {
-    cst_add_leaf(node, p->tok);
+    cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
   }
 
@@ -1870,74 +1870,74 @@ static CstNode *cst_parse_asm(CstParser *p) {
     cst_fail(p);
     return NULL;
   }
-  CstNode *operand = cst_parse_raw_group(p);
+  CstNode *operand = cst_parse_raw_group(ctx, p);
   if (!p->ok)
     return NULL;
-  cst_add_child(node, operand);
+  cst_add_child(ctx, node, operand);
 
   if (!cst_at(p, ";")) {
     cst_fail(p);
     return NULL;
   }
-  cst_add_leaf(node, p->tok);
+  cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
   return node;
 }
 
-static CstNode *cst_parse_statement(CstParser *p) {
+static CstNode *cst_parse_statement(ChibiccContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_statement1(p);
+  CstNode *node = cst_parse_statement1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_statement1(CstParser *p) {
+static CstNode *cst_parse_statement1(ChibiccContext *ctx, CstParser *p) {
   if (!p->ok || !p->tok || p->tok->kind == TK_EOF)
     return NULL;
 
   Token *tok = p->tok;
 
   if (equal(tok, "return"))
-    return cst_parse_return(p);
+    return cst_parse_return(ctx, p);
   if (equal(tok, "if"))
-    return cst_parse_if(p);
+    return cst_parse_if(ctx, p);
   if (equal(tok, "switch"))
-    return cst_parse_switch(p);
+    return cst_parse_switch(ctx, p);
   if (equal(tok, "while"))
-    return cst_parse_while(p);
+    return cst_parse_while(ctx, p);
   if (equal(tok, "do"))
-    return cst_parse_do(p);
+    return cst_parse_do(ctx, p);
   if (equal(tok, "for"))
-    return cst_parse_for(p);
+    return cst_parse_for(ctx, p);
   if (equal(tok, "case"))
-    return cst_parse_case(p);
+    return cst_parse_case(ctx, p);
   if (equal(tok, "default"))
-    return cst_parse_default(p);
+    return cst_parse_default(ctx, p);
   if (equal(tok, "goto"))
-    return cst_parse_goto(p);
+    return cst_parse_goto(ctx, p);
   if (equal(tok, "break"))
-    return cst_parse_simple_stmt(p, CST_BREAK);
+    return cst_parse_simple_stmt(ctx, p, CST_BREAK);
   if (equal(tok, "continue"))
-    return cst_parse_simple_stmt(p, CST_CONTINUE);
+    return cst_parse_simple_stmt(ctx, p, CST_CONTINUE);
   if (equal(tok, "asm") || equal(tok, "__asm__"))
-    return cst_parse_asm(p);
+    return cst_parse_asm(ctx, p);
 
   if (tok->kind == TK_IDENT && equal(tok->next, ":"))
-    return cst_parse_label(p);
+    return cst_parse_label(ctx, p);
 
   if (equal(tok, "{")) {
-    CstNode *block = new_cst_node(CST_BLOCK);
-    cst_parse_compound(p, block);
+    CstNode *block = new_cst_node(ctx, CST_BLOCK);
+    cst_parse_compound(ctx, p, block);
     return p->ok ? block : NULL;
   }
 
   if (equal(tok, ";")) {
-    CstNode *null = new_cst_node(CST_NULL_STMT);
-    cst_add_leaf(null, tok);
+    CstNode *null = new_cst_node(ctx, CST_NULL_STMT);
+    cst_add_leaf(ctx, null, tok);
     p->tok = tok->next;
     return null;
   }
@@ -1946,7 +1946,7 @@ static CstNode *cst_parse_statement1(CstParser *p) {
   // unknown type (`size_t x;`) therefore fails the expression path and
   // becomes UNPARSED instead of being guessed.
   if (cst_is_decl_start(tok, p->cst)) {
-    CstNode *decl = cst_parse_decl(p);
+    CstNode *decl = cst_parse_decl(ctx, p);
     if (decl)
       return decl;
     cst_fail(p);
@@ -1954,7 +1954,7 @@ static CstNode *cst_parse_statement1(CstParser *p) {
   }
 
   Token *next = NULL;
-  CstNode *stmt = cst_try_expr_stmt(&next, tok, p->cst);
+  CstNode *stmt = cst_try_expr_stmt(ctx, &next, tok, p->cst);
   if (stmt) {
     p->tok = next;
     return stmt;
@@ -2045,9 +2045,9 @@ static CstKind cst_pp_kind(Token *tok) {
 // not past the end of the line. Parameters do not nest in valid input,
 // so the group is flat; a missing ')' stops at the line's end and turns
 // the group into UNPARSED.
-static CstNode *cst_parse_pp_params(Token **rest, Token *tok, Token *end) {
-  CstNode *group = new_cst_node(CST_GROUP_PAREN);
-  cst_add_leaf(group, tok);
+static CstNode *cst_parse_pp_params(ChibiccContext *ctx, Token **rest, Token *tok, Token *end) {
+  CstNode *group = new_cst_node(ctx, CST_GROUP_PAREN);
+  cst_add_leaf(ctx, group, tok);
 
   int depth = 1;
   Token *p = tok->next;
@@ -2056,7 +2056,7 @@ static CstNode *cst_parse_pp_params(Token **rest, Token *tok, Token *end) {
       depth++;
     } else if (equal(p, ")")) {
       depth--;
-      cst_add_leaf(group, p);
+      cst_add_leaf(ctx, group, p);
       p = p->next;
       if (depth == 0) {
         *rest = p;
@@ -2064,7 +2064,7 @@ static CstNode *cst_parse_pp_params(Token **rest, Token *tok, Token *end) {
       }
       continue;
     }
-    cst_add_leaf(group, p);
+    cst_add_leaf(ctx, group, p);
     p = p->next;
   }
 
@@ -2077,31 +2077,31 @@ static CstNode *cst_parse_pp_params(Token **rest, Token *tok, Token *end) {
 // the directive node. For #define the macro name is followed by a
 // GROUP_PAREN only when '(' comes with no space - the object / function
 // macro boundary of preprocess.c - so the dump records the distinction.
-static CstNode *cst_parse_directive_line(CstParser *p) {
+static CstNode *cst_parse_directive_line(ChibiccContext *ctx, CstParser *p) {
   Token *hash = p->tok;
   Token *end = cst_directive_end(hash);
-  CstNode *node = new_cst_node(cst_pp_kind(hash));
-  cst_add_leaf(node, hash);
+  CstNode *node = new_cst_node(ctx, cst_pp_kind(hash));
+  cst_add_leaf(ctx, node, hash);
 
   Token *tok = hash->next;
   if (node->kind == CST_PP_DEFINE && tok != end && tok->kind == TK_IDENT) {
-    cst_add_leaf(node, tok); // "define"
+    cst_add_leaf(ctx, node, tok); // "define"
     tok = tok->next;
 
     if (tok != end && tok->kind == TK_IDENT) {
-      cst_add_leaf(node, tok); // macro name
+      cst_add_leaf(ctx, node, tok); // macro name
       tok = tok->next;
 
       if (tok != end && equal(tok, "(") && !tok->has_space) {
         Token *rest = NULL;
-        cst_add_child(node, cst_parse_pp_params(&rest, tok, end));
+        cst_add_child(ctx, node, cst_parse_pp_params(ctx, &rest, tok, end));
         tok = rest;
       }
     }
   }
 
   while (tok != end) {
-    cst_add_leaf(node, tok);
+    cst_add_leaf(ctx, node, tok);
     tok = tok->next;
   }
 
@@ -2115,11 +2115,11 @@ static CstNode *cst_parse_directive_line(CstParser *p) {
 // nesting recurses through cst_parse_item and every branch keeps its
 // tokens. An unterminated group ends at EOF or at an enclosing closer;
 // an orphan #elif / #else / #endif is an ordinary directive line.
-static CstNode *cst_parse_pp_if(CstParser *p) {
-  CstNode *node = new_cst_node(CST_PP_IF);
-  CstNode *branch = new_cst_node(CST_PP_BRANCH);
-  cst_add_child(branch, cst_parse_directive_line(p));
-  cst_add_child(node, branch);
+static CstNode *cst_parse_pp_if(ChibiccContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_PP_IF);
+  CstNode *branch = new_cst_node(ctx, CST_PP_BRANCH);
+  cst_add_child(ctx, branch, cst_parse_directive_line(ctx, p));
+  cst_add_child(ctx, node, branch);
 
   for (;;) {
     while (p->ok && p->tok && p->tok->kind != TK_EOF &&
@@ -2128,7 +2128,7 @@ static CstNode *cst_parse_pp_if(CstParser *p) {
       // the group end unterminated instead of swallowing it.
       if (cst_is_close(p->tok))
         return node;
-      cst_add_child(branch, cst_parse_item(p));
+      cst_add_child(ctx, branch, cst_parse_item(ctx, p));
     }
 
     if (!p->ok || !p->tok || p->tok->kind == TK_EOF ||
@@ -2137,50 +2137,50 @@ static CstNode *cst_parse_pp_if(CstParser *p) {
 
     Token *name = cst_directive_name(p->tok);
     if (equal(name, "endif")) {
-      cst_add_child(node, cst_parse_directive_line(p));
+      cst_add_child(ctx, node, cst_parse_directive_line(ctx, p));
       return node;
     }
 
-    branch = new_cst_node(CST_PP_BRANCH);
-    cst_add_child(branch, cst_parse_directive_line(p));
-    cst_add_child(node, branch);
+    branch = new_cst_node(ctx, CST_PP_BRANCH);
+    cst_add_child(ctx, branch, cst_parse_directive_line(ctx, p));
+    cst_add_child(ctx, node, branch);
   }
 }
 
 // One item at statement level: a directive line (conditionals recurse),
 // or a statement / declaration with the raw fallback. Every path
 // consumes at least one token when one is available.
-static CstNode *cst_parse_item(CstParser *p) {
+static CstNode *cst_parse_item(ChibiccContext *ctx, CstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     Token *start = p->tok;
     p->ok = true;
     Token *next = NULL;
-    CstNode *item = cst_parse_fallback_statement(p->cst, &next, start);
+    CstNode *item = cst_parse_fallback_statement(ctx, p->cst, &next, start);
     p->tok = next;
     return item;
   }
-  CstNode *item = cst_parse_item1(p);
+  CstNode *item = cst_parse_item1(ctx, p);
   p->cst->depth--;
   return item;
 }
 
-static CstNode *cst_parse_item1(CstParser *p) {
+static CstNode *cst_parse_item1(ChibiccContext *ctx, CstParser *p) {
   if (cst_is_directive(p->tok)) {
     if (cst_is_pp_if(p->tok))
-      return cst_parse_pp_if(p);
-    return cst_parse_directive_line(p);
+      return cst_parse_pp_if(ctx, p);
+    return cst_parse_directive_line(ctx, p);
   }
 
   Token *start = p->tok;
-  CstNode *item = cst_parse_statement(p);
+  CstNode *item = cst_parse_statement(ctx, p);
   if (item)
     return item;
 
   p->tok = start;
   p->ok = true;
   Token *next = NULL;
-  item = cst_parse_fallback_statement(p->cst, &next, start);
+  item = cst_parse_fallback_statement(ctx, p->cst, &next, start);
   p->tok = next;
   return item;
 }
@@ -2190,24 +2190,24 @@ static CstNode *cst_parse_item1(CstParser *p) {
 // A failed item is rebuilt from its first token with the raw fallback, so
 // one malformed construct does not cost the rest of the block. A missing
 // '}' turns the block itself into UNPARSED; parsing continues at EOF.
-static void cst_parse_compound(CstParser *p, CstNode *block) {
-  cst_add_leaf(block, p->tok); // '{'
+static void cst_parse_compound(ChibiccContext *ctx, CstParser *p, CstNode *block) {
+  cst_add_leaf(ctx, block, p->tok); // '{'
   p->tok = p->tok->next;
 
   while (p->ok && p->tok && p->tok->kind != TK_EOF && !equal(p->tok, "}")) {
     if (cst_is_close(p->tok)) {
-      CstNode *unparsed = new_cst_node(CST_UNPARSED);
-      cst_add_leaf(unparsed, p->tok);
-      cst_add_child(block, unparsed);
+      CstNode *unparsed = new_cst_node(ctx, CST_UNPARSED);
+      cst_add_leaf(ctx, unparsed, p->tok);
+      cst_add_child(ctx, block, unparsed);
       p->tok = p->tok->next;
       continue;
     }
 
-    cst_add_child(block, cst_parse_item(p));
+    cst_add_child(ctx, block, cst_parse_item(ctx, p));
   }
 
   if (p->ok && p->tok && p->tok->kind != TK_EOF && equal(p->tok, "}")) {
-    cst_add_leaf(block, p->tok);
+    cst_add_leaf(ctx, block, p->tok);
     p->tok = p->tok->next;
   } else {
     block->kind = CST_UNPARSED;
@@ -2216,32 +2216,32 @@ static void cst_parse_compound(CstParser *p, CstNode *block) {
 
 // Split the top level into items. The EOF token is left for cst_parse so
 // that it stays the tree's last leaf whatever the items do.
-static void cst_parse_items(CstNode *parent, CstParser *p) {
+static void cst_parse_items(ChibiccContext *ctx, CstNode *parent, CstParser *p) {
   while (p->ok && p->tok && p->tok->kind != TK_EOF) {
     if (cst_is_close(p->tok)) {
-      CstNode *unparsed = new_cst_node(CST_UNPARSED);
-      cst_add_leaf(unparsed, p->tok);
-      cst_add_child(parent, unparsed);
+      CstNode *unparsed = new_cst_node(ctx, CST_UNPARSED);
+      cst_add_leaf(ctx, unparsed, p->tok);
+      cst_add_child(ctx, parent, unparsed);
       p->tok = p->tok->next;
       continue;
     }
 
-    cst_add_child(parent, cst_parse_item(p));
+    cst_add_child(ctx, parent, cst_parse_item(ctx, p));
   }
 }
 
 // Build the CST for tokenize_file()'s output. The EOF marker has its own
 // kind because it carries the file's trailing trivia and no spelling.
-CstNode *cst_parse(Token *tok) {
+CstNode *cst_parse(ChibiccContext *ctx, Token *tok) {
   CstContext cst = {};
-  cst_collect_typedefs(&cst, tok);
+  cst_collect_typedefs(ctx, &cst, tok);
 
   CstParser p = {tok, true, &cst};
-  CstNode *root = new_cst_node(CST_TRANSLATION_UNIT);
-  cst_parse_items(root, &p);
+  CstNode *root = new_cst_node(ctx, CST_TRANSLATION_UNIT);
+  cst_parse_items(ctx, root, &p);
 
   if (p.tok && p.tok->kind == TK_EOF)
-    cst_add_leaf(root, p.tok);
+    cst_add_leaf(ctx, root, p.tok);
   return root;
 }
 
@@ -2263,7 +2263,7 @@ void cst_reconstruct(CstNode *root, FILE *out) {
   cst_reconstruct_node(root, out);
 }
 
-static char *cst_kind_name(CstKind kind) {
+static char *cst_kind_name(ChibiccContext *ctx, CstKind kind) {
   switch (kind) {
   case CST_TRANSLATION_UNIT: return "TU";
   case CST_TOKEN:            return "TOKEN";
@@ -2347,11 +2347,11 @@ static void cst_print_escaped(FILE *out, char *p, int len) {
   }
 }
 
-static void cst_dump_node(CstNode *node, FILE *out, int depth) {
+static void cst_dump_node(ChibiccContext *ctx, CstNode *node, FILE *out, int depth) {
   for (int i = 0; i < depth; i++)
     fputs("  ", out);
 
-  fputs(cst_kind_name(node->kind), out);
+  fputs(cst_kind_name(ctx, node->kind), out);
 
   if (node->tok && node->tok->raw_len) {
     fputc(' ', out);
@@ -2360,14 +2360,14 @@ static void cst_dump_node(CstNode *node, FILE *out, int depth) {
   fputc('\n', out);
 
   for (int i = 0; i < node->child_count; i++)
-    cst_dump_node(node->children[i], out, depth + 1);
+    cst_dump_node(ctx, node->children[i], out, depth + 1);
 }
 
 // Print the tree shape, two spaces per level. Leaf text is the token's
 // raw spelling (not its trivia); the dump locks the tree, the round-trip
 // locks the bytes.
-void cst_dump(CstNode *root, FILE *out) {
-  cst_dump_node(root, out, 0);
+void cst_dump(ChibiccContext *ctx, CstNode *root, FILE *out) {
+  cst_dump_node(ctx, root, out, 0);
 }
 
 static bool cst_verify_node(CstNode *node, Token **cur) {
