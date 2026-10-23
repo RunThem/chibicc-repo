@@ -15,12 +15,12 @@ prefix="$tmp/prefix"
 make -C "$root" install PREFIX="$prefix" >/dev/null
 
 count=$(ls "$prefix/include/chibicc" | wc -l | tr -d ' ')
-if [ "$count" -ne 9 ]; then
-  echo "install: expected 9 public headers, found $count" >&2
+if [ "$count" -ne 10 ]; then
+  echo "install: expected 10 public headers, found $count" >&2
   ls "$prefix/include/chibicc" >&2
   exit 1
 fi
-for h in chibicc context diagnostic token preprocess provenance cst ast sema; do
+for h in chibicc allocator context diagnostic token preprocess provenance cst ast sema; do
   if [ ! -f "$prefix/include/chibicc/$h.h" ]; then
     echo "install: missing header $h.h" >&2
     exit 1

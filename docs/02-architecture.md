@@ -176,7 +176,7 @@ chibicc_context_free(ctx);                     /* 销毁 */
 
 分配策略:
 
-- 块大小 64 KiB, 按需追加.
+- 块大小 64 KiB, 按需追加. 块本身从 `<chibicc/allocator.h>` 的 `CHIBICC_*` 宏取得, 默认是 libc, 可在重编库时替换.
 - `calloc` 语义, 返回的内存零初始化.
 - 对齐至少 8 字节; 零初始化分配用 16 字节, 因为 `Token` 和 `Node` 内含 `long double`.
 - `realloc` 复制到新块, 旧块不回收. 因此扩容的峰值约为最终大小的两倍.

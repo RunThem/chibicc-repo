@@ -9,6 +9,7 @@
 #ifndef CHIBICC_H
 #define CHIBICC_H
 
+#include <chibicc/allocator.h>
 #include <chibicc/diagnostic.h>
 #include <chibicc/context.h>
 #include <chibicc/token.h>

@@ -25,7 +25,7 @@ fi
 mkdir -p "$tmp/pubinc"
 cp -R "$root/libchibicc/include/chibicc" "$tmp/pubinc/"
 
-for h in diagnostic context token preprocess provenance cst ast sema chibicc; do
+for h in allocator diagnostic context token preprocess provenance cst ast sema chibicc; do
   cat > "$tmp/h.c" <<EOF
 #include <chibicc/$h.h>
 int main(void) { return 0; }

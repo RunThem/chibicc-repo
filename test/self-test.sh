@@ -23,7 +23,9 @@ if [ ! -f "$lib" ]; then
   exit 1
 fi
 
-"$cc" -std=c11 -g -Wall -Wno-switch $pratt_flag \
+# The test includes the internal umbrella, so it sees the allocator
+# check; it is compiled for the default allocator, like the archive.
+"$cc" -std=c11 -g -Wall -Wno-switch $pratt_flag -DCHIBICC_DEFAULT_ALLOCATOR \
   -I"$root/libchibicc/include" -I"$root/libchibicc/src" \
   "$root/test/self/self-test.c" "$lib" -o "$tmp/self-test"
 "$tmp/self-test"

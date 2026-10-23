@@ -827,8 +827,9 @@ static char *read_file(ChibiccContext *ctx, char *path, size_t *len) {
   fputc('\0', out);
   fclose(out);
 
-  // The memstream buffer is malloc-owned; move the text into the arena
-  // so a context reset releases it with everything else.
+  // The memstream buffer belongs to the C library's malloc, not to
+  // CHIBICC_MALLOC, so it is released with free(); the text is moved
+  // into the arena so a context reset releases it with everything else.
   if (ctx) {
     char *copy = chibicc_arena_alloc(ctx, data_len + 1, 1);
     memcpy(copy, buf, data_len + 1);

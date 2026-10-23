@@ -1,4 +1,9 @@
-CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch -Ilibchibicc/include -Ilibchibicc/src
+# The allocator build switch (chibicc/allocator.h): the default build
+# selects the C library allocator. A custom build overrides
+# ALLOCATOR_CFLAGS with an -include shim header plus the four
+# CHIBICC_* macros and leaves CHIBICC_DEFAULT_ALLOCATOR undefined.
+ALLOCATOR_CFLAGS ?= -DCHIBICC_DEFAULT_ALLOCATOR
+CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch $(ALLOCATOR_CFLAGS) -Ilibchibicc/include -Ilibchibicc/src
 
 # Keep VERSION in sync with CHIBICC_VERSION in the public umbrella.
 VERSION=0.1.0
@@ -92,6 +97,7 @@ test: $(TESTS)
 	test/cst.sh ./chibicc
 	test/expand.sh ./chibicc
 	test/library.sh
+	test/allocator.sh
 	test/self-test.sh
 	CHIBICC_LIB="$(CURDIR)/libchibicc.a" test/context-audit.sh --strict
 
@@ -128,6 +134,7 @@ test-all: test test-stage2
 # install / pkg-config layout (L3.3c).
 check-library: $(CHECK_LIBS) libchibicc.pc
 	test/library.sh
+	test/allocator.sh
 	test/public-api.sh
 	test/install.sh
 
@@ -160,7 +167,7 @@ stage2/libchibicc.a: $(STAGE2_LIB_OBJS)
 
 stage2/%.o: %.c chibicc $(LIB_HDR) $(PUBLIC_HDRS)
 	mkdir -p $(@D)
-	./chibicc -Ilibchibicc/include -Ilibchibicc/src -c -o $@ $<
+	./chibicc -DCHIBICC_DEFAULT_ALLOCATOR -Ilibchibicc/include -Ilibchibicc/src -c -o $@ $<
 
 stage2/main.o stage2/codegen.o: driver.h
 
@@ -194,7 +201,7 @@ stage2-pratt/libchibicc.a: $(STAGE2_PRATT_LIB_OBJS)
 
 stage2-pratt/%.o: %.c chibicc-pratt $(LIB_HDR) $(PUBLIC_HDRS)
 	mkdir -p $(@D)
-	./chibicc-pratt -DCHIBICC_PRATT_PARSE_FEATURE=1 -Ilibchibicc/include -Ilibchibicc/src -c -o $@ $<
+	./chibicc-pratt -DCHIBICC_PRATT_PARSE_FEATURE=1 -DCHIBICC_DEFAULT_ALLOCATOR -Ilibchibicc/include -Ilibchibicc/src -c -o $@ $<
 
 stage2-pratt/main.o stage2-pratt/codegen.o: driver.h
 

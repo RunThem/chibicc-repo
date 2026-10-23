@@ -34,7 +34,8 @@
 - `chibicc_reconstruct`: 从第 1 层的 token 流重建原始字节.
 - 宏展开 provenance 的 11 个访问器, 以及 `chibicc_expansion_dump` / `_verify`.
 - 一个不透明的 `ChibiccContext`, 管理一个翻译单元的全部状态和内存.
-- 9 个公共头, 36 个公共函数. 公共符号一律 `chibicc_` / `Chibicc` 前缀.
+- 一套可替换的分配器宏 (`<chibicc/allocator.h>`).
+- 10 个公共头, 36 个公共函数. 公共符号一律 `chibicc_` / `Chibicc` 前缀.
 
 库的实现约 1.2 万行 C, 公共头约 2.3 千行. 它没有外部依赖, 除 C 标准库外只要求 POSIX 的文件与线程基础能力.
 

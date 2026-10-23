@@ -839,7 +839,7 @@ mkdir -p "$tmp/asan"
 asan_objs=
 for src in "$root"/libchibicc/src/*.c; do
   base=$(basename "$src" .c)
-  "$cc" -std=c11 -g -Wall -Wno-switch $pratt_flag -DCHIBICC_DEBUG_ARENA -DCHIBICC_TEST_BUILTINS -fsanitize=address,undefined -fno-omit-frame-pointer \
+  "$cc" -std=c11 -g -Wall -Wno-switch $pratt_flag -DCHIBICC_DEFAULT_ALLOCATOR -DCHIBICC_DEBUG_ARENA -DCHIBICC_TEST_BUILTINS -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$root/libchibicc/include" -I"$root/libchibicc/src" -c "$src" -o "$tmp/asan/$base.o"
   asan_objs="$asan_objs $tmp/asan/$base.o"
 done

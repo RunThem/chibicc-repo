@@ -75,6 +75,7 @@ make install PREFIX=/opt/libchibicc DESTDIR=/tmp/stage
 ```text
 $PREFIX/include/chibicc/
   chibicc.h
+  allocator.h
   context.h
   diagnostic.h
   token.h
@@ -91,7 +92,7 @@ $PREFIX/lib/pkgconfig/libchibicc.pc
 
 `test/install.sh` 校验:
 
-- 恰好 9 个公共头.
+- 恰好 10 个公共头.
 - `libchibicc.a` 存在.
 - `libchibicc.pc` 存在.
 - Linux 下 `.so` 和符号链接存在.
@@ -210,6 +211,7 @@ make test-stage2-pratt
 | `test/cst.sh` | 305 项 CST 断言与 61 个 dump 样本 |
 | `test/expand.sh` | 29 个 provenance dump 样本, 3 个链形状样本, 17 个 verify 样本, 全量语料 |
 | `test/library.sh` | 公共面消费者, 错误路径, 双 context, ASan/UBSan |
+| `test/allocator.sh` | 用替换分配器重编库, 活块归零 |
 | `test/self-test.sh` | 库内自测: hashmap / arena / sema 状态重置 |
 
 `make test` 需要能汇编和运行 x86-64 Linux 目标. 在 macOS 上会在汇编阶段失败. 本机只做前端检查:
@@ -235,7 +237,7 @@ make test-stage2-pratt
 make check-library
 ```
 
-运行三个脚本:
+运行四个脚本:
 
 1. `test/library.sh`: 用宿主 `cc` 链接 `libchibicc.a`, 验证:
    - tokenize / preprocess / parse / sema.
@@ -245,13 +247,14 @@ make check-library
    - reset 复用.
    - 同线程双 context 与跨线程双 context.
    - ASan + UBSan 重编库对象, 检查零 UB, 活字节上界, free 后回基线.
-2. `test/public-api.sh`: 验证:
+2. `test/allocator.sh`: 用 `CHIBICC_MALLOC` / `CHIBICC_CALLOC` / `CHIBICC_REALLOC` / `CHIBICC_FREE` 的计数替换版重编整个库, 验证替换分配器确实被调用, 且 `chibicc_context_free` 后活块归零.
+3. `test/public-api.sh`: 验证:
    - 每个公共头单独 `-fsyntax-only -Wall -Wextra`.
    - 只看到公共头的消费者能编译链接.
    - 消费者对象不引用内部符号.
    - `.a` 中 D7 全部存在.
    - Linux `.so` 只导出 D7.
-3. `test/install.sh`: 验证安装布局与 pkg-config.
+4. `test/install.sh`: 验证安装布局与 pkg-config.
 
 ## 10.10 Docker 闸门
 
@@ -315,6 +318,38 @@ cc app.c $(PKG_CONFIG_PATH=/opt/libchibicc/lib/pkgconfig \
 ### 10.11.4 共享库
 
 Linux 下链接 `-lchibicc`, 运行时需要 `LD_LIBRARY_PATH` 或安装到系统路径. 共享库只导出 D7, 没有内部符号碰撞风险.
+
+### 10.11.5 替换分配器
+
+`<chibicc/allocator.h>` 只有两个构建期状态:
+
+- 定义 `CHIBICC_DEFAULT_ALLOCATOR`: 四个宏展开为 C 库的 `malloc` / `calloc` / `realloc` / `free`. 默认构建就是这样.
+- 不定义它: 嵌入方提供 `CHIBICC_MALLOC` / `CHIBICC_CALLOC` / `CHIBICC_REALLOC` / `CHIBICC_FREE` 四个宏. 构建 libchibicc 时缺一个就在包含处 `#error`, 不会静默回落到 libc.
+
+Makefile 的 `ALLOCATOR_CFLAGS` 默认是 `-DCHIBICC_DEFAULT_ALLOCATOR`. 自定义构建覆盖它即可, 下面是 mimalloc 的例子:
+
+```sh
+# -include 让每个库编译单元看到 mimalloc 的声明; -D 定义的是对象式
+# 宏, 因此 CHIBICC_MALLOC(size) 展开成 mi_malloc(size), 其余同理.
+make clean
+make libchibicc.a ALLOCATOR_CFLAGS='-include mimalloc.h -DCHIBICC_MALLOC=mi_malloc -DCHIBICC_CALLOC=mi_calloc -DCHIBICC_REALLOC=mi_realloc -DCHIBICC_FREE=mi_free'
+```
+
+`mimalloc.h` 必须在编译器的 include 路径里; 不在的话把 `-I/usr/local/include` 加进 `ALLOCATOR_CFLAGS`, 或把 `-include` 的路径写成绝对路径.
+
+如果要连 `chibicc` 驱动器一起构建, 链接时还要给出 mimalloc:
+
+```sh
+make ALLOCATOR_CFLAGS='-include mimalloc.h -DCHIBICC_MALLOC=mi_malloc -DCHIBICC_CALLOC=mi_calloc -DCHIBICC_REALLOC=mi_realloc -DCHIBICC_FREE=mi_free' LDFLAGS='-lmimalloc'
+```
+
+要点:
+
+- 不要同时定义 `CHIBICC_DEFAULT_ALLOCATOR`, 否则四个宏会被 libc 版本覆盖(重定义警告), 自定义分配器不会生效.
+- 自定义构建的文件必须是库的每个编译单元都能看到的, 并且链接时提供这四个函数.
+- 替换实现必须满足 libc 的对齐, 清零与 `realloc` 失败语义, 见 9.3.11.
+- `make test-stage2` 的 stage2 规则固定传 `-DCHIBICC_DEFAULT_ALLOCATOR`, 即自举检查始终用默认分配器; 自定义分配器用宿主 cc 构建 `libchibicc.a`, 并可用 `test/allocator.sh` 的计数版验证.
+- 只给消费者加宏不会影响预编译的库.
 
 ## 10.12 常见问题
 

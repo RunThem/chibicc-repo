@@ -46,12 +46,12 @@ static void *arena_alloc(ChibiccContext *ctx, size_t size, size_t align) {
   if (size == 0)
     size = 1;
 
-  ArenaBlock *b = calloc(1, sizeof(ArenaBlock));
+  ArenaBlock *b = CHIBICC_CALLOC(1, sizeof(ArenaBlock));
   if (!b)
     return NULL;
-  b->data = malloc(size);
+  b->data = CHIBICC_MALLOC(size);
   if (!b->data) {
-    free(b);
+    CHIBICC_FREE(b);
     return NULL;
   }
   b->cap = size;
@@ -74,8 +74,8 @@ static void *arena_alloc(ChibiccContext *ctx, size_t size, size_t align) {
     size_t cap = ARENA_BLOCK_SIZE;
     if (cap < size + align)
       cap = size + align;
-    ArenaBlock *nb = calloc(1, sizeof(ArenaBlock));
-    nb->data = malloc(cap);
+    ArenaBlock *nb = CHIBICC_CALLOC(1, sizeof(ArenaBlock));
+    nb->data = CHIBICC_MALLOC(cap);
     nb->cap = cap;
     nb->next = b;
     ctx->arena = nb;
@@ -139,10 +139,20 @@ void *chibicc_arena_realloc(ChibiccContext *ctx, void *old, size_t old_size, siz
   return p;
 }
 
+// strdup would take the C library's allocator, but the context frees
+// these blocks through CHIBICC_FREE; a replaced allocator must own them.
+static char *config_strdup(char *s) {
+  size_t n = strlen(s) + 1;
+  char *p = CHIBICC_MALLOC(n);
+  if (p)
+    memcpy(p, s, n);
+  return p;
+}
+
 static void config_push(char ***arr, int *len, int *cap, char *s) {
   if (*len + 1 >= *cap) {
     int ncap = *cap ? *cap * 2 : 8;
-    char **n = realloc(*arr, sizeof(char *) * ncap);
+    char **n = CHIBICC_REALLOC(*arr, sizeof(char *) * ncap);
     // On OOM keep the old array and capacity; the caller's string is
     // not stored. A void configuration setter has no report path.
     if (!n)
@@ -156,7 +166,7 @@ static void config_push(char ***arr, int *len, int *cap, char *s) {
 
 void chibicc_context_add_include_path(ChibiccContext *ctx, char *path) {
   config_push(&ctx->include_paths, &ctx->include_paths_len,
-              &ctx->include_paths_cap, strdup(path));
+              &ctx->include_paths_cap, config_strdup(path));
 }
 
 void chibicc_context_set_base_file(ChibiccContext *ctx, char *path) {
@@ -181,7 +191,7 @@ static void apply_macro_op(ChibiccContext *ctx, char *op) {
 
 void chibicc_context_define(ChibiccContext *ctx, char *name, char *buf) {
   size_t n = strlen(name) + strlen(buf) + 4;
-  char *s = calloc(1, n);
+  char *s = CHIBICC_CALLOC(1, n);
   snprintf(s, n, "D:%s=%s", name, buf);
   config_push(&ctx->macro_ops, &ctx->macro_ops_len, &ctx->macro_ops_cap, s);
   apply_macro_op(ctx, s);
@@ -189,7 +199,7 @@ void chibicc_context_define(ChibiccContext *ctx, char *name, char *buf) {
 
 void chibicc_context_undef(ChibiccContext *ctx, char *name) {
   size_t n = strlen(name) + 3;
-  char *s = calloc(1, n);
+  char *s = CHIBICC_CALLOC(1, n);
   snprintf(s, n, "U:%s", name);
   config_push(&ctx->macro_ops, &ctx->macro_ops_len, &ctx->macro_ops_cap, s);
   apply_macro_op(ctx, s);
@@ -213,8 +223,8 @@ bool chibicc_context_failed(ChibiccContext *ctx) {
 static void free_arena(ChibiccContext *ctx) {
   for (ArenaBlock *b = ctx->arena; b;) {
     ArenaBlock *next = b->next;
-    free(b->data);
-    free(b);
+    CHIBICC_FREE(b->data);
+    CHIBICC_FREE(b);
     b = next;
   }
   ctx->arena = NULL;
@@ -251,7 +261,7 @@ static void clear_state(ChibiccContext *ctx) {
 }
 
 ChibiccContext *chibicc_context_new(void) {
-  ChibiccContext *ctx = calloc(1, sizeof(ChibiccContext));
+  ChibiccContext *ctx = CHIBICC_CALLOC(1, sizeof(ChibiccContext));
   ctx->predefined_macros = true;
   init_macros(ctx);
   return ctx;
@@ -270,12 +280,12 @@ void chibicc_context_free(ChibiccContext *ctx) {
     return;
   free_arena(ctx);
   for (int i = 0; i < ctx->include_paths_len; i++)
-    free(ctx->include_paths[i]);
-  free(ctx->include_paths);
+    CHIBICC_FREE(ctx->include_paths[i]);
+  CHIBICC_FREE(ctx->include_paths);
   for (int i = 0; i < ctx->macro_ops_len; i++)
-    free(ctx->macro_ops[i]);
-  free(ctx->macro_ops);
-  free(ctx);
+    CHIBICC_FREE(ctx->macro_ops[i]);
+  CHIBICC_FREE(ctx->macro_ops);
+  CHIBICC_FREE(ctx);
 }
 
 Token *chibicc_tokenize_file(ChibiccContext *ctx, char *path) {
