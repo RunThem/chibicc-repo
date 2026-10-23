@@ -33,26 +33,26 @@
 
 #include "chibicc.h"
 
-static Type *find_typedef(Token *tok);
-static Type *find_tag(Token *tok);
-static Type *find_current_tag(Token *tok);
-static void push_tag_scope(Token *tok, Type *ty);
-static void add_typedef(Node *node);
-static void add_declared_name(Token *tok);
-static void enter_scope(void);
-static void leave_scope(void);
+static Type *find_typedef(ChibiccContext *ctx, Token *tok);
+static Type *find_tag(ChibiccContext *ctx, Token *tok);
+static Type *find_current_tag(ChibiccContext *ctx, Token *tok);
+static void push_tag_scope(ChibiccContext *ctx, Token *tok, Type *ty);
+static void add_typedef(ChibiccContext *ctx, Node *node);
+static void add_declared_name(ChibiccContext *ctx, Token *tok);
+static void enter_scope(ChibiccContext *ctx);
+static void leave_scope(ChibiccContext *ctx);
 
 // Bound the parser's recursion: pathological nesting must fail with a
 // diagnostic, not a stack overflow.
 #define MAX_PARSE_DEPTH 512
 
-static bool is_typename(Token *tok);
-static Token *attribute_list(Token *tok, Type *ty);
-static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs);
-static Type *typename(Token **rest, Token *tok, Node **specs);
-static Type *enum_specifier(Token **rest, Token *tok, Node **specs);
-static Type *typeof_specifier(Token **rest, Token *tok, Node **specs);
-static Type *type_suffix(Token **rest, Token *tok, Type *ty);
+static bool is_typename(ChibiccContext *ctx, Token *tok);
+static Token *attribute_list(ChibiccContext *ctx, Token *tok, Type *ty);
+static Type *declspec(ChibiccContext *ctx, Token **rest, Token *tok, VarAttr *attr, Node **specs);
+static Type *typename(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs);
+static Type *enum_specifier(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs);
+static Type *typeof_specifier(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs);
+static Type *type_suffix(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty);
 
 // The built-in types are shared by every context (type.c), and a tag or
 // typedef type is shared by every declaration that names it. A
@@ -63,87 +63,87 @@ typedef struct {
   Token *name_pos; // where the name would go, for "name omitted"
 } DeclName;
 
-static Type *declarator(Token **rest, Token *tok, Type *ty, DeclName *decl);
-static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr);
-static Initializer *init_record(Token **rest, Token *tok);
-static Node *compound_stmt(Token **rest, Token *tok);
-static Node *stmt(Token **rest, Token *tok);
-static Node *expr_stmt(Token **rest, Token *tok);
-static Node *expr(Token **rest, Token *tok);
-static Node *assign(Token **rest, Token *tok);
+static Type *declarator(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl);
+static Node *declaration(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
+static Initializer *init_record(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *compound_stmt(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *stmt(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *expr_stmt(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *expr(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *assign(ChibiccContext *ctx, Token **rest, Token *tok);
 #if !CHIBICC_PRATT_PARSE_FEATURE
-static Node *logor(Token **rest, Token *tok);
-static Node *logand(Token **rest, Token *tok);
-static Node *bitor(Token **rest, Token *tok);
-static Node *bitxor(Token **rest, Token *tok);
-static Node *bitand(Token **rest, Token *tok);
-static Node *equality(Token **rest, Token *tok);
-static Node *relational(Token **rest, Token *tok);
-static Node *shift(Token **rest, Token *tok);
-static Node *add(Token **rest, Token *tok);
-static Node *mul(Token **rest, Token *tok);
+static Node *logor(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *logand(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *bitor(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *bitxor(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *bitand(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *equality(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *relational(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *shift(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *add(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *mul(ChibiccContext *ctx, Token **rest, Token *tok);
 #endif
 #if !CHIBICC_PRATT_PARSE_FEATURE
-static Node *cast(Token **rest, Token *tok);
+static Node *cast(ChibiccContext *ctx, Token **rest, Token *tok);
 #endif
-static Type *struct_decl(Token **rest, Token *tok, Node **specs);
-static Type *union_decl(Token **rest, Token *tok, Node **specs);
+static Type *struct_decl(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs);
+static Type *union_decl(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs);
 #if !CHIBICC_PRATT_PARSE_FEATURE
-static Node *postfix(Token **rest, Token *tok);
+static Node *postfix(ChibiccContext *ctx, Token **rest, Token *tok);
 #endif
-static Node *funcall(Token **rest, Token *tok, Node *node);
-static Node *unary(Token **rest, Token *tok);
+static Node *funcall(ChibiccContext *ctx, Token **rest, Token *tok, Node *node);
+static Node *unary(ChibiccContext *ctx, Token **rest, Token *tok);
 // The body behind each depth-guarded entry (the wrapper increments
 // parse_depth before calling it).
-static Type *declarator1(Token **rest, Token *tok, Type *ty, DeclName *decl);
-static Type *abstract_declarator(Token **rest, Token *tok, Type *ty);
-static Type *abstract_declarator1(Token **rest, Token *tok, Type *ty);
-static Initializer *init_record1(Token **rest, Token *tok);
+static Type *declarator1(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl);
+static Type *abstract_declarator(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty);
+static Type *abstract_declarator1(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty);
+static Initializer *init_record1(ChibiccContext *ctx, Token **rest, Token *tok);
 #if !CHIBICC_PRATT_PARSE_FEATURE
-static Node *expr1(Token **rest, Token *tok);
-static Node *assign1(Token **rest, Token *tok);
-static Node *conditional1(Token **rest, Token *tok);
+static Node *expr1(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *assign1(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *conditional1(ChibiccContext *ctx, Token **rest, Token *tok);
 #endif
 #if !CHIBICC_PRATT_PARSE_FEATURE
-static Node *cast1(Token **rest, Token *tok);
-static Node *unary1(Token **rest, Token *tok);
+static Node *cast1(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *unary1(ChibiccContext *ctx, Token **rest, Token *tok);
 #endif
-static Node *primary(Token **rest, Token *tok);
-static Node *parse_typedef(Token **rest, Token *tok, Type *basety);
-static bool is_function(Token *tok);
-static Node *function_def(Token **rest, Token *tok, Type *basety, VarAttr *attr);
-static Node *global_variable(Token **rest, Token *tok, Type *basety, VarAttr *attr);
+static Node *primary(ChibiccContext *ctx, Token **rest, Token *tok);
+static Node *parse_typedef(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety);
+static bool is_function(ChibiccContext *ctx, Token *tok);
+static Node *function_def(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
+static Node *global_variable(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
 
-Node *new_node(NodeKind kind, Token *tok) {
-  Node *node = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Node));
+Node *new_node(ChibiccContext *ctx, NodeKind kind, Token *tok) {
+  Node *node = chibicc_arena_calloc(ctx, 1, sizeof(Node));
   node->kind = kind;
   node->tok = tok;
   return node;
 }
 
-Node *new_binary(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
-  Node *node = new_node(kind, tok);
+Node *new_binary(ChibiccContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
+  Node *node = new_node(ctx, kind, tok);
   node->lhs = lhs;
   node->rhs = rhs;
   return node;
 }
 
-Node *new_unary(NodeKind kind, Node *expr, Token *tok) {
-  Node *node = new_node(kind, tok);
+Node *new_unary(ChibiccContext *ctx, NodeKind kind, Node *expr, Token *tok) {
+  Node *node = new_node(ctx, kind, tok);
   node->lhs = expr;
   return node;
 }
 
-Node *new_num(int64_t val, Token *tok) {
-  Node *node = new_node(ND_NUM, tok);
+Node *new_num(ChibiccContext *ctx, int64_t val, Token *tok) {
+  Node *node = new_node(ctx, ND_NUM, tok);
   node->val = val;
   return node;
 }
 
-char *get_ident(Token *tok) {
+char *get_ident(ChibiccContext *ctx, Token *tok) {
   if (tok->kind != TK_IDENT)
-    error_tok(chibicc_ctx(), tok, "expected an identifier");
-  return chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len);
+    error_tok(ctx, tok, "expected an identifier");
+  return chibicc_arena_strndup(ctx, tok->loc, tok->len);
 }
 
 //
@@ -174,26 +174,26 @@ struct ParseScope {
   HashMap tags;
 };
 
-void parse_init(void) {
-  chibicc_ctx()->scope = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(ParseScope));
+void parse_init(ChibiccContext *ctx) {
+  ctx->scope = chibicc_arena_calloc(ctx, 1, sizeof(ParseScope));
 }
 
 // The parser's scope stack lives in ChibiccContext (PLAN L2.4).
-#define scope (chibicc_ctx()->scope)
+#define scope (ctx->scope)
 
-static void enter_scope(void) {
-  ParseScope *sc = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(ParseScope));
+static void enter_scope(ChibiccContext *ctx) {
+  ParseScope *sc = chibicc_arena_calloc(ctx, 1, sizeof(ParseScope));
   sc->next = scope;
   scope = sc;
 }
 
-static void leave_scope(void) {
+static void leave_scope(ChibiccContext *ctx) {
   scope = scope->next;
 }
 
 // The parser's typedef-name oracle: the C grammar needs to know whether
 // an identifier names a type before it can parse a declaration.
-static Type *find_typedef(Token *tok) {
+static Type *find_typedef(ChibiccContext *ctx, Token *tok) {
   if (tok->kind != TK_IDENT)
     return NULL;
 
@@ -209,21 +209,21 @@ static Type *find_typedef(Token *tok) {
 // visible immediately: the oracle has to classify the very next
 // identifier. sema completes the type when it reaches the ND_TYPEDEF
 // record this declaration also emits.
-static void add_typedef(Node *node) {
-  NameEntry *e = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(NameEntry));
+static void add_typedef(ChibiccContext *ctx, Node *node) {
+  NameEntry *e = chibicc_arena_calloc(ctx, 1, sizeof(NameEntry));
   e->type_def = node->ty;
-  hashmap_put(chibicc_ctx(), &scope->names, get_ident(node->tok), e);
+  hashmap_put(ctx, &scope->names, get_ident(ctx, node->tok), e);
 }
 
 // Records a name a declarator just declared (a variable, function,
 // parameter or enum constant), so that it shadows a typedef of the same
 // spelling for the rest of the parse.
-static void add_declared_name(Token *tok) {
-  hashmap_put(chibicc_ctx(), &scope->names, get_ident(tok), chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(NameEntry)));
+static void add_declared_name(ChibiccContext *ctx, Token *tok) {
+  hashmap_put(ctx, &scope->names, get_ident(ctx, tok), chibicc_arena_calloc(ctx, 1, sizeof(NameEntry)));
 }
 
 // Find a struct/union/enum tag by name, in any enclosing scope.
-static Type *find_tag(Token *tok) {
+static Type *find_tag(ChibiccContext *ctx, Token *tok) {
   for (ParseScope *sc = scope; sc; sc = sc->next) {
     Type *ty = hashmap_get2(&sc->tags, tok->loc, tok->len);
     if (ty)
@@ -235,12 +235,12 @@ static Type *find_tag(Token *tok) {
 // Find a tag declared in the current scope only; used when a tag is
 // (re)defined, so that a previous forward declaration in the same scope
 // keeps its identity.
-static Type *find_current_tag(Token *tok) {
+static Type *find_current_tag(ChibiccContext *ctx, Token *tok) {
   return hashmap_get2(&scope->tags, tok->loc, tok->len);
 }
 
-static void push_tag_scope(Token *tok, Type *ty) {
-  hashmap_put2(chibicc_ctx(), &scope->tags, tok->loc, tok->len, ty);
+static void push_tag_scope(ChibiccContext *ctx, Token *tok, Type *ty) {
+  hashmap_put2(ctx, &scope->tags, tok->loc, tok->len, ty);
 }
 
 // Appends a chain of nodes to the chain `cur` points into and returns
@@ -301,7 +301,7 @@ static void add_spec(Node **specs, Node *node) {
 // Enum constants an enum-specifier defines along the way are declaration
 // records with no statement of their own; they are appended to `*specs`
 // for the caller to place at this position of its chain or node.
-static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
+static Type *declspec(ChibiccContext *ctx, Token **rest, Token *tok, VarAttr *attr, Node **specs) {
   // We use a single integer as counters for all typenames.
   // For example, bits 0 and 1 represents how many times we saw the
   // keyword "void" so far. With this, we can use a switch statement
@@ -324,11 +324,11 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
   int counter = 0;
   bool is_atomic = false;
 
-  while (is_typename(tok) || equal(tok, "__attribute__")) {
+  while (is_typename(ctx, tok) || equal(tok, "__attribute__")) {
     // Declaration and function attributes are accepted in any specifier
     // position; the ones without a type meaning are ignored.
     if (equal(tok, "__attribute__")) {
-      tok = attribute_list(tok, NULL);
+      tok = attribute_list(ctx, tok, NULL);
       continue;
     }
 
@@ -336,7 +336,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
     if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern") ||
         equal(tok, "inline") || equal(tok, "_Thread_local") || equal(tok, "__thread")) {
       if (!attr)
-        error_tok(chibicc_ctx(), tok, "storage class specifier is not allowed in this context");
+        error_tok(ctx, tok, "storage class specifier is not allowed in this context");
 
       if (equal(tok, "typedef"))
         attr->is_typedef = true;
@@ -351,7 +351,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
 
       if (attr->is_typedef &&
           attr->is_static + attr->is_extern + attr->is_inline + attr->is_tls > 1)
-        error_tok(chibicc_ctx(), tok, "typedef may not be used together with static,"
+        error_tok(ctx, tok, "typedef may not be used together with static,"
                   " extern, inline, __thread or _Thread_local");
       tok = tok->next;
       continue;
@@ -367,8 +367,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
     if (equal(tok, "_Atomic")) {
       tok = tok->next;
       if (equal(tok , "(")) {
-        ty = typename(&tok, tok->next, specs);
-        tok = skip(chibicc_ctx(), tok, ")");
+        ty = typename(ctx, &tok, tok->next, specs);
+        tok = skip(ctx, tok, ")");
       }
       is_atomic = true;
       continue;
@@ -376,39 +376,39 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
 
     if (equal(tok, "_Alignas")) {
       if (!attr)
-        error_tok(chibicc_ctx(), tok, "_Alignas is not allowed in this context");
-      tok = skip(chibicc_ctx(), tok->next, "(");
+        error_tok(ctx, tok, "_Alignas is not allowed in this context");
+      tok = skip(ctx, tok->next, "(");
 
       // The `_Alignas(type)` form asks for a property of a type that
       // may not be complete yet, and the `_Alignas(expr)` form is a
       // constant expression; both are recorded for sema to settle.
       // Whichever comes last is the one that counts, as before.
-      if (is_typename(tok)) {
-        attr->align_ty = typename(&tok, tok, specs);
+      if (is_typename(ctx, tok)) {
+        attr->align_ty = typename(ctx, &tok, tok, specs);
         attr->align_expr = NULL;
       } else {
         attr->align_ty = NULL;
-        attr->align_expr = conditional(&tok, tok);
+        attr->align_expr = conditional(ctx, &tok, tok);
       }
-      tok = skip(chibicc_ctx(), tok, ")");
+      tok = skip(ctx, tok, ")");
       continue;
     }
 
     // Handle user-defined types.
-    Type *ty2 = find_typedef(tok);
+    Type *ty2 = find_typedef(ctx, tok);
     if (equal(tok, "struct") || equal(tok, "union") || equal(tok, "enum") ||
         equal(tok, "typeof") || ty2) {
       if (counter)
         break;
 
       if (equal(tok, "struct")) {
-        ty = struct_decl(&tok, tok->next, specs);
+        ty = struct_decl(ctx, &tok, tok->next, specs);
       } else if (equal(tok, "union")) {
-        ty = union_decl(&tok, tok->next, specs);
+        ty = union_decl(ctx, &tok, tok->next, specs);
       } else if (equal(tok, "enum")) {
-        ty = enum_specifier(&tok, tok->next, specs);
+        ty = enum_specifier(ctx, &tok, tok->next, specs);
       } else if (equal(tok, "typeof")) {
-        ty = typeof_specifier(&tok, tok->next, specs);
+        ty = typeof_specifier(ctx, &tok, tok->next, specs);
       } else {
         ty = ty2;
         tok = tok->next;
@@ -501,14 +501,14 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
       ty = ty_ldouble;
       break;
     default:
-      error_tok(chibicc_ctx(), tok, "invalid type");
+      error_tok(ctx, tok, "invalid type");
     }
 
     tok = tok->next;
   }
 
   if (is_atomic) {
-    ty = copy_type(chibicc_ctx(), ty);
+    ty = copy_type(ctx, ty);
     ty->is_atomic = true;
   }
 
@@ -518,10 +518,10 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr, Node **specs) {
 
 // func-params = ("void" | param ("," param)* ("," "...")?)? ")"
 // param       = declspec declarator
-static Type *func_params(Token **rest, Token *tok, Type *ty) {
+static Type *func_params(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
   if (equal(tok, "void") && equal(tok->next, ")")) {
     *rest = tok->next->next;
-    return func_type(chibicc_ctx(), ty);
+    return func_type(ctx, ty);
   }
 
   Type head = {};
@@ -531,32 +531,32 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
 
   while (!equal(tok, ")")) {
     if (cur != &head)
-      tok = skip(chibicc_ctx(), tok, ",");
+      tok = skip(ctx, tok, ",");
 
     if (equal(tok, "...")) {
       is_variadic = true;
       tok = tok->next;
-      skip(chibicc_ctx(), tok, ")");
+      skip(ctx, tok, ")");
       break;
     }
 
     DeclName decl = {};
-    Type *ty2 = declspec(&tok, tok, NULL, &specs);
-    ty2 = declarator(&tok, tok, ty2, &decl);
+    Type *ty2 = declspec(ctx, &tok, tok, NULL, &specs);
+    ty2 = declarator(ctx, &tok, tok, ty2, &decl);
 
     if (ty2->kind == TY_ARRAY) {
       // "array of T" is converted to "pointer to T" only in the parameter
       // context. For example, *argv[] is converted to **argv by this.
-      ty2 = pointer_to(chibicc_ctx(), ty2->base);
+      ty2 = pointer_to(ctx, ty2->base);
     } else if (ty2->kind == TY_FUNC) {
       // Likewise, a function is converted to a pointer to a function
       // only in the parameter context.
-      ty2 = pointer_to(chibicc_ctx(), ty2);
+      ty2 = pointer_to(ctx, ty2);
     }
 
     // The parameter record is copied into the function type; its name
     // lives on that per-parameter copy, where sema reads it.
-    Type *param = copy_type(chibicc_ctx(), ty2);
+    Type *param = copy_type(ctx, ty2);
     param->name = decl.name;
     param->name_pos = decl.name_pos;
     cur = cur->next = param;
@@ -565,7 +565,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
   if (cur == &head)
     is_variadic = true;
 
-  ty = func_type(chibicc_ctx(), ty);
+  ty = func_type(ctx, ty);
   ty->params = head.next;
   ty->is_variadic = is_variadic;
   // Enum constants a parameter's declspec defined (e.g.
@@ -577,44 +577,44 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
 }
 
 // array-dimensions = ("static" | "restrict")* const-expr? "]" type-suffix
-static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
+static Type *array_dimensions(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
   while (equal(tok, "static") || equal(tok, "restrict"))
     tok = tok->next;
 
   if (equal(tok, "]")) {
-    ty = type_suffix(rest, tok->next, ty);
-    return array_of(chibicc_ctx(), ty, -1);
+    ty = type_suffix(ctx, rest, tok->next, ty);
+    return array_of(ctx, ty, -1);
   }
 
-  Node *expr = conditional(&tok, tok);
-  tok = skip(chibicc_ctx(), tok, "]");
-  ty = type_suffix(rest, tok, ty);
+  Node *expr = conditional(ctx, &tok, tok);
+  tok = skip(ctx, tok, "]");
+  ty = type_suffix(ctx, rest, tok, ty);
 
   // Whether the dimension denotes a fixed-length array or a VLA depends
   // on whether the length expression is a constant expression - a
   // semantic question. The expression is recorded here and sema decides
   // the type when it resolves the declarator (see resolve_type).
-  return array_of_dim(chibicc_ctx(), ty, expr);
+  return array_of_dim(ctx, ty, expr);
 }
 
 // type-suffix = "(" func-params
 //             | "[" array-dimensions
 //             | ε
-static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
+static Type *type_suffix(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
   if (equal(tok, "("))
-    return func_params(rest, tok->next, ty);
+    return func_params(ctx, rest, tok->next, ty);
 
   if (equal(tok, "["))
-    return array_dimensions(rest, tok->next, ty);
+    return array_dimensions(ctx, rest, tok->next, ty);
 
   *rest = tok;
   return ty;
 }
 
 // pointers = ("*" ("const" | "volatile" | "restrict")*)*
-static Type *pointers(Token **rest, Token *tok, Type *ty) {
+static Type *pointers(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
   while (consume(&tok, tok, "*")) {
-    ty = pointer_to(chibicc_ctx(), ty);
+    ty = pointer_to(ctx, ty);
     while (equal(tok, "const") || equal(tok, "volatile") || equal(tok, "restrict") ||
            equal(tok, "__restrict") || equal(tok, "__restrict__"))
       tok = tok->next;
@@ -628,24 +628,24 @@ static Type *pointers(Token **rest, Token *tok, Type *ty) {
 // The declarator layer builds the type shape and leaves everything it
 // cannot decide syntactically (array dimensions, typeof operands) as
 // records for sema to complete.
-static Type *declarator(Token **rest, Token *tok, Type *ty, DeclName *decl) {
-  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(chibicc_ctx(), tok, "nesting too deep");
-  Type *node = declarator1(rest, tok, ty, decl);
-  chibicc_ctx()->parse_depth--;
+static Type *declarator(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl) {
+  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(ctx, tok, "nesting too deep");
+  Type *node = declarator1(ctx, rest, tok, ty, decl);
+  ctx->parse_depth--;
   return node;
 }
 
-static Type *declarator1(Token **rest, Token *tok, Type *ty, DeclName *decl) {
-  ty = pointers(&tok, tok, ty);
+static Type *declarator1(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl) {
+  ty = pointers(ctx, &tok, tok, ty);
 
   if (equal(tok, "(")) {
     Token *start = tok;
     Type dummy = {};
-    declarator(&tok, start->next, &dummy, NULL);
-    tok = skip(chibicc_ctx(), tok, ")");
-    ty = type_suffix(rest, tok, ty);
-    return declarator(&tok, start->next, ty, decl);
+    declarator(ctx, &tok, start->next, &dummy, NULL);
+    tok = skip(ctx, tok, ")");
+    ty = type_suffix(ctx, rest, tok, ty);
+    return declarator(ctx, &tok, start->next, ty, decl);
   }
 
   Token *name = NULL;
@@ -656,12 +656,12 @@ static Type *declarator1(Token **rest, Token *tok, Type *ty, DeclName *decl) {
     tok = tok->next;
   }
 
-  ty = type_suffix(rest, tok, ty);
+  ty = type_suffix(ctx, rest, tok, ty);
   // A named declaration accepts trailing attributes here. The type
   // meaning is ignored for a named declaration, so a shared type record
   // is never mutated.
   tok = *rest;
-  tok = attribute_list(tok, NULL);
+  tok = attribute_list(ctx, tok, NULL);
   *rest = tok;
   if (decl) {
     decl->name = name;
@@ -671,37 +671,37 @@ static Type *declarator1(Token **rest, Token *tok, Type *ty, DeclName *decl) {
 }
 
 // abstract-declarator = pointers ("(" abstract-declarator ")")? type-suffix
-static Type *abstract_declarator(Token **rest, Token *tok, Type *ty) {
-  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(chibicc_ctx(), tok, "nesting too deep");
-  Type *node = abstract_declarator1(rest, tok, ty);
-  chibicc_ctx()->parse_depth--;
+static Type *abstract_declarator(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
+  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(ctx, tok, "nesting too deep");
+  Type *node = abstract_declarator1(ctx, rest, tok, ty);
+  ctx->parse_depth--;
   return node;
 }
 
-static Type *abstract_declarator1(Token **rest, Token *tok, Type *ty) {
-  ty = pointers(&tok, tok, ty);
+static Type *abstract_declarator1(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty) {
+  ty = pointers(ctx, &tok, tok, ty);
 
   if (equal(tok, "(")) {
     Token *start = tok;
     Type dummy = {};
-    abstract_declarator(&tok, start->next, &dummy);
-    tok = skip(chibicc_ctx(), tok, ")");
-    ty = type_suffix(rest, tok, ty);
-    return abstract_declarator(&tok, start->next, ty);
+    abstract_declarator(ctx, &tok, start->next, &dummy);
+    tok = skip(ctx, tok, ")");
+    ty = type_suffix(ctx, rest, tok, ty);
+    return abstract_declarator(ctx, &tok, start->next, ty);
   }
 
-  ty = type_suffix(rest, tok, ty);
+  ty = type_suffix(ctx, rest, tok, ty);
   tok = *rest;
-  tok = attribute_list(tok, NULL);
+  tok = attribute_list(ctx, tok, NULL);
   *rest = tok;
   return ty;
 }
 
 // type-name = declspec abstract-declarator
-static Type *typename(Token **rest, Token *tok, Node **specs) {
-  Type *ty = declspec(&tok, tok, NULL, specs);
-  return abstract_declarator(rest, tok, ty);
+static Type *typename(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+  Type *ty = declspec(ctx, &tok, tok, NULL, specs);
+  return abstract_declarator(ctx, rest, tok, ty);
 }
 
 static bool consume_end(Token **rest, Token *tok) {
@@ -722,8 +722,8 @@ static bool consume_end(Token **rest, Token *tok) {
 //                | ident ("{" enum-list? "}")?
 //
 // enum-list      = ident ("=" num)? ("," ident ("=" num)?)* ","?
-static Type *enum_specifier(Token **rest, Token *tok, Node **specs) {
-  Type *ty = enum_type(chibicc_ctx());
+static Type *enum_specifier(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+  Type *ty = enum_type(ctx);
 
   // Read a struct tag.
   Token *tag = NULL;
@@ -733,16 +733,16 @@ static Type *enum_specifier(Token **rest, Token *tok, Node **specs) {
   }
 
   if (tag && !equal(tok, "{")) {
-    Type *ty = find_tag(tag);
+    Type *ty = find_tag(ctx, tag);
     if (!ty)
-      error_tok(chibicc_ctx(), tag, "unknown enum type");
+      error_tok(ctx, tag, "unknown enum type");
     if (ty->kind != TY_ENUM)
-      error_tok(chibicc_ctx(), tag, "not an enum tag");
+      error_tok(ctx, tag, "not an enum tag");
     *rest = tok;
     return ty;
   }
 
-  tok = skip(chibicc_ctx(), tok, "{");
+  tok = skip(ctx, tok, "{");
 
   // Read an enum-list. Each member becomes a declaration record node
   // carrying the name, the optional explicit value expression and the
@@ -751,40 +751,40 @@ static Type *enum_specifier(Token **rest, Token *tok, Node **specs) {
   int i = 0;
   while (!consume_end(rest, tok)) {
     if (i++ > 0)
-      tok = skip(chibicc_ctx(), tok, ",");
+      tok = skip(ctx, tok, ",");
 
     Token *name = tok;
     tok = tok->next;
-    add_declared_name(name);
+    add_declared_name(ctx, name);
 
-    Node *node = new_node(ND_ENUM_CONST, name);
+    Node *node = new_node(ctx, ND_ENUM_CONST, name);
     if (equal(tok, "="))
-      node->lhs = conditional(&tok, tok->next);
+      node->lhs = conditional(ctx, &tok, tok->next);
     node->ty_op = ty;
 
     add_spec(specs, node);
   }
 
   if (tag)
-    push_tag_scope(tag, ty);
+    push_tag_scope(ctx, tag, ty);
   return ty;
 }
 
 // typeof-specifier = "(" (expr | typename) ")"
-static Type *typeof_specifier(Token **rest, Token *tok, Node **specs) {
-  tok = skip(chibicc_ctx(), tok, "(");
+static Type *typeof_specifier(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+  tok = skip(ctx, tok, "(");
 
   Type *ty;
-  if (is_typename(tok)) {
-    ty = typename(&tok, tok, specs);
+  if (is_typename(ctx, tok)) {
+    ty = typename(ctx, &tok, tok, specs);
   } else {
     // What type an expression has is not a syntax question, so the
     // operand is recorded in a placeholder the declarator builds on;
     // sema annotates the expression and fills the record in.
-    ty = typeof_placeholder(chibicc_ctx());
-    ty->typeof_expr = expr(&tok, tok);
+    ty = typeof_placeholder(ctx);
+    ty->typeof_expr = expr(ctx, &tok, tok);
   }
-  *rest = skip(chibicc_ctx(), tok, ")");
+  *rest = skip(ctx, tok, ")");
   return ty;
 }
 
@@ -800,34 +800,34 @@ static Type *typeof_specifier(Token **rest, Token *tok, Node **specs) {
 // resolves the record and lowers the node when it types it - including
 // the VLA-size sibling statement and the block-scope static's data
 // image, whose shapes it reproduces exactly.
-static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) {
+static Node *declaration(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr) {
   Node head = {};
   Node *cur = &head;
   int i = 0;
 
   while (!equal(tok, ";")) {
     if (i++ > 0)
-      tok = skip(chibicc_ctx(), tok, ",");
+      tok = skip(ctx, tok, ",");
 
     DeclName decl_name = {};
-    Type *ty = declarator(&tok, tok, basety, &decl_name);
+    Type *ty = declarator(ctx, &tok, tok, basety, &decl_name);
     if (!decl_name.name)
-      error_tok(chibicc_ctx(), decl_name.name_pos, "variable name omitted");
+      error_tok(ctx, decl_name.name_pos, "variable name omitted");
 
     // The declared name shadows a typedef of the same name for the rest
     // of the parse - before the initializer is parsed, as the old
     // declaration site did.
     Token *name = decl_name.name;
-    add_declared_name(name);
+    add_declared_name(ctx, name);
 
     Initializer *init = NULL;
     if (equal(tok, "=")) {
       Token *eq = tok;
-      init = init_record(&tok, tok->next);
+      init = init_record(ctx, &tok, tok->next);
       init->eq_tok = eq;
     }
 
-    Node *decl = new_node(ND_DECL, name);
+    Node *decl = new_node(ctx, ND_DECL, name);
     decl->ty_op = ty;
     decl->name_tok = name;
     if (attr)
@@ -870,30 +870,30 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
 // Designators are recorded as written: index expressions stay
 // unevaluated and member names stay unbound; sema evaluates and
 // applies them against the target type.
-static InitDesig *designators(Token **rest, Token *tok) {
+static InitDesig *designators(ChibiccContext *ctx, Token **rest, Token *tok) {
   InitDesig head = {};
   InitDesig *cur = &head;
 
   while (1) {
     if (equal(tok, "[")) {
-      InitDesig *desig = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(InitDesig));
+      InitDesig *desig = chibicc_arena_calloc(ctx, 1, sizeof(InitDesig));
       desig->tok = tok;
-      desig->begin = conditional(&tok, tok->next);
+      desig->begin = conditional(ctx, &tok, tok->next);
       desig->after_begin = tok;
       if (equal(tok, "..."))
-        desig->end = conditional(&tok, tok->next);
+        desig->end = conditional(ctx, &tok, tok->next);
       desig->rbracket = tok;
-      tok = skip(chibicc_ctx(), tok, "]");
+      tok = skip(ctx, tok, "]");
       cur = cur->next = desig;
       continue;
     }
 
     if (equal(tok, ".")) {
-      InitDesig *desig = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(InitDesig));
+      InitDesig *desig = chibicc_arena_calloc(ctx, 1, sizeof(InitDesig));
       desig->tok = tok;
       tok = tok->next;
       if (tok->kind != TK_IDENT)
-        error_tok(chibicc_ctx(), tok, "expected a field designator");
+        error_tok(ctx, tok, "expected a field designator");
       desig->name = tok;
       tok = tok->next;
       cur = cur->next = desig;
@@ -915,16 +915,16 @@ static InitDesig *designators(Token **rest, Token *tok) {
 // sublist, string literal or expression) and no decision that needs
 // the target type is made here. Brace elision, string expansion,
 // designator application and flexible-array sizing all happen in sema.
-static Initializer *init_record(Token **rest, Token *tok) {
-  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(chibicc_ctx(), tok, "nesting too deep");
-  Initializer *node = init_record1(rest, tok);
-  chibicc_ctx()->parse_depth--;
+static Initializer *init_record(ChibiccContext *ctx, Token **rest, Token *tok) {
+  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(ctx, tok, "nesting too deep");
+  Initializer *node = init_record1(ctx, rest, tok);
+  ctx->parse_depth--;
   return node;
 }
 
-static Initializer *init_record1(Token **rest, Token *tok) {
-  Initializer *rec = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Initializer));
+static Initializer *init_record1(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Initializer *rec = chibicc_arena_calloc(ctx, 1, sizeof(Initializer));
   rec->tok = tok;
 
   if (equal(tok, "{")) {
@@ -936,17 +936,17 @@ static Initializer *init_record1(Token **rest, Token *tok) {
     bool first = true;
 
     while (!consume_end(&tok, tok)) {
-      InitItem *item = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(InitItem));
+      InitItem *item = chibicc_arena_calloc(ctx, 1, sizeof(InitItem));
       if (!first) {
         item->comma_tok = tok;
-        tok = skip(chibicc_ctx(), tok, ",");
+        tok = skip(ctx, tok, ",");
       }
       first = false;
 
-      item->desigs = designators(&tok, tok);
+      item->desigs = designators(ctx, &tok, tok);
       if (item->desigs && equal(tok, "="))
         tok = tok->next;
-      item->init = init_record(&tok, tok);
+      item->init = init_record(ctx, &tok, tok);
       cur = cur->next = item;
     }
 
@@ -969,13 +969,13 @@ static Initializer *init_record1(Token **rest, Token *tok) {
   }
 
   rec->kind = INIT_EXPR;
-  rec->expr = assign(rest, tok);
+  rec->expr = assign(ctx, rest, tok);
   return rec;
 }
 
 // Returns true if a given token represents a type.
-static bool is_typename(Token *tok) {
-  HashMap *map = &chibicc_ctx()->typename_map;
+static bool is_typename(ChibiccContext *ctx, Token *tok) {
+  HashMap *map = &ctx->typename_map;
 
   if (map->capacity == 0) {
     static char *kw[] = {
@@ -987,25 +987,25 @@ static bool is_typename(Token *tok) {
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
-      hashmap_put(chibicc_ctx(), map, kw[i], (void *)1);
+      hashmap_put(ctx, map, kw[i], (void *)1);
   }
 
-  return hashmap_get2(map, tok->loc, tok->len) || find_typedef(tok);
+  return hashmap_get2(map, tok->loc, tok->len) || find_typedef(ctx, tok);
 }
 
 // asm-stmt = "asm" ("volatile" | "inline")* "(" string-literal ")"
-static Node *asm_stmt(Token **rest, Token *tok) {
-  Node *node = new_node(ND_ASM, tok);
+static Node *asm_stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = new_node(ctx, ND_ASM, tok);
   tok = tok->next;
 
   while (equal(tok, "volatile") || equal(tok, "inline"))
     tok = tok->next;
 
-  tok = skip(chibicc_ctx(), tok, "(");
+  tok = skip(ctx, tok, "(");
   if (tok->kind != TK_STR || tok->ty->base->kind != TY_CHAR)
-    error_tok(chibicc_ctx(), tok, "expected string literal");
+    error_tok(ctx, tok, "expected string literal");
   node->asm_str = tok->str;
-  *rest = skip(chibicc_ctx(), tok->next, ")");
+  *rest = skip(ctx, tok->next, ")");
   return node;
 }
 
@@ -1024,37 +1024,37 @@ static Node *asm_stmt(Token **rest, Token *tok) {
 //      | ident ":" stmt
 //      | "{" compound-stmt
 //      | expr-stmt
-static Node *stmt(Token **rest, Token *tok) {
+static Node *stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
   if (equal(tok, "return")) {
     // The implicit conversion to the return type is sema's: the parser
     // does not know the enclosing function.
-    Node *node = new_node(ND_RETURN, tok);
+    Node *node = new_node(ctx, ND_RETURN, tok);
     if (consume(rest, tok->next, ";"))
       return node;
 
-    node->lhs = expr(&tok, tok->next);
-    *rest = skip(chibicc_ctx(), tok, ";");
+    node->lhs = expr(ctx, &tok, tok->next);
+    *rest = skip(ctx, tok, ";");
     return node;
   }
 
   if (equal(tok, "if")) {
-    Node *node = new_node(ND_IF, tok);
-    tok = skip(chibicc_ctx(), tok->next, "(");
-    node->cond = expr(&tok, tok);
-    tok = skip(chibicc_ctx(), tok, ")");
-    node->then = stmt(&tok, tok);
+    Node *node = new_node(ctx, ND_IF, tok);
+    tok = skip(ctx, tok->next, "(");
+    node->cond = expr(ctx, &tok, tok);
+    tok = skip(ctx, tok, ")");
+    node->then = stmt(ctx, &tok, tok);
     if (equal(tok, "else"))
-      node->els = stmt(&tok, tok->next);
+      node->els = stmt(ctx, &tok, tok->next);
     *rest = tok;
     return node;
   }
 
   if (equal(tok, "switch")) {
-    Node *node = new_node(ND_SWITCH, tok);
-    tok = skip(chibicc_ctx(), tok->next, "(");
-    node->cond = expr(&tok, tok);
-    tok = skip(chibicc_ctx(), tok, ")");
-    node->then = stmt(rest, tok);
+    Node *node = new_node(ctx, ND_SWITCH, tok);
+    tok = skip(ctx, tok->next, "(");
+    node->cond = expr(ctx, &tok, tok);
+    tok = skip(ctx, tok, ")");
+    node->then = stmt(ctx, rest, tok);
     return node;
   }
 
@@ -1063,121 +1063,121 @@ static Node *stmt(Token **rest, Token *tok) {
     // they are recorded unevaluated; sema evaluates them into begin/end
     // when it resolves the node. `:` is where the range check is
     // anchored.
-    Node *node = new_node(ND_CASE, tok);
-    node->begin_expr = conditional(&tok, tok->next);
+    Node *node = new_node(ctx, ND_CASE, tok);
+    node->begin_expr = conditional(ctx, &tok, tok->next);
 
     if (equal(tok, "...")) {
       // [GNU] Case ranges, e.g. "case 1 ... 5:"
-      node->end_expr = conditional(&tok, tok->next);
+      node->end_expr = conditional(ctx, &tok, tok->next);
     }
 
     node->colon_tok = tok;
-    tok = skip(chibicc_ctx(), tok, ":");
-    node->lhs = stmt(rest, tok);
+    tok = skip(ctx, tok, ":");
+    node->lhs = stmt(ctx, rest, tok);
     return node;
   }
 
   if (equal(tok, "default")) {
-    Node *node = new_node(ND_CASE, tok);
+    Node *node = new_node(ctx, ND_CASE, tok);
     node->is_default = true;
-    tok = skip(chibicc_ctx(), tok->next, ":");
-    node->lhs = stmt(rest, tok);
+    tok = skip(ctx, tok->next, ":");
+    node->lhs = stmt(ctx, rest, tok);
     return node;
   }
 
   if (equal(tok, "for")) {
-    Node *node = new_node(ND_FOR, tok);
-    tok = skip(chibicc_ctx(), tok->next, "(");
+    Node *node = new_node(ctx, ND_FOR, tok);
+    tok = skip(ctx, tok->next, "(");
 
-    enter_scope();
+    enter_scope(ctx);
 
-    if (is_typename(tok)) {
+    if (is_typename(ctx, tok)) {
       Node *specs = NULL;
-      Type *basety = declspec(&tok, tok, NULL, &specs);
+      Type *basety = declspec(ctx, &tok, tok, NULL, &specs);
       // Enum records a for-init declspec defined share the init's
       // scope, so they ride at the head of the init chain. The init is
       // a chain of declaration records like any other declaration; sema
       // folds it into one statement once the records are lowered,
       // because codegen's `for` has a single-statement init slot.
-      node->init = specs_then(specs, declaration(&tok, tok, basety, NULL));
+      node->init = specs_then(specs, declaration(ctx, &tok, tok, basety, NULL));
     } else {
-      node->init = expr_stmt(&tok, tok);
+      node->init = expr_stmt(ctx, &tok, tok);
     }
 
     if (!equal(tok, ";"))
-      node->cond = expr(&tok, tok);
-    tok = skip(chibicc_ctx(), tok, ";");
+      node->cond = expr(ctx, &tok, tok);
+    tok = skip(ctx, tok, ";");
 
     if (!equal(tok, ")"))
-      node->inc = expr(&tok, tok);
-    tok = skip(chibicc_ctx(), tok, ")");
+      node->inc = expr(ctx, &tok, tok);
+    tok = skip(ctx, tok, ")");
 
-    node->then = stmt(rest, tok);
+    node->then = stmt(ctx, rest, tok);
 
-    leave_scope();
+    leave_scope(ctx);
     return node;
   }
 
   if (equal(tok, "while")) {
-    Node *node = new_node(ND_WHILE, tok);
-    tok = skip(chibicc_ctx(), tok->next, "(");
-    node->cond = expr(&tok, tok);
-    tok = skip(chibicc_ctx(), tok, ")");
-    node->then = stmt(rest, tok);
+    Node *node = new_node(ctx, ND_WHILE, tok);
+    tok = skip(ctx, tok->next, "(");
+    node->cond = expr(ctx, &tok, tok);
+    tok = skip(ctx, tok, ")");
+    node->then = stmt(ctx, rest, tok);
     return node;
   }
 
   if (equal(tok, "do")) {
-    Node *node = new_node(ND_DO, tok);
-    node->then = stmt(&tok, tok->next);
+    Node *node = new_node(ctx, ND_DO, tok);
+    node->then = stmt(ctx, &tok, tok->next);
 
-    tok = skip(chibicc_ctx(), tok, "while");
-    tok = skip(chibicc_ctx(), tok, "(");
-    node->cond = expr(&tok, tok);
-    tok = skip(chibicc_ctx(), tok, ")");
-    *rest = skip(chibicc_ctx(), tok, ";");
+    tok = skip(ctx, tok, "while");
+    tok = skip(ctx, tok, "(");
+    node->cond = expr(ctx, &tok, tok);
+    tok = skip(ctx, tok, ")");
+    *rest = skip(ctx, tok, ";");
     return node;
   }
 
   if (equal(tok, "asm"))
-    return asm_stmt(rest, tok);
+    return asm_stmt(ctx, rest, tok);
 
   if (equal(tok, "goto")) {
     if (equal(tok->next, "*")) {
       // [GNU] `goto *ptr` jumps to the address specified by `ptr`.
-      Node *node = new_node(ND_GOTO_EXPR, tok);
-      node->lhs = expr(&tok, tok->next->next);
-      *rest = skip(chibicc_ctx(), tok, ";");
+      Node *node = new_node(ctx, ND_GOTO_EXPR, tok);
+      node->lhs = expr(ctx, &tok, tok->next->next);
+      *rest = skip(ctx, tok, ";");
       return node;
     }
 
-    Node *node = new_node(ND_GOTO, tok);
-    node->label = get_ident(tok->next);
-    *rest = skip(chibicc_ctx(), tok->next->next, ";");
+    Node *node = new_node(ctx, ND_GOTO, tok);
+    node->label = get_ident(ctx, tok->next);
+    *rest = skip(ctx, tok->next->next, ";");
     return node;
   }
 
   if (equal(tok, "break")) {
-    *rest = skip(chibicc_ctx(), tok->next, ";");
-    return new_node(ND_BREAK, tok);
+    *rest = skip(ctx, tok->next, ";");
+    return new_node(ctx, ND_BREAK, tok);
   }
 
   if (equal(tok, "continue")) {
-    *rest = skip(chibicc_ctx(), tok->next, ";");
-    return new_node(ND_CONTINUE, tok);
+    *rest = skip(ctx, tok->next, ";");
+    return new_node(ctx, ND_CONTINUE, tok);
   }
 
   if (tok->kind == TK_IDENT && equal(tok->next, ":")) {
-    Node *node = new_node(ND_LABEL, tok);
-    node->label = chibicc_arena_strndup(chibicc_ctx(), tok->loc, tok->len);
-    node->lhs = stmt(rest, tok->next->next);
+    Node *node = new_node(ctx, ND_LABEL, tok);
+    node->label = chibicc_arena_strndup(ctx, tok->loc, tok->len);
+    node->lhs = stmt(ctx, rest, tok->next->next);
     return node;
   }
 
   if (equal(tok, "{"))
-    return compound_stmt(rest, tok->next);
+    return compound_stmt(ctx, rest, tok->next);
 
-  return expr_stmt(rest, tok);
+  return expr_stmt(ctx, rest, tok);
 }
 
 // compound-stmt = (typedef | declaration | stmt)* "}"
@@ -1186,43 +1186,43 @@ static Node *stmt(Token **rest, Token *tok) {
 // enum constants, block-scope extern declarations and [GNU] nested
 // function definitions) enter the chain at their source position; sema
 // removes them again before codegen sees the chain.
-static Node *compound_stmt(Token **rest, Token *tok) {
-  Node *node = new_node(ND_BLOCK, tok);
+static Node *compound_stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = new_node(ctx, ND_BLOCK, tok);
   node->is_scope_block = true;
   Node head = {};
   Node *cur = &head;
 
-  enter_scope();
+  enter_scope(ctx);
 
   while (!equal(tok, "}")) {
-    if (is_typename(tok) && !equal(tok->next, ":")) {
+    if (is_typename(ctx, tok) && !equal(tok->next, ":")) {
       VarAttr attr = {};
       Node *specs = NULL;
-      Type *basety = declspec(&tok, tok, &attr, &specs);
+      Type *basety = declspec(ctx, &tok, tok, &attr, &specs);
       cur = chain_append(cur, specs);
 
       if (attr.is_typedef) {
-        cur = chain_append(cur, parse_typedef(&tok, tok, basety));
+        cur = chain_append(cur, parse_typedef(ctx, &tok, tok, basety));
         continue;
       }
 
-      if (is_function(tok)) {
-        cur = cur->next = function_def(&tok, tok, basety, &attr);
+      if (is_function(ctx, tok)) {
+        cur = cur->next = function_def(ctx, &tok, tok, basety, &attr);
         continue;
       }
 
       if (attr.is_extern) {
-        cur = chain_append(cur, global_variable(&tok, tok, basety, &attr));
+        cur = chain_append(cur, global_variable(ctx, &tok, tok, basety, &attr));
         continue;
       }
 
-      cur = chain_append(cur, declaration(&tok, tok, basety, &attr));
+      cur = chain_append(cur, declaration(ctx, &tok, tok, basety, &attr));
     } else {
-      cur = cur->next = stmt(&tok, tok);
+      cur = cur->next = stmt(ctx, &tok, tok);
     }
   }
 
-  leave_scope();
+  leave_scope(ctx);
 
   node->body = head.next;
   *rest = tok->next;
@@ -1230,36 +1230,36 @@ static Node *compound_stmt(Token **rest, Token *tok) {
 }
 
 // expr-stmt = expr? ";"
-static Node *expr_stmt(Token **rest, Token *tok) {
+static Node *expr_stmt(ChibiccContext *ctx, Token **rest, Token *tok) {
   if (equal(tok, ";")) {
     *rest = tok->next;
-    return new_node(ND_BLOCK, tok);
+    return new_node(ctx, ND_BLOCK, tok);
   }
 
-  Node *node = new_node(ND_EXPR_STMT, tok);
-  node->lhs = expr(&tok, tok);
-  *rest = skip(chibicc_ctx(), tok, ";");
+  Node *node = new_node(ctx, ND_EXPR_STMT, tok);
+  node->lhs = expr(ctx, &tok, tok);
+  *rest = skip(ctx, tok, ";");
   return node;
 }
 
 #if !CHIBICC_PRATT_PARSE_FEATURE
 // expr = assign ("," expr)?
-static Node *expr(Token **rest, Token *tok) {
-  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(chibicc_ctx(), tok, "nesting too deep");
-  Node *node = expr1(rest, tok);
-  chibicc_ctx()->parse_depth--;
+static Node *expr(ChibiccContext *ctx, Token **rest, Token *tok) {
+  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(ctx, tok, "nesting too deep");
+  Node *node = expr1(ctx, rest, tok);
+  ctx->parse_depth--;
   return node;
 }
 
-static Node *expr1(Token **rest, Token *tok) {
-  Node *node = assign(&tok, tok);
+static Node *expr1(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = assign(ctx, &tok, tok);
 
   // Comma is left-associative: `a, b, c` is `(a, b), c`, the shape the C
   // grammar gives. Both parsers build this shape.
   while (equal(tok, ",")) {
     Token *start = tok;
-    node = new_binary(ND_COMMA, node, assign(&tok, tok->next), start);
+    node = new_binary(ctx, ND_COMMA, node, assign(ctx, &tok, tok->next), start);
   }
 
   *rest = tok;
@@ -1272,76 +1272,76 @@ static Node *expr1(Token **rest, Token *tok) {
 //
 // A compound assignment keeps its operator in `op`; sema rewrites it to
 // the read-modify-write form (handling the bitfield and atomic cases).
-static Node *assign(Token **rest, Token *tok) {
-  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(chibicc_ctx(), tok, "nesting too deep");
-  Node *node = assign1(rest, tok);
-  chibicc_ctx()->parse_depth--;
+static Node *assign(ChibiccContext *ctx, Token **rest, Token *tok) {
+  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(ctx, tok, "nesting too deep");
+  Node *node = assign1(ctx, rest, tok);
+  ctx->parse_depth--;
   return node;
 }
 
-static Node *assign1(Token **rest, Token *tok) {
-  Node *node = conditional(&tok, tok);
+static Node *assign1(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = conditional(ctx, &tok, tok);
 
   if (equal(tok, "="))
-    return new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    return new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
 
   if (equal(tok, "+=")) {
-    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
     expr->op = ND_ADD;
     return expr;
   }
 
   if (equal(tok, "-=")) {
-    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
     expr->op = ND_SUB;
     return expr;
   }
 
   if (equal(tok, "*=")) {
-    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
     expr->op = ND_MUL;
     return expr;
   }
 
   if (equal(tok, "/=")) {
-    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
     expr->op = ND_DIV;
     return expr;
   }
 
   if (equal(tok, "%=")) {
-    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
     expr->op = ND_MOD;
     return expr;
   }
 
   if (equal(tok, "&=")) {
-    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
     expr->op = ND_BITAND;
     return expr;
   }
 
   if (equal(tok, "|=")) {
-    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
     expr->op = ND_BITOR;
     return expr;
   }
 
   if (equal(tok, "^=")) {
-    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
     expr->op = ND_BITXOR;
     return expr;
   }
 
   if (equal(tok, "<<=")) {
-    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
     expr->op = ND_SHL;
     return expr;
   }
 
   if (equal(tok, ">>=")) {
-    Node *expr = new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
     expr->op = ND_SHR;
     return expr;
   }
@@ -1351,16 +1351,16 @@ static Node *assign1(Token **rest, Token *tok) {
 }
 
 // conditional = logor ("?" expr? ":" conditional)?
-Node *conditional(Token **rest, Token *tok) {
-  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(chibicc_ctx(), tok, "nesting too deep");
-  Node *node = conditional1(rest, tok);
-  chibicc_ctx()->parse_depth--;
+Node *conditional(ChibiccContext *ctx, Token **rest, Token *tok) {
+  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(ctx, tok, "nesting too deep");
+  Node *node = conditional1(ctx, rest, tok);
+  ctx->parse_depth--;
   return node;
 }
 
-static Node *conditional1(Token **rest, Token *tok) {
-  Node *cond = logor(&tok, tok);
+static Node *conditional1(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *cond = logor(ctx, &tok, tok);
 
   if (!equal(tok, "?")) {
     *rest = tok;
@@ -1370,90 +1370,90 @@ static Node *conditional1(Token **rest, Token *tok) {
   if (equal(tok->next, ":")) {
     // [GNU] `a ?: b`. Kept as-is in the tree with is_elvis set;
     // sema lowers it to `tmp = a, tmp ? tmp : b`.
-    Node *node = new_node(ND_COND, tok);
+    Node *node = new_node(ctx, ND_COND, tok);
     node->is_elvis = true;
     node->cond = cond;
-    node->els = conditional(rest, tok->next->next);
+    node->els = conditional(ctx, rest, tok->next->next);
     return node;
   }
 
-  Node *node = new_node(ND_COND, tok);
+  Node *node = new_node(ctx, ND_COND, tok);
   node->cond = cond;
-  node->then = expr(&tok, tok->next);
-  tok = skip(chibicc_ctx(), tok, ":");
-  node->els = conditional(rest, tok);
+  node->then = expr(ctx, &tok, tok->next);
+  tok = skip(ctx, tok, ":");
+  node->els = conditional(ctx, rest, tok);
   return node;
 }
 
 // logor = logand ("||" logand)*
-static Node *logor(Token **rest, Token *tok) {
-  Node *node = logand(&tok, tok);
+static Node *logor(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = logand(ctx, &tok, tok);
   while (equal(tok, "||")) {
     Token *start = tok;
-    node = new_binary(ND_LOGOR, node, logand(&tok, tok->next), start);
+    node = new_binary(ctx, ND_LOGOR, node, logand(ctx, &tok, tok->next), start);
   }
   *rest = tok;
   return node;
 }
 
 // logand = bitor ("&&" bitor)*
-static Node *logand(Token **rest, Token *tok) {
-  Node *node = bitor(&tok, tok);
+static Node *logand(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = bitor(ctx, &tok, tok);
   while (equal(tok, "&&")) {
     Token *start = tok;
-    node = new_binary(ND_LOGAND, node, bitor(&tok, tok->next), start);
+    node = new_binary(ctx, ND_LOGAND, node, bitor(ctx, &tok, tok->next), start);
   }
   *rest = tok;
   return node;
 }
 
 // bitor = bitxor ("|" bitxor)*
-static Node *bitor(Token **rest, Token *tok) {
-  Node *node = bitxor(&tok, tok);
+static Node *bitor(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = bitxor(ctx, &tok, tok);
   while (equal(tok, "|")) {
     Token *start = tok;
-    node = new_binary(ND_BITOR, node, bitxor(&tok, tok->next), start);
+    node = new_binary(ctx, ND_BITOR, node, bitxor(ctx, &tok, tok->next), start);
   }
   *rest = tok;
   return node;
 }
 
 // bitxor = bitand ("^" bitand)*
-static Node *bitxor(Token **rest, Token *tok) {
-  Node *node = bitand(&tok, tok);
+static Node *bitxor(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = bitand(ctx, &tok, tok);
   while (equal(tok, "^")) {
     Token *start = tok;
-    node = new_binary(ND_BITXOR, node, bitand(&tok, tok->next), start);
+    node = new_binary(ctx, ND_BITXOR, node, bitand(ctx, &tok, tok->next), start);
   }
   *rest = tok;
   return node;
 }
 
 // bitand = equality ("&" equality)*
-static Node *bitand(Token **rest, Token *tok) {
-  Node *node = equality(&tok, tok);
+static Node *bitand(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = equality(ctx, &tok, tok);
   while (equal(tok, "&")) {
     Token *start = tok;
-    node = new_binary(ND_BITAND, node, equality(&tok, tok->next), start);
+    node = new_binary(ctx, ND_BITAND, node, equality(ctx, &tok, tok->next), start);
   }
   *rest = tok;
   return node;
 }
 
 // equality = relational ("==" relational | "!=" relational)*
-static Node *equality(Token **rest, Token *tok) {
-  Node *node = relational(&tok, tok);
+static Node *equality(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = relational(ctx, &tok, tok);
 
   for (;;) {
     Token *start = tok;
 
     if (equal(tok, "==")) {
-      node = new_binary(ND_EQ, node, relational(&tok, tok->next), start);
+      node = new_binary(ctx, ND_EQ, node, relational(ctx, &tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, "!=")) {
-      node = new_binary(ND_NE, node, relational(&tok, tok->next), start);
+      node = new_binary(ctx, ND_NE, node, relational(ctx, &tok, tok->next), start);
       continue;
     }
 
@@ -1463,29 +1463,29 @@ static Node *equality(Token **rest, Token *tok) {
 }
 
 // relational = shift ("<" shift | "<=" shift | ">" shift | ">=" shift)*
-static Node *relational(Token **rest, Token *tok) {
-  Node *node = shift(&tok, tok);
+static Node *relational(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = shift(ctx, &tok, tok);
 
   for (;;) {
     Token *start = tok;
 
     if (equal(tok, "<")) {
-      node = new_binary(ND_LT, node, shift(&tok, tok->next), start);
+      node = new_binary(ctx, ND_LT, node, shift(ctx, &tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, "<=")) {
-      node = new_binary(ND_LE, node, shift(&tok, tok->next), start);
+      node = new_binary(ctx, ND_LE, node, shift(ctx, &tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, ">")) {
-      node = new_binary(ND_GT, node, shift(&tok, tok->next), start);
+      node = new_binary(ctx, ND_GT, node, shift(ctx, &tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, ">=")) {
-      node = new_binary(ND_GE, node, shift(&tok, tok->next), start);
+      node = new_binary(ctx, ND_GE, node, shift(ctx, &tok, tok->next), start);
       continue;
     }
 
@@ -1495,19 +1495,19 @@ static Node *relational(Token **rest, Token *tok) {
 }
 
 // shift = add ("<<" add | ">>" add)*
-static Node *shift(Token **rest, Token *tok) {
-  Node *node = add(&tok, tok);
+static Node *shift(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = add(ctx, &tok, tok);
 
   for (;;) {
     Token *start = tok;
 
     if (equal(tok, "<<")) {
-      node = new_binary(ND_SHL, node, add(&tok, tok->next), start);
+      node = new_binary(ctx, ND_SHL, node, add(ctx, &tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, ">>")) {
-      node = new_binary(ND_SHR, node, add(&tok, tok->next), start);
+      node = new_binary(ctx, ND_SHR, node, add(ctx, &tok, tok->next), start);
       continue;
     }
 
@@ -1516,19 +1516,19 @@ static Node *shift(Token **rest, Token *tok) {
   }
 }
 // add = mul ("+" mul | "-" mul)*
-static Node *add(Token **rest, Token *tok) {
-  Node *node = mul(&tok, tok);
+static Node *add(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = mul(ctx, &tok, tok);
 
   for (;;) {
     Token *start = tok;
 
     if (equal(tok, "+")) {
-      node = new_binary(ND_ADD, node, mul(&tok, tok->next), start);
+      node = new_binary(ctx, ND_ADD, node, mul(ctx, &tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, "-")) {
-      node = new_binary(ND_SUB, node, mul(&tok, tok->next), start);
+      node = new_binary(ctx, ND_SUB, node, mul(ctx, &tok, tok->next), start);
       continue;
     }
 
@@ -1538,24 +1538,24 @@ static Node *add(Token **rest, Token *tok) {
 }
 
 // mul = cast ("*" cast | "/" cast | "%" cast)*
-static Node *mul(Token **rest, Token *tok) {
-  Node *node = cast(&tok, tok);
+static Node *mul(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = cast(ctx, &tok, tok);
 
   for (;;) {
     Token *start = tok;
 
     if (equal(tok, "*")) {
-      node = new_binary(ND_MUL, node, cast(&tok, tok->next), start);
+      node = new_binary(ctx, ND_MUL, node, cast(ctx, &tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, "/")) {
-      node = new_binary(ND_DIV, node, cast(&tok, tok->next), start);
+      node = new_binary(ctx, ND_DIV, node, cast(ctx, &tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, "%")) {
-      node = new_binary(ND_MOD, node, cast(&tok, tok->next), start);
+      node = new_binary(ctx, ND_MOD, node, cast(ctx, &tok, tok->next), start);
       continue;
     }
 
@@ -1567,61 +1567,61 @@ static Node *mul(Token **rest, Token *tok) {
 
 #if !CHIBICC_PRATT_PARSE_FEATURE
 // cast = "(" type-name ")" cast | unary
-static Node *cast(Token **rest, Token *tok) {
-  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(chibicc_ctx(), tok, "nesting too deep");
-  Node *node = cast1(rest, tok);
-  chibicc_ctx()->parse_depth--;
+static Node *cast(ChibiccContext *ctx, Token **rest, Token *tok) {
+  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(ctx, tok, "nesting too deep");
+  Node *node = cast1(ctx, rest, tok);
+  ctx->parse_depth--;
   return node;
 }
 
-static Node *cast1(Token **rest, Token *tok) {
-  if (equal(tok, "(") && is_typename(tok->next)) {
+static Node *cast1(ChibiccContext *ctx, Token **rest, Token *tok) {
+  if (equal(tok, "(") && is_typename(ctx, tok->next)) {
     Token *start = tok;
     Node *specs = NULL;
-    Type *ty = typename(&tok, tok->next, &specs);
-    tok = skip(chibicc_ctx(), tok, ")");
+    Type *ty = typename(ctx, &tok, tok->next, &specs);
+    tok = skip(ctx, tok, ")");
 
     // compound literal
     if (equal(tok, "{"))
-      return unary(rest, start);
+      return unary(ctx, rest, start);
 
     // Type cast: kept faithful and untyped, with the target type
     // recorded for sema to complete and apply. This is a cast the
     // source wrote, so is_implicit stays false; the casts sema inserts
     // to carry out an implicit conversion are the ones new_cast marks.
-    Node *node = new_node(ND_CAST, start);
-    node->lhs = cast(rest, tok);
+    Node *node = new_node(ctx, ND_CAST, start);
+    node->lhs = cast(ctx, rest, tok);
     node->ty_op = ty;
     node->spec_decls = specs;
     return node;
   }
 
-  return unary(rest, tok);
+  return unary(ctx, rest, tok);
 }
 
 // unary = ("+" | "-" | "*" | "&" | "!" | "~") cast
 //       | ("++" | "--") unary
 //       | "&&" ident
 //       | postfix
-static Node *unary(Token **rest, Token *tok) {
-  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(chibicc_ctx(), tok, "nesting too deep");
-  Node *node = unary1(rest, tok);
-  chibicc_ctx()->parse_depth--;
+static Node *unary(ChibiccContext *ctx, Token **rest, Token *tok) {
+  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(ctx, tok, "nesting too deep");
+  Node *node = unary1(ctx, rest, tok);
+  ctx->parse_depth--;
   return node;
 }
 
-static Node *unary1(Token **rest, Token *tok) {
+static Node *unary1(ChibiccContext *ctx, Token **rest, Token *tok) {
   if (equal(tok, "+"))
-    return cast(rest, tok->next);
+    return cast(ctx, rest, tok->next);
 
   if (equal(tok, "-"))
-    return new_unary(ND_NEG, cast(rest, tok->next), tok);
+    return new_unary(ctx, ND_NEG, cast(ctx, rest, tok->next), tok);
 
   if (equal(tok, "&")) {
     // The bitfield check lives in sema: it needs the operand's type.
-    return new_unary(ND_ADDR, cast(rest, tok->next), tok);
+    return new_unary(ctx, ND_ADDR, cast(ctx, rest, tok->next), tok);
   }
 
   if (equal(tok, "*")) {
@@ -1630,40 +1630,40 @@ static Node *unary1(Token **rest, Token *tok) {
     // anything. If foo is a function, `*foo`, `**foo` or `*****foo`
     // are all equivalent to just `foo`. The check needs the operand's
     // type, so sema drops the node when it sees one.
-    return new_unary(ND_DEREF, cast(rest, tok->next), tok);
+    return new_unary(ctx, ND_DEREF, cast(ctx, rest, tok->next), tok);
   }
 
   if (equal(tok, "!"))
-    return new_unary(ND_NOT, cast(rest, tok->next), tok);
+    return new_unary(ctx, ND_NOT, cast(ctx, rest, tok->next), tok);
 
   if (equal(tok, "~"))
-    return new_unary(ND_BITNOT, cast(rest, tok->next), tok);
+    return new_unary(ctx, ND_BITNOT, cast(ctx, rest, tok->next), tok);
 
   // Read ++i as a faithful prefix increment; sema lowers it to i+=1
   if (equal(tok, "++")) {
-    Node *node = new_node(ND_INCDEC, tok);
-    node->lhs = unary(rest, tok->next);
+    Node *node = new_node(ctx, ND_INCDEC, tok);
+    node->lhs = unary(ctx, rest, tok->next);
     node->addend = 1;
     return node;
   }
 
   // Read --i as a faithful prefix decrement; sema lowers it to i-=1
   if (equal(tok, "--")) {
-    Node *node = new_node(ND_INCDEC, tok);
-    node->lhs = unary(rest, tok->next);
+    Node *node = new_node(ctx, ND_INCDEC, tok);
+    node->lhs = unary(ctx, rest, tok->next);
     node->addend = -1;
     return node;
   }
 
   // [GNU] labels-as-values
   if (equal(tok, "&&")) {
-    Node *node = new_node(ND_LABEL_VAL, tok);
-    node->label = get_ident(tok->next);
+    Node *node = new_node(ctx, ND_LABEL_VAL, tok);
+    node->label = get_ident(ctx, tok->next);
     *rest = tok->next->next;
     return node;
   }
 
-  return postfix(rest, tok);
+  return postfix(ctx, rest, tok);
 }
 #endif // !CHIBICC_PRATT_PARSE_FEATURE
 
@@ -1673,7 +1673,7 @@ static Node *unary1(Token **rest, Token *tok) {
 // flexible-array-member conversion are sema's; the member list here is
 // the syntax shape, with `_Alignas` and bitfield widths recorded
 // unevaluated.
-static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
+static void struct_members(ChibiccContext *ctx, Token **rest, Token *tok, Type *ty, Node **specs) {
   Member head = {};
   Member *cur = &head;
   int idx = 0;
@@ -1681,7 +1681,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
   while (!equal(tok, "}")) {
     VarAttr attr = {};
     Token *decl_start = tok;
-    Type *basety = declspec(&tok, tok, &attr, specs);
+    Type *basety = declspec(ctx, &tok, tok, &attr, specs);
     bool first = true;
 
     // An anonymous member is recognized by the kind of the base type.
@@ -1691,7 +1691,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
     if ((basety->kind == TY_STRUCT || basety->kind == TY_UNION ||
          basety->kind == TY_TYPEOF) &&
         consume(&tok, tok, ";")) {
-      Member *mem = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Member));
+      Member *mem = chibicc_arena_calloc(ctx, 1, sizeof(Member));
       mem->tok = decl_start;
       mem->ty = basety;
       mem->idx = idx++;
@@ -1704,13 +1704,13 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
     // Regular struct members
     while (!consume(&tok, tok, ";")) {
       if (!first)
-        tok = skip(chibicc_ctx(), tok, ",");
+        tok = skip(ctx, tok, ",");
       first = false;
 
-      Member *mem = chibicc_arena_calloc(chibicc_ctx(), 1, sizeof(Member));
+      Member *mem = chibicc_arena_calloc(ctx, 1, sizeof(Member));
       mem->tok = tok;
       DeclName decl = {};
-      mem->ty = declarator(&tok, tok, basety, &decl);
+      mem->ty = declarator(ctx, &tok, tok, basety, &decl);
       mem->name = decl.name;
       mem->idx = idx++;
       mem->align_ty = attr.align_ty;
@@ -1721,7 +1721,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
         // The width is a constant expression; it is recorded
         // unevaluated and sema evaluates it when the aggregate is
         // laid out.
-        mem->width_expr = conditional(&tok, tok);
+        mem->width_expr = conditional(ctx, &tok, tok);
       }
 
       cur = cur->next = mem;
@@ -1736,7 +1736,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty, Node **specs) {
 //
 // `packed` and `aligned` are applied when a type record is given; the
 // known declaration/function attributes are recognized and ignored.
-static Token *skip_attribute_args(Token *tok) {
+static Token *skip_attribute_args(ChibiccContext *ctx, Token *tok) {
   if (!equal(tok, "("))
     return tok;
 
@@ -1749,7 +1749,7 @@ static Token *skip_attribute_args(Token *tok) {
         return tok->next;
     }
   }
-  error_tok(chibicc_ctx(), tok, "unclosed attribute");
+  error_tok(ctx, tok, "unclosed attribute");
   return tok;
 }
 
@@ -1770,16 +1770,16 @@ static bool is_ignored_attribute(Token *tok) {
   return false;
 }
 
-static Token *attribute_list(Token *tok, Type *ty) {
+static Token *attribute_list(ChibiccContext *ctx, Token *tok, Type *ty) {
   while (consume(&tok, tok, "__attribute__")) {
-    tok = skip(chibicc_ctx(), tok, "(");
-    tok = skip(chibicc_ctx(), tok, "(");
+    tok = skip(ctx, tok, "(");
+    tok = skip(ctx, tok, "(");
 
     bool first = true;
 
     while (!consume(&tok, tok, ")")) {
       if (!first)
-        tok = skip(chibicc_ctx(), tok, ",");
+        tok = skip(ctx, tok, ",");
       first = false;
 
       if (consume(&tok, tok, "packed")) {
@@ -1794,38 +1794,38 @@ static Token *attribute_list(Token *tok, Type *ty) {
         // positions pass NULL so the shared type records stay read-only.
         if (consume(&tok, tok, "(")) {
           if (ty)
-            ty->align_expr = conditional(&tok, tok);
+            ty->align_expr = conditional(ctx, &tok, tok);
           else
-            (void)conditional(&tok, tok);
-          tok = skip(chibicc_ctx(), tok, ")");
+            (void)conditional(ctx, &tok, tok);
+          tok = skip(ctx, tok, ")");
         }
         continue;
       }
 
       if (equal(tok, "cleanup")) {
-        warn_tok(chibicc_ctx(), tok, "cleanup attribute is ignored");
-        tok = skip_attribute_args(tok->next);
+        warn_tok(ctx, tok, "cleanup attribute is ignored");
+        tok = skip_attribute_args(ctx, tok->next);
         continue;
       }
 
       if (is_ignored_attribute(tok)) {
-        tok = skip_attribute_args(tok->next);
+        tok = skip_attribute_args(ctx, tok->next);
         continue;
       }
 
-      error_tok(chibicc_ctx(), tok, "unknown attribute");
+      error_tok(ctx, tok, "unknown attribute");
     }
 
-    tok = skip(chibicc_ctx(), tok, ")");
+    tok = skip(ctx, tok, ")");
   }
 
   return tok;
 }
 
 // struct-union-decl = attribute? ident? ("{" struct-members)?
-static Type *struct_union_decl(Token **rest, Token *tok, Node **specs) {
-  Type *ty = struct_type(chibicc_ctx());
-  tok = attribute_list(tok, ty);
+static Type *struct_union_decl(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+  Type *ty = struct_type(ctx);
+  tok = attribute_list(ctx, tok, ty);
 
   // Read a tag.
   Token *tag = NULL;
@@ -1837,40 +1837,40 @@ static Type *struct_union_decl(Token **rest, Token *tok, Node **specs) {
   if (tag && !equal(tok, "{")) {
     *rest = tok;
 
-    Type *ty2 = find_tag(tag);
+    Type *ty2 = find_tag(ctx, tag);
     if (ty2)
       return ty2;
 
     ty->size = -1;
-    push_tag_scope(tag, ty);
+    push_tag_scope(ctx, tag, ty);
     return ty;
   }
 
-  tok = skip(chibicc_ctx(), tok, "{");
+  tok = skip(ctx, tok, "{");
 
   // Construct a struct object. The member list is syntax; placing the
   // members is sema's job, which it does when the type is completed -
   // at the definition for a bare one, or at the first declaration that
   // resolves a type referring to it.
-  struct_members(&tok, tok, ty, specs);
-  *rest = attribute_list(tok, ty);
+  struct_members(ctx, &tok, tok, ty, specs);
+  *rest = attribute_list(ctx, tok, ty);
   ty->layout_pending = true;
 
   Type *ret = ty;
   if (tag) {
     // If this is a redefinition, overwrite a previous type.
     // Otherwise, register the struct type.
-    Type *ty2 = find_current_tag(tag);
+    Type *ty2 = find_current_tag(ctx, tag);
     if (ty2) {
       // A forward declaration (size -1) is completed here. A second
       // definition of the same tag in the same scope is a constraint
       // violation (C11 6.7.2.3p1), not a silent replacement.
       if (ty2->size >= 0)
-        error_tok(chibicc_ctx(), tag, "redefinition of tag");
+        error_tok(ctx, tag, "redefinition of tag");
       *ty2 = *ty;
       ret = ty2;
     } else {
-      push_tag_scope(tag, ty);
+      push_tag_scope(ctx, tag, ty);
     }
   }
 
@@ -1878,15 +1878,15 @@ static Type *struct_union_decl(Token **rest, Token *tok, Node **specs) {
 }
 
 // struct-decl = struct-union-decl
-static Type *struct_decl(Token **rest, Token *tok, Node **specs) {
-  Type *ty = struct_union_decl(rest, tok, specs);
+static Type *struct_decl(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+  Type *ty = struct_union_decl(ctx, rest, tok, specs);
   ty->kind = TY_STRUCT;
   return ty;
 }
 
 // union-decl = struct-union-decl
-static Type *union_decl(Token **rest, Token *tok, Node **specs) {
-  Type *ty = struct_union_decl(rest, tok, specs);
+static Type *union_decl(ChibiccContext *ctx, Token **rest, Token *tok, Node **specs) {
+  Type *ty = struct_union_decl(ctx, rest, tok, specs);
   ty->kind = TY_UNION;
   return ty;
 }
@@ -1908,8 +1908,8 @@ static Type *union_decl(Token **rest, Token *tok, Node **specs) {
 // `->` token in `arrow_tok`. sema finds the member (flattening the
 // anonymous ones in between), checks the operand and re-inserts the
 // dereference.
-static Node *struct_ref(Node *node, Token *tok, Token *arrow) {
-  Node *mem = new_unary(ND_MEMBER, node, tok);
+static Node *struct_ref(ChibiccContext *ctx, Node *node, Token *tok, Token *arrow) {
+  Node *mem = new_unary(ctx, ND_MEMBER, node, tok);
   mem->arrow_tok = arrow;
   return mem;
 }
@@ -1925,37 +1925,37 @@ static Node *struct_ref(Node *node, Token *tok, Token *arrow) {
 //              | "->" ident
 //              | "++"
 //              | "--"
-static Node *postfix(Token **rest, Token *tok) {
-  if (equal(tok, "(") && is_typename(tok->next)) {
+static Node *postfix(ChibiccContext *ctx, Token **rest, Token *tok) {
+  if (equal(tok, "(") && is_typename(ctx, tok->next)) {
     // Compound literal. Kept faithful: the type and the initializer
     // record ride on the node, and sema materializes the hidden
     // variable (an anonymous global at file scope, a hidden local in a
     // block) when it resolves the node, then lowers it when typing.
     Token *start = tok;
     Node *specs = NULL;
-    Type *ty = typename(&tok, tok->next, &specs);
-    tok = skip(chibicc_ctx(), tok, ")");
+    Type *ty = typename(ctx, &tok, tok->next, &specs);
+    tok = skip(ctx, tok, ")");
 
-    Node *node = new_node(ND_COMPOUND_LITERAL, start);
+    Node *node = new_node(ctx, ND_COMPOUND_LITERAL, start);
     node->ty_op = ty;
     node->spec_decls = specs;
-    node->decl_init = init_record(rest, tok);
+    node->decl_init = init_record(ctx, rest, tok);
     return node;
   }
 
-  Node *node = primary(&tok, tok);
+  Node *node = primary(ctx, &tok, tok);
 
   for (;;) {
     if (equal(tok, "(")) {
-      node = funcall(&tok, tok->next, node);
+      node = funcall(ctx, &tok, tok->next, node);
       continue;
     }
 
     if (equal(tok, "[")) {
       Token *start = tok;
-      Node *idx = expr(&tok, tok->next);
-      tok = skip(chibicc_ctx(), tok, "]");
-      Node *subscript = new_node(ND_SUBSCRIPT, start);
+      Node *idx = expr(ctx, &tok, tok->next);
+      tok = skip(ctx, tok, "]");
+      Node *subscript = new_node(ctx, ND_SUBSCRIPT, start);
       subscript->lhs = node;
       subscript->rhs = idx;
       node = subscript;
@@ -1963,20 +1963,20 @@ static Node *postfix(Token **rest, Token *tok) {
     }
 
     if (equal(tok, ".")) {
-      node = struct_ref(node, tok->next, NULL);
+      node = struct_ref(ctx, node, tok->next, NULL);
       tok = tok->next->next;
       continue;
     }
 
     if (equal(tok, "->")) {
       // x->y is short for (*x).y
-      node = struct_ref(node, tok->next, tok);
+      node = struct_ref(ctx, node, tok->next, tok);
       tok = tok->next->next;
       continue;
     }
 
     if (equal(tok, "++")) {
-      Node *incdec = new_node(ND_INCDEC, tok);
+      Node *incdec = new_node(ctx, ND_INCDEC, tok);
       incdec->lhs = node;
       incdec->is_post = true;
       incdec->addend = 1;
@@ -1986,7 +1986,7 @@ static Node *postfix(Token **rest, Token *tok) {
     }
 
     if (equal(tok, "--")) {
-      Node *incdec = new_node(ND_INCDEC, tok);
+      Node *incdec = new_node(ctx, ND_INCDEC, tok);
       incdec->lhs = node;
       incdec->is_post = true;
       incdec->addend = -1;
@@ -2006,20 +2006,20 @@ static Node *postfix(Token **rest, Token *tok) {
 // The callee check, the argument conversions and the struct-return
 // buffer are sema's; the node stays faithful, anchored at the closing
 // paren where the argument-count diagnostics point.
-static Node *funcall(Token **rest, Token *tok, Node *fn) {
+static Node *funcall(ChibiccContext *ctx, Token **rest, Token *tok, Node *fn) {
   Node head = {};
   Node *cur = &head;
 
   while (!equal(tok, ")")) {
     if (cur != &head)
-      tok = skip(chibicc_ctx(), tok, ",");
+      tok = skip(ctx, tok, ",");
 
-    cur = cur->next = assign(&tok, tok);
+    cur = cur->next = assign(ctx, &tok, tok);
   }
 
-  *rest = skip(chibicc_ctx(), tok, ")");
+  *rest = skip(ctx, tok, ")");
 
-  Node *node = new_unary(ND_FUNCALL, fn, tok);
+  Node *node = new_unary(ctx, ND_FUNCALL, fn, tok);
   node->args = head.next;
   return node;
 }
@@ -2033,30 +2033,30 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
 // syntax question, so the selection is left to sema: the node keeps the
 // controlling expression in `cond` and one ND_GENERIC_ASSOC per
 // association in `args`.
-static Node *generic_selection(Token **rest, Token *tok) {
-  Node *node = new_node(ND_GENERIC, tok);
+static Node *generic_selection(ChibiccContext *ctx, Token **rest, Token *tok) {
+  Node *node = new_node(ctx, ND_GENERIC, tok);
 
-  tok = skip(chibicc_ctx(), tok, "(");
-  node->cond = assign(&tok, tok);
+  tok = skip(ctx, tok, "(");
+  node->cond = assign(ctx, &tok, tok);
 
   Node head = {};
   Node *cur = &head;
 
   while (!consume(rest, tok, ")")) {
-    tok = skip(chibicc_ctx(), tok, ",");
+    tok = skip(ctx, tok, ",");
 
-    Node *assoc = new_node(ND_GENERIC_ASSOC, tok);
+    Node *assoc = new_node(ctx, ND_GENERIC_ASSOC, tok);
 
     // A "default:" association is the one that carries no type name.
     if (equal(tok, "default")) {
-      tok = skip(chibicc_ctx(), tok->next, ":");
+      tok = skip(ctx, tok->next, ":");
     } else {
       Node *specs = NULL;
-      assoc->ty_op = typename(&tok, tok, &specs);
+      assoc->ty_op = typename(ctx, &tok, tok, &specs);
       assoc->spec_decls = specs;
-      tok = skip(chibicc_ctx(), tok, ":");
+      tok = skip(ctx, tok, ":");
     }
-    assoc->lhs = assign(&tok, tok);
+    assoc->lhs = assign(ctx, &tok, tok);
 
     cur = cur->next = assoc;
   }
@@ -2077,30 +2077,30 @@ static Node *generic_selection(Token **rest, Token *tok) {
 //         | ident
 //         | str
 //         | num
-static Node *primary(Token **rest, Token *tok) {
+static Node *primary(ChibiccContext *ctx, Token **rest, Token *tok) {
   Token *start = tok;
 
   if (equal(tok, "(") && equal(tok->next, "{")) {
     // This is a GNU statement expresssion.
-    Node *node = new_node(ND_STMT_EXPR, tok);
-    node->body = compound_stmt(&tok, tok->next->next)->body;
-    *rest = skip(chibicc_ctx(), tok, ")");
+    Node *node = new_node(ctx, ND_STMT_EXPR, tok);
+    node->body = compound_stmt(ctx, &tok, tok->next->next)->body;
+    *rest = skip(ctx, tok, ")");
     return node;
   }
 
   if (equal(tok, "(")) {
-    Node *node = expr(&tok, tok->next);
-    *rest = skip(chibicc_ctx(), tok, ")");
+    Node *node = expr(ctx, &tok, tok->next);
+    *rest = skip(ctx, tok, ")");
     return node;
   }
 
-  if (equal(tok, "sizeof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
+  if (equal(tok, "sizeof") && equal(tok->next, "(") && is_typename(ctx, tok->next->next)) {
     Node *specs = NULL;
-    Type *ty = typename(&tok, tok->next->next, &specs);
-    *rest = skip(chibicc_ctx(), tok, ")");
+    Type *ty = typename(ctx, &tok, tok->next->next, &specs);
+    *rest = skip(ctx, tok, ")");
 
     // Keep sizeof faithful; sema folds it to its value.
-    Node *node = new_node(ND_SIZEOF, start);
+    Node *node = new_node(ctx, ND_SIZEOF, start);
     node->ty_op = ty;
     node->spec_decls = specs;
     return node;
@@ -2108,74 +2108,74 @@ static Node *primary(Token **rest, Token *tok) {
 
   if (equal(tok, "sizeof")) {
     // Keep sizeof faithful; sema folds it to its value.
-    Node *node = new_node(ND_SIZEOF, tok);
-    node->lhs = unary(rest, tok->next);
+    Node *node = new_node(ctx, ND_SIZEOF, tok);
+    node->lhs = unary(ctx, rest, tok->next);
     return node;
   }
 
-  if (equal(tok, "_Alignof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
+  if (equal(tok, "_Alignof") && equal(tok->next, "(") && is_typename(ctx, tok->next->next)) {
     Node *specs = NULL;
-    Type *ty = typename(&tok, tok->next->next, &specs);
-    *rest = skip(chibicc_ctx(), tok, ")");
+    Type *ty = typename(ctx, &tok, tok->next->next, &specs);
+    *rest = skip(ctx, tok, ")");
 
-    Node *node = new_node(ND_ALIGNOF, start);
+    Node *node = new_node(ctx, ND_ALIGNOF, start);
     node->ty_op = ty;
     node->spec_decls = specs;
     return node;
   }
 
   if (equal(tok, "_Alignof")) {
-    Node *node = new_node(ND_ALIGNOF, tok);
-    node->lhs = unary(rest, tok->next);
+    Node *node = new_node(ctx, ND_ALIGNOF, tok);
+    node->lhs = unary(ctx, rest, tok->next);
     return node;
   }
 
   if (equal(tok, "_Generic"))
-    return generic_selection(rest, tok->next);
+    return generic_selection(ctx, rest, tok->next);
 
   if (equal(tok, "__builtin_types_compatible_p")) {
     // Both type operands are recorded; sema folds the node to 0 or 1.
-    Node *node = new_node(ND_TYPES_COMPATIBLE, start);
+    Node *node = new_node(ctx, ND_TYPES_COMPATIBLE, start);
     Node *specs = NULL;
-    tok = skip(chibicc_ctx(), tok->next, "(");
-    node->ty_op = typename(&tok, tok, &specs);
-    tok = skip(chibicc_ctx(), tok, ",");
-    node->ty_op2 = typename(&tok, tok, &specs);
+    tok = skip(ctx, tok->next, "(");
+    node->ty_op = typename(ctx, &tok, tok, &specs);
+    tok = skip(ctx, tok, ",");
+    node->ty_op2 = typename(ctx, &tok, tok, &specs);
     node->spec_decls = specs;
-    *rest = skip(chibicc_ctx(), tok, ")");
+    *rest = skip(ctx, tok, ")");
     return node;
   }
 
   if (equal(tok, "__builtin_reg_class")) {
     // sema folds the node to the register class of its type operand.
-    Node *node = new_node(ND_REG_CLASS, start);
+    Node *node = new_node(ctx, ND_REG_CLASS, start);
     Node *specs = NULL;
-    tok = skip(chibicc_ctx(), tok->next, "(");
-    node->ty_op = typename(&tok, tok, &specs);
+    tok = skip(ctx, tok->next, "(");
+    node->ty_op = typename(ctx, &tok, tok, &specs);
     node->spec_decls = specs;
-    *rest = skip(chibicc_ctx(), tok, ")");
+    *rest = skip(ctx, tok, ")");
     return node;
   }
 
   if (equal(tok, "__builtin_compare_and_swap")) {
-    Node *node = new_node(ND_CAS, tok);
-    tok = skip(chibicc_ctx(), tok->next, "(");
-    node->cas_addr = assign(&tok, tok);
-    tok = skip(chibicc_ctx(), tok, ",");
-    node->cas_old = assign(&tok, tok);
-    tok = skip(chibicc_ctx(), tok, ",");
-    node->cas_new = assign(&tok, tok);
-    *rest = skip(chibicc_ctx(), tok, ")");
+    Node *node = new_node(ctx, ND_CAS, tok);
+    tok = skip(ctx, tok->next, "(");
+    node->cas_addr = assign(ctx, &tok, tok);
+    tok = skip(ctx, tok, ",");
+    node->cas_old = assign(ctx, &tok, tok);
+    tok = skip(ctx, tok, ",");
+    node->cas_new = assign(ctx, &tok, tok);
+    *rest = skip(ctx, tok, ")");
     return node;
   }
 
   if (equal(tok, "__builtin_atomic_exchange")) {
-    Node *node = new_node(ND_EXCH, tok);
-    tok = skip(chibicc_ctx(), tok->next, "(");
-    node->lhs = assign(&tok, tok);
-    tok = skip(chibicc_ctx(), tok, ",");
-    node->rhs = assign(&tok, tok);
-    *rest = skip(chibicc_ctx(), tok, ")");
+    Node *node = new_node(ctx, ND_EXCH, tok);
+    tok = skip(ctx, tok->next, "(");
+    node->lhs = assign(ctx, &tok, tok);
+    tok = skip(ctx, tok, ",");
+    node->rhs = assign(ctx, &tok, tok);
+    *rest = skip(ctx, tok, ")");
     return node;
   }
 
@@ -2184,7 +2184,7 @@ static Node *primary(Token **rest, Token *tok) {
     // one it denotes is not a syntax question, so the reference stays
     // faithful and sema's resolve pass binds it, using the scope stack
     // the tree structure gives it.
-    Node *node = new_node(ND_IDENT, tok);
+    Node *node = new_node(ctx, ND_IDENT, tok);
     *rest = tok->next;
     return node;
   }
@@ -2192,7 +2192,7 @@ static Node *primary(Token **rest, Token *tok) {
   if (tok->kind == TK_STR) {
     // Keep the literal faithful; sema lowers it to a reference to an
     // anonymous global when it types the node.
-    Node *node = new_node(ND_STRING, tok);
+    Node *node = new_node(ctx, ND_STRING, tok);
     *rest = tok->next;
     return node;
   }
@@ -2200,10 +2200,10 @@ static Node *primary(Token **rest, Token *tok) {
   if (tok->kind == TK_NUM) {
     Node *node;
     if (is_flonum(tok->ty)) {
-      node = new_node(ND_NUM, tok);
+      node = new_node(ctx, ND_NUM, tok);
       node->fval = tok->fval;
     } else {
-      node = new_num(tok->val, tok);
+      node = new_num(ctx, tok->val, tok);
     }
 
     node->ty = tok->ty;
@@ -2211,7 +2211,7 @@ static Node *primary(Token **rest, Token *tok) {
     return node;
   }
 
-  error_tok(chibicc_ctx(), tok, "expected an expression");
+  error_tok(ctx, tok, "expected an expression");
 }
 
 #if CHIBICC_PRATT_PARSE_FEATURE
@@ -2309,67 +2309,67 @@ static bool infix_bp(Token *tok, NodeKind *kind, NodeKind *assign_op,
   return false;
 }
 
-static Node *expr_bp(Token **rest, Token *tok, int min_bp);
+static Node *expr_bp(ChibiccContext *ctx, Token **rest, Token *tok, int min_bp);
 
 // The prefix (nud) forms: a cast or compound literal (the `(` type-name
 // lookahead), the unary operators, labels-as-values, then the shared
 // primary parser for everything atomic. Unary `+` is transparent and
 // builds no node, exactly as the cascade did.
-static Node *expr_nud(Token **rest, Token *tok) {
-  if (equal(tok, "(") && is_typename(tok->next)) {
+static Node *expr_nud(ChibiccContext *ctx, Token **rest, Token *tok) {
+  if (equal(tok, "(") && is_typename(ctx, tok->next)) {
     Token *start = tok;
     Node *specs = NULL;
-    Type *ty = typename(&tok, tok->next, &specs);
-    tok = skip(chibicc_ctx(), tok, ")");
+    Type *ty = typename(ctx, &tok, tok->next, &specs);
+    tok = skip(ctx, tok, ")");
 
     // A compound literal. Kept faithful, with the type and the
     // initializer record on the node; sema materializes the object.
     if (equal(tok, "{")) {
-      Node *node = new_node(ND_COMPOUND_LITERAL, start);
+      Node *node = new_node(ctx, ND_COMPOUND_LITERAL, start);
       node->ty_op = ty;
       node->spec_decls = specs;
-      node->decl_init = init_record(rest, tok);
+      node->decl_init = init_record(ctx, rest, tok);
       return node;
     }
 
     // A cast the source wrote: untyped, with the target type recorded
     // for sema. is_implicit stays false (new_cast sets it for the casts
     // sema inserts).
-    Node *node = new_node(ND_CAST, start);
-    node->lhs = expr_bp(rest, tok, BP_CAST);
+    Node *node = new_node(ctx, ND_CAST, start);
+    node->lhs = expr_bp(ctx, rest, tok, BP_CAST);
     node->ty_op = ty;
     node->spec_decls = specs;
     return node;
   }
 
   if (equal(tok, "+"))
-    return expr_bp(rest, tok->next, BP_CAST);
+    return expr_bp(ctx, rest, tok->next, BP_CAST);
 
   if (equal(tok, "-"))
-    return new_unary(ND_NEG, expr_bp(rest, tok->next, BP_CAST), tok);
+    return new_unary(ctx, ND_NEG, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
   if (equal(tok, "&"))
-    return new_unary(ND_ADDR, expr_bp(rest, tok->next, BP_CAST), tok);
+    return new_unary(ctx, ND_ADDR, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
   if (equal(tok, "*"))
-    return new_unary(ND_DEREF, expr_bp(rest, tok->next, BP_CAST), tok);
+    return new_unary(ctx, ND_DEREF, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
   if (equal(tok, "!"))
-    return new_unary(ND_NOT, expr_bp(rest, tok->next, BP_CAST), tok);
+    return new_unary(ctx, ND_NOT, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
   if (equal(tok, "~"))
-    return new_unary(ND_BITNOT, expr_bp(rest, tok->next, BP_CAST), tok);
+    return new_unary(ctx, ND_BITNOT, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
   if (equal(tok, "++")) {
-    Node *node = new_node(ND_INCDEC, tok);
-    node->lhs = expr_bp(rest, tok->next, BP_CAST);
+    Node *node = new_node(ctx, ND_INCDEC, tok);
+    node->lhs = expr_bp(ctx, rest, tok->next, BP_CAST);
     node->addend = 1;
     return node;
   }
 
   if (equal(tok, "--")) {
-    Node *node = new_node(ND_INCDEC, tok);
-    node->lhs = expr_bp(rest, tok->next, BP_CAST);
+    Node *node = new_node(ctx, ND_INCDEC, tok);
+    node->lhs = expr_bp(ctx, rest, tok->next, BP_CAST);
     node->addend = -1;
     return node;
   }
@@ -2377,22 +2377,22 @@ static Node *expr_nud(Token **rest, Token *tok) {
   // [GNU] labels-as-values. Checked before any infix interpretation, so
   // `&&label` is not a binary `&&`.
   if (equal(tok, "&&")) {
-    Node *node = new_node(ND_LABEL_VAL, tok);
-    node->label = get_ident(tok->next);
+    Node *node = new_node(ctx, ND_LABEL_VAL, tok);
+    node->label = get_ident(ctx, tok->next);
     *rest = tok->next->next;
     return node;
   }
 
-  return primary(rest, tok);
+  return primary(ctx, rest, tok);
 }
 
 // The one expression loop. The depth gate counts here and only here in
 // the Pratt build; the entry wrappers below do not add a frame.
-static Node *expr_bp(Token **rest, Token *tok, int min_bp) {
-  if (++chibicc_ctx()->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(chibicc_ctx(), tok, "nesting too deep");
+static Node *expr_bp(ChibiccContext *ctx, Token **rest, Token *tok, int min_bp) {
+  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
+    error_tok(ctx, tok, "nesting too deep");
 
-  Node *node = expr_nud(rest, tok);
+  Node *node = expr_nud(ctx, rest, tok);
 
   for (;;) {
     Token *op = *rest;
@@ -2405,34 +2405,34 @@ static Node *expr_bp(Token **rest, Token *tok, int min_bp) {
     // call, subscript, member access and postfix increment/decrement.
     if (min_bp < BP_POSTFIX) {
       if (equal(op, "(")) {
-        node = funcall(rest, op->next, node);
+        node = funcall(ctx, rest, op->next, node);
         continue;
       }
 
       if (equal(op, "[")) {
         Token *idx = op->next;
-        Node *subscript = new_node(ND_SUBSCRIPT, op);
+        Node *subscript = new_node(ctx, ND_SUBSCRIPT, op);
         subscript->lhs = node;
-        subscript->rhs = expr(&idx, idx);
-        *rest = skip(chibicc_ctx(), idx, "]");
+        subscript->rhs = expr(ctx, &idx, idx);
+        *rest = skip(ctx, idx, "]");
         node = subscript;
         continue;
       }
 
       if (equal(op, ".")) {
-        node = struct_ref(node, op->next, NULL);
+        node = struct_ref(ctx, node, op->next, NULL);
         *rest = op->next->next;
         continue;
       }
 
       if (equal(op, "->")) {
-        node = struct_ref(node, op->next, op);
+        node = struct_ref(ctx, node, op->next, op);
         *rest = op->next->next;
         continue;
       }
 
       if (equal(op, "++")) {
-        Node *incdec = new_node(ND_INCDEC, op);
+        Node *incdec = new_node(ctx, ND_INCDEC, op);
         incdec->lhs = node;
         incdec->is_post = true;
         incdec->addend = 1;
@@ -2442,7 +2442,7 @@ static Node *expr_bp(Token **rest, Token *tok, int min_bp) {
       }
 
       if (equal(op, "--")) {
-        Node *incdec = new_node(ND_INCDEC, op);
+        Node *incdec = new_node(ctx, ND_INCDEC, op);
         incdec->lhs = node;
         incdec->is_post = true;
         incdec->addend = -1;
@@ -2456,81 +2456,81 @@ static Node *expr_bp(Token **rest, Token *tok, int min_bp) {
       break;
 
     if (kind == ND_COND) {
-      Node *cond = new_node(ND_COND, op);
+      Node *cond = new_node(ctx, ND_COND, op);
 
       if (equal(op->next, ":")) {
         // [GNU] `a ?: b`: only cond and els, with is_elvis set.
         cond->is_elvis = true;
         cond->cond = node;
-        cond->els = expr_bp(rest, op->next->next, BP_COND - 1);
+        cond->els = expr_bp(ctx, rest, op->next->next, BP_COND - 1);
         node = cond;
         continue;
       }
 
       Token *mid = NULL;
       cond->cond = node;
-      cond->then = expr_bp(&mid, op->next, 0);
-      Token *colon = skip(chibicc_ctx(), mid, ":");
-      cond->els = expr_bp(rest, colon, BP_COND - 1);
+      cond->then = expr_bp(ctx, &mid, op->next, 0);
+      Token *colon = skip(ctx, mid, ":");
+      cond->els = expr_bp(ctx, rest, colon, BP_COND - 1);
       node = cond;
       continue;
     }
 
     if (kind == ND_ASSIGN) {
-      Node *rhs = expr_bp(rest, op->next, rbp);
-      Node *assign = new_binary(ND_ASSIGN, node, rhs, op);
+      Node *rhs = expr_bp(ctx, rest, op->next, rbp);
+      Node *assign = new_binary(ctx, ND_ASSIGN, node, rhs, op);
       assign->op = assign_op;
       node = assign;
       continue;
     }
 
-    node = new_binary(kind, node, expr_bp(rest, op->next, rbp), op);
+    node = new_binary(ctx, kind, node, expr_bp(ctx, rest, op->next, rbp), op);
   }
 
-  chibicc_ctx()->parse_depth--;
+  ctx->parse_depth--;
   return node;
 }
 
 // primary's `sizeof expr` and `_Alignof expr` forms parse their operand
 // through the old `unary` name; in the Pratt build that is the cast layer.
-static Node *unary(Token **rest, Token *tok) {
-  return expr_bp(rest, tok, BP_CAST);
+static Node *unary(ChibiccContext *ctx, Token **rest, Token *tok) {
+  return expr_bp(ctx, rest, tok, BP_CAST);
 }
 
-static Node *expr(Token **rest, Token *tok) {
-  return expr_bp(rest, tok, 0);
+static Node *expr(ChibiccContext *ctx, Token **rest, Token *tok) {
+  return expr_bp(ctx, rest, tok, 0);
 }
 
-static Node *assign(Token **rest, Token *tok) {
-  return expr_bp(rest, tok, BP_ASSIGN - 1);
+static Node *assign(ChibiccContext *ctx, Token **rest, Token *tok) {
+  return expr_bp(ctx, rest, tok, BP_ASSIGN - 1);
 }
 
-Node *conditional(Token **rest, Token *tok) {
-  return expr_bp(rest, tok, BP_COND - 1);
+Node *conditional(ChibiccContext *ctx, Token **rest, Token *tok) {
+  return expr_bp(ctx, rest, tok, BP_COND - 1);
 }
 #endif // CHIBICC_PRATT_PARSE_FEATURE
 
 // Parses typedef declarators into ND_TYPEDEF records. The name also
 // goes into the typedef-name oracle immediately: the grammar needs it
 // to classify the very next identifier.
-static Node *parse_typedef(Token **rest, Token *tok, Type *basety) {
+static Node *parse_typedef(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety) {
   Node head = {};
   Node *cur = &head;
   bool first = true;
 
   while (!consume(&tok, tok, ";")) {
     if (!first)
-      tok = skip(chibicc_ctx(), tok, ",");
+      tok = skip(ctx, tok, ",");
     first = false;
 
     DeclName decl = {};
-    Type *ty = declarator(&tok, tok, basety, &decl);
+    Type *ty = declarator(ctx, &tok, tok, basety, &decl);
     if (!decl.name)
-      error_tok(chibicc_ctx(), decl.name_pos, "typedef name omitted");
+      error_tok(ctx, decl.name_pos, "typedef name omitted");
 
-    Node *node = new_node(ND_TYPEDEF, decl.name);
+    Node *node = new_node(ctx, ND_TYPEDEF, decl.name);
     node->ty = ty;
-    add_typedef(node);
+    add_typedef(ctx, node);
     cur = cur->next = node;
   }
 
@@ -2541,17 +2541,17 @@ static Node *parse_typedef(Token **rest, Token *tok, Type *basety) {
 // Parses a function declarator, and its body if one follows, into an
 // ND_FUNCDEF record. sema declares the function (checking it against a
 // previous declaration, anchored at `tok`) and analyzes the body.
-static Node *function_def(Token **rest, Token *tok, Type *basety, VarAttr *attr) {
+static Node *function_def(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr) {
   DeclName decl = {};
-  Type *ty = declarator(&tok, tok, basety, &decl);
+  Type *ty = declarator(ctx, &tok, tok, basety, &decl);
   if (!decl.name)
-    error_tok(chibicc_ctx(), decl.name_pos, "function name omitted");
+    error_tok(ctx, decl.name_pos, "function name omitted");
 
-  Node *node = new_node(ND_FUNCDEF, tok);
+  Node *node = new_node(ctx, ND_FUNCDEF, tok);
   node->ty_op = ty;
   node->name_tok = decl.name;
   node->attr = *attr;
-  add_declared_name(decl.name);
+  add_declared_name(ctx, decl.name);
 
   if (consume(&tok, tok, ";")) {
     *rest = tok;
@@ -2561,14 +2561,14 @@ static Node *function_def(Token **rest, Token *tok, Type *basety, VarAttr *attr)
   // The parameters are visible in the whole body, so they shadow
   // typedefs of the same name from here on, one scope above the body's
   // own - where the old begin_function registered them.
-  enter_scope();
+  enter_scope(ctx);
   for (Type *p = ty->params; p; p = p->next)
     if (p->name)
-      add_declared_name(p->name);
+      add_declared_name(ctx, p->name);
 
-  tok = skip(chibicc_ctx(), tok, "{");
-  node->body = compound_stmt(&tok, tok);
-  leave_scope();
+  tok = skip(ctx, tok, "{");
+  node->body = compound_stmt(ctx, &tok, tok);
+  leave_scope(ctx);
   *rest = tok;
   return node;
 }
@@ -2576,30 +2576,30 @@ static Node *function_def(Token **rest, Token *tok, Type *basety, VarAttr *attr)
 // Parses global-variable declarators (at file scope, or `extern` ones
 // inside a block) into ND_GVAR_DECL records; sema declares the objects
 // and serializes their initializers.
-static Node *global_variable(Token **rest, Token *tok, Type *basety, VarAttr *attr) {
+static Node *global_variable(ChibiccContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr) {
   Node head = {};
   Node *cur = &head;
   bool first = true;
 
   while (!consume(&tok, tok, ";")) {
     if (!first)
-      tok = skip(chibicc_ctx(), tok, ",");
+      tok = skip(ctx, tok, ",");
     first = false;
 
     DeclName decl = {};
-    Type *ty = declarator(&tok, tok, basety, &decl);
+    Type *ty = declarator(ctx, &tok, tok, basety, &decl);
     if (!decl.name)
-      error_tok(chibicc_ctx(), decl.name_pos, "variable name omitted");
+      error_tok(ctx, decl.name_pos, "variable name omitted");
 
     Token *name = decl.name;
-    add_declared_name(name);
+    add_declared_name(ctx, name);
 
-    Node *node = new_node(ND_GVAR_DECL, tok);
+    Node *node = new_node(ctx, ND_GVAR_DECL, tok);
     node->ty_op = ty;
     node->name_tok = name;
     node->attr = *attr;
     if (equal(tok, "="))
-      node->decl_init = init_record(&tok, tok->next);
+      node->decl_init = init_record(ctx, &tok, tok->next);
     cur = cur->next = node;
   }
 
@@ -2609,12 +2609,12 @@ static Node *global_variable(Token **rest, Token *tok, Type *basety, VarAttr *at
 
 // Lookahead tokens and returns true if a given token is a start
 // of a function definition or declaration.
-static bool is_function(Token *tok) {
+static bool is_function(ChibiccContext *ctx, Token *tok) {
   if (equal(tok, ";"))
     return false;
 
   Type dummy = {};
-  Type *ty = declarator(&tok, tok, &dummy, NULL);
+  Type *ty = declarator(ctx, &tok, tok, &dummy, NULL);
   return ty->kind == TY_FUNC;
 }
 
@@ -2623,31 +2623,31 @@ static bool is_function(Token *tok) {
 // The top-level declaration-record chain this returns is what sema
 // walks, in source order, to declare the objects and analyze the
 // function bodies.
-Node *parse(Token *tok) {
-  parse_init();
+Node *parse(ChibiccContext *ctx, Token *tok) {
+  parse_init(ctx);
   Node head = {};
   Node *cur = &head;
 
   while (tok->kind != TK_EOF) {
     VarAttr attr = {};
     Node *specs = NULL;
-    Type *basety = declspec(&tok, tok, &attr, &specs);
+    Type *basety = declspec(ctx, &tok, tok, &attr, &specs);
     cur = chain_append(cur, specs);
 
     // Typedef
     if (attr.is_typedef) {
-      cur = chain_append(cur, parse_typedef(&tok, tok, basety));
+      cur = chain_append(cur, parse_typedef(ctx, &tok, tok, basety));
       continue;
     }
 
     // Function
-    if (is_function(tok)) {
-      cur = cur->next = function_def(&tok, tok, basety, &attr);
+    if (is_function(ctx, tok)) {
+      cur = cur->next = function_def(ctx, &tok, tok, basety, &attr);
       continue;
     }
 
     // Global variable
-    cur = chain_append(cur, global_variable(&tok, tok, basety, &attr));
+    cur = chain_append(cur, global_variable(ctx, &tok, tok, basety, &attr));
   }
 
   return head.next;

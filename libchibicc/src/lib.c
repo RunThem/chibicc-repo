@@ -374,7 +374,7 @@ Token *chibicc_preprocess(ChibiccContext *ctx, Token *tok) {
 
 Node *chibicc_parse(ChibiccContext *ctx, Token *tok) {
   ENTER_RET(ctx, NULL);
-  Node *r = parse(tok);
+  Node *r = parse(ctx, tok);
   LEAVE(ctx);
   return r;
 }

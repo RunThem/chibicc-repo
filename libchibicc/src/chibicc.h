@@ -152,17 +152,17 @@ bool expansion_verify(Token *tok);
 // uses them to build the nodes its lowerings introduce. The shapes that
 // only a lowering produces - a bound name, a VLA designator, a numeric
 // literal typed at birth - sema constructs itself.
-Node *new_node(NodeKind kind, Token *tok);
-Node *new_binary(NodeKind kind, Node *lhs, Node *rhs, Token *tok);
-Node *new_unary(NodeKind kind, Node *expr, Token *tok);
-Node *new_num(int64_t val, Token *tok);
+Node *new_node(ChibiccContext *ctx, NodeKind kind, Token *tok);
+Node *new_binary(ChibiccContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok);
+Node *new_unary(ChibiccContext *ctx, NodeKind kind, Node *expr, Token *tok);
+Node *new_num(ChibiccContext *ctx, int64_t val, Token *tok);
 
 // Identifier spelling, used by sema when it declares the objects the
 // parser's declaration records name.
-char *get_ident(Token *tok);
+char *get_ident(ChibiccContext *ctx, Token *tok);
 
-Node *parse(Token *tok);
-void parse_init(void);
+Node *parse(ChibiccContext *ctx, Token *tok);
+void parse_init(ChibiccContext *ctx);
 void sema_store_label_gotos(Obj *fn, NodeArray gotos);
 NodeArray *sema_label_gotos(Obj *fn);
 void sema_state_clear(ChibiccContext *ctx);
@@ -179,7 +179,7 @@ int64_t const_expr(Token **rest, Token *tok);
 
 // The parser's conditional-expression entry point (parse.c), which
 // const_expr uses to read the expression it evaluates.
-Node *conditional(Token **rest, Token *tok);
+Node *conditional(ChibiccContext *ctx, Token **rest, Token *tok);
 
 // The type-level tools a consumer needs in order to build nodes that
 // arrive already typed: the annotation entry point, the constructors for

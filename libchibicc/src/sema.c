@@ -105,26 +105,26 @@ static Member *get_struct_member(Type *ty, Token *tok);
 // a token. Exported (see chibicc.h): a consumer that builds a node needs
 // it to arrive typed, and these are the shapes it cannot build itself.
 Node *new_var_node(Obj *var, Token *tok) {
-  Node *node = new_node(ND_VAR, tok);
+  Node *node = new_node(chibicc_ctx(), ND_VAR, tok);
   node->var = var;
   return node;
 }
 
 Node *new_vla_ptr(Obj *var, Token *tok) {
-  Node *node = new_node(ND_VLA_PTR, tok);
+  Node *node = new_node(chibicc_ctx(), ND_VLA_PTR, tok);
   node->var = var;
   return node;
 }
 
 Node *new_long(int64_t val, Token *tok) {
-  Node *node = new_node(ND_NUM, tok);
+  Node *node = new_node(chibicc_ctx(), ND_NUM, tok);
   node->val = val;
   node->ty = ty_long;
   return node;
 }
 
 Node *new_ulong(long val, Token *tok) {
-  Node *node = new_node(ND_NUM, tok);
+  Node *node = new_node(chibicc_ctx(), ND_NUM, tok);
   node->val = val;
   node->ty = ty_ulong;
   return node;
@@ -488,7 +488,7 @@ static void resolve_enum_records(Node *recs) {
       recs->val = val++;
       recs->ty_op = NULL;
 
-      VarScope *sc = push_scope(get_ident(recs->tok));
+      VarScope *sc = push_scope(get_ident(chibicc_ctx(), recs->tok));
       sc->enum_ty = ety;
       sc->enum_val = recs->val;
       recs = recs->next;
@@ -938,7 +938,7 @@ static void create_param_lvars(Type *param) {
     create_param_lvars(param->next);
     if (!param->name)
       error_tok(chibicc_ctx(), param->name_pos, "parameter name omitted");
-    new_lvar(get_ident(param->name), param);
+    new_lvar(get_ident(chibicc_ctx(), param->name), param);
   }
 }
 
@@ -986,7 +986,7 @@ static void declare_builtin_functions(void) {
 // arrives fully typed, so add_type skips it and codegen recognizes the
 // builtin by name.
 Node *new_alloca(Node *sz) {
-  Node *node = new_unary(ND_FUNCALL, new_var_node(builtin_alloca, sz->tok), sz->tok);
+  Node *node = new_unary(chibicc_ctx(), ND_FUNCALL, new_var_node(builtin_alloca, sz->tok), sz->tok);
   node->func_ty = builtin_alloca->ty;
   node->ty = builtin_alloca->ty->return_ty;
   node->args = sz;
@@ -1009,7 +1009,7 @@ Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
   add_type(rhs);
   usual_arith_conv(&lhs, &rhs);
 
-  Node *node = new_binary(kind, lhs, rhs, tok);
+  Node *node = new_binary(chibicc_ctx(), kind, lhs, rhs, tok);
   node->ty = lhs->ty;
   return node;
 }
@@ -1182,7 +1182,7 @@ static Member *find_init_member(Type *ty, Token *name) {
 // its anonymous global, which is what a string initializer for a
 // non-array target used to parse into.
 static Node *materialize_str(Initializer *rec) {
-  Node *node = new_node(ND_STRING, rec->str_tok);
+  Node *node = new_node(chibicc_ctx(), ND_STRING, rec->str_tok);
   add_type(node);
   return node;
 }
@@ -1197,19 +1197,19 @@ static void resolve_string(Initializer *rec, InitTree *init) {
   case 1: {
     char *str = tok->str;
     for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(str[i], tok);
+      init->children[i]->expr = new_num(chibicc_ctx(), str[i], tok);
     break;
   }
   case 2: {
     uint16_t *str = (uint16_t *)tok->str;
     for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(str[i], tok);
+      init->children[i]->expr = new_num(chibicc_ctx(), str[i], tok);
     break;
   }
   case 4: {
     uint32_t *str = (uint32_t *)tok->str;
     for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(str[i], tok);
+      init->children[i]->expr = new_num(chibicc_ctx(), str[i], tok);
     break;
   }
   default:
@@ -1803,7 +1803,7 @@ static void resolve_member(Node *node) {
     if (!mem)
       error_tok(chibicc_ctx(), node->tok, "no such member");
 
-    Node *link = new_unary(ND_MEMBER, cur, node->tok);
+    Node *link = new_unary(chibicc_ctx(), ND_MEMBER, cur, node->tok);
     link->member = mem;
     if (arrow) {
       // The dereference belongs to the innermost link. The marker
@@ -2731,7 +2731,7 @@ static bool is_const_expr(Node *node) {
 }
 
 int64_t const_expr(Token **rest, Token *tok) {
-  Node *node = conditional(rest, tok);
+  Node *node = conditional(chibicc_ctx(), rest, tok);
   return eval(node);
 }
 
@@ -2884,9 +2884,9 @@ static void resolve_node(Node *node) {
       Token *anchor = node->decl_init ? node->decl_init->eq_tok : node->tok;
       check_declared_void(anchor, node->ty_op);
       node->var = new_anon_gvar(node->ty_op);
-      push_scope(get_ident(node->name_tok))->var = node->var;
+      push_scope(get_ident(chibicc_ctx(), node->name_tok))->var = node->var;
     } else {
-      node->var = new_lvar(get_ident(node->name_tok),
+      node->var = new_lvar(get_ident(chibicc_ctx(), node->name_tok),
                            named_type(node->ty_op, node->name_tok));
       int align = attr_align(&node->attr);
       if (align)
@@ -2913,7 +2913,7 @@ static void resolve_node(Node *node) {
     resolve_type_exprs(node->ty_op);
     resolve_type(node->ty_op);
 
-    Obj *var = new_gvar(get_ident(node->name_tok),
+    Obj *var = new_gvar(get_ident(chibicc_ctx(), node->name_tok),
                         named_type(node->ty_op, node->name_tok));
     var->is_definition = !node->attr.is_extern;
     var->is_static = node->attr.is_static;
@@ -3033,7 +3033,7 @@ static void resolve_function(Node *node) {
   resolve_type_exprs(ty);
   resolve_type(ty);
 
-  Obj *fn = declare_function(get_ident(node->name_tok),
+  Obj *fn = declare_function(get_ident(chibicc_ctx(), node->name_tok),
                              named_type(ty, node->name_tok), &node->attr,
                              node->tok, node->body != NULL);
   node->var = fn;
