@@ -185,8 +185,8 @@
 
 ### 规模
 
-- 18 个源文件, `2931 insertions(+) / 2843 deletions(-)` (不含计划 / RESULT /
-  文档).
+- 19 个文件 (库源码, `codegen.c`, `main.c`, `driver.h`, 4 个测试脚本),
+  `2946 insertions(+) / 2844 deletions(-)` (不含计划 / RESULT / 文档).
 - 583 个定义中 410 个以 `ChibiccContext *ctx` 为首参: libchibicc 378
   (cst 70, hashmap 9, lib 31, parse 77, preprocess 53, provenance 1, sema 93,
   strings 3, tokenize 29, type 10, unicode 2), codegen 30, self-test 2;
