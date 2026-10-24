@@ -1,6 +1,6 @@
 # PLAN-l5.md - L5 产品化验证 (formatter / CST 覆盖 / source mapping / 文档)
 
-> 状态: 进行中; 执行记录见 `plans/RESULT-l5.md`
+> 状态: 已完成 (2026-10-25); 执行记录见 `plans/RESULT-l5.md`
 > 基线: `main` @ `c530431`
 > 分支: `main` (W1-W6 每步一个提交)
 > 范围: CST 结构覆盖, CST formatter MVP (第一个真实消费者), AST source
@@ -175,68 +175,68 @@ LibcpToken **end)`: 遍历子树收集锚点 token, 按可比坐标(所属文件
 
 ### W0 - 计划落档与决策关闭
 
-- [ ] W0.1 写本计划; AGENTS.md 路线图 L5 改"进行中"并指向本计划,
+- [x] W0.1 写本计划; AGENTS.md 路线图 L5 改"进行中"并指向本计划,
   已决事项关闭"展开流 CST"(2026-10-25, 引用 1.2)。提交
   "Add the L5 productization plan"。
 
 ### W1 - statement expression 覆盖
 
-- [ ] W1.1 `cst_parse_primary` 的 `(` 分支: `(` 后跟 `{` 时解析复合块
+- [x] W1.1 `cst_parse_primary` 的 `(` 分支: `(` 后跟 `{` 时解析复合块
   (复用块级 item 解析), 新增 `CST_STMT_EXPR`(cst.h kind 追加);
   dump / reconstruct / verify 不需要新逻辑(叶子显式, 全 lossless)。
-- [ ] W1.2 `test/cst.sh`: 新增 `({ ... })` 的 round-trip / verify /
+- [x] W1.2 `test/cst.sh`: 新增 `({ ... })` 的 round-trip / verify /
   dump 样本(空体 / 单语句 / 声明 + 多语句 / 嵌套); 语料全量
   round-trip 不回归。
-- [ ] W1.3 闸门: 本机 cst.sh + ast/trivia/expand/diagnostic 通道;
+- [x] W1.3 闸门: 本机 cst.sh + ast/trivia/expand/diagnostic 通道;
   docker-test + snapshot 空 diff。提交 "Cover GNU statement
   expressions in the CST"。
 
 ### W2 - typedef seed API
 
-- [ ] W2.1 `libcp/include/libcp/cst.h` + 实现(`libcp/src/cst.c` 的
+- [x] W2.1 `libcp/include/libcp/cst.h` + 实现(`libcp/src/cst.c` 的
   typedef 表经 context 传递, 或挂在 parse 入口的选项; 实现时以最小
   面为准); `test/public-api.sh` D7 清单 +1。
-- [ ] W2.2 `test/cst.sh`: seed 后 `va_list ap;` 成结构的 dump 样本;
+- [x] W2.2 `test/cst.sh`: seed 后 `va_list ap;` 成结构的 dump 样本;
   `test/library.sh` 消费者加一个 seed 用例。
-- [ ] W2.3 闸门同 W1 + 容器 check-library(D7 变化过闸)。提交
+- [x] W2.3 闸门同 W1 + 容器 check-library(D7 变化过闸)。提交
   "Add libcp_cst_seed_typedef for include-provided names"。
 
 ### W3 - 覆盖率 golden
 
-- [ ] W3.1 `test/cst-stats.sh`: 统计 48 语料文件每文件 UNPARSED 数,
+- [x] W3.1 `test/cst-stats.sh`: 统计 48 语料文件每文件 UNPARSED 数,
   golden 文件入库; W1/W2 后的实测数即为基线(写入本计划 8 节)。
   `make test` / `test-stage2` 接线。
-- [ ] W3.2 提交 "Lock the CST UNPARSED coverage golden"。
+- [x] W3.2 提交 "Lock the CST UNPARSED coverage golden"。
 
 ### W4 - formatter MVP(第一个真实消费者)
 
-- [ ] W4.1 `tools/fmt.c`: 只走 tokenize_file -> (seed 由 CLI 选项供给)
+- [x] W4.1 `tools/fmt.c`: 只走 tokenize_file -> (seed 由 CLI 选项供给)
   -> cst_parse -> 按 4.1 策略发射; `main(int argc, char **argv)`
   独立二进制, 链接 `libcp.a`, 公共头 only。
-- [ ] W4.2 `Makefile`: `make fmt`(默认不进 `all`); `test/fmt.sh`:
+- [x] W4.2 `Makefile`: `make fmt`(默认不进 `all`); `test/fmt.sh`:
   幂等 / 行数不变 / 注释数量不变 / UNPARSED 与指令行原样, 由
   `make test` / `test-stage2` 接线。
-- [ ] W4.3 docker: `format 后 -S == 原 -S` 逐字节(时间宏固定, 41 语料);
+- [x] W4.3 docker: `format 后 -S == 原 -S` 逐字节(时间宏固定, 41 语料);
   连同 docker-test / snapshot 空一起作为行为闸门。
-- [ ] W4.4 API 手感发现清单记入工作笔记(RESULT 用)。提交 "Add the
+- [x] W4.4 API 手感发现清单记入工作笔记(RESULT 用)。提交 "Add the
   CST formatter MVP as the first real consumer"。
 
 ### W5 - source range 与诊断展开点
 
-- [ ] W5.1 `libcp_node_source_range`(4.4 方案; 需要的最小访问器按需
+- [x] W5.1 `libcp_node_source_range`(4.4 方案; 需要的最小访问器按需
   拍板); 一个改写示例(tools/ 或 test 内)把 AST 子树映射回源码 span。
-- [ ] W5.2 `LibcpDiagnostic` 追加 tok / prov 字段; 默认输出不变;
+- [x] W5.2 `LibcpDiagnostic` 追加 tok / prov 字段; 默认输出不变;
   一个"宏内错误回调拿到调用点"的用例进 `test/library.sh`。
-- [ ] W5.3 闸门: diagnostic.sh 68 例逐字节 + 全套 + 容器
+- [x] W5.3 闸门: diagnostic.sh 68 例逐字节 + 全套 + 容器
   check-library。提交 "Add node source ranges and diagnostic
   expansion points"。
 
 ### W6 - 文档与收尾
 
-- [ ] W6.1 README 顶部改为库定位(上游正文保留在下方); docs/ 增补
+- [x] W6.1 README 顶部改为库定位(上游正文保留在下方); docs/ 增补
   formatter 章(能力 / 策略 / 已验证示例 / API 手感结论); docs/09
   D7 表同步; docs/12 时间线加行。
-- [ ] W6.2 终闸门: `make docker-test` + snapshot + 容器
+- [x] W6.2 终闸门: `make docker-test` + snapshot + 容器
   check-library + (一次) tinycc thirdparty; 写 `plans/RESULT-l5.md`
   (含 API 手感清单与 user-data 扩展点的候选结论), 勾完本计划,
   AGENTS.md 勾选。提交 "Record the L5 line and mark the plan
@@ -277,9 +277,13 @@ LibcpToken **end)`: 遍历子树收集锚点 token, 按可比坐标(所属文件
 ## 8. 基线数据(执行时回填)
 
 - W1 前: 770 UNPARSED / 30 文件(3.1 分布)。
-- W1 后: ___ (预期剩 typedef 类 + 零星, 目标 < 60)。
-- W1+W2 后(seed va_list): ___ 。
-- formatter 首版手感记录: 见 RESULT。
+- W1 后: 45(判据 < 60 达成; 残余: macro.c 19 宏形状残骸, attribute.c 14
+  属性内嵌 struct 的 offsetof, varargs.c 4 + tls.c 1 + typedef.c 1
+  include-typedef, string.c 3, atomic.c 3)。
+- W1+W2 后(seed va_list): golden 数字不变(驱动器通道不 seed, seed 是
+  API 消费者能力); library.sh 验证 seed 后 `va_list ap;` 成结构且跨
+  reset 保留。
+- formatter 首版手感记录: 见 RESULT 第 5 节。
 
 ## 9. 回退
 

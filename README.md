@@ -2,7 +2,9 @@
 
 > **Fork status**: this repository maintains `libcp`, a reusable, lossless C
 > front end (tokenize, preprocess, CST, AST, sema). The `chibicc` binary is
-> its reference consumer. `libcp` reads as "Library C Parse"; the name is a
+> its reference consumer; `tools/fmt.c` (built by `make fmt`) is its first
+> real tool consumer - a line-preserving CST formatter. See `docs/` for the
+> library documentation. `libcp` reads as "Library C Parse"; the name is a
 > brand token, not a description - the sentence above is.
 
 (The old master has moved to

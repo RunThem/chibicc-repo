@@ -35,7 +35,7 @@
 - 宏展开 provenance 的 11 个访问器, 以及 `libcp_expansion_dump` / `_verify`.
 - 一个不透明的 `LibcpContext`, 管理一个翻译单元的全部状态和内存.
 - 一套可替换的分配器宏 (`<libcp/allocator.h>`).
-- 10 个公共头, 36 个公共函数. 公共符号一律 `libcp_` / `Libcp` 前缀.
+- 10 个公共头, 38 个公共函数(L5 起含 `libcp_cst_seed_typedef` 与 `libcp_node_source_range`). 公共符号一律 `libcp_` / `Libcp` 前缀.
 
 库的实现约 1.2 万行 C, 公共头约 2.3 千行. 它没有外部依赖, 除 C 标准库外只要求 POSIX 的文件与线程基础能力.
 

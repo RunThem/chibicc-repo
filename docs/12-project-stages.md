@@ -28,6 +28,7 @@
 | 2026-10-21 | 源码与计划归档整理 | `dd3e631` 之后 |
 | 2026-10-23 | 库改名 libcp | `3a46b6c` 完成 |
 | 2026-10-25 | Pratt 单一路径与内部符号前缀 | `ab6106f` 完成 |
+| 2026-10-25 | L5 产品化验证 (formatter / 覆盖 / source mapping) | `plans/RESULT-l5.md` |
 | 未开始 | L5 产品化验证 (原阶段 6) | - |
 
 日期是终态提交的日期, 不是开工日期. 每个阶段的详细执行记录在 `plans/` 下.
@@ -445,25 +446,15 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 
 这些整理让目录结构与"库 + 参考消费者"的定位一致.
 
-## 12.14 L5 产品化验证 (未开工)
+## 12.14 L5 产品化验证 (2026-10-25 完成)
 
-这是原阶段 6, 2026-10-19 改为必选, 但目前没有开始.
+用户 2026-10-25 拍板开工(`plans/PLAN-l5.md` / `plans/RESULT-l5.md`), 同日完成:
 
-计划内容:
-
-- L5.1: CST formatter MVP, 只消费第 1/2 层, 对 `UNPARSED` 原样输出, 幂等, 编译等价, 注释数量不变.
-- L5.2: CST 结构覆盖率统计与 typedef 供给.
-- L5.3: AST 源码范围或 CST 映射; 诊断展开点字段.
-- L5.4: 库文档与示例.
-- L5.5: L5 闸门.
-
-未完成意味着:
-
-- API 还没有被真实工具验证.
-- formatter 的可行性没有被证明.
-- 源码映射和诊断展开点还缺.
-
-这是当前最大的产品化风险, 不是隐藏信息. 采用者应该把它计入决策.
+- **CST 覆盖 (W1-W3)**: 语句表达式 `({...})`, 类型名实参(`__builtin_types_compatible_p(int, int)` / `offsetof(struct T, m)`)与 `_Generic`(含关联臂与 `default`)成为结构节点; 48 语料文件的 UNPARSED 从 770 降到 45, 剩余成因(macro 形状残骸 / 属性内嵌 struct / `_Atomic`)由 `test/cst-stats.sh` 的 golden 锁定.
+- **typedef 供给 (W2)**: `libcp_cst_seed_typedef` - include 提供的 typedef 名(如 `va_list`)由消费者 seed, 库不猜.
+- **formatter MVP (W4)**: `tools/fmt.c` - 库的第一个真实消费者, 行保持的 CST 格式化器; `test/fmt.sh` 锁幂等 / 行数 / 注释数量 / 容器内 `-S` 逐字节等价.
+- **source mapping (W5)**: `libcp_node_source_range`(子树锚点 token 极值)与诊断展开点(`LibcpDiagnostic` 增加 `tok` / `prov`, 默认输出逐字节不变).
+- 同线关闭"展开流 CST"未决项(维持现状), per-node user data 扩展点按 formatter 的负结果继续推迟(只读遍历型消费者不需要它).
 
 ## 12.15 从阶段史看现在的代码
 
@@ -479,7 +470,7 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 | token 有 trivia 和 raw 坐标 | trivia 线 | 逐字节重建 |
 | provenance 链 | provenance 线 | 宏来源不可从 AST 恢复 |
 | `LibcpContext` 不透明 | 库边界 L3 | 公共面不泄漏内部布局 |
-| 36 个公共函数 | 库边界 D7 | 唯一的公共 API 清单 |
+| 38 个公共函数 | 库边界 D7 + L5 | 唯一的公共 API 清单(L5 追加 seed 与 range) |
 | 表达式层是一个绑定力循环 | Pratt 线 + Pratt 单一路径线 | 级联已删, Pratt 是唯一实现 |
 
 ## 12.16 读历史文档的注意事项
