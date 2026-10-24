@@ -1,0 +1,34 @@
+# CI (CodeReview 2026-10-24 B1). The Linux runner is native x86-64, so
+# the full test set runs without Docker. The macOS job only builds the
+# compiler and exercises the host-runnable front-end channels: the
+# generated x86-64 code cannot be assembled there. The Pratt dual build
+# and the thirdparty projects stay on the manual Docker gates.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test (stage 1 + stage 2)
+        run: make -j"$(nproc)" test-all
+      - name: Library surface gates
+        run: make check-library
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the compiler
+        run: make -j"$(sysctl -n hw.ncpu)" chibicc
+      - name: Front-end channels
+        run: |
+          test/trivia.sh ./chibicc
+          test/cst.sh ./chibicc
+          test/expand.sh ./chibicc
+          test/ast.sh ./chibicc

@@ -382,6 +382,9 @@ struct LibcpContext {
   bool resolving_body;
 };
 
+// The base file name is per-TU state, not configuration: it is set from
+// the input path when tokenizing starts and cleared by reset, unlike the
+// include paths and macro operations, which survive reset.
 void libcp_context_set_base_file(LibcpContext *ctx, char *path);
 
 void *libcp_arena_alloc(LibcpContext *ctx, size_t size, size_t align);

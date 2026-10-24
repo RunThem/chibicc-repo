@@ -4,7 +4,14 @@
 .codegraph/
 thirdparty/
 stage2/
+stage2-pratt/
+pratt/
 chibicc
+chibicc-pratt
+libcp.a
+libcp.so
+libcp.so.*
+libcp.pc
 tmp*
 *.o
 *.s

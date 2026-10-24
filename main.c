@@ -1341,6 +1341,10 @@ int main(int argc, char **argv) {
   atexit(cleanup);
   ctx = libcp_context_new();
   parse_args(argc, argv);
+  // A malformed -D body no longer exits from inside the library; the
+  // diagnostic has already been printed, so stop here as before.
+  if (libcp_context_failed(ctx))
+    exit(1);
   if (base_file)
     libcp_context_set_base_file(ctx, base_file);
 

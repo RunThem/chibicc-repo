@@ -70,9 +70,12 @@ static void *arena_alloc(LibcpContext *ctx, size_t size, size_t align) {
 
   ArenaBlock *b = ctx->arena;
   size_t start = b ? (b->used + align - 1) / align * align : 0;
-  if (!b || start + size > b->cap) {
+  // Overflow-safe form of start + size > b->cap. start may round past
+  // cap (used can sit on cap with a custom-sized block), and cap - start
+  // would then wrap, so that case is decided first.
+  if (!b || start > b->cap || size > b->cap - start) {
     size_t cap = ARENA_BLOCK_SIZE;
-    if (cap < size + align)
+    if (size > SIZE_MAX - align || cap < size + align)
       cap = size + align;
     ArenaBlock *nb = LIBCP_CALLOC(1, sizeof(ArenaBlock));
     nb->data = LIBCP_MALLOC(cap);
@@ -193,16 +196,35 @@ void libcp_context_define(LibcpContext *ctx, char *name, char *buf) {
   size_t n = strlen(name) + strlen(buf) + 4;
   char *s = LIBCP_CALLOC(1, n);
   snprintf(s, n, "D:%s=%s", name, buf);
-  config_push(&ctx->macro_ops, &ctx->macro_ops_len, &ctx->macro_ops_cap, s);
+
+  // Its own error boundary: a malformed body raises through
+  // tokenize_nested instead of exiting the host process. The frame is
+  // hand-written (not ENTER_VOID) so the op string is freed on the way
+  // out, and the op is applied before it is recorded because
+  // apply_macro_op leaves its '=' NULed when it raises - a half-applied
+  // op must not reach the reset replay.
+  JmpFrame jf;
+  jf.prev = ctx->jmp_top;
+  ctx->jmp_top = &jf;
+  if (setjmp(jf.buf)) {
+    ctx->jmp_top = jf.prev;
+    LIBCP_FREE(s);
+    return;
+  }
+
   apply_macro_op(ctx, s);
+  config_push(&ctx->macro_ops, &ctx->macro_ops_len, &ctx->macro_ops_cap, s);
+  ctx->jmp_top = jf.prev;
 }
 
 void libcp_context_undef(LibcpContext *ctx, char *name) {
   size_t n = strlen(name) + 3;
   char *s = LIBCP_CALLOC(1, n);
   snprintf(s, n, "U:%s", name);
+  ENTER_VOID(ctx);
   config_push(&ctx->macro_ops, &ctx->macro_ops_len, &ctx->macro_ops_cap, s);
   apply_macro_op(ctx, s);
+  LEAVE(ctx);
 }
 
 void libcp_context_set_predefined_macros(LibcpContext *ctx, bool enabled) {

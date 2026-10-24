@@ -286,10 +286,12 @@ libcp_context_set_diagnostic(ctx, on_diagnostic, user);
 ```c
 LibcpToken *tok = libcp_tokenize_file(ctx, path);
 tok = libcp_preprocess(ctx, tok);
-Node *ast = libcp_parse(ctx, tok);
-Obj *prog = libcp_sema(ctx, ast);
-codegen(prog, out);
+LibcpNode *ast = libcp_parse(ctx, tok);
+LibcpObj *prog = libcp_sema(ctx, ast);
+codegen(ctx, prog, out);
 ```
+
+其中 `codegen()` 是驱动器自己的函数(声明在 `driver.h`), 不属于库 - 库的产物到第 4 层为止.
 
 只读通道在 `cc1()` 里早退, 不写目标文件, 不调用汇编器:
 

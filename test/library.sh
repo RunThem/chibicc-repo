@@ -509,6 +509,46 @@ static int check_define(LibcpContext *ctx) {
   return 0;
 }
 
+// A malformed macro body in libcp_context_define raises to the callback
+// and returns instead of exiting the host process; the failed op is not
+// recorded, so the reset replay stays valid and the context keeps
+// working (CodeReview 2026-10-24 A1).
+static int check_define_bad_body(LibcpContext *ctx) {
+  int before = errors;
+  libcp_context_define(ctx, "BAD_BODY", "\"oops");
+  if (!libcp_context_failed(ctx) || errors != before + 1)
+    return 1;
+  libcp_context_reset(ctx);
+
+  // The name stays an identifier: the failed op never entered the
+  // replay (a recorded half-applied op would silently define it as 1).
+  LibcpToken *tok =
+    libcp_tokenize_buffer(ctx, "<def>", "int y = BAD_BODY;\n");
+  if (!tok)
+    return 1;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || libcp_context_failed(ctx))
+    return 1;
+  int ident = 0;
+  for (LibcpToken *t = tok; t && t->kind != TK_EOF; t = t->next)
+    if (t->kind == TK_IDENT && t->len == 8 &&
+        !memcmp(t->loc, "BAD_BODY", 8))
+      ident = 1;
+  if (!ident)
+    return 1;
+
+  // A define after the failure still records and replays across a reset.
+  libcp_context_define(ctx, "AFTER", "7");
+  libcp_context_reset(ctx);
+  tok = libcp_tokenize_buffer(ctx, "<def>", "int y = AFTER;\n");
+  if (!tok)
+    return 1;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 7) || libcp_context_failed(ctx))
+    return 1;
+  return 0;
+}
+
 // Every public entry unwinds to the callback and returns its failure
 // value without exiting (PLAN L3.4b).
 static int check_errors(LibcpContext *ctx) {
@@ -779,6 +819,9 @@ int main(int argc, char **argv) {
     return 1;
   libcp_context_reset(ctx);
   if (check_define(ctx))
+    return 1;
+  libcp_context_reset(ctx);
+  if (check_define_bad_body(ctx))
     return 1;
   libcp_context_reset(ctx);
   if (check_errors(ctx))

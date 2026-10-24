@@ -224,13 +224,13 @@ struct libcp_initializer {
 
 ### 6.4.1 递归下降
 
-`parse.c` 是一个递归下降解析器. 每个函数对应一条产生式, 通过 `rest` 出参返回剩余 token 链:
+`parse.c` 是一个递归下降解析器. 每个函数对应一条产生式, 以 `LibcpContext *ctx` 为首参, 通过 `rest` 出参返回剩余 token 链:
 
 ```c
-static Node *stmt(Token **rest, Token *tok);
-static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr);
-static Node *assign(Token **rest, Token *tok);
-static Node *expr(Token **rest, Token *tok);
+static Node *stmt(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *declaration(LibcpContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
+static Node *assign(LibcpContext *ctx, Token **rest, Token *tok);
+static Node *expr(LibcpContext *ctx, Token **rest, Token *tok);
 ```
 
 声明层:

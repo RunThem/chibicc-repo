@@ -25,7 +25,7 @@ make libcp.a   # 只构建静态库
 | `libcp.so.0` | 共享库, 仅 Linux |
 | `libcp.so` | 指向 `libcp.so.0` 的符号链接, 仅 Linux |
 | `chibicc` | 参考编译器, 链接 `libcp.a` |
-| `libcp.pc` | pkg-config 文件, 由 `make` 生成 |
+| `libcp.pc` | pkg-config 文件, 仅由 `make libcp.pc` / `make check-library` / `make install` 生成, `make`(all)不构建它 |
 | `pratt/libcp.a` | Pratt 表达式解析构建的静态库, 仅显式构建 |
 | `stage2/libcp.a` | 自举构建的静态库 |
 
@@ -54,7 +54,7 @@ CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch \
 | `test-stage2-pratt` | Pratt 构建的自举 |
 | `check-library` | 公共面与打包闸门 |
 | `check-library-pratt` | Pratt 库的公共面闸门 |
-| `install` | 安装头文件, 库与 pkg-config |
+| `install` | 安装头文件, 库, pkg-config 文件与 LICENSE |
 | `clean` | 清理构建产物 |
 | `docker-image` | 构建 amd64 测试镜像 |
 | `docker-test` | 容器内完整测试与自举 |
@@ -88,6 +88,7 @@ $PREFIX/lib/libcp.a
 $PREFIX/lib/libcp.so.0        (Linux)
 $PREFIX/lib/libcp.so          (Linux, 符号链接)
 $PREFIX/lib/pkgconfig/libcp.pc
+$PREFIX/share/licenses/libcp/LICENSE
 ```
 
 `test/install.sh` 校验:
@@ -95,6 +96,7 @@ $PREFIX/lib/pkgconfig/libcp.pc
 - 恰好 10 个公共头.
 - `libcp.a` 存在.
 - `libcp.pc` 存在.
+- `LICENSE` 存在.
 - Linux 下 `.so` 和符号链接存在.
 - pkg-config 的版本等于 `LIBCP_VERSION`.
 - 用 pkg-config 的 flags 能编译并运行一个消费者.

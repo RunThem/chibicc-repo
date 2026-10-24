@@ -1,8 +1,8 @@
 #!/bin/sh
 # The packaging gate (PLAN L3.3c): make install puts exactly the public
-# headers, the library and libcp.pc under the prefix, pkg-config
-# reports the same version as LIBCP_VERSION, and a consumer builds and
-# runs with pkg-config's flags.
+# headers, the library, libcp.pc and the license under the prefix,
+# pkg-config reports the same version as LIBCP_VERSION, and a consumer
+# builds and runs with pkg-config's flags.
 
 set -eu
 
@@ -28,6 +28,7 @@ for h in libcp allocator context diagnostic token preprocess provenance cst ast 
 done
 [ -f "$prefix/lib/libcp.a" ] || { echo "install: missing libcp.a" >&2; exit 1; }
 [ -f "$prefix/lib/pkgconfig/libcp.pc" ] || { echo "install: missing libcp.pc" >&2; exit 1; }
+[ -f "$prefix/share/licenses/libcp/LICENSE" ] || { echo "install: missing LICENSE" >&2; exit 1; }
 if [ "$(uname -s)" = "Linux" ]; then
   [ -f "$prefix/lib/libcp.so.0" ] || { echo "install: missing libcp.so.0" >&2; exit 1; }
   [ -L "$prefix/lib/libcp.so" ] || { echo "install: missing libcp.so symlink" >&2; exit 1; }

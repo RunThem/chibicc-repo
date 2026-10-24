@@ -82,7 +82,7 @@ endif
 $(LIB_OBJS) $(DRIVER_OBJS): $(LIB_HDR) $(PUBLIC_HDRS)
 $(DRIVER_OBJS): driver.h
 
-test/%.exe: chibicc test/%.c
+test/%.exe: chibicc test/%.c test/common test/test.h
 	./chibicc -Iinclude -Itest -c -o test/$*.o test/$*.c
 	$(CC) -pthread -o $@ test/$*.o -xc test/common
 
@@ -101,7 +101,7 @@ test: $(TESTS)
 	test/self-test.sh
 	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
 
-pratt/test/%.exe: chibicc-pratt test/%.c
+pratt/test/%.exe: chibicc-pratt test/%.c test/common test/test.h
 	mkdir -p pratt/test
 	./chibicc-pratt -Iinclude -Itest -c -o pratt/test/$*.o test/$*.c
 	$(CC) -pthread -o $@ pratt/test/$*.o -xc test/common
@@ -171,7 +171,7 @@ stage2/%.o: %.c chibicc $(LIB_HDR) $(PUBLIC_HDRS)
 
 stage2/main.o stage2/codegen.o: driver.h
 
-stage2/test/%.exe: stage2/chibicc test/%.c
+stage2/test/%.exe: stage2/chibicc test/%.c test/common test/test.h
 	mkdir -p stage2/test
 	./stage2/chibicc -Iinclude -Itest -c -o stage2/test/$*.o test/$*.c
 	$(CC) -pthread -o $@ stage2/test/$*.o -xc test/common
@@ -205,7 +205,7 @@ stage2-pratt/%.o: %.c chibicc-pratt $(LIB_HDR) $(PUBLIC_HDRS)
 
 stage2-pratt/main.o stage2-pratt/codegen.o: driver.h
 
-stage2-pratt/test/%.exe: stage2-pratt/chibicc test/%.c
+stage2-pratt/test/%.exe: stage2-pratt/chibicc test/%.c test/common test/test.h
 	mkdir -p stage2-pratt/test
 	./stage2-pratt/chibicc -Iinclude -Itest -c -o stage2-pratt/test/$*.o test/$*.c
 	$(CC) -pthread -o $@ stage2-pratt/test/$*.o -xc test/common
@@ -243,11 +243,13 @@ endif
 	$(INSTALL) -m 644 libcp.pc.tmp \
 	  $(DESTDIR)$(PREFIX)/lib/pkgconfig/libcp.pc
 	rm -f libcp.pc.tmp
+	$(INSTALL) -d $(DESTDIR)$(PREFIX)/share/licenses/libcp
+	$(INSTALL) -m 644 LICENSE $(DESTDIR)$(PREFIX)/share/licenses/libcp
 
 # Misc.
 
 clean:
-	rm -rf chibicc libcp.a libcp.so libcp.so.0 libcp.pc tmp* $(TESTS) test/*.s test/*.exe stage2 pratt stage2-pratt chibicc-pratt
+	rm -rf chibicc libcp.a libcp.so libcp.so.0 libcp.pc libcp.pc.tmp tmp* $(TESTS) test/*.s test/*.exe stage2 pratt stage2-pratt chibicc-pratt
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 # Docker (amd64 Linux) 测试环境: 本机是 macOS ARM64, chibicc 生成的 x86-64 代码
@@ -260,7 +262,7 @@ clean:
 THIRDPARTY ?= tinycc libpng git sqlite cpython
 
 # 拷贝源码到容器可写层(排除本机构建产物与 thirdparty 缓存)
-BOOT = mkdir -p /work && tar -C /src --exclude=./.git --exclude=./.cache --exclude=./thirdparty --exclude=./chibicc --exclude=./chibicc-pratt --exclude=./libcp.a --exclude="./libcp.so*" --exclude=./stage2 --exclude=./stage2-pratt --exclude=./pratt --exclude=./compile_commands.json --exclude=./test/*.exe --exclude="*.o" --exclude="*.s" -cf - . | tar -C /work -xf -
+BOOT = mkdir -p /work && tar -C /src --exclude=./.git --exclude=./.cache --exclude=./.codegraph --exclude=./thirdparty --exclude=./chibicc --exclude=./chibicc-pratt --exclude=./libcp.a --exclude="./libcp.so*" --exclude=./stage2 --exclude=./stage2-pratt --exclude=./pratt --exclude=./compile_commands.json --exclude=./test/*.exe --exclude="*.o" --exclude="*.s" -cf - . | tar -C /work -xf -
 
 docker-image:
 	docker build --platform linux/amd64 -t chibicc:amd64 .
@@ -383,4 +385,4 @@ docker-snapshot-ndiff: docker-image
 	@rc=0; diff -ru .cache/.ndtmp/base .cache/.ndtmp/new || rc=1; rm -rf .cache/.ndtmp; \
 	  [ $$rc -eq 0 ] && echo "snapshot ndiff: empty" || { echo "snapshot ndiff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: all test clean test-stage2 test-thirdparty check-library check-library-pratt check-context check-context-pratt install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff test-pratt test-both test-ab test-stage2-pratt docker-test-both docker-test-pratt docker-pratt-ab docker-pratt-tinycc
+.PHONY: all test clean test-stage2 test-all test-thirdparty check-library check-library-pratt check-context check-context-pratt install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff test-pratt test-both test-ab test-stage2-pratt docker-test-both docker-test-pratt docker-pratt-ab docker-pratt-tinycc

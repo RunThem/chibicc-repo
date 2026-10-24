@@ -139,16 +139,16 @@ TU
 ### 5.4.1 入口
 
 ```c
-CstNode *cst_parse(Token *tok) {
-  CstContext ctx = {};
-  cst_collect_typedefs(&ctx, tok);
+CstNode *cst_parse(LibcpContext *ctx, Token *tok) {
+  CstContext cst = {};
+  cst_collect_typedefs(ctx, &cst, tok);
 
-  CstParser p = {tok, true, &ctx};
-  CstNode *root = new_cst_node(CST_TRANSLATION_UNIT);
-  cst_parse_items(root, &p);
+  CstParser p = {tok, true, &cst};
+  CstNode *root = new_cst_node(ctx, CST_TRANSLATION_UNIT);
+  cst_parse_items(ctx, root, &p);
 
   if (p.tok && p.tok->kind == TK_EOF)
-    cst_add_leaf(root, p.tok);
+    cst_add_leaf(ctx, root, p.tok);
   return root;
 }
 ```

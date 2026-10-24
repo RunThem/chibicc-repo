@@ -19,3 +19,4 @@
 /.cache
 /.codegraph
 /compile_commands.json
+/.zcodeignore
