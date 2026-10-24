@@ -67,6 +67,10 @@ typedef enum {
   CST_PP_NULL,
   CST_PP_IF,
   CST_PP_BRANCH,
+  // GNU statement expression "({...})" and a _Generic association
+  // argument "type: expr" / "default: expr" (added by PLAN-l5 W1).
+  CST_STMT_EXPR,
+  CST_GENERIC_ASSOC,
 } LibcpCstKind;
 
 typedef struct libcp_cst_node LibcpCstNode;

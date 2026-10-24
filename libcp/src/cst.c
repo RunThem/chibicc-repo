@@ -290,8 +290,10 @@ static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p);
 static CstNode *cst_parse_arg_list(LibcpContext *ctx, CstParser *p);
 static CstNode *cst_parse_init_list(LibcpContext *ctx, CstParser *p);
 static CstNode *cst_parse_type_name(LibcpContext *ctx, CstParser *p);
+static CstNode *cst_parse_type_name_core(LibcpContext *ctx, CstParser *p);
 static CstNode *cst_parse_declarator(LibcpContext *ctx, CstParser *p, bool allow_abstract);
 static CstNode *cst_parse_decl(LibcpContext *ctx, CstParser *p);
+static void cst_parse_compound(LibcpContext *ctx, CstParser *p, CstNode *block);
 // The body behind each depth-guarded expression/declarator entry.
 static CstNode *cst_parse_comma1(LibcpContext *ctx, CstParser *p);
 static CstNode *cst_parse_assign1(LibcpContext *ctx, CstParser *p);
@@ -327,6 +329,29 @@ static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p) {
   }
 
   if (libcp_equal(tok, "(")) {
+    // GNU statement expression: "(" block ")". The block parser runs at
+    // the brace, so the items inside keep the full statement grammar
+    // (PLAN-l5 W1: this span used to fall back to CST_UNPARSED).
+    if (libcp_equal(tok->next, "{")) {
+      CstNode *node = new_cst_node(ctx, CST_STMT_EXPR);
+      cst_add_leaf(ctx, node, tok);
+      p->tok = tok->next;
+
+      CstNode *block = new_cst_node(ctx, CST_BLOCK);
+      cst_parse_compound(ctx, p, block);
+      if (!p->ok)
+        return NULL;
+      cst_add_child(ctx, node, block);
+
+      if (!cst_at(p, ")")) {
+        cst_fail(p);
+        return NULL;
+      }
+      cst_add_leaf(ctx, node, p->tok);
+      p->tok = p->tok->next;
+      return node;
+    }
+
     CstNode *node = new_cst_node(ctx, CST_PAREN);
     cst_add_leaf(ctx, node, tok);
 
@@ -340,6 +365,16 @@ static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p) {
     cst_add_child(ctx, node, inner);
     cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
+    return node;
+  }
+
+  // _Generic is a primary-expression in C11 but a keyword here; it is
+  // call-shaped, so it becomes a PRIMARY leaf and the postfix tail's
+  // arg-list takes over (the arms parse as associations, cst_parse_arg).
+  if (libcp_equal(tok, "_Generic") && libcp_equal(tok->next, "(")) {
+    CstNode *node = new_cst_node(ctx, CST_PRIMARY);
+    cst_add_leaf(ctx, node, tok);
+    p->tok = tok->next;
     return node;
   }
 
@@ -362,7 +397,50 @@ static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-// arg-list = "(" (assign ("," assign)*)? ")"
+// arg = assign
+//     | type-name                              (builtin type arguments)
+//     | (type-name | "default") ":" assign     (_Generic association)
+//
+// The type forms are not assignment-expressions, but calls such as
+// __builtin_types_compatible_p(int, int), __builtin_offsetof(struct T,
+// m) and _Generic(100.0, double: 1, default: 0) take them as arguments.
+// The assignment attempt runs first; its failure backtracks only this
+// argument, and the failed attempt's nodes are unreachable, which is
+// allowed (PLAN-l5 W1).
+static CstNode *cst_parse_arg(LibcpContext *ctx, CstParser *p) {
+  Token *start = p->tok;
+
+  CstNode *arg = cst_parse_assign(ctx, p);
+  if (p->ok)
+    return arg;
+
+  p->ok = true;
+  p->tok = start;
+
+  CstNode *ty;
+  if (libcp_equal(p->tok, "default")) {
+    // The _Generic default arm is a keyword here, not a type name.
+    ty = new_cst_node(ctx, CST_PRIMARY);
+    cst_add_leaf(ctx, ty, p->tok);
+    p->tok = p->tok->next;
+  } else {
+    ty = cst_parse_type_name_core(ctx, p);
+    if (!p->ok)
+      return NULL;
+  }
+
+  if (!cst_at(p, ":"))
+    return ty;
+
+  CstNode *assoc = new_cst_node(ctx, CST_GENERIC_ASSOC);
+  cst_add_child(ctx, assoc, ty);
+  cst_add_leaf(ctx, assoc, p->tok); // ':'
+  p->tok = p->tok->next;
+  cst_add_child(ctx, assoc, cst_parse_assign(ctx, p));
+  return p->ok ? assoc : NULL;
+}
+
+// arg-list = "(" (arg ("," arg)*)? ")"
 static CstNode *cst_parse_arg_list(LibcpContext *ctx, CstParser *p) {
   CstNode *args = new_cst_node(ctx, CST_ARG_LIST);
   cst_add_leaf(ctx, args, p->tok); // '('
@@ -370,7 +448,7 @@ static CstNode *cst_parse_arg_list(LibcpContext *ctx, CstParser *p) {
 
   if (!cst_at(p, ")")) {
     for (;;) {
-      CstNode *arg = cst_parse_assign(ctx, p);
+      CstNode *arg = cst_parse_arg(ctx, p);
       if (!p->ok)
         return NULL;
       cst_add_child(ctx, args, arg);
@@ -1367,6 +1445,27 @@ static CstNode *cst_parse_type_name(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
+// The paren-less part of a type name: decl-specs plus an optional
+// abstract declarator. Same children as cst_parse_type_name, without
+// the wrapping parentheses; used where a bare type name appears (a call
+// argument, PLAN-l5 W1).
+static CstNode *cst_parse_type_name_core(LibcpContext *ctx, CstParser *p) {
+  CstNode *node = new_cst_node(ctx, CST_TYPE_NAME);
+
+  CstNode *specs = cst_parse_decl_specs(ctx, p);
+  if (!p->ok)
+    return NULL;
+  cst_add_child(ctx, node, specs);
+
+  CstNode *decl = cst_parse_declarator(ctx, p, true);
+  if (!p->ok)
+    return NULL;
+  if (decl->child_count)
+    cst_add_child(ctx, node, decl);
+
+  return node;
+}
+
 // declaration = decl-specs init-declarator ("," init-declarator)* ";"
 //             | decl-specs ";"
 // function-definition = decl-specs declarator compound-stmt
@@ -2276,6 +2375,8 @@ static char *cst_kind_name(LibcpContext *ctx, CstKind kind) {
   case CST_GROUP_BRACKET:    return "GROUP_BRACKET";
   case CST_GROUP_BRACE:      return "GROUP_BRACE";
   case CST_BLOCK:            return "BLOCK";
+  case CST_STMT_EXPR:        return "STMT_EXPR";
+  case CST_GENERIC_ASSOC:    return "GENERIC_ASSOC";
   case CST_NULL_STMT:        return "NULL_STMT";
   case CST_UNPARSED:         return "UNPARSED";
   case CST_EXPR_STMT:        return "EXPR_STMT";

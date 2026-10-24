@@ -97,6 +97,21 @@ exp_dump() {
     check "-verify-cst/$name"
 }
 
+# PLAN-l5 W1: GNU statement expressions, type-name call arguments and
+# _Generic associations are structured now (CST_STMT_EXPR /
+# CST_TYPE_NAME argument / CST_GENERIC_ASSOC).
+exp_dump stmt_expr 'x = ({ y; });\n' \
+'TU\n  EXPR_STMT\n    ASSIGN\n      PRIMARY\n        TOKEN x\n      TOKEN =\n      STMT_EXPR\n        TOKEN (\n        BLOCK\n          TOKEN {\n          EXPR_STMT\n            PRIMARY\n              TOKEN y\n            TOKEN ;\n          TOKEN }\n        TOKEN )\n    TOKEN ;\n  EOF\n'
+
+exp_dump stmt_expr_decl '({ int y = 3; y; });\n' \
+'TU\n  EXPR_STMT\n    STMT_EXPR\n      TOKEN (\n      BLOCK\n        TOKEN {\n        DECL\n          DECL_SPECS\n            TOKEN int\n          INIT_DECLARATOR\n            DECLARATOR\n              TOKEN y\n            TOKEN =\n            PRIMARY\n              TOKEN 3\n          TOKEN ;\n        EXPR_STMT\n          PRIMARY\n            TOKEN y\n          TOKEN ;\n        TOKEN }\n      TOKEN )\n    TOKEN ;\n  EOF\n'
+
+exp_dump type_arg 'f(int);\n' \
+'TU\n  EXPR_STMT\n    POSTFIX\n      PRIMARY\n        TOKEN f\n      ARG_LIST\n        TOKEN (\n        TYPE_NAME\n          DECL_SPECS\n            TOKEN int\n        TOKEN )\n    TOKEN ;\n  EOF\n'
+
+exp_dump generic_assoc 'x = _Generic(1.0, int: 2, default: 0);\n' \
+'TU\n  EXPR_STMT\n    ASSIGN\n      PRIMARY\n        TOKEN x\n      TOKEN =\n      POSTFIX\n        PRIMARY\n          TOKEN _Generic\n        ARG_LIST\n          TOKEN (\n          PRIMARY\n            TOKEN 1.0\n          TOKEN ,\n          GENERIC_ASSOC\n            TYPE_NAME\n              DECL_SPECS\n                TOKEN int\n            TOKEN :\n            PRIMARY\n              TOKEN 2\n          TOKEN ,\n          GENERIC_ASSOC\n            PRIMARY\n              TOKEN default\n            TOKEN :\n            PRIMARY\n              TOKEN 0\n          TOKEN )\n    TOKEN ;\n  EOF\n'
+
 # 空文件: 没有 token, 只剩收尾的 EOF.
 exp_dump empty '' \
 'TU\n  EOF\n'
