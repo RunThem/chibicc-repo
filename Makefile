@@ -72,6 +72,7 @@ test: $(TESTS)
 	test/ast.sh ./chibicc
 	test/trivia.sh ./chibicc
 	test/cst.sh ./chibicc
+	test/cst-stats.sh ./chibicc
 	test/expand.sh ./chibicc
 	test/library.sh
 	test/allocator.sh
@@ -125,6 +126,7 @@ test-stage2: libcp.a stage2/libcp.a $(TESTS:test/%=stage2/test/%)
 	test/ast.sh ./stage2/chibicc
 	test/trivia.sh ./stage2/chibicc
 	test/cst.sh ./stage2/chibicc
+	test/cst-stats.sh ./stage2/chibicc
 	test/expand.sh ./stage2/chibicc
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/library.sh
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/self-test.sh
