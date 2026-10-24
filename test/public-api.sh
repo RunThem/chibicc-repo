@@ -140,6 +140,7 @@ libcp_cst_reconstruct
 libcp_cst_dump
 libcp_cst_verify
 libcp_parse
+libcp_node_source_range
 libcp_sema
 libcp_token_provenance
 libcp_macro_prov_next

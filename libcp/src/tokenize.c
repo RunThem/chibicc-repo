@@ -83,7 +83,7 @@ static noreturn void raise_error(LibcpContext *ctx) {
 // A registered callback gets the structured form instead; the default
 // path below is byte-for-byte what the compiler printed before L2.6.
 static void verror_at(LibcpContext *ctx, char *filename, char *input, int line_no, char *loc,
-                      LibcpDiagnosticSeverity severity, char *fmt, va_list ap) {
+                      Token *tok, LibcpDiagnosticSeverity severity, char *fmt, va_list ap) {
 
   // Find a line containing `loc`.
   char *line = loc;
@@ -94,7 +94,8 @@ static void verror_at(LibcpContext *ctx, char *filename, char *input, int line_n
     char *msg = vformat(ctx, fmt, ap);
     LibcpDiagnostic d = {filename, line_no,
                            libcp_display_width(ctx, line, loc - line) + 1,
-                           severity, msg};
+                           severity, msg,
+                           tok, tok ? tok->prov : NULL};
     ctx->diag_fn(ctx->diag_user, &d);
     return;
   }
@@ -124,7 +125,7 @@ void libcp_error(LibcpContext *ctx, char *fmt, ...) {
 
   if (ctx && ctx->diag_fn) {
     char *msg = vformat(ctx, fmt, ap);
-    LibcpDiagnostic d = {NULL, 0, 0, LIBCP_DIAG_ERROR, msg};
+    LibcpDiagnostic d = {NULL, 0, 0, LIBCP_DIAG_ERROR, msg, NULL, NULL};
     ctx->diag_fn(ctx->diag_user, &d);
   } else {
     vfprintf(stderr, fmt, ap);
@@ -141,7 +142,7 @@ void libcp_error_at(LibcpContext *ctx, char *loc, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(ctx, ctx->current_file->name, ctx->current_file->contents, line_no,
-            loc, LIBCP_DIAG_ERROR, fmt, ap);
+            loc, NULL, LIBCP_DIAG_ERROR, fmt, ap);
   va_end(ap);
   raise_error(ctx);
 }
@@ -150,7 +151,7 @@ void libcp_error_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(ctx, tok->file->name, tok->file->contents, tok->line_no, tok->loc,
-            LIBCP_DIAG_ERROR, fmt, ap);
+            tok, LIBCP_DIAG_ERROR, fmt, ap);
   va_end(ap);
   raise_error(ctx);
 }
@@ -159,7 +160,7 @@ void libcp_warn_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(ctx, tok->file->name, tok->file->contents, tok->line_no, tok->loc,
-            LIBCP_DIAG_WARNING, fmt, ap);
+            tok, LIBCP_DIAG_WARNING, fmt, ap);
   va_end(ap);
 }
 

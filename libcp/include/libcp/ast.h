@@ -541,4 +541,11 @@ struct libcp_node {
 // typedef/tag classification oracle the C grammar requires.
 LIBCP_API LibcpNode *libcp_parse(LibcpContext *ctx, LibcpToken *tok);
 
+// The anchor-token extremes of a subtree (PLAN-l5 W5): the smallest and
+// largest representative tokens by (file, offset). *start and *end are
+// NULL when the subtree carries no tokens. `next` chains are siblings
+// and are not followed; initializer trees are not descended.
+LIBCP_API void libcp_node_source_range(const LibcpNode *node,
+                                       LibcpToken **start, LibcpToken **end);
+
 #endif

@@ -58,7 +58,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 | 第 1 层 | `libcp_tokenize_file`, `libcp_tokenize_buffer`, `libcp_tokenize_buffer_len`, `libcp_reconstruct` |
 | 预处理 | `libcp_preprocess` |
 | 第 2 层 | `libcp_cst_parse`, `libcp_cst_seed_typedef`, `libcp_cst_reconstruct`, `libcp_cst_dump`, `libcp_cst_verify` |
-| 第 3 层 | `libcp_parse` |
+| 第 3 层 | `libcp_parse`, `libcp_node_source_range` |
 | 第 4 层 | `libcp_sema` |
 | provenance | `libcp_token_provenance`, `libcp_macro_prov_next`, `_expansion`, `_arg_index` |
 | provenance | `libcp_macro_expansion_name`, `_end`, `_macro`, `_def`, `_arg`, `_arg_count`, `_is_builtin` |
@@ -137,6 +137,9 @@ typedef void (*LibcpDiagnosticFn)(void *user,
 - `user` 原样传给回调.
 - `fn` 为 NULL 时恢复默认打印行为.
 - 回调里的字符串只保证到下一次 reset.
+- `LibcpDiagnostic` 自 L5 起带 `tok`(锚点 token, token 锚定的诊断非 NULL)与
+  `prov`(该 token 的宏展开链, 源 token 为 NULL): 回调可以沿链走到最外层
+  调用点. 默认打印行为忽略这两个字段, 输出逐字节不变.
 
 ### 9.3.5 libcp_context_failed
 
@@ -398,6 +401,23 @@ LibcpNode *libcp_parse(LibcpContext *ctx, LibcpToken *tok);
 - 语法错误返回 NULL, `failed` 为 true.
 - 表达式不做类型计算, 名字未绑定, 常量未求值. 数值字面量例外, 带词法类型.
 - 深度上限 512.
+
+### 9.7.2 libcp_node_source_range
+
+```c
+void libcp_node_source_range(const LibcpNode *node,
+                             LibcpToken **start, LibcpToken **end);
+```
+
+子树锚点 token 的极值(按 所属文件 + 偏移 比较): 把一个 AST 子树映射回源码
+span 的最小接口. 注意事项:
+
+- `next` 链是兄弟, 不被跟随; 初始化器树不被下降.
+- 极值取自各节点的代表 token: 例如 `ND_FUNCDEF` 的代表 token 是函数体的
+  `{`, 所以整个函数定义的 range 从它的名字 token 开始, 不从声明说明符
+  开始 - 需要更早边界时要自己看 `spec_decls`.
+- 宏展开产物 token 的坐标在合成缓冲里, 跨文件比较按文件指针先序, 稳定
+  但无语义.
 
 ## 9.8 第 4 层 API
 

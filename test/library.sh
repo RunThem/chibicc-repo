@@ -289,6 +289,102 @@ static int check_cst_seed(LibcpContext *ctx) {
   return 0;
 }
 
+// PLAN-l5 W5: a subtree maps back to a source span through its anchor
+// tokens, and a macro-internal diagnostic carries the provenance chain
+// to the call site.
+static int check_source_range(LibcpContext *ctx) {
+  char *src = "int f(void) { return 1+2; }\n";
+
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<range>", src);
+  if (!tok)
+    return 1;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok)
+    return 1;
+  LibcpNode *prog = libcp_parse(ctx, tok);
+  if (!prog || prog->kind != ND_FUNCDEF)
+    return 1;
+
+  // f's body block -> return stmt -> the "+" node.
+  LibcpNode *ret = prog->body->body;
+  if (!ret || ret->kind != ND_RETURN)
+    return 1;
+  LibcpNode *add = ret->lhs;
+  if (!add || add->kind != ND_ADD)
+    return 1;
+
+  LibcpToken *start = NULL, *end = NULL;
+  libcp_node_source_range(add, &start, &end);
+  if (!start || !end)
+    return 1;
+  if (start->raw_len != 1 || start->raw_loc[0] != '1')
+    return 1;
+  if (end->raw_len != 1 || end->raw_loc[0] != '2')
+    return 1;
+
+  // The whole function: its representative anchors run from the name
+  // (a FUNCDEF's own tok is the body brace) to the last token.
+  libcp_node_source_range(prog, &start, &end);
+  if (!start || !end || start->raw_len != 1 || start->raw_loc[0] != 'f')
+    return 1;
+  if (end->raw_len != 1 || end->raw_loc[0] != '2')
+    return 1;
+  return 0;
+}
+
+static LibcpToken *exp_diag_tok;
+static const struct libcp_macro_prov *exp_diag_prov;
+
+static void exp_diag(void *user, const LibcpDiagnostic *d) {
+  (void)user;
+  exp_diag_tok = (LibcpToken *)d->tok;
+  exp_diag_prov = d->prov;
+}
+
+static int check_diag_expansion(LibcpContext *ctx) {
+  libcp_context_set_diagnostic(ctx, exp_diag, NULL);
+  int rc = 1;
+
+  // A plain source error: anchored, no provenance.
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<exp>", "int x = ;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok)
+    goto out;
+  libcp_parse(ctx, tok);
+  if (!libcp_context_failed(ctx) || !exp_diag_tok || exp_diag_prov)
+    goto out;
+  libcp_context_reset(ctx);
+
+  // An error inside a macro body: the diagnostic carries the chain; the
+  // outermost expansion names the macro at the call site.
+  tok = libcp_tokenize_buffer(ctx, "<exp>",
+                              "#define M(x) ((x)+1)\n"
+                              "int y = M(1+);\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok)
+    goto out;
+  libcp_parse(ctx, tok);
+  if (!libcp_context_failed(ctx) || !exp_diag_tok || !exp_diag_prov)
+    goto out;
+
+  LibcpMacroProv *p = (LibcpMacroProv *)exp_diag_prov;
+  while (libcp_macro_prov_next(p))
+    p = libcp_macro_prov_next(p);
+  LibcpToken *name = libcp_macro_expansion_name(libcp_macro_prov_expansion(p));
+  if (!name || name->len != 1 || name->loc[0] != 'M')
+    goto out;
+  rc = 0;
+
+out:
+  libcp_context_reset(ctx);
+  libcp_context_set_diagnostic(ctx, diag, NULL);
+  return rc;
+}
+
 static int check_cst_depth(LibcpContext *ctx) {
   size_t n = 2000, i;
   char *src = malloc(2 * n + 64);
@@ -831,6 +927,10 @@ int main(int argc, char **argv) {
   if (check_cst_depth(ctx))
     return 1;
   if (check_cst_seed(ctx))
+    return 1;
+  if (check_source_range(ctx))
+    return 1;
+  if (check_diag_expansion(ctx))
     return 1;
   if (check_utf8(ctx))
     return 1;
