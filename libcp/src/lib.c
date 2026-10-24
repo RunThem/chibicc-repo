@@ -153,6 +153,14 @@ void libcp_context_add_include_path(LibcpContext *ctx, char *path) {
               &ctx->include_paths_cap, config_strdup(path));
 }
 
+// PLAN-l5 W2: a typedef name provided by an included header is invisible
+// to the CST's pre-preprocess scan; the consumer, which knows its target
+// headers, seeds those names instead of the library guessing.
+void libcp_cst_seed_typedef(LibcpContext *ctx, char *name) {
+  config_push(&ctx->cst_seeds, &ctx->cst_seeds_len,
+              &ctx->cst_seeds_cap, config_strdup(name));
+}
+
 void libcp_context_set_base_file(LibcpContext *ctx, char *path) {
   ctx->base_file = libcp_arena_strdup(ctx, path);
 }
@@ -288,6 +296,9 @@ void libcp_context_free(LibcpContext *ctx) {
   for (int i = 0; i < ctx->macro_ops_len; i++)
     LIBCP_FREE(ctx->macro_ops[i]);
   LIBCP_FREE(ctx->macro_ops);
+  for (int i = 0; i < ctx->cst_seeds_len; i++)
+    LIBCP_FREE(ctx->cst_seeds[i]);
+  LIBCP_FREE(ctx->cst_seeds);
   LIBCP_FREE(ctx);
 }
 

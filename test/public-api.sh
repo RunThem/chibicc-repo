@@ -135,6 +135,7 @@ libcp_tokenize_buffer_len
 libcp_reconstruct
 libcp_preprocess
 libcp_cst_parse
+libcp_cst_seed_typedef
 libcp_cst_reconstruct
 libcp_cst_dump
 libcp_cst_verify

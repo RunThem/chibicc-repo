@@ -84,6 +84,11 @@ struct libcp_cst_node {
 };
 
 LIBCP_API LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok);
+// Seed a typedef name the preprocessor would get from an included
+// header: the CST is built before preprocessing, so its declaration
+// oracle cannot see such names and the consumer supplies them (e.g.
+// "va_list"). Configuration: survives reset.
+LIBCP_API void libcp_cst_seed_typedef(LibcpContext *ctx, char *name);
 LIBCP_API void libcp_cst_reconstruct(LibcpContext *ctx, LibcpCstNode *root, FILE *out);
 LIBCP_API void libcp_cst_dump(LibcpContext *ctx, LibcpCstNode *root, FILE *out);
 LIBCP_API bool libcp_cst_verify(LibcpContext *ctx, LibcpCstNode *root, LibcpToken *tok);

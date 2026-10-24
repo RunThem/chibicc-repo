@@ -252,12 +252,48 @@ static int cst_depth_case(LibcpContext *ctx, char *src) {
   return 0;
 }
 
+// PLAN-l5 W2: an include-provided typedef name is invisible to the
+// pre-preprocess scan; seeding it lets the declaration oracle see it,
+// and the seed survives reset as configuration.
+static int cst_unparsed_count(LibcpCstNode *n) {
+  int count = (n->kind == CST_UNPARSED) ? 1 : 0;
+  for (int i = 0; i < n->child_count; i++)
+    count += cst_unparsed_count(n->children[i]);
+  return count;
+}
+
+static int check_cst_seed(LibcpContext *ctx) {
+  char *src = "va_list ap;\n";
+
+  LibcpToken *raw = libcp_tokenize_buffer(ctx, "<cst-seed>", src);
+  if (!raw)
+    return 1;
+  LibcpCstNode *root = libcp_cst_parse(ctx, raw);
+  if (!root || !libcp_cst_verify(ctx, root, raw))
+    return 1;
+  if (cst_unparsed_count(root) != 1)
+    return 1;
+
+  libcp_cst_seed_typedef(ctx, "va_list");
+  raw = libcp_tokenize_buffer(ctx, "<cst-seed>", src);
+  root = libcp_cst_parse(ctx, raw);
+  if (!root || !libcp_cst_verify(ctx, root, raw) ||
+      cst_unparsed_count(root) != 0)
+    return 1;
+
+  libcp_context_reset(ctx);
+  raw = libcp_tokenize_buffer(ctx, "<cst-seed>", src);
+  root = libcp_cst_parse(ctx, raw);
+  if (!root || cst_unparsed_count(root) != 0)
+    return 1;
+  return 0;
+}
+
 static int check_cst_depth(LibcpContext *ctx) {
   size_t n = 2000, i;
   char *src = malloc(2 * n + 64);
   if (!src)
     return 1;
-
   i = 0;
   memcpy(src + i, "int f(void) { return ", 21);
   i += 21;
@@ -793,6 +829,8 @@ int main(int argc, char **argv) {
   if (check_parse_depth(ctx))
     return 1;
   if (check_cst_depth(ctx))
+    return 1;
+  if (check_cst_seed(ctx))
     return 1;
   if (check_utf8(ctx))
     return 1;

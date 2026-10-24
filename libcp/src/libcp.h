@@ -325,6 +325,13 @@ struct LibcpContext {
   char **macro_ops;
   int macro_ops_len;
   int macro_ops_cap;
+  // Typedef names the consumer seeded for the CST oracle (PLAN-l5 W2):
+  // names that arrive through included headers, which the
+  // pre-preprocess typedef scan cannot see. Survives reset like the
+  // other configuration.
+  char **cst_seeds;
+  int cst_seeds_len;
+  int cst_seeds_cap;
   bool predefined_macros;
   LibcpDiagnosticFn diag_fn;
   void *diag_user;

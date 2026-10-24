@@ -57,7 +57,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 | 配置 | `libcp_context_add_include_path`, `_define`, `_undef`, `_set_predefined_macros`, `_predefined_count`, `_predefined_at` |
 | 第 1 层 | `libcp_tokenize_file`, `libcp_tokenize_buffer`, `libcp_tokenize_buffer_len`, `libcp_reconstruct` |
 | 预处理 | `libcp_preprocess` |
-| 第 2 层 | `libcp_cst_parse`, `libcp_cst_reconstruct`, `libcp_cst_dump`, `libcp_cst_verify` |
+| 第 2 层 | `libcp_cst_parse`, `libcp_cst_seed_typedef`, `libcp_cst_reconstruct`, `libcp_cst_dump`, `libcp_cst_verify` |
 | 第 3 层 | `libcp_parse` |
 | 第 4 层 | `libcp_sema` |
 | provenance | `libcp_token_provenance`, `libcp_macro_prov_next`, `_expansion`, `_arg_index` |
@@ -337,7 +337,18 @@ LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok);
 - 叶子按序覆盖输入 token, 包括 EOF.
 - 输入链在调用中不被改写.
 
-### 9.6.2 libcp_cst_reconstruct
+### 9.6.2 libcp_cst_seed_typedef
+
+```c
+void libcp_cst_seed_typedef(LibcpContext *ctx, char *name);
+```
+
+把一个由**被 include 的头文件**提供的 typedef 名(如 `va_list`, `pthread_t`)注入
+CST 的声明 oracle. CST 建在预处理之前, 看不到 include 里的 `typedef`, 这类
+名字不 seed 时相关声明回落 `CST_UNPARSED`. 配置语义: 跨 `reset` 保留,
+`libcp_context_free` 释放. 库不猜 - 消费者知道自己目标的头, 由它供给.
+
+### 9.6.3 libcp_cst_reconstruct
 
 ```c
 void libcp_cst_reconstruct(LibcpContext *ctx, LibcpCstNode *root,
@@ -348,7 +359,7 @@ void libcp_cst_reconstruct(LibcpContext *ctx, LibcpCstNode *root,
 
 对直接 tokenize 输出, 结果等于原文件字节.
 
-### 9.6.3 libcp_cst_dump
+### 9.6.4 libcp_cst_dump
 
 ```c
 void libcp_cst_dump(LibcpContext *ctx, LibcpCstNode *root, FILE *out);
@@ -356,7 +367,7 @@ void libcp_cst_dump(LibcpContext *ctx, LibcpCstNode *root, FILE *out);
 
 打印树形 dump, 每层缩进两格. 叶子打印种类和拼写.
 
-### 9.6.4 libcp_cst_verify
+### 9.6.5 libcp_cst_verify
 
 ```c
 bool libcp_cst_verify(LibcpContext *ctx, LibcpCstNode *root,

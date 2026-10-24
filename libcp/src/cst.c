@@ -2334,6 +2334,12 @@ static void cst_parse_items(LibcpContext *ctx, CstNode *parent, CstParser *p) {
 CstNode *libcp_cst_parse(LibcpContext *ctx, Token *tok) {
   ENTER_RET(ctx, NULL);
   CstContext cst = {};
+
+  // Seeded names first: they participate in every declaration decision
+  // alongside the file-local scan (PLAN-l5 W2).
+  for (int i = 0; i < ctx->cst_seeds_len; i++)
+    libcp_strarray_push(ctx, &cst.typedefs,
+                        libcp_arena_strdup(ctx, ctx->cst_seeds[i]));
   cst_collect_typedefs(ctx, &cst, tok);
 
   CstParser p = {tok, true, &cst};
