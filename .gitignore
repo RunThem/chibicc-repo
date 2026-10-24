@@ -16,4 +16,5 @@
 /.cache
 /.codegraph
 /compile_commands.json
-/.zcodeignore
+/.zcodeignore/fmt
+/fmt.dSYM

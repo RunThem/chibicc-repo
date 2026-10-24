@@ -63,6 +63,11 @@ test/%.exe: chibicc test/%.c test/common test/test.h
 	./chibicc -Iinclude -Itest -c -o test/$*.o test/$*.c
 	$(CC) -pthread -o $@ test/$*.o -xc test/common
 
+# The CST formatter MVP (PLAN-l5 W4): the library's first real consumer,
+# built against libcp.a through the public headers only.
+fmt: libcp.a tools/fmt.c
+	$(CC) $(CFLAGS) -o $@ tools/fmt.c libcp.a
+
 test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./chibicc
@@ -78,6 +83,8 @@ test: $(TESTS)
 	test/allocator.sh
 	test/self-test.sh
 	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
+	$(MAKE) fmt
+	test/fmt.sh ./chibicc ./fmt
 
 test-all: test test-stage2
 
@@ -117,6 +124,10 @@ stage2/test/%.exe: stage2/chibicc test/%.c test/common test/test.h
 	./stage2/chibicc -Iinclude -Itest -c -o stage2/test/$*.o test/$*.c
 	$(CC) -pthread -o $@ stage2/test/$*.o -xc test/common
 
+# The formatter against the self-hosted library archive.
+stage2/fmt: stage2/libcp.a tools/fmt.c
+	$(CC) $(CFLAGS) -o $@ tools/fmt.c stage2/libcp.a
+
 test-stage2: libcp.a stage2/libcp.a $(TESTS:test/%=stage2/test/%)
 	for i in $(TESTS:test/%=stage2/test/%); do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./stage2/chibicc
@@ -130,6 +141,8 @@ test-stage2: libcp.a stage2/libcp.a $(TESTS:test/%=stage2/test/%)
 	test/expand.sh ./stage2/chibicc
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/library.sh
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/self-test.sh
+	$(MAKE) stage2/fmt
+	test/fmt.sh ./stage2/chibicc ./stage2/fmt
 
 # Packaging (PLAN L3.3c).
 
@@ -157,7 +170,7 @@ endif
 # Misc.
 
 clean:
-	rm -rf chibicc libcp.a libcp.so libcp.so.0 libcp.pc libcp.pc.tmp tmp* $(TESTS) test/*.s test/*.exe stage2
+	rm -rf chibicc fmt libcp.a libcp.so libcp.so.0 libcp.pc libcp.pc.tmp tmp* $(TESTS) test/*.s test/*.exe stage2
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 # Docker (amd64 Linux) 测试环境: 本机是 macOS ARM64, chibicc 生成的 x86-64 代码
