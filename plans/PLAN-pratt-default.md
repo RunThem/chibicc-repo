@@ -1,6 +1,6 @@
 # PLAN-pratt-default.md - Pratt 单一路径与内部符号前缀
 
-> 状态: 进行中; 执行记录见 `plans/RESULT-pratt-default.md`
+> 状态: 已完成 (2026-10-25); 执行记录见 `plans/RESULT-pratt-default.md`
 > 基线: `main` @ `e8d6f3d`
 > 分支: `main` (阶段 1 / 阶段 2 两个执行提交)
 > 范围: 删除旧级联表达式解析器, Pratt 成为唯一路径; 归档内全部外部内部符号
@@ -136,49 +136,49 @@ Pratt 线 (`plans/PLAN-pratt-parse.md`) 落地后表达式层长期双路径并�
 
 ### S0 - 计划落档
 
-- [ ] S0.1 写本计划并单独提交.
+- [x] S0.1 写本计划并单独提交.
 
 ### S1 - 删除旧级联, Pratt 唯一化
 
-- [ ] S1.1 `parse.c`: 删 3 段旧级联定义体与 5 个前置声明守卫块; 去掉 Pratt
+- [x] S1.1 `parse.c`: 删 3 段旧级联定义体与 5 个前置声明守卫块; 去掉 Pratt
   段的 `#if` / `#endif` 包装, 内容原样保留; 共享代码不动.
-- [ ] S1.2 `libcp.h`: 删宏定义 (55-61).
-- [ ] S1.3 `Makefile`: 删全部 pratt 目标 / 规则 / 变量 / clean / BOOT /
+- [x] S1.2 `libcp.h`: 删宏定义 (55-61).
+- [x] S1.3 `Makefile`: 删全部 pratt 目标 / 规则 / 变量 / clean / BOOT /
   .PHONY / docker 条目.
-- [ ] S1.4 `git rm test/pratt-ab.sh`; 简化 `test/library.sh` /
+- [x] S1.4 `git rm test/pratt-ab.sh`; 简化 `test/library.sh` /
   `test/self-test.sh` (归档从四套变两套); 清理 ast.sh / context-audit.sh /
   public-api.sh / self-test.c / main.c 注释里的双构建说法.
-- [ ] S1.5 `.gitignore` 删 3 个条目; `ci.yml` 头注释改写.
-- [ ] S1.6 docs 现状描述同步 (06 重写 §6.4.2, 01 / 08 / 10 / 12).
-- [ ] S1.7 AGENTS.md: 路线图加本线条目, 已决事项补记 chibicc-pratt 移除,
+- [x] S1.5 `.gitignore` 删 3 个条目; `ci.yml` 头注释改写.
+- [x] S1.6 docs 现状描述同步 (06 重写 §6.4.2, 01 / 08 / 10 / 12).
+- [x] S1.7 AGENTS.md: 路线图加本线条目, 已决事项补记 chibicc-pratt 移除,
   构建与测试 / 现状 / 设计原则 / 测试约定相应更新.
-- [ ] S1.8 闸门: 本机 `make` + `make check-context` + ast/trivia/cst/
+- [x] S1.8 闸门: 本机 `make` + `make check-context` + ast/trivia/cst/
   expand/diagnostic 前端通道; docker `docker-test` + 容器 `check-library`
   + `docker-test-thirdparty THIRDPARTY=tinycc`; grep 判据 1.
-- [ ] S1.9 提交 "Make the Pratt parser the only expression path".
+- [x] S1.9 提交 "Make the Pratt parser the only expression path".
 
 ### S2 - 内部符号 libcp_ 统一前缀 + 合并 21 个薄包装
 
-- [ ] S2.1 前置核实公共头 D7 声明的 LIBCP_API / visibility 形态, 确认定义
+- [x] S2.1 前置核实公共头 D7 声明的 LIBCP_API / visibility 形态, 确认定义
   移出 `lib.c` 后 `.so` 导出仍成立; 必要时在合并定义处显式加 LIBCP_API.
-- [ ] S2.2 85 个无冲突符号 (72 函数 + 13 个 `ty_*` 变量) 词边界受限改名,
+- [x] S2.2 85 个无冲突符号 (72 函数 + 13 个 `ty_*` 变量) 词边界受限改名,
   范围 `libcp/src/*.c` + `libcp.h` + `codegen.c` + `main.c` +
   `test/self/self-test.c`; 逐符号 diff 审查, 重点核对 parse / sema / error /
   format / equal / skip / consume / conditional 等常见词的注释误伤.
-- [ ] S2.3 21 个撞名对逐一确认纯转发后合并: 删 `lib.c` 包装, 实现原地改用
+- [x] S2.3 21 个撞名对逐一确认纯转发后合并: 删 `lib.c` 包装, 实现原地改用
   公共名; 内部 umbrella 头删旧声明; 有实际逻辑的保留包装并记录 (预计 0).
-- [ ] S2.4 `test/public-api.sh` 黑名单更新为新前缀名, 负向控制有效.
-- [ ] S2.5 AGENTS.md 已决事项补记 (废止 L3.2b 不重命名策略) + docs 符号
+- [x] S2.4 `test/public-api.sh` 黑名单更新为新前缀名, 负向控制有效.
+- [x] S2.5 AGENTS.md 已决事项补记 (废止 L3.2b 不重命名策略) + docs 符号
   策略句子同步.
-- [ ] S2.6 闸门: `nm -g libcp.a` 判据 3; docker `docker-test` (自举改名后
+- [x] S2.6 闸门: `nm -g libcp.a` 判据 3; docker `docker-test` (自举改名后
   源码) + 容器 `check-library` (.so exact-D7) + `check-context`.
-- [ ] S2.7 提交 "Prefix all internal library symbols with libcp_".
+- [x] S2.7 提交 "Prefix all internal library symbols with libcp_".
 
 ### S3 - 记录归档
 
-- [ ] S3.1 写 `plans/RESULT-pratt-default.md`: 执行记录, 最终归档符号统计,
+- [x] S3.1 写 `plans/RESULT-pratt-default.md`: 执行记录, 最终归档符号统计,
   21 个合并对清单, 三盲区最终状态; 勾完本计划复选框.
-- [ ] S3.2 AGENTS.md 路线图勾选; 提交 "Record the Pratt-only line and mark
+- [x] S3.2 AGENTS.md 路线图勾选; 提交 "Record the Pratt-only line and mark
   the plan complete".
 
 ## 5. 闸门
