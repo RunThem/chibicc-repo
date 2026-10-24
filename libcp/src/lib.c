@@ -4,35 +4,16 @@
 
 #include "libcp.h"
 
-const char *libcp_version(void) {
-  return LIBCP_VERSION;
-}
-
 // Every public entry is an error boundary: an error_* longjmps to the
 // innermost frame, and the entry returns its failure value. The frame
 // belongs to the context in hand; no other state is saved or restored.
-#define ENTER_RET(ctx, fail)                                              \
-  JmpFrame _jf;                                                           \
-  _jf.prev = (ctx)->jmp_top;                                              \
-  (ctx)->jmp_top = &_jf;                                                  \
-  if (setjmp(_jf.buf)) {                                                  \
-    (ctx)->jmp_top = _jf.prev;                                            \
-    return fail;                                                          \
-  }
+// The ENTER/LEAVE macros live in libcp.h; the merged entries (the phase
+// functions that carry their public name directly) use them from their
+// own translation units.
 
-#define ENTER_VOID(ctx)                                                   \
-  JmpFrame _jf;                                                           \
-  _jf.prev = (ctx)->jmp_top;                                              \
-  (ctx)->jmp_top = &_jf;                                                  \
-  if (setjmp(_jf.buf)) {                                                  \
-    (ctx)->jmp_top = _jf.prev;                                            \
-    return;                                                               \
-  }
-
-#define LEAVE(ctx)                                                        \
-  do {                                                                    \
-    (ctx)->jmp_top = _jf.prev;                                            \
-  } while (0)
+const char *libcp_version(void) {
+  return LIBCP_VERSION;
+}
 
 #define ARENA_BLOCK_SIZE (64 * 1024)
 
@@ -182,13 +163,13 @@ static void apply_macro_op(LibcpContext *ctx, char *op) {
     char *eq = strchr(name, '=');
     if (eq) {
       *eq = '\0';
-      define_macro(ctx, name, eq + 1);
+      libcp_define_macro(ctx, name, eq + 1);
       *eq = '=';
     } else {
-      define_macro(ctx, name, "1");
+      libcp_define_macro(ctx, name, "1");
     }
   } else {
-    undef_macro(ctx, op + 2);
+    libcp_undef_macro(ctx, op + 2);
   }
 }
 
@@ -277,7 +258,7 @@ static void clear_state(LibcpContext *ctx) {
   ctx->include_count = 0;
   ctx->parse_depth = 0;
   ctx->scope = NULL;
-  sema_state_clear(ctx);
+  libcp_sema_state_clear(ctx);
   ctx->failed = false;
   ctx->jmp_top = NULL;
 }
@@ -285,14 +266,14 @@ static void clear_state(LibcpContext *ctx) {
 LibcpContext *libcp_context_new(void) {
   LibcpContext *ctx = LIBCP_CALLOC(1, sizeof(LibcpContext));
   ctx->predefined_macros = true;
-  init_macros(ctx);
+  libcp_init_macros(ctx);
   return ctx;
 }
 
 void libcp_context_reset(LibcpContext *ctx) {
   free_arena(ctx);
   clear_state(ctx);
-  init_macros(ctx);
+  libcp_init_macros(ctx);
   for (int i = 0; i < ctx->macro_ops_len; i++)
     apply_macro_op(ctx, ctx->macro_ops[i]);
 }
@@ -314,12 +295,12 @@ Token *libcp_tokenize_file(LibcpContext *ctx, char *path) {
   ENTER_RET(ctx, NULL);
   if (!ctx->base_file)
     ctx->base_file = libcp_arena_strdup(ctx, path);
-  Token *tok = tokenize_file(ctx, path);
-  // tokenize_file returns NULL only when the file cannot be opened; the
+  Token *tok = libcp_tokenize_file_impl(ctx, path);
+  // libcp_tokenize_file_impl returns NULL only when the file cannot be opened; the
   // facades report it, so a library consumer never sees a silent NULL
   // (PLAN D4/L3.4b).
   if (!tok)
-    error(ctx, "cannot open %s: %s", path, strerror(errno));
+    libcp_error(ctx, "cannot open %s: %s", path, strerror(errno));
   LEAVE(ctx);
   return tok;
 }
@@ -328,7 +309,7 @@ Token *libcp_tokenize_buffer_len(LibcpContext *ctx, char *name,
                                    char *contents, int len) {
   ENTER_RET(ctx, NULL);
   if (len < 0)
-    error(ctx, "invalid buffer length");
+    libcp_error(ctx, "invalid buffer length");
   if (!ctx->base_file)
     ctx->base_file = libcp_arena_strdup(ctx, name);
 
@@ -336,14 +317,14 @@ Token *libcp_tokenize_buffer_len(LibcpContext *ctx, char *name,
   memcpy(copy, contents, len);
   copy[len] = '\0';
 
-  File *file = new_file_len(ctx, libcp_arena_strdup(ctx, name), 0, copy, len);
+  File *file = libcp_new_file_len(ctx, libcp_arena_strdup(ctx, name), 0, copy, len);
   char *nul = memchr(copy, 0, len);
   if (nul) {
     ctx->current_file = file;
-    error_at(ctx, nul, "NUL byte in source file");
+    libcp_error_at(ctx, nul, "NUL byte in source file");
   }
 
-  Token *tok = tokenize(ctx, file);
+  Token *tok = libcp_tokenize(ctx, file);
   LEAVE(ctx);
   return tok;
 }
@@ -359,111 +340,5 @@ void libcp_reconstruct(LibcpContext *ctx, Token *tok, FILE *out) {
     fwrite(tok->raw_loc, 1, tok->raw_len, out);
   }
   LEAVE(ctx);
-}
-
-Token *libcp_preprocess(LibcpContext *ctx, Token *tok) {
-  ENTER_RET(ctx, NULL);
-  Token *r = preprocess(ctx, tok);
-  LEAVE(ctx);
-  return r;
-}
-
-Node *libcp_parse(LibcpContext *ctx, Token *tok) {
-  ENTER_RET(ctx, NULL);
-  Node *r = parse(ctx, tok);
-  LEAVE(ctx);
-  return r;
-}
-
-Obj *libcp_sema(LibcpContext *ctx, Node *toplevel) {
-  ENTER_RET(ctx, NULL);
-  Obj *r = sema(ctx, toplevel);
-  LEAVE(ctx);
-  return r;
-}
-
-CstNode *libcp_cst_parse(LibcpContext *ctx, Token *tok) {
-  ENTER_RET(ctx, NULL);
-  CstNode *r = cst_parse(ctx, tok);
-  LEAVE(ctx);
-  return r;
-}
-
-void libcp_cst_reconstruct(LibcpContext *ctx, CstNode *root, FILE *out) {
-  ENTER_VOID(ctx);
-  cst_reconstruct(root, out);
-  LEAVE(ctx);
-}
-
-void libcp_cst_dump(LibcpContext *ctx, CstNode *root, FILE *out) {
-  ENTER_VOID(ctx);
-  cst_dump(ctx, root, out);
-  LEAVE(ctx);
-}
-
-bool libcp_cst_verify(LibcpContext *ctx, CstNode *root, Token *tok) {
-  ENTER_RET(ctx, false);
-  bool r = cst_verify(root, tok);
-  LEAVE(ctx);
-  return r;
-}
-
-void libcp_expansion_dump(LibcpContext *ctx, Token *tok, FILE *out) {
-  ENTER_VOID(ctx);
-  expansion_dump(ctx, tok, out);
-  LEAVE(ctx);
-}
-
-bool libcp_expansion_verify(LibcpContext *ctx, Token *tok) {
-  ENTER_RET(ctx, false);
-  bool r = expansion_verify(tok);
-  LEAVE(ctx);
-  return r;
-}
-
-// The provenance accessors (PLAN D7). They read immutable records and
-// allocate nothing, so they need no error boundary.
-LibcpMacroProv *libcp_token_provenance(LibcpToken *tok) {
-  return token_provenance(tok);
-}
-
-LibcpMacroProv *libcp_macro_prov_next(LibcpMacroProv *p) {
-  return macro_prov_next(p);
-}
-
-LibcpMacroExpansion *libcp_macro_prov_expansion(LibcpMacroProv *p) {
-  return macro_prov_expansion(p);
-}
-
-int libcp_macro_prov_arg_index(LibcpMacroProv *p) {
-  return macro_prov_arg_index(p);
-}
-
-LibcpToken *libcp_macro_expansion_name(LibcpMacroExpansion *e) {
-  return macro_expansion_name(e);
-}
-
-LibcpToken *libcp_macro_expansion_end(LibcpMacroExpansion *e) {
-  return macro_expansion_end(e);
-}
-
-char *libcp_macro_expansion_macro(LibcpMacroExpansion *e) {
-  return macro_expansion_macro(e);
-}
-
-LibcpToken *libcp_macro_expansion_def(LibcpMacroExpansion *e) {
-  return macro_expansion_def(e);
-}
-
-LibcpToken *libcp_macro_expansion_arg(LibcpMacroExpansion *e, int i) {
-  return macro_expansion_arg(e, i);
-}
-
-int libcp_macro_expansion_arg_count(LibcpMacroExpansion *e) {
-  return macro_expansion_arg_count(e);
-}
-
-bool libcp_macro_expansion_is_builtin(LibcpMacroExpansion *e) {
-  return macro_expansion_is_builtin(e);
 }
 

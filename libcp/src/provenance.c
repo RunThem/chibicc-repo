@@ -16,7 +16,7 @@
 //
 // -verify-expansions checks the chain invariants of plans/RESULT.md (I1-I3)
 // and prints at most one message on stderr: exit 0 on success, 1 on the
-// first violation. It never calls error() (判据 4), so the channel can
+// first violation. It never calls libcp_error() (判据 4), so the channel can
 // run over a broken stream without taking the process down. This is the
 // only consumer of the accessors besides the dump. Neither channel touches
 // the compilation path.
@@ -31,7 +31,7 @@ static bool is_synthetic(Token *tok) {
 
 // Print a token's position as <file>:<line>, or <file>:@synth when the
 // position is not a line of a real file. phys-line = line_no -
-// line_delta, because preprocess() adds the #line offset to every
+// line_delta, because libcp_preprocess() adds the #line offset to every
 // token's line number at the end.
 static void print_pos(FILE *out, Token *tok) {
   if (is_synthetic(tok))
@@ -40,35 +40,36 @@ static void print_pos(FILE *out, Token *tok) {
     fprintf(out, "%s:%d", tok->file->name, tok->line_no - tok->line_delta);
 }
 
-void expansion_dump(LibcpContext *ctx, Token *tok, FILE *out) {
+void libcp_expansion_dump(LibcpContext *ctx, Token *tok, FILE *out) {
+  ENTER_VOID(ctx);
   for (; tok->kind != TK_EOF; tok = tok->next) {
     fputs("T ", out);
     print_pos(out, tok);
-    fprintf(out, " %s ", token_kind_name(ctx, tok->kind));
-    print_escaped(out, tok->loc, tok->len);
+    fprintf(out, " %s ", libcp_token_kind_name(ctx, tok->kind));
+    libcp_print_escaped(out, tok->loc, tok->len);
 
-    MacroProv *prov = token_provenance(tok);
+    MacroProv *prov = libcp_token_provenance(tok);
     if (!prov) {
       fputs(" -\n", out);
       continue;
     }
 
     fputc(' ', out);
-    for (MacroProv *p = prov; p; p = macro_prov_next(p)) {
+    for (MacroProv *p = prov; p; p = libcp_macro_prov_next(p)) {
       if (p != prov)
         fputc('>', out);
 
-      MacroExpansion *e = macro_prov_expansion(p);
-      fprintf(out, "%s@", macro_expansion_macro(e));
-      print_pos(out, macro_expansion_name(e));
+      MacroExpansion *e = libcp_macro_prov_expansion(p);
+      fprintf(out, "%s@", libcp_macro_expansion_macro(e));
+      print_pos(out, libcp_macro_expansion_name(e));
 
-      int arg_index = macro_prov_arg_index(p);
+      int arg_index = libcp_macro_prov_arg_index(p);
       if (arg_index < 0)
         fputs(":body:", out);
       else
         fprintf(out, ":arg%d:", arg_index + 1);
 
-      Token *def = macro_expansion_def(e);
+      Token *def = libcp_macro_expansion_def(e);
       if (def)
         print_pos(out, def);
       else
@@ -76,6 +77,7 @@ void expansion_dump(LibcpContext *ctx, Token *tok, FILE *out) {
     }
     fputc('\n', out);
   }
+  LEAVE(ctx);
 }
 
 // A chain deeper than this is treated as corruption rather than as a real
@@ -109,10 +111,10 @@ static void report(Token *tok, char *what) {
 // argument list is well-formed. I3: no node appears twice (chains are
 // prepend-only and share immutable tails).
 static bool verify_chain(Token *tok) {
-  MacroProv *head = token_provenance(tok);
+  MacroProv *head = libcp_token_provenance(tok);
   int depth = 0;
 
-  for (MacroProv *p = head; p; p = macro_prov_next(p)) {
+  for (MacroProv *p = head; p; p = libcp_macro_prov_next(p)) {
     if (++depth > MAX_PROV_DEPTH) {
       report(tok, "chain is too deep");
       return false;
@@ -120,7 +122,7 @@ static bool verify_chain(Token *tok) {
 
     int seen = 0;
     int steps = 0;
-    for (MacroProv *q = head; q; q = macro_prov_next(q)) {
+    for (MacroProv *q = head; q; q = libcp_macro_prov_next(q)) {
       if (q == p)
         seen++;
       if (++steps > MAX_PROV_DEPTH) {
@@ -133,14 +135,14 @@ static bool verify_chain(Token *tok) {
       return false;
     }
 
-    MacroExpansion *e = macro_prov_expansion(p);
+    MacroExpansion *e = libcp_macro_prov_expansion(p);
     if (!e) {
       report(tok, "layer without an expansion");
       return false;
     }
 
-    Token *name = macro_expansion_name(e);
-    char *macro = macro_expansion_macro(e);
+    Token *name = libcp_macro_expansion_name(e);
+    char *macro = libcp_macro_expansion_macro(e);
     if (!name || !macro) {
       report(tok, "expansion without a name");
       return false;
@@ -152,21 +154,21 @@ static bool verify_chain(Token *tok) {
       return false;
     }
 
-    int arg_index = macro_prov_arg_index(p);
-    int arg_count = macro_expansion_arg_count(e);
+    int arg_index = libcp_macro_prov_arg_index(p);
+    int arg_count = libcp_macro_expansion_arg_count(e);
     if (arg_index < -1 || arg_index >= arg_count) {
       report(tok, "argument index out of range");
       return false;
     }
 
     for (int i = 0; i < arg_count; i++)
-      if (!verify_arg_list(macro_expansion_arg(e, i))) {
+      if (!verify_arg_list(libcp_macro_expansion_arg(e, i))) {
         report(tok, "malformed argument list");
         return false;
       }
 
     if (arg_index >= 0 &&
-        (macro_expansion_end(e) == name || macro_expansion_is_builtin(e))) {
+        (libcp_macro_expansion_end(e) == name || libcp_macro_expansion_is_builtin(e))) {
       report(tok, "argument layer on a non-function-like expansion");
       return false;
     }
@@ -174,9 +176,13 @@ static bool verify_chain(Token *tok) {
   return true;
 }
 
-bool expansion_verify(Token *tok) {
+bool libcp_expansion_verify(LibcpContext *ctx, Token *tok) {
+  ENTER_RET(ctx, false);
   for (; tok->kind != TK_EOF; tok = tok->next)
-    if (token_provenance(tok) && !verify_chain(tok))
+    if (libcp_token_provenance(tok) && !verify_chain(tok)) {
+      LEAVE(ctx);
       return false;
+    }
+  LEAVE(ctx);
   return true;
 }

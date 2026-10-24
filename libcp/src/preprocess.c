@@ -97,7 +97,7 @@ static Token *preprocess2(LibcpContext *ctx, Token *tok);
 static Macro *find_macro(LibcpContext *ctx, Token *tok);
 
 static bool is_hash(Token *tok) {
-  return tok->at_bol && equal(tok, "#");
+  return tok->at_bol && libcp_equal(tok, "#");
 }
 
 // Some preprocessor directives such as #include allow extraneous
@@ -105,7 +105,7 @@ static bool is_hash(Token *tok) {
 static Token *skip_line(LibcpContext *ctx, Token *tok) {
   if (tok->at_bol)
     return tok;
-  warn_tok(ctx, tok, "extra token");
+  libcp_warn_tok(ctx, tok, "extra token");
   while (tok->at_bol)
     tok = tok->next;
   return tok;
@@ -221,12 +221,12 @@ static Token *append(LibcpContext *ctx, Token *tok1, Token *tok2) {
 static Token *skip_cond_incl2(Token *tok) {
   while (tok->kind != TK_EOF) {
     if (is_hash(tok) &&
-        (equal(tok->next, "if") || equal(tok->next, "ifdef") ||
-         equal(tok->next, "ifndef"))) {
+        (libcp_equal(tok->next, "if") || libcp_equal(tok->next, "ifdef") ||
+         libcp_equal(tok->next, "ifndef"))) {
       tok = skip_cond_incl2(tok->next->next);
       continue;
     }
-    if (is_hash(tok) && equal(tok->next, "endif"))
+    if (is_hash(tok) && libcp_equal(tok->next, "endif"))
       return tok->next->next;
     tok = tok->next;
   }
@@ -238,15 +238,15 @@ static Token *skip_cond_incl2(Token *tok) {
 static Token *skip_cond_incl(Token *tok) {
   while (tok->kind != TK_EOF) {
     if (is_hash(tok) &&
-        (equal(tok->next, "if") || equal(tok->next, "ifdef") ||
-         equal(tok->next, "ifndef"))) {
+        (libcp_equal(tok->next, "if") || libcp_equal(tok->next, "ifdef") ||
+         libcp_equal(tok->next, "ifndef"))) {
       tok = skip_cond_incl2(tok->next->next);
       continue;
     }
 
     if (is_hash(tok) &&
-        (equal(tok->next, "elif") || equal(tok->next, "else") ||
-         equal(tok->next, "endif")))
+        (libcp_equal(tok->next, "elif") || libcp_equal(tok->next, "else") ||
+         libcp_equal(tok->next, "endif")))
       break;
     tok = tok->next;
   }
@@ -275,26 +275,26 @@ static char *quote_string(LibcpContext *ctx, char *str) {
   return buf;
 }
 
-// tokenize() leaves current_file pointing at the nested file. Restore
-// the caller's file so error_at's implicit current_file still matches
+// libcp_tokenize() leaves current_file pointing at the nested file. Restore
+// the caller's file so libcp_error_at's implicit current_file still matches
 // the loc it is given.
 static Token *tokenize_nested(LibcpContext *ctx, File *file) {
   File *save = ctx->current_file;
-  Token *tok = tokenize(ctx, file);
+  Token *tok = libcp_tokenize(ctx, file);
   ctx->current_file = save;
   return tok;
 }
 
 static Token *tokenize_file_nested(LibcpContext *ctx, char *path) {
   File *save = ctx->current_file;
-  Token *tok = tokenize_file(ctx, path);
+  Token *tok = libcp_tokenize_file_impl(ctx, path);
   ctx->current_file = save;
   return tok;
 }
 
 static Token *new_str_token(LibcpContext *ctx, char *str, Token *tmpl) {
   char *buf = quote_string(ctx, str);
-  return tokenize_nested(ctx, new_file(ctx, tmpl->file->name, tmpl->file->file_no, buf));
+  return tokenize_nested(ctx, libcp_new_file(ctx, tmpl->file->name, tmpl->file->file_no, buf));
 }
 
 // Copy all tokens until the next newline, terminate them with
@@ -313,8 +313,8 @@ static Token *copy_line(LibcpContext *ctx, Token **rest, Token *tok) {
 }
 
 static Token *new_num_token(LibcpContext *ctx, int val, Token *tmpl) {
-  char *buf = format(ctx, "%d\n", val);
-  return tokenize_nested(ctx, new_file(ctx, tmpl->file->name, tmpl->file->file_no, buf));
+  char *buf = libcp_format(ctx, "%d\n", val);
+  return tokenize_nested(ctx, libcp_new_file(ctx, tmpl->file->name, tmpl->file->file_no, buf));
 }
 
 #ifdef LIBCP_TEST_BUILTINS
@@ -337,17 +337,17 @@ static Token *read_const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
   while (tok->kind != TK_EOF) {
     // "defined(foo)" or "defined foo" becomes "1" if macro "foo"
     // is defined. Otherwise "0".
-    if (equal(tok, "defined")) {
+    if (libcp_equal(tok, "defined")) {
       Token *start = tok;
-      bool has_paren = consume(&tok, tok->next, "(");
+      bool has_paren = libcp_consume(&tok, tok->next, "(");
 
       if (tok->kind != TK_IDENT)
-        error_tok(ctx, start, "macro name must be an identifier");
+        libcp_error_tok(ctx, start, "macro name must be an identifier");
       Macro *m = find_macro(ctx, tok);
       tok = tok->next;
 
       if (has_paren)
-        tok = skip(ctx, tok, ")");
+        tok = libcp_skip(ctx, tok, ")");
 
       cur = cur->next = new_num_token(ctx, m ? 1 : 0, start);
       continue;
@@ -368,7 +368,7 @@ static long eval_const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
   expr = preprocess2(ctx, expr);
 
   if (expr->kind == TK_EOF)
-    error_tok(ctx, start, "no expression");
+    libcp_error_tok(ctx, start, "no expression");
 
   // [https://www.sigbus.info/n1570#6.10.1p4] The standard requires
   // we replace remaining non-macro identifiers with "0" before
@@ -383,12 +383,12 @@ static long eval_const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
   }
 
   // Convert pp-numbers to regular numbers
-  convert_pp_tokens(ctx, expr);
+  libcp_convert_pp_tokens(ctx, expr);
 
   Token *rest2;
-  long val = const_expr(ctx, &rest2, expr);
+  long val = libcp_const_expr(ctx, &rest2, expr);
   if (rest2->kind != TK_EOF)
-    error_tok(ctx, rest2, "extra token");
+    libcp_error_tok(ctx, rest2, "extra token");
   return val;
 }
 
@@ -405,7 +405,7 @@ static CondIncl *push_cond_incl(LibcpContext *ctx, Token *tok, bool included) {
 static Macro *find_macro(LibcpContext *ctx, Token *tok) {
   if (tok->kind != TK_IDENT)
     return NULL;
-  return hashmap_get2(ctx, &macros, tok->loc, tok->len);
+  return libcp_hashmap_get2(ctx, &macros, tok->loc, tok->len);
 }
 
 static Macro *add_macro(LibcpContext *ctx, char *name, bool is_objlike, Token *body) {
@@ -413,7 +413,7 @@ static Macro *add_macro(LibcpContext *ctx, char *name, bool is_objlike, Token *b
   m->name = name;
   m->is_objlike = is_objlike;
   m->body = body;
-  hashmap_put(ctx, &macros, name, m);
+  libcp_hashmap_put(ctx, &macros, name, m);
   return m;
 }
 
@@ -421,22 +421,22 @@ static MacroParam *read_macro_params(LibcpContext *ctx, Token **rest, Token *tok
   MacroParam head = {};
   MacroParam *cur = &head;
 
-  while (!equal(tok, ")")) {
+  while (!libcp_equal(tok, ")")) {
     if (cur != &head)
-      tok = skip(ctx, tok, ",");
+      tok = libcp_skip(ctx, tok, ",");
 
-    if (equal(tok, "...")) {
+    if (libcp_equal(tok, "...")) {
       *va_args_name = "__VA_ARGS__";
-      *rest = skip(ctx, tok->next, ")");
+      *rest = libcp_skip(ctx, tok->next, ")");
       return head.next;
     }
 
     if (tok->kind != TK_IDENT)
-      error_tok(ctx, tok, "expected an identifier");
+      libcp_error_tok(ctx, tok, "expected an identifier");
 
-    if (equal(tok->next, "...")) {
+    if (libcp_equal(tok->next, "...")) {
       *va_args_name = libcp_arena_strndup(ctx, tok->loc, tok->len);
-      *rest = skip(ctx, tok->next->next, ")");
+      *rest = libcp_skip(ctx, tok->next->next, ")");
       return head.next;
     }
 
@@ -452,12 +452,12 @@ static MacroParam *read_macro_params(LibcpContext *ctx, Token **rest, Token *tok
 
 static void read_macro_definition(LibcpContext *ctx, Token **rest, Token *tok) {
   if (tok->kind != TK_IDENT)
-    error_tok(ctx, tok, "macro name must be an identifier");
+    libcp_error_tok(ctx, tok, "macro name must be an identifier");
   Token *name_tok = tok;
   char *name = libcp_arena_strndup(ctx, tok->loc, tok->len);
   tok = tok->next;
 
-  if (!tok->has_space && equal(tok, "(")) {
+  if (!tok->has_space && libcp_equal(tok, "(")) {
     // Function-like macro
     char *va_args_name = NULL;
     MacroParam *params = read_macro_params(ctx, &tok, tok->next, &va_args_name);
@@ -479,17 +479,17 @@ static MacroArg *read_macro_arg_one(LibcpContext *ctx, Token **rest, Token *tok,
   int level = 0;
 
   for (;;) {
-    if (level == 0 && equal(tok, ")"))
+    if (level == 0 && libcp_equal(tok, ")"))
       break;
-    if (level == 0 && !read_rest && equal(tok, ","))
+    if (level == 0 && !read_rest && libcp_equal(tok, ","))
       break;
 
     if (tok->kind == TK_EOF)
-      error_tok(ctx, tok, "premature end of input");
+      libcp_error_tok(ctx, tok, "premature end of input");
 
-    if (equal(tok, "("))
+    if (libcp_equal(tok, "("))
       level++;
-    else if (equal(tok, ")"))
+    else if (libcp_equal(tok, ")"))
       level--;
 
     cur = cur->next = copy_token(ctx, tok);
@@ -516,7 +516,7 @@ read_macro_args(LibcpContext *ctx, Token **rest, Token *tok, MacroParam *params,
   int index = 0;
   for (; pp; pp = pp->next) {
     if (cur != &head)
-      tok = skip(ctx, tok, ",");
+      tok = libcp_skip(ctx, tok, ",");
     cur = cur->next = read_macro_arg_one(ctx, &tok, tok, false);
     cur->name = pp->name;
     cur->index = index++;
@@ -524,12 +524,12 @@ read_macro_args(LibcpContext *ctx, Token **rest, Token *tok, MacroParam *params,
 
   if (va_args_name) {
     MacroArg *arg;
-    if (equal(tok, ")")) {
+    if (libcp_equal(tok, ")")) {
       arg = libcp_arena_calloc(ctx, 1, sizeof(MacroArg));
       arg->tok = new_eof(ctx, tok);
     } else {
       if (pp != params)
-        tok = skip(ctx, tok, ",");
+        tok = libcp_skip(ctx, tok, ",");
       arg = read_macro_arg_one(ctx, &tok, tok, true);
     }
     arg->name = va_args_name;;
@@ -537,10 +537,10 @@ read_macro_args(LibcpContext *ctx, Token **rest, Token *tok, MacroParam *params,
     arg->index = index;
     cur = cur->next = arg;
   } else if (pp) {
-    error_tok(ctx, start, "too many arguments");
+    libcp_error_tok(ctx, start, "too many arguments");
   }
 
-  skip(ctx, tok, ")");
+  libcp_skip(ctx, tok, ")");
   *rest = tok;
   return head.next;
 }
@@ -589,12 +589,12 @@ static Token *stringize(LibcpContext *ctx, Token *hash, Token *arg) {
 // Concatenate two tokens to create a new token.
 static Token *paste(LibcpContext *ctx, Token *lhs, Token *rhs) {
   // Paste the two tokens.
-  char *buf = format(ctx, "%.*s%.*s", lhs->len, lhs->loc, rhs->len, rhs->loc);
+  char *buf = libcp_format(ctx, "%.*s%.*s", lhs->len, lhs->loc, rhs->len, rhs->loc);
 
   // Tokenize the resulting string.
-  Token *tok = tokenize_nested(ctx, new_file(ctx, lhs->file->name, lhs->file->file_no, buf));
+  Token *tok = tokenize_nested(ctx, libcp_new_file(ctx, lhs->file->name, lhs->file->file_no, buf));
   if (tok->next->kind != TK_EOF)
-    error_tok(ctx, lhs, "pasting forms '%s', an invalid token", buf);
+    libcp_error_tok(ctx, lhs, "pasting forms '%s', an invalid token", buf);
   return tok;
 }
 
@@ -620,10 +620,10 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
 
   while (tok->kind != TK_EOF) {
     // "#" followed by a parameter is replaced with stringized actuals.
-    if (equal(tok, "#")) {
+    if (libcp_equal(tok, "#")) {
       MacroArg *arg = find_arg(args, tok->next);
       if (!arg)
-        error_tok(ctx, tok->next, "'#' is not followed by a macro parameter");
+        libcp_error_tok(ctx, tok->next, "'#' is not followed by a macro parameter");
       cur = cur->next = stringize(ctx, tok, arg->tok);
       cur->prov = new_prov(ctx, e, -1, body_base);
       tok = tok->next->next;
@@ -633,7 +633,7 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
     // [GNU] If __VA_ARG__ is empty, `,##__VA_ARGS__` is expanded
     // to the empty token list. Otherwise, its expaned to `,` and
     // __VA_ARGS__.
-    if (equal(tok, ",") && equal(tok->next, "##")) {
+    if (libcp_equal(tok, ",") && libcp_equal(tok->next, "##")) {
       MacroArg *arg = find_arg(args, tok->next->next);
       if (arg && arg->is_va_args) {
         if (arg->tok->kind == TK_EOF) {
@@ -647,12 +647,12 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
       }
     }
 
-    if (equal(tok, "##")) {
+    if (libcp_equal(tok, "##")) {
       if (cur == &head)
-        error_tok(ctx, tok, "'##' cannot appear at start of macro expansion");
+        libcp_error_tok(ctx, tok, "'##' cannot appear at start of macro expansion");
 
       if (tok->next->kind == TK_EOF)
-        error_tok(ctx, tok, "'##' cannot appear at end of macro expansion");
+        libcp_error_tok(ctx, tok, "'##' cannot appear at end of macro expansion");
 
       MacroArg *arg = find_arg(args, tok->next);
       if (arg) {
@@ -676,7 +676,7 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
 
     MacroArg *arg = find_arg(args, tok);
 
-    if (arg && equal(tok->next, "##")) {
+    if (arg && libcp_equal(tok->next, "##")) {
       Token *rhs = tok->next->next;
 
       if (arg->tok->kind == TK_EOF) {
@@ -704,14 +704,14 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
 
     // If __VA_ARG__ is empty, __VA_OPT__(x) is expanded to the
     // empty token list. Otherwise, __VA_OPT__(x) is expanded to x.
-    if (equal(tok, "__VA_OPT__") && equal(tok->next, "(")) {
+    if (libcp_equal(tok, "__VA_OPT__") && libcp_equal(tok->next, "(")) {
       MacroArg *arg = read_macro_arg_one(ctx, &tok, tok->next->next, true);
       if (has_varargs(args))
         for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next) {
           cur = cur->next = t;
           cur->prov = new_prov(ctx, e, -1, body_base);
         }
-      tok = skip(ctx, tok, ")");
+      tok = libcp_skip(ctx, tok, ")");
       continue;
     }
 
@@ -790,7 +790,7 @@ static bool expand_macro(LibcpContext *ctx, Token **rest, Token *tok) {
 
   // If a funclike macro token is not followed by an argument list,
   // treat it as a normal identifier.
-  if (!equal(tok->next, "("))
+  if (!libcp_equal(tok->next, "("))
     return false;
 
   // Function-like macro application
@@ -818,20 +818,20 @@ static bool expand_macro(LibcpContext *ctx, Token **rest, Token *tok) {
   return true;
 }
 
-char *search_include_paths(LibcpContext *ctx, char *filename) {
+char *libcp_search_include_paths(LibcpContext *ctx, char *filename) {
   if (filename[0] == '/')
     return filename;
 
-  char *cached = hashmap_get(ctx, &ctx->search_cache, filename);
+  char *cached = libcp_hashmap_get(ctx, &ctx->search_cache, filename);
   if (cached)
     return cached;
 
   // Search a file from the include paths.
   for (int i = 0; i < ctx->include_paths_len; i++) {
-    char *path = format(ctx, "%s/%s", ctx->include_paths[i], filename);
-    if (!file_exists(path))
+    char *path = libcp_format(ctx, "%s/%s", ctx->include_paths[i], filename);
+    if (!libcp_file_exists(path))
       continue;
-    hashmap_put(ctx, &ctx->search_cache, filename, path);
+    libcp_hashmap_put(ctx, &ctx->search_cache, filename, path);
     ctx->include_next_idx = i + 1;
     return path;
   }
@@ -841,9 +841,9 @@ char *search_include_paths(LibcpContext *ctx, char *filename) {
 static char *search_include_next(LibcpContext *ctx, char *filename) {
   for (; ctx->include_next_idx < ctx->include_paths_len;
        ctx->include_next_idx++) {
-    char *path = format(ctx, "%s/%s", ctx->include_paths[ctx->include_next_idx],
+    char *path = libcp_format(ctx, "%s/%s", ctx->include_paths[ctx->include_next_idx],
                         filename);
-    if (file_exists(path))
+    if (libcp_file_exists(path))
       return path;
   }
   return NULL;
@@ -864,15 +864,15 @@ static char *read_include_filename(LibcpContext *ctx, Token **rest, Token *tok, 
   }
 
   // Pattern 2: #include <foo.h>
-  if (equal(tok, "<")) {
+  if (libcp_equal(tok, "<")) {
     // Reconstruct a filename from a sequence of tokens between
     // "<" and ">".
     Token *start = tok;
 
     // Find closing ">".
-    for (; !equal(tok, ">"); tok = tok->next)
+    for (; !libcp_equal(tok, ">"); tok = tok->next)
       if (tok->at_bol || tok->kind == TK_EOF)
-        error_tok(ctx, tok, "expected '>'");
+        libcp_error_tok(ctx, tok, "expected '>'");
 
     *is_dquote = false;
     *rest = skip_line(ctx, tok->next);
@@ -887,7 +887,7 @@ static char *read_include_filename(LibcpContext *ctx, Token **rest, Token *tok, 
     return read_include_filename(ctx, &tok2, tok2, is_dquote);
   }
 
-  error_tok(ctx, tok, "expected a filename");
+  libcp_error_tok(ctx, tok, "expected a filename");
 }
 
 // Detect the following "include guard" pattern.
@@ -898,7 +898,7 @@ static char *read_include_filename(LibcpContext *ctx, Token **rest, Token *tok, 
 //   #endif
 static char *detect_include_guard(LibcpContext *ctx, Token *tok) {
   // Detect the first two lines.
-  if (!is_hash(tok) || !equal(tok->next, "ifndef"))
+  if (!is_hash(tok) || !libcp_equal(tok->next, "ifndef"))
     return NULL;
   tok = tok->next->next;
 
@@ -908,7 +908,7 @@ static char *detect_include_guard(LibcpContext *ctx, Token *tok) {
   char *macro = libcp_arena_strndup(ctx, tok->loc, tok->len);
   tok = tok->next;
 
-  if (!is_hash(tok) || !equal(tok->next, "define") || !equal(tok->next->next, macro))
+  if (!is_hash(tok) || !libcp_equal(tok->next, "define") || !libcp_equal(tok->next->next, macro))
     return NULL;
 
   // Read until the end of the file.
@@ -918,10 +918,10 @@ static char *detect_include_guard(LibcpContext *ctx, Token *tok) {
       continue;
     }
 
-    if (equal(tok->next, "endif") && tok->next->next->kind == TK_EOF)
+    if (libcp_equal(tok->next, "endif") && tok->next->next->kind == TK_EOF)
       return macro;
 
-    if (equal(tok, "if") || equal(tok, "ifdef") || equal(tok, "ifndef"))
+    if (libcp_equal(tok, "if") || libcp_equal(tok, "ifdef") || libcp_equal(tok, "ifndef"))
       tok = skip_cond_incl(tok->next);
     else
       tok = tok->next;
@@ -939,29 +939,29 @@ static char *detect_include_guard(LibcpContext *ctx, Token *tok) {
 static Token *include_file(LibcpContext *ctx, Token *tok, char *path, Token *filename_tok,
                            File *parent) {
   // Check for "#pragma once"
-  if (hashmap_get(ctx, &pragma_once, path))
+  if (libcp_hashmap_get(ctx, &pragma_once, path))
     return tok;
 
   // If we read the same file before, and if the file was guarded
   // by the usual #ifndef ... #endif pattern, we may be able to
   // skip the file without opening it.
-  char *guard_name = hashmap_get(ctx, &ctx->include_guards, path);
-  if (guard_name && hashmap_get(ctx, &macros, guard_name))
+  char *guard_name = libcp_hashmap_get(ctx, &ctx->include_guards, path);
+  if (guard_name && libcp_hashmap_get(ctx, &macros, guard_name))
     return tok;
 
   if (parent->include_depth >= MAX_INCLUDE_DEPTH)
-    error_tok(ctx, filename_tok, "include depth exceeded");
+    libcp_error_tok(ctx, filename_tok, "include depth exceeded");
   if (++ctx->include_count > MAX_INCLUDE_COUNT)
-    error_tok(ctx, filename_tok, "too many includes");
+    libcp_error_tok(ctx, filename_tok, "too many includes");
 
   Token *tok2 = tokenize_file_nested(ctx, path);
   if (!tok2)
-    error_tok(ctx, filename_tok, "%s: cannot open file: %s", path, strerror(errno));
+    libcp_error_tok(ctx, filename_tok, "%s: cannot open file: %s", path, strerror(errno));
   tok2->file->include_depth = parent->include_depth + 1;
 
   guard_name = detect_include_guard(ctx, tok2);
   if (guard_name)
-    hashmap_put(ctx, &ctx->include_guards, path, guard_name);
+    libcp_hashmap_put(ctx, &ctx->include_guards, path, guard_name);
 
   return append(ctx, tok2, tok);
 }
@@ -969,10 +969,10 @@ static Token *include_file(LibcpContext *ctx, Token *tok, char *path, Token *fil
 // Read #line arguments
 static void read_line_marker(LibcpContext *ctx, Token **rest, Token *tok) {
   Token *start = tok;
-  tok = preprocess(ctx, copy_line(ctx, rest, tok));
+  tok = libcp_preprocess(ctx, copy_line(ctx, rest, tok));
 
   if (tok->kind != TK_NUM || tok->ty->kind != TY_INT)
-    error_tok(ctx, tok, "invalid line marker");
+    libcp_error_tok(ctx, tok, "invalid line marker");
   start->file->line_delta = tok->val - start->line_no;
 
   tok = tok->next;
@@ -980,7 +980,7 @@ static void read_line_marker(LibcpContext *ctx, Token **rest, Token *tok) {
     return;
 
   if (tok->kind != TK_STR)
-    error_tok(ctx, tok, "filename expected");
+    libcp_error_tok(ctx, tok, "filename expected");
   start->file->display_name = tok->str;
 }
 
@@ -1007,25 +1007,25 @@ static Token *preprocess2(LibcpContext *ctx, Token *tok) {
     Token *start = tok;
     tok = tok->next;
 
-    if (equal(tok, "include")) {
+    if (libcp_equal(tok, "include")) {
       bool is_dquote;
       char *filename = read_include_filename(ctx, &tok, tok->next, &is_dquote);
 
       if (filename[0] != '/' && is_dquote) {
-        char *path = format(ctx, "%s/%s", dirname(libcp_arena_strdup(ctx, start->file->name)), filename);
-        if (file_exists(path)) {
+        char *path = libcp_format(ctx, "%s/%s", dirname(libcp_arena_strdup(ctx, start->file->name)), filename);
+        if (libcp_file_exists(path)) {
           tok = include_file(ctx, tok, path, start->next->next, start->file);
           continue;
         }
       }
 
-      char *path = search_include_paths(ctx, filename);
+      char *path = libcp_search_include_paths(ctx, filename);
       tok = include_file(ctx, tok, path ? path : filename, start->next->next,
                          start->file);
       continue;
     }
 
-    if (equal(tok, "include_next")) {
+    if (libcp_equal(tok, "include_next")) {
       bool ignore;
       char *filename = read_include_filename(ctx, &tok, tok->next, &ignore);
       char *path = search_include_next(ctx, filename);
@@ -1034,21 +1034,21 @@ static Token *preprocess2(LibcpContext *ctx, Token *tok) {
       continue;
     }
 
-    if (equal(tok, "define")) {
+    if (libcp_equal(tok, "define")) {
       read_macro_definition(ctx, &tok, tok->next);
       continue;
     }
 
-    if (equal(tok, "undef")) {
+    if (libcp_equal(tok, "undef")) {
       tok = tok->next;
       if (tok->kind != TK_IDENT)
-        error_tok(ctx, tok, "macro name must be an identifier");
-      undef_macro(ctx, libcp_arena_strndup(ctx, tok->loc, tok->len));
+        libcp_error_tok(ctx, tok, "macro name must be an identifier");
+      libcp_undef_macro(ctx, libcp_arena_strndup(ctx, tok->loc, tok->len));
       tok = skip_line(ctx, tok->next);
       continue;
     }
 
-    if (equal(tok, "if")) {
+    if (libcp_equal(tok, "if")) {
       long val = eval_const_expr(ctx, &tok, tok);
       push_cond_incl(ctx, start, val);
       if (!val)
@@ -1056,7 +1056,7 @@ static Token *preprocess2(LibcpContext *ctx, Token *tok) {
       continue;
     }
 
-    if (equal(tok, "ifdef")) {
+    if (libcp_equal(tok, "ifdef")) {
       bool defined = find_macro(ctx, tok->next);
       push_cond_incl(ctx, tok, defined);
       tok = skip_line(ctx, tok->next->next);
@@ -1065,7 +1065,7 @@ static Token *preprocess2(LibcpContext *ctx, Token *tok) {
       continue;
     }
 
-    if (equal(tok, "ifndef")) {
+    if (libcp_equal(tok, "ifndef")) {
       bool defined = find_macro(ctx, tok->next);
       push_cond_incl(ctx, tok, !defined);
       tok = skip_line(ctx, tok->next->next);
@@ -1074,9 +1074,9 @@ static Token *preprocess2(LibcpContext *ctx, Token *tok) {
       continue;
     }
 
-    if (equal(tok, "elif")) {
+    if (libcp_equal(tok, "elif")) {
       if (!cond_incl || cond_incl->ctx == IN_ELSE)
-        error_tok(ctx, start, "stray #elif");
+        libcp_error_tok(ctx, start, "stray #elif");
       cond_incl->ctx = IN_ELIF;
 
       if (!cond_incl->included && eval_const_expr(ctx, &tok, tok))
@@ -1086,9 +1086,9 @@ static Token *preprocess2(LibcpContext *ctx, Token *tok) {
       continue;
     }
 
-    if (equal(tok, "else")) {
+    if (libcp_equal(tok, "else")) {
       if (!cond_incl || cond_incl->ctx == IN_ELSE)
-        error_tok(ctx, start, "stray #else");
+        libcp_error_tok(ctx, start, "stray #else");
       cond_incl->ctx = IN_ELSE;
       tok = skip_line(ctx, tok->next);
 
@@ -1097,15 +1097,15 @@ static Token *preprocess2(LibcpContext *ctx, Token *tok) {
       continue;
     }
 
-    if (equal(tok, "endif")) {
+    if (libcp_equal(tok, "endif")) {
       if (!cond_incl)
-        error_tok(ctx, start, "stray #endif");
+        libcp_error_tok(ctx, start, "stray #endif");
       cond_incl = cond_incl->next;
       tok = skip_line(ctx, tok->next);
       continue;
     }
 
-    if (equal(tok, "line")) {
+    if (libcp_equal(tok, "line")) {
       read_line_marker(ctx, &tok, tok->next);
       continue;
     }
@@ -1115,40 +1115,40 @@ static Token *preprocess2(LibcpContext *ctx, Token *tok) {
       continue;
     }
 
-    if (equal(tok, "pragma") && equal(tok->next, "once")) {
-      hashmap_put(ctx, &pragma_once, tok->file->name, (void *)1);
+    if (libcp_equal(tok, "pragma") && libcp_equal(tok->next, "once")) {
+      libcp_hashmap_put(ctx, &pragma_once, tok->file->name, (void *)1);
       tok = skip_line(ctx, tok->next->next);
       continue;
     }
 
-    if (equal(tok, "pragma")) {
+    if (libcp_equal(tok, "pragma")) {
       do {
         tok = tok->next;
       } while (!tok->at_bol);
       continue;
     }
 
-    if (equal(tok, "error"))
-      error_tok(ctx, tok, "error");
+    if (libcp_equal(tok, "error"))
+      libcp_error_tok(ctx, tok, "error");
 
     // `#`-only line is legal. It's called a null directive.
     if (tok->at_bol)
       continue;
 
-    error_tok(ctx, tok, "invalid preprocessor directive");
+    libcp_error_tok(ctx, tok, "invalid preprocessor directive");
   }
 
   cur->next = tok;
   return head.next;
 }
 
-void define_macro(LibcpContext *ctx, char *name, char *buf) {
-  Token *tok = tokenize_nested(ctx, new_file(ctx, "<built-in>", 1, buf));
+void libcp_define_macro(LibcpContext *ctx, char *name, char *buf) {
+  Token *tok = tokenize_nested(ctx, libcp_new_file(ctx, "<built-in>", 1, buf));
   add_macro(ctx, name, true, tok);
 }
 
-void undef_macro(LibcpContext *ctx, char *name) {
-  hashmap_delete(ctx, &macros, name);
+void libcp_undef_macro(LibcpContext *ctx, char *name) {
+  libcp_hashmap_delete(ctx, &macros, name);
 }
 
 static Macro *add_builtin(LibcpContext *ctx, char *name, macro_handler_fn *fn) {
@@ -1201,12 +1201,12 @@ static char *format_date(LibcpContext *ctx, struct tm *tm) {
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
   };
 
-  return format(ctx, "\"%s %2d %d\"", mon[tm->tm_mon], tm->tm_mday, tm->tm_year + 1900);
+  return libcp_format(ctx, "\"%s %2d %d\"", mon[tm->tm_mon], tm->tm_mday, tm->tm_year + 1900);
 }
 
 // __TIME__ is expanded to the current time, e.g. "13:34:03".
 static char *format_time(LibcpContext *ctx, struct tm *tm) {
-  return format(ctx, "\"%02d:%02d:%02d\"", tm->tm_hour, tm->tm_min, tm->tm_sec);
+  return libcp_format(ctx, "\"%02d:%02d:%02d\"", tm->tm_hour, tm->tm_min, tm->tm_sec);
 }
 
 typedef enum {
@@ -1240,16 +1240,16 @@ typedef struct {
 
 static int predefined_size(SizeKind size) {
   switch (size) {
-  case SZ_DOUBLE: return ty_double->size;
-  case SZ_FLOAT: return ty_float->size;
-  case SZ_INT: return ty_int->size;
-  case SZ_LDOUBLE: return ty_ldouble->size;
-  case SZ_LONG_LONG: return ty_long->size;
-  case SZ_LONG: return ty_long->size;
-  case SZ_POINTER: return ty_ulong->size;
-  case SZ_PTRDIFF: return ty_long->size;
-  case SZ_SHORT: return ty_short->size;
-  case SZ_SIZE: return ty_ulong->size;
+  case SZ_DOUBLE: return libcp_ty_double->size;
+  case SZ_FLOAT: return libcp_ty_float->size;
+  case SZ_INT: return libcp_ty_int->size;
+  case SZ_LDOUBLE: return libcp_ty_ldouble->size;
+  case SZ_LONG_LONG: return libcp_ty_long->size;
+  case SZ_LONG: return libcp_ty_long->size;
+  case SZ_POINTER: return libcp_ty_ulong->size;
+  case SZ_PTRDIFF: return libcp_ty_long->size;
+  case SZ_SHORT: return libcp_ty_short->size;
+  case SZ_SIZE: return libcp_ty_ulong->size;
   case SZ_NONE: break;
   }
   return 0;
@@ -1308,7 +1308,7 @@ static const PredefinedDef predefined_defs[] = {
   {"__TIME__", NULL, SZ_NONE, PREDEF_DYNAMIC, NULL},
 };
 
-void init_macros(LibcpContext *ctx) {
+void libcp_init_macros(LibcpContext *ctx) {
   if (!ctx || !ctx->predefined_macros)
     return;
 
@@ -1322,12 +1322,12 @@ void init_macros(LibcpContext *ctx) {
     e->name = d->name;
 
     if (d->kind == PREDEF_SIZEOF) {
-      char *value = format(ctx, "%d", predefined_size(d->size));
+      char *value = libcp_format(ctx, "%d", predefined_size(d->size));
       e->value = value;
-      define_macro(ctx, d->name, value);
+      libcp_define_macro(ctx, d->name, value);
     } else if (d->kind == PREDEF_MACRO) {
       e->value = d->value;
-      define_macro(ctx, d->name, d->value);
+      libcp_define_macro(ctx, d->name, d->value);
     } else if (d->kind == PREDEF_BUILTIN) {
       add_builtin(ctx, d->name, d->handler);
     }
@@ -1341,8 +1341,8 @@ void init_macros(LibcpContext *ctx) {
   time_t now = time(NULL);
   struct tm tm_buf;
   localtime_r(&now, &tm_buf);
-  define_macro(ctx, "__DATE__", format_date(ctx, &tm_buf));
-  define_macro(ctx, "__TIME__", format_time(ctx, &tm_buf));
+  libcp_define_macro(ctx, "__DATE__", format_date(ctx, &tm_buf));
+  libcp_define_macro(ctx, "__TIME__", format_time(ctx, &tm_buf));
 }
 
 int libcp_context_predefined_count(LibcpContext *ctx) {
@@ -1399,7 +1399,7 @@ static void join_adjacent_string_literals(LibcpContext *ctx, Token *tok) {
         kind = k;
         basety = t->ty->base;
       } else if (k != STR_NONE && kind != k) {
-        error_tok(ctx, t, "unsupported non-standard concatenation of string literals");
+        libcp_error_tok(ctx, t, "unsupported non-standard concatenation of string literals");
       }
     }
 
@@ -1409,7 +1409,7 @@ static void join_adjacent_string_literals(LibcpContext *ctx, Token *tok) {
           // The re-scan replaces the whole token (and does not set
           // line_no); the provenance belongs to the source token.
           MacroProv *prov = t->prov;
-          *t = *tokenize_string_literal(ctx, t, basety);
+          *t = *libcp_tokenize_string_literal(ctx, t, basety);
           t->prov = prov;
         }
 
@@ -1441,7 +1441,7 @@ static void join_adjacent_string_literals(LibcpContext *ctx, Token *tok) {
     }
 
     *tok1 = *copy_token(ctx, tok1);
-    tok1->ty = array_of(ctx, tok1->ty->base, len);
+    tok1->ty = libcp_array_of(ctx, tok1->ty->base, len);
     tok1->str = buf;
     tok1->next = tok2;
     tok1 = tok2;
@@ -1449,15 +1449,17 @@ static void join_adjacent_string_literals(LibcpContext *ctx, Token *tok) {
 }
 
 // Entry point function of the preprocessor.
-Token *preprocess(LibcpContext *ctx, Token *tok) {
+Token *libcp_preprocess(LibcpContext *ctx, Token *tok) {
+  ENTER_RET(ctx, NULL);
   tok = preprocess2(ctx, tok);
   if (cond_incl)
-    error_tok(ctx, cond_incl->tok, "unterminated conditional directive");
-  convert_pp_tokens(ctx, tok);
+    libcp_error_tok(ctx, cond_incl->tok, "unterminated conditional directive");
+  libcp_convert_pp_tokens(ctx, tok);
   join_adjacent_string_literals(ctx, tok);
 
   for (Token *t = tok; t; t = t->next)
     t->line_no += t->line_delta;
+  LEAVE(ctx);
   return tok;
 }
 
@@ -1465,39 +1467,39 @@ Token *preprocess(LibcpContext *ctx, Token *tok) {
 // layout is preprocess.c's business, and consumers (provenance.c
 // today, the library API later) see only these functions.
 
-MacroProv *token_provenance(Token *tok) {
+MacroProv *libcp_token_provenance(Token *tok) {
   return tok->prov;
 }
 
-MacroProv *macro_prov_next(MacroProv *p) {
+MacroProv *libcp_macro_prov_next(MacroProv *p) {
   return p->next;
 }
 
-MacroExpansion *macro_prov_expansion(MacroProv *p) {
+MacroExpansion *libcp_macro_prov_expansion(MacroProv *p) {
   return p->exp;
 }
 
-int macro_prov_arg_index(MacroProv *p) {
+int libcp_macro_prov_arg_index(MacroProv *p) {
   return p->arg_index;
 }
 
-Token *macro_expansion_name(MacroExpansion *e) {
+Token *libcp_macro_expansion_name(MacroExpansion *e) {
   return e->name;
 }
 
-Token *macro_expansion_end(MacroExpansion *e) {
+Token *libcp_macro_expansion_end(MacroExpansion *e) {
   return e->rparen ? e->rparen : e->name;
 }
 
-char *macro_expansion_macro(MacroExpansion *e) {
+char *libcp_macro_expansion_macro(MacroExpansion *e) {
   return e->macro->name;
 }
 
-Token *macro_expansion_def(MacroExpansion *e) {
+Token *libcp_macro_expansion_def(MacroExpansion *e) {
   return e->macro->def;
 }
 
-Token *macro_expansion_arg(MacroExpansion *e, int i) {
+Token *libcp_macro_expansion_arg(MacroExpansion *e, int i) {
   if (i < 0 || i >= e->arg_count)
     return NULL;
 
@@ -1507,10 +1509,10 @@ Token *macro_expansion_arg(MacroExpansion *e, int i) {
   return arg ? arg->tok : NULL;
 }
 
-int macro_expansion_arg_count(MacroExpansion *e) {
+int libcp_macro_expansion_arg_count(MacroExpansion *e) {
   return e->arg_count;
 }
 
-bool macro_expansion_is_builtin(MacroExpansion *e) {
+bool libcp_macro_expansion_is_builtin(MacroExpansion *e) {
   return e->is_builtin;
 }

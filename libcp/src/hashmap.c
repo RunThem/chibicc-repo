@@ -45,7 +45,7 @@ static void rehash(LibcpContext *ctx, HashMap *map) {
   for (int i = 0; i < map->capacity; i++) {
     HashEntry *ent = &map->buckets[i];
     if (ent->key && ent->key != TOMBSTONE)
-      hashmap_put2(ctx, &map2, ent->key, ent->keylen, ent->val);
+      libcp_hashmap_put2(ctx, &map2, ent->key, ent->keylen, ent->val);
   }
 
   assert(map2.used == nkeys);
@@ -106,29 +106,29 @@ static HashEntry *get_or_insert_entry(LibcpContext *ctx, HashMap *map, char *key
   unreachable();
 }
 
-void *hashmap_get(LibcpContext *ctx, HashMap *map, char *key) {
-  return hashmap_get2(ctx, map, key, strlen(key));
+void *libcp_hashmap_get(LibcpContext *ctx, HashMap *map, char *key) {
+  return libcp_hashmap_get2(ctx, map, key, strlen(key));
 }
 
-void *hashmap_get2(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
+void *libcp_hashmap_get2(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
   HashEntry *ent = get_entry(ctx, map, key, keylen);
   return ent ? ent->val : NULL;
 }
 
-void hashmap_put(LibcpContext *ctx, HashMap *map, char *key, void *val) {
-   hashmap_put2(ctx, map, key, strlen(key), val);
+void libcp_hashmap_put(LibcpContext *ctx, HashMap *map, char *key, void *val) {
+   libcp_hashmap_put2(ctx, map, key, strlen(key), val);
 }
 
-void hashmap_put2(LibcpContext *ctx, HashMap *map, char *key, int keylen, void *val) {
+void libcp_hashmap_put2(LibcpContext *ctx, HashMap *map, char *key, int keylen, void *val) {
   HashEntry *ent = get_or_insert_entry(ctx, map, key, keylen);
   ent->val = val;
 }
 
-void hashmap_delete(LibcpContext *ctx, HashMap *map, char *key) {
-  hashmap_delete2(ctx, map, key, strlen(key));
+void libcp_hashmap_delete(LibcpContext *ctx, HashMap *map, char *key) {
+  libcp_hashmap_delete2(ctx, map, key, strlen(key));
 }
 
-void hashmap_delete2(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
+void libcp_hashmap_delete2(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
   HashEntry *ent = get_entry(ctx, map, key, keylen);
   if (!ent)
     return;

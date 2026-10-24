@@ -98,9 +98,10 @@ EOF
 
 # The object may reference libc and D7; an internal phase or helper name
 # means the public surface leaked. Symbols differ by one leading
-# underscore on Darwin.
+# underscore on Darwin. Since the symbol-prefix line every internal
+# symbol carries the libcp_ prefix too, the deny list is anchored on it.
 nm -u "$tmp/consumer.o" | awk '{print $NF}' > "$tmp/undef"
-bad=$(grep -E '^_?(tokenize|tokenize_file|convert_pp_tokens|preprocess|parse|parse_init|sema|const_expr|add_type|new_cast|new_node|new_binary|new_unary|new_num|error|error_at|error_tok|warn_tok|hashmap_[a-z_0-9]+|strarray_push|nodearray_push|format|libcp_arena_[a-z_0-9]+|libcp_ctx|libcp_context_activate|libcp_context_set_base_file|cst_parse|cst_dump|cst_verify|cst_reconstruct|expansion_dump|expansion_verify)$' "$tmp/undef" || true)
+bad=$(grep -E '^_?(libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|add_type|new_cast|new_node|new_binary|new_unary|new_num|error|error_at|error_tok|warn_tok|strarray_push|nodearray_push|format|ctx|conditional|context_activate|context_set_base_file)|libcp_(hashmap|arena|sema|ty)_[a-z_0-9]+)$' "$tmp/undef" || true)
 if [ -n "$bad" ]; then
   echo "public-api: the consumer references internal symbols:" >&2
   echo "$bad" >&2
@@ -111,12 +112,12 @@ fi
   -o "$tmp/consumer"
 "$tmp/consumer"
 
-# PLAN L3.2b, the .a symbol policy: the library does not rename its
-# internal functions, so a static archive exposes them to whatever links
-# it. Consumers must not call them (the public headers do not declare
-# them), and the documentation states it. What is checked here is the
-# other half: every D7 function is present. The strict export whitelist
-# belongs to the shared library (L3.3b, -fvisibility=hidden).
+# PLAN L3.2b, revised by the symbol-prefix line (PLAN-pratt-default S2):
+# the archive's internal symbols carry the libcp_ prefix too, but they
+# are still not API - the public headers do not declare them and
+# consumers must not call them. What is checked here is the other half:
+# every D7 function is present. The strict export whitelist belongs to
+# the shared library (L3.3b, -fvisibility=hidden).
 d7="libcp_context_new
 libcp_context_free
 libcp_context_reset

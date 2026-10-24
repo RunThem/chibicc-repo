@@ -1,7 +1,7 @@
 #include "libcp.h"
 
 // Encode a given character in UTF-8.
-int encode_utf8(char *buf, uint32_t c) {
+int libcp_encode_utf8(char *buf, uint32_t c) {
   if (c <= 0x7F) {
     buf[0] = c;
     return 1;
@@ -34,7 +34,7 @@ int encode_utf8(char *buf, uint32_t c) {
 // encoded in one to four bytes. One byte UTF-8 code points are
 // identical to ASCII. Non-ASCII characters are encoded using more
 // than one byte.
-uint32_t decode_utf8(LibcpContext *ctx, char **new_pos, char *p) {
+uint32_t libcp_decode_utf8(LibcpContext *ctx, char **new_pos, char *p) {
   if ((unsigned char)*p < 128) {
     *new_pos = p + 1;
     return *p;
@@ -48,7 +48,7 @@ uint32_t decode_utf8(LibcpContext *ctx, char **new_pos, char *p) {
     // Valid four-byte leads stop at F4; F5..FF cannot encode a code
     // point and would otherwise alias a valid range.
     if ((unsigned char)*p > 0b11110100)
-      error_at(ctx, start, "invalid UTF-8 sequence");
+      libcp_error_at(ctx, start, "invalid UTF-8 sequence");
     len = 4;
     c = *p & 0b111;
   } else if ((unsigned char)*p >= 0b11100000) {
@@ -58,12 +58,12 @@ uint32_t decode_utf8(LibcpContext *ctx, char **new_pos, char *p) {
     len = 2;
     c = *p & 0b11111;
   } else {
-    error_at(ctx, start, "invalid UTF-8 sequence");
+    libcp_error_at(ctx, start, "invalid UTF-8 sequence");
   }
 
   for (int i = 1; i < len; i++) {
     if ((unsigned char)p[i] >> 6 != 0b10)
-      error_at(ctx, start, "invalid UTF-8 sequence");
+      libcp_error_at(ctx, start, "invalid UTF-8 sequence");
     c = (c << 6) | (p[i] & 0b111111);
   }
 
@@ -72,7 +72,7 @@ uint32_t decode_utf8(LibcpContext *ctx, char **new_pos, char *p) {
   // the Unicode maximum.
   static uint32_t min[] = {0, 0, 0x80, 0x800, 0x10000};
   if (c < min[len] || (c >= 0xD800 && c <= 0xDFFF) || c > 0x10FFFF)
-    error_at(ctx, start, "invalid UTF-8 sequence");
+    libcp_error_at(ctx, start, "invalid UTF-8 sequence");
 
   *new_pos = p + len;
   return c;
@@ -95,7 +95,7 @@ static bool in_range(uint32_t *range, uint32_t c) {
 // For example, ¾ (U+00BE) is a valid identifier because characters in
 // 0x00BE-0x00C0 are allowed, while neither ⟘ (U+27D8) nor '　'
 // (U+3000, full-width space) are allowed because they are out of range.
-bool is_ident1(uint32_t c) {
+bool libcp_is_ident1(uint32_t c) {
   static uint32_t range[] = {
     '_', '_', 'a', 'z', 'A', 'Z', '$', '$',
     0x00A8, 0x00A8, 0x00AA, 0x00AA, 0x00AD, 0x00AD, 0x00AF, 0x00AF,
@@ -118,13 +118,13 @@ bool is_ident1(uint32_t c) {
 
 // Returns true if a given character is acceptable as a non-first
 // character of an identifier.
-bool is_ident2(uint32_t c) {
+bool libcp_is_ident2(uint32_t c) {
   static uint32_t range[] = {
     '0', '9', '$', '$', 0x0300, 0x036F, 0x1DC0, 0x1DFF, 0x20D0, 0x20FF,
     0xFE20, 0xFE2F, -1,
   };
 
-  return is_ident1(c) || in_range(range, c);
+  return libcp_is_ident1(c) || in_range(range, c);
 }
 
 // Returns the number of columns needed to display a given
@@ -189,11 +189,11 @@ static int char_width(uint32_t c) {
 
 // Returns the number of columns needed to display a given
 // string in a fixed-width font.
-int display_width(LibcpContext *ctx, char *p, int len) {
+int libcp_display_width(LibcpContext *ctx, char *p, int len) {
   char *start = p;
   int w = 0;
   while (p - start < len) {
-    uint32_t c = decode_utf8(ctx, &p, p);
+    uint32_t c = libcp_decode_utf8(ctx, &p, p);
     w += char_width(c);
   }
   return w;

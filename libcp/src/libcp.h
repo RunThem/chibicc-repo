@@ -70,72 +70,48 @@ typedef struct {
   int len;
 } NodeArray;
 
-void strarray_push(LibcpContext *ctx, StringArray *arr, char *s);
-void nodearray_push(LibcpContext *ctx, NodeArray *arr, Node *node);
-char *format(LibcpContext *ctx, char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void libcp_strarray_push(LibcpContext *ctx, StringArray *arr, char *s);
+void libcp_nodearray_push(LibcpContext *ctx, NodeArray *arr, Node *node);
+char *libcp_format(LibcpContext *ctx, char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
 //
 // tokenize.c
 //
 
-noreturn void error(LibcpContext *ctx, char *fmt, ...) __attribute__((format(printf, 2, 3)));
-noreturn void error_at(LibcpContext *ctx, char *loc, char *fmt, ...) __attribute__((format(printf, 3, 4)));
-noreturn void error_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
-void warn_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
-bool equal(Token *tok, char *op);
-Token *skip(LibcpContext *ctx, Token *tok, char *op);
-bool consume(Token **rest, Token *tok, char *str);
-void convert_pp_tokens(LibcpContext *ctx, Token *tok);
-File **get_input_files(LibcpContext *ctx);
-File *new_file(LibcpContext *ctx, char *name, int file_no, char *contents);
-File *new_file_len(LibcpContext *ctx, char *name, int file_no, char *contents, int len);
-bool is_line_break(char *p);
-int line_break_len(char *p);
-Token *tokenize_string_literal(LibcpContext *ctx, Token *tok, Type *basety);
-Token *tokenize(LibcpContext *ctx, File *file);
-Token *tokenize_file(LibcpContext *ctx, char *filename);
+noreturn void libcp_error(LibcpContext *ctx, char *fmt, ...) __attribute__((format(printf, 2, 3)));
+noreturn void libcp_error_at(LibcpContext *ctx, char *loc, char *fmt, ...) __attribute__((format(printf, 3, 4)));
+noreturn void libcp_error_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
+void libcp_warn_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
+bool libcp_equal(Token *tok, char *op);
+Token *libcp_skip(LibcpContext *ctx, Token *tok, char *op);
+bool libcp_consume(Token **rest, Token *tok, char *str);
+void libcp_convert_pp_tokens(LibcpContext *ctx, Token *tok);
+File **libcp_get_input_files(LibcpContext *ctx);
+File *libcp_new_file(LibcpContext *ctx, char *name, int file_no, char *contents);
+File *libcp_new_file_len(LibcpContext *ctx, char *name, int file_no, char *contents, int len);
+bool libcp_is_line_break(char *p);
+int libcp_line_break_len(char *p);
+Token *libcp_tokenize_string_literal(LibcpContext *ctx, Token *tok, Type *basety);
+Token *libcp_tokenize(LibcpContext *ctx, File *file);
+Token *libcp_tokenize_file_impl(LibcpContext *ctx, char *filename);
 
 #define unreachable() \
-  error(ctx, "internal error at %s:%d", __FILE__, __LINE__)
-
-//
-// cst.c
-//
-
-CstNode *cst_parse(LibcpContext *ctx, Token *tok);
-void cst_reconstruct(CstNode *root, FILE *out);
-void cst_dump(LibcpContext *ctx, CstNode *root, FILE *out);
-bool cst_verify(CstNode *root, Token *tok);
+  libcp_error(ctx, "internal error at %s:%d", __FILE__, __LINE__)
 
 //
 // preprocess.c
+// The CST channel entries (libcp_cst_parse / _reconstruct / _dump /
+// _verify), the pipeline entries (libcp_preprocess / libcp_parse /
+// libcp_sema), the expansion channels (libcp_expansion_dump / _verify)
+// and the provenance accessors carry their public names directly and are
+// declared in the public headers (PLAN-pratt-default S2: the facade
+// wrappers merged into the implementations).
 //
 
-char *search_include_paths(LibcpContext *ctx, char *filename);
-void init_macros(LibcpContext *ctx);
-void define_macro(LibcpContext *ctx, char *name, char *buf);
-void undef_macro(LibcpContext *ctx, char *name);
-Token *preprocess(LibcpContext *ctx, Token *tok);
-
-MacroProv *token_provenance(Token *tok);
-MacroProv *macro_prov_next(MacroProv *p);
-MacroExpansion *macro_prov_expansion(MacroProv *p);
-int macro_prov_arg_index(MacroProv *p);
-
-Token *macro_expansion_name(MacroExpansion *e);
-Token *macro_expansion_end(MacroExpansion *e);   // rparen; name if none
-char *macro_expansion_macro(MacroExpansion *e);  // the macro's spelling
-Token *macro_expansion_def(MacroExpansion *e);   // #define name; NULL if none
-Token *macro_expansion_arg(MacroExpansion *e, int i);
-int macro_expansion_arg_count(MacroExpansion *e);
-bool macro_expansion_is_builtin(MacroExpansion *e);
-
-//
-// provenance.c
-//
-
-void expansion_dump(LibcpContext *ctx, Token *tok, FILE *out);
-bool expansion_verify(Token *tok);
+char *libcp_search_include_paths(LibcpContext *ctx, char *filename);
+void libcp_init_macros(LibcpContext *ctx);
+void libcp_define_macro(LibcpContext *ctx, char *name, char *buf);
+void libcp_undef_macro(LibcpContext *ctx, char *name);
 
 //
 // parse.c
@@ -145,104 +121,101 @@ bool expansion_verify(Token *tok);
 // uses them to build the nodes its lowerings introduce. The shapes that
 // only a lowering produces - a bound name, a VLA designator, a numeric
 // literal typed at birth - sema constructs itself.
-Node *new_node(LibcpContext *ctx, NodeKind kind, Token *tok);
-Node *new_binary(LibcpContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok);
-Node *new_unary(LibcpContext *ctx, NodeKind kind, Node *expr, Token *tok);
-Node *new_num(LibcpContext *ctx, int64_t val, Token *tok);
+Node *libcp_new_node(LibcpContext *ctx, NodeKind kind, Token *tok);
+Node *libcp_new_binary(LibcpContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok);
+Node *libcp_new_unary(LibcpContext *ctx, NodeKind kind, Node *expr, Token *tok);
+Node *libcp_new_num(LibcpContext *ctx, int64_t val, Token *tok);
 
 // Identifier spelling, used by sema when it declares the objects the
 // parser's declaration records name.
-char *get_ident(LibcpContext *ctx, Token *tok);
+char *libcp_get_ident(LibcpContext *ctx, Token *tok);
 
-Node *parse(LibcpContext *ctx, Token *tok);
-void parse_init(LibcpContext *ctx);
-void sema_store_label_gotos(LibcpContext *ctx, Obj *fn, NodeArray gotos);
-NodeArray *sema_label_gotos(LibcpContext *ctx, Obj *fn);
-void sema_state_clear(LibcpContext *ctx);
+void libcp_parse_init(LibcpContext *ctx);
+void libcp_sema_store_label_gotos(LibcpContext *ctx, Obj *fn, NodeArray gotos);
+NodeArray *libcp_sema_label_gotos(LibcpContext *ctx, Obj *fn);
+void libcp_sema_state_clear(LibcpContext *ctx);
 
 //
 // sema.c
 //
 
-Obj *sema(LibcpContext *ctx, Node *toplevel);
-
 // Parses and evaluates a constant expression. Used by the
 // preprocessor for `#if`; not part of the parse/sema pipeline below.
-int64_t const_expr(LibcpContext *ctx, Token **rest, Token *tok);
+int64_t libcp_const_expr(LibcpContext *ctx, Token **rest, Token *tok);
 
 // The parser's conditional-expression entry point (parse.c), which
-// const_expr uses to read the expression it evaluates.
-Node *conditional(LibcpContext *ctx, Token **rest, Token *tok);
+// libcp_const_expr uses to read the expression it evaluates.
+Node *libcp_conditional(LibcpContext *ctx, Token **rest, Token *tok);
 
 // The type-level tools a consumer needs in order to build nodes that
 // arrive already typed: the annotation entry point, the constructors for
 // the shapes only sema produces, and the conversions that carry sema's
 // decisions.
-void add_type(LibcpContext *ctx, Node *node);
-Node *new_arith(LibcpContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok);
-void usual_arith_conv(LibcpContext *ctx, Node **lhs, Node **rhs);
-Type *get_common_type(LibcpContext *ctx, Type *ty1, Type *ty2);
-Node *new_cast(LibcpContext *ctx, Node *expr, Type *ty);
-Node *new_long(LibcpContext *ctx, int64_t val, Token *tok);
-Node *new_ulong(LibcpContext *ctx, long val, Token *tok);
-Node *new_var_node(LibcpContext *ctx, Obj *var, Token *tok);
-Node *new_vla_ptr(LibcpContext *ctx, Obj *var, Token *tok);
-Node *new_alloca(LibcpContext *ctx, Node *sz);
+void libcp_add_type(LibcpContext *ctx, Node *node);
+Node *libcp_new_arith(LibcpContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok);
+void libcp_usual_arith_conv(LibcpContext *ctx, Node **lhs, Node **rhs);
+Type *libcp_get_common_type(LibcpContext *ctx, Type *ty1, Type *ty2);
+Node *libcp_new_cast(LibcpContext *ctx, Node *expr, Type *ty);
+Node *libcp_new_long(LibcpContext *ctx, int64_t val, Token *tok);
+Node *libcp_new_ulong(LibcpContext *ctx, long val, Token *tok);
+Node *libcp_new_var_node(LibcpContext *ctx, Obj *var, Token *tok);
+Node *libcp_new_vla_ptr(LibcpContext *ctx, Obj *var, Token *tok);
+Node *libcp_new_alloca(LibcpContext *ctx, Node *sz);
 
 // The next value the anonymous-name counter would hand out, without
 // consuming it.
-int unique_name_next(LibcpContext *ctx);
+int libcp_unique_name_next(LibcpContext *ctx);
 
 //
 // type.c
 //
 
-extern Type *ty_void;
-extern Type *ty_bool;
+extern Type *libcp_ty_void;
+extern Type *libcp_ty_bool;
 
-extern Type *ty_char;
-extern Type *ty_short;
-extern Type *ty_int;
-extern Type *ty_long;
+extern Type *libcp_ty_char;
+extern Type *libcp_ty_short;
+extern Type *libcp_ty_int;
+extern Type *libcp_ty_long;
 
-extern Type *ty_uchar;
-extern Type *ty_ushort;
-extern Type *ty_uint;
-extern Type *ty_ulong;
+extern Type *libcp_ty_uchar;
+extern Type *libcp_ty_ushort;
+extern Type *libcp_ty_uint;
+extern Type *libcp_ty_ulong;
 
-extern Type *ty_float;
-extern Type *ty_double;
-extern Type *ty_ldouble;
+extern Type *libcp_ty_float;
+extern Type *libcp_ty_double;
+extern Type *libcp_ty_ldouble;
 
-bool is_integer(Type *ty);
-bool is_flonum(Type *ty);
-bool is_numeric(Type *ty);
-bool is_compatible(Type *t1, Type *t2);
-Type *copy_type(LibcpContext *ctx, Type *ty);
-Type *pointer_to(LibcpContext *ctx, Type *base);
-Type *func_type(LibcpContext *ctx, Type *return_ty);
-Type *array_of(LibcpContext *ctx, Type *base, int size);
-Type *vla_of(LibcpContext *ctx, Type *base, Node *expr);
-Type *array_of_dim(LibcpContext *ctx, Type *base, Node *dim);
-Type *typeof_placeholder(LibcpContext *ctx);
-Type *enum_type(LibcpContext *ctx);
-Type *struct_type(LibcpContext *ctx);
+bool libcp_is_integer(Type *ty);
+bool libcp_is_flonum(Type *ty);
+bool libcp_is_numeric(Type *ty);
+bool libcp_is_compatible(Type *t1, Type *t2);
+Type *libcp_copy_type(LibcpContext *ctx, Type *ty);
+Type *libcp_pointer_to(LibcpContext *ctx, Type *base);
+Type *libcp_func_type(LibcpContext *ctx, Type *return_ty);
+Type *libcp_array_of(LibcpContext *ctx, Type *base, int size);
+Type *libcp_vla_of(LibcpContext *ctx, Type *base, Node *expr);
+Type *libcp_array_of_dim(LibcpContext *ctx, Type *base, Node *dim);
+Type *libcp_typeof_placeholder(LibcpContext *ctx);
+Type *libcp_enum_type(LibcpContext *ctx);
+Type *libcp_struct_type(LibcpContext *ctx);
 
 //
 // strings.c
 //
 
-int align_to(int n, int align);
+int libcp_align_to(int n, int align);
 
 //
 // unicode.c
 //
 
-int encode_utf8(char *buf, uint32_t c);
-uint32_t decode_utf8(LibcpContext *ctx, char **new_pos, char *p);
-bool is_ident1(uint32_t c);
-bool is_ident2(uint32_t c);
-int display_width(LibcpContext *ctx, char *p, int len);
+int libcp_encode_utf8(char *buf, uint32_t c);
+uint32_t libcp_decode_utf8(LibcpContext *ctx, char **new_pos, char *p);
+bool libcp_is_ident1(uint32_t c);
+bool libcp_is_ident2(uint32_t c);
+int libcp_display_width(LibcpContext *ctx, char *p, int len);
 
 //
 // hashmap.c
@@ -261,20 +234,20 @@ typedef struct {
   int ndeleted; // tombstones in `used`
 } HashMap;
 
-void *hashmap_get(LibcpContext *ctx, HashMap *map, char *key);
-void *hashmap_get2(LibcpContext *ctx, HashMap *map, char *key, int keylen);
-void hashmap_put(LibcpContext *ctx, HashMap *map, char *key, void *val);
-void hashmap_put2(LibcpContext *ctx, HashMap *map, char *key, int keylen, void *val);
-void hashmap_delete(LibcpContext *ctx, HashMap *map, char *key);
-void hashmap_delete2(LibcpContext *ctx, HashMap *map, char *key, int keylen);
+void *libcp_hashmap_get(LibcpContext *ctx, HashMap *map, char *key);
+void *libcp_hashmap_get2(LibcpContext *ctx, HashMap *map, char *key, int keylen);
+void libcp_hashmap_put(LibcpContext *ctx, HashMap *map, char *key, void *val);
+void libcp_hashmap_put2(LibcpContext *ctx, HashMap *map, char *key, int keylen, void *val);
+void libcp_hashmap_delete(LibcpContext *ctx, HashMap *map, char *key);
+void libcp_hashmap_delete2(LibcpContext *ctx, HashMap *map, char *key, int keylen);
 
 //
 // Shared helpers (strings.c / tokenize.c)
 //
 
-bool file_exists(char *path);
-void print_escaped(FILE *out, char *p, int len);
-char *token_kind_name(LibcpContext *ctx, TokenKind kind);
+bool libcp_file_exists(char *path);
+void libcp_print_escaped(FILE *out, char *p, int len);
+char *libcp_token_kind_name(LibcpContext *ctx, TokenKind kind);
 
 //
 // context / arena / diagnostics (PLAN L2)
@@ -289,6 +262,34 @@ struct JmpFrame {
   JmpFrame *prev;
   jmp_buf buf;
 };
+
+// The boundary prologue / epilogue for a public entry. ENTER_RET returns
+// `fail` from the enclosing function on error; ENTER_VOID returns void.
+// The frame belongs to the context in hand; no other state is saved or
+// restored. Used by lib.c's facade entries and by the phase functions
+// that carry their public name directly (PLAN-pratt-default S2).
+#define ENTER_RET(ctx, fail)                                              \
+  JmpFrame _jf;                                                           \
+  _jf.prev = (ctx)->jmp_top;                                              \
+  (ctx)->jmp_top = &_jf;                                                  \
+  if (setjmp(_jf.buf)) {                                                  \
+    (ctx)->jmp_top = _jf.prev;                                            \
+    return fail;                                                          \
+  }
+
+#define ENTER_VOID(ctx)                                                   \
+  JmpFrame _jf;                                                           \
+  _jf.prev = (ctx)->jmp_top;                                              \
+  (ctx)->jmp_top = &_jf;                                                  \
+  if (setjmp(_jf.buf)) {                                                  \
+    (ctx)->jmp_top = _jf.prev;                                            \
+    return;                                                               \
+  }
+
+#define LEAVE(ctx)                                                        \
+  do {                                                                    \
+    (ctx)->jmp_top = _jf.prev;                                            \
+  } while (0)
 
 struct ArenaBlock {
   ArenaBlock *next;

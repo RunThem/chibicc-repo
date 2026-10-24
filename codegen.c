@@ -357,7 +357,7 @@ static void gen_addr(LibcpContext *ctx, Node *node) {
     return;
   }
 
-  error_tok(ctx, node->tok, "not an lvalue");
+  libcp_error_tok(ctx, node->tok, "not an lvalue");
 }
 
 // Load a value from where %rax is pointing to.
@@ -453,7 +453,7 @@ static void cmp_zero(Type *ty) {
     return;
   }
 
-  if (is_integer(ty) && ty->size <= 4)
+  if (libcp_is_integer(ty) && ty->size <= 4)
     println("  cmp $0, %%eax");
   else
     println("  cmp $0, %%rax");
@@ -621,7 +621,7 @@ static bool has_flonum2(Type *ty) {
 }
 
 static void push_struct(Type *ty) {
-  int sz = align_to(ty->size, 8);
+  int sz = libcp_align_to(ty->size, 8);
   println("  sub $%d, %%rsp", sz);
   depth += sz / 8;
 
@@ -697,7 +697,7 @@ static int push_args(LibcpContext *ctx, Node *node) {
     case TY_UNION:
       if (ty->size > 16) {
         cg(arg)->pass_by_stack = true;
-        stack += align_to(ty->size, 8) / 8;
+        stack += libcp_align_to(ty->size, 8) / 8;
       } else {
         bool fp1 = has_flonum1(ty);
         bool fp2 = has_flonum2(ty);
@@ -707,7 +707,7 @@ static int push_args(LibcpContext *ctx, Node *node) {
           gp = gp + !fp1 + !fp2;
         } else {
           cg(arg)->pass_by_stack = true;
-          stack += align_to(ty->size, 8) / 8;
+          stack += libcp_align_to(ty->size, 8) / 8;
         }
       }
       break;
@@ -871,7 +871,7 @@ static void builtin_alloca(void) {
 static void gen_expr(LibcpContext *ctx, Node *node) {
   // A faithful `+`/`-` still carries its source shape (PLAN B2): the
   // element-size scaling, the `num + ptr` canonicalization and the
-  // conversions new_arith applies are made here, at emission, by the
+  // conversions libcp_new_arith applies are made here, at emission, by the
   // same new_add/new_sub the shaping pass used to call ahead of time.
   // The node is replaced rather than recursed into: the product
   // carries the original node's token, so the debug lines and the
@@ -1276,7 +1276,7 @@ static void gen_expr(LibcpContext *ctx, Node *node) {
   // is the one of the operand the swap moves to the left, which is
   // also how the evaluator reads the faithful pair.
   if (node->kind == ND_GT || node->kind == ND_GE) {
-    Node *swapped = new_binary(ctx, node->kind == ND_GT ? ND_LT : ND_LE,
+    Node *swapped = libcp_new_binary(ctx, node->kind == ND_GT ? ND_LT : ND_LE,
                                node->rhs, node->lhs, node->tok);
     swapped->ty = node->ty;
     gen_expr(ctx, swapped);
@@ -1331,7 +1331,7 @@ static void gen_expr(LibcpContext *ctx, Node *node) {
       return;
     }
 
-    error_tok(ctx, node->tok, "invalid expression");
+    libcp_error_tok(ctx, node->tok, "invalid expression");
   }
   case TY_LDOUBLE: {
     gen_expr(ctx, node->lhs);
@@ -1370,7 +1370,7 @@ static void gen_expr(LibcpContext *ctx, Node *node) {
       return;
     }
 
-    error_tok(ctx, node->tok, "invalid expression");
+    libcp_error_tok(ctx, node->tok, "invalid expression");
   }
   }
 
@@ -1463,7 +1463,7 @@ static void gen_expr(LibcpContext *ctx, Node *node) {
     return;
   }
 
-  error_tok(ctx, node->tok, "invalid expression");
+  libcp_error_tok(ctx, node->tok, "invalid expression");
 }
 
 static void gen_stmt(LibcpContext *ctx, Node *node) {
@@ -1610,7 +1610,7 @@ static void gen_stmt(LibcpContext *ctx, Node *node) {
                                   node->decl_init->tok);
     node->decl_init = NULL;
     node->init_resolved = NULL;
-    add_type(ctx, chain);
+    libcp_add_type(ctx, chain);
     gen_expr(ctx, chain);
     return;
   }
@@ -1660,7 +1660,7 @@ static void gen_stmt(LibcpContext *ctx, Node *node) {
     return;
   }
 
-  error_tok(ctx, node->tok, "invalid statement");
+  libcp_error_tok(ctx, node->tok, "invalid statement");
 }
 
 // The shaping pass, at its terminal shape: the control-flow half of
@@ -1683,7 +1683,7 @@ static void gen_stmt(LibcpContext *ctx, Node *node) {
 //
 // Label names keep the `.L..%d` format and continue the same number
 // space as sema's anonymous objects, from wherever the library's
-// counter stopped (unique_name_next at entry): the snapshot
+// counter stopped (libcp_unique_name_next at entry): the snapshot
 // normalizer renumbers exactly this suffix shape, so a different
 // prefix would surface as a diff even for a pure renumbering, and a
 // fresh sequence from zero would collide with the object names sema
@@ -1695,7 +1695,7 @@ static Node *current_switch;
 static NodeArray cg_labels;  // the labels of the function being shaped
 
 static char *new_label(LibcpContext *ctx) {
-  return format(ctx, ".L..%d", label_base + label_seq++);
+  return libcp_format(ctx, ".L..%d", label_base + label_seq++);
 }
 
 static void shape_node(LibcpContext *ctx, Node *node);
@@ -1790,8 +1790,8 @@ static Obj *new_lvar(char *name, Type *ty) {
 // a VLA, by its runtime size rather than a compile-time one.
 static Node *scale_rhs(LibcpContext *ctx, Type *ptr_ty, Node *rhs, Token *tok) {
   if (ptr_ty->base->kind == TY_VLA)
-    return new_binary(ctx, ND_MUL, rhs, new_var_node(ctx, cg_type(ptr_ty->base)->vla_size, tok), tok);
-  return new_binary(ctx, ND_MUL, rhs, new_long(ctx, ptr_ty->base->size, tok), tok);
+    return libcp_new_binary(ctx, ND_MUL, rhs, libcp_new_var_node(ctx, cg_type(ptr_ty->base)->vla_size, tok), tok);
+  return libcp_new_binary(ctx, ND_MUL, rhs, libcp_new_long(ctx, ptr_ty->base->size, tok), tok);
 }
 
 // Marks an additive node one of the lowering helpers below built. Its
@@ -1814,15 +1814,15 @@ static Node *mark_lowered(Node *node) {
 // of the faithful lowering the emitter runs at emission (PLAN B2); its
 // product carries the mark either way.
 static Node *new_add(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
-  add_type(ctx, lhs);
-  add_type(ctx, rhs);
+  libcp_add_type(ctx, lhs);
+  libcp_add_type(ctx, rhs);
 
   // num + num
-  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
-    return mark_lowered(new_arith(ctx, ND_ADD, lhs, rhs, tok));
+  if (libcp_is_numeric(lhs->ty) && libcp_is_numeric(rhs->ty))
+    return mark_lowered(libcp_new_arith(ctx, ND_ADD, lhs, rhs, tok));
 
   if (lhs->ty->base && rhs->ty->base)
-    error_tok(ctx, tok, "invalid operands");
+    libcp_error_tok(ctx, tok, "invalid operands");
 
   // Canonicalize `num + ptr` to `ptr + num`.
   if (!lhs->ty->base && rhs->ty->base) {
@@ -1832,25 +1832,25 @@ static Node *new_add(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
   }
 
   // ptr + num; a pointer to a VLA scales by its runtime size
-  return mark_lowered(new_arith(ctx, ND_ADD, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
+  return mark_lowered(libcp_new_arith(ctx, ND_ADD, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 }
 
 // Like `+`, `-` is overloaded for the pointer type.
 static Node *new_sub(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
-  add_type(ctx, lhs);
-  add_type(ctx, rhs);
+  libcp_add_type(ctx, lhs);
+  libcp_add_type(ctx, rhs);
 
   // num - num
-  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
-    return mark_lowered(new_arith(ctx, ND_SUB, lhs, rhs, tok));
+  if (libcp_is_numeric(lhs->ty) && libcp_is_numeric(rhs->ty))
+    return mark_lowered(libcp_new_arith(ctx, ND_SUB, lhs, rhs, tok));
 
   // pointer to a VLA - num
   if (lhs->ty->base && lhs->ty->base->kind == TY_VLA)
-    return mark_lowered(new_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
+    return mark_lowered(libcp_new_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 
   // ptr - num
-  if (lhs->ty->base && is_integer(rhs->ty))
-    return mark_lowered(new_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
+  if (lhs->ty->base && libcp_is_integer(rhs->ty))
+    return mark_lowered(libcp_new_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 
   // ptr - ptr, which returns how many elements are between the two. The
   // difference itself is an element count, so it is typed long and left
@@ -1859,12 +1859,12 @@ static Node *new_sub(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
   // through the emitter under the `DIV` just like a built `ptr + num`
   // does.
   if (lhs->ty->base && rhs->ty->base) {
-    Node *node = mark_lowered(new_binary(ctx, ND_SUB, lhs, rhs, tok));
-    node->ty = ty_long;
-    return new_arith(ctx, ND_DIV, node, new_num(ctx, lhs->ty->base->size, tok), tok);
+    Node *node = mark_lowered(libcp_new_binary(ctx, ND_SUB, lhs, rhs, tok));
+    node->ty = libcp_ty_long;
+    return libcp_new_arith(ctx, ND_DIV, node, libcp_new_num(ctx, lhs->ty->base->size, tok), tok);
   }
 
-  error_tok(ctx, tok, "invalid operands");
+  libcp_error_tok(ctx, tok, "invalid operands");
 }
 
 // Generate code for computing a VLA size: one assignment per VLA the
@@ -1881,15 +1881,15 @@ static Node *compute_vla_size(LibcpContext *ctx, Type *ty, Token *tok) {
 
   Node *base_sz;
   if (ty->base->kind == TY_VLA)
-    base_sz = new_var_node(ctx, cg_type(ty->base)->vla_size, tok);
+    base_sz = libcp_new_var_node(ctx, cg_type(ty->base)->vla_size, tok);
   else
-    base_sz = new_num(ctx, ty->base->size, tok);
+    base_sz = libcp_new_num(ctx, ty->base->size, tok);
 
-  cg_type(ty)->vla_size = new_lvar("", ty_ulong);
-  Node *expr = new_binary(ctx, ND_ASSIGN, new_var_node(ctx, cg_type(ty)->vla_size, tok),
-                          new_binary(ctx, ND_MUL, ty->vla_len, base_sz, tok),
+  cg_type(ty)->vla_size = new_lvar("", libcp_ty_ulong);
+  Node *expr = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok),
+                          libcp_new_binary(ctx, ND_MUL, ty->vla_len, base_sz, tok),
                           tok);
-  return node ? new_binary(ctx, ND_COMMA, node, expr, tok) : expr;
+  return node ? libcp_new_binary(ctx, ND_COMMA, node, expr, tok) : expr;
 }
 
 // `sizeof` of a VLA type: a reference to its runtime size variable,
@@ -1897,9 +1897,9 @@ static Node *compute_vla_size(LibcpContext *ctx, Type *ty, Token *tok) {
 // (e.g. `sizeof(int[n])` with a fresh type).
 static Node *vla_size_expr(LibcpContext *ctx, Type *ty, Token *tok) {
   if (cg_type(ty)->vla_size)
-    return new_var_node(ctx, cg_type(ty)->vla_size, tok);
+    return libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok);
   Node *lhs = compute_vla_size(ctx, ty, tok);
-  return new_binary(ctx, ND_COMMA, lhs, new_var_node(ctx, cg_type(ty)->vla_size, tok), tok);
+  return libcp_new_binary(ctx, ND_COMMA, lhs, libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok), tok);
 }
 
 // The target expression of one initializer assignment (PLAN A8.1,
@@ -1910,17 +1910,17 @@ static Node *vla_size_expr(LibcpContext *ctx, Type *ty, Token *tok) {
 // walk (contract 3(d)).
 static Node *init_desg_expr(LibcpContext *ctx, InitPath *desg, Token *tok) {
   if (desg->var)
-    return new_var_node(ctx, desg->var, tok);
+    return libcp_new_var_node(ctx, desg->var, tok);
 
   if (desg->member) {
-    Node *node = new_unary(ctx, ND_MEMBER, init_desg_expr(ctx, desg->next, tok), tok);
+    Node *node = libcp_new_unary(ctx, ND_MEMBER, init_desg_expr(ctx, desg->next, tok), tok);
     node->member = desg->member;
     return node;
   }
 
   Node *lhs = init_desg_expr(ctx, desg->next, tok);
-  Node *add = new_add(ctx, lhs, new_num(ctx, desg->idx, tok), tok);
-  Node *node = new_unary(ctx, ND_DEREF, add, tok);
+  Node *add = new_add(ctx, lhs, libcp_new_num(ctx, desg->idx, tok), tok);
+  Node *node = libcp_new_unary(ctx, ND_DEREF, add, tok);
   node->ty = add->ty->base;
   return node;
 }
@@ -1931,22 +1931,22 @@ static Node *init_desg_expr(LibcpContext *ctx, InitPath *desg, Token *tok) {
 // a partial list is preceded by the MEMZERO in lvar_init_comma below.
 static Node *create_lvar_init(LibcpContext *ctx, InitTree *init, Type *ty, InitPath *desg, Token *tok) {
   if (ty->kind == TY_ARRAY) {
-    Node *node = new_node(ctx, ND_NULL_EXPR, tok);
+    Node *node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
     for (int i = 0; i < ty->array_len; i++) {
       InitPath desg2 = {desg, i};
       Node *rhs = create_lvar_init(ctx, init->children[i], ty->base, &desg2, tok);
-      node = new_binary(ctx, ND_COMMA, node, rhs, tok);
+      node = libcp_new_binary(ctx, ND_COMMA, node, rhs, tok);
     }
     return node;
   }
 
   if (ty->kind == TY_STRUCT && !init->expr) {
-    Node *node = new_node(ctx, ND_NULL_EXPR, tok);
+    Node *node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
 
     for (Member *mem = ty->members; mem; mem = mem->next) {
       InitPath desg2 = {desg, 0, mem};
       Node *rhs = create_lvar_init(ctx, init->children[mem->idx], mem->ty, &desg2, tok);
-      node = new_binary(ctx, ND_COMMA, node, rhs, tok);
+      node = libcp_new_binary(ctx, ND_COMMA, node, rhs, tok);
     }
     return node;
   }
@@ -1958,10 +1958,10 @@ static Node *create_lvar_init(LibcpContext *ctx, InitTree *init, Type *ty, InitP
   }
 
   if (!init->expr)
-    return new_node(ctx, ND_NULL_EXPR, tok);
+    return libcp_new_node(ctx, ND_NULL_EXPR, tok);
 
   Node *lhs = init_desg_expr(ctx, desg, tok);
-  return new_binary(ctx, ND_ASSIGN, lhs, init->expr, tok);
+  return libcp_new_binary(ctx, ND_ASSIGN, lhs, init->expr, tok);
 }
 
 // Shapes every expression a resolved initializer record holds, once
@@ -1985,11 +1985,11 @@ static Node *lvar_init_comma(LibcpContext *ctx, Obj *var, InitTree *init, Token 
   // that unspecified elements are set to 0. Here, we simply
   // zero-initialize the entire memory region of a variable before
   // initializing it with user-supplied values.
-  Node *lhs = new_node(ctx, ND_MEMZERO, tok);
+  Node *lhs = libcp_new_node(ctx, ND_MEMZERO, tok);
   lhs->var = var;
 
   Node *rhs = create_lvar_init(ctx, init, var->ty, &desg, tok);
-  return new_binary(ctx, ND_COMMA, lhs, rhs, tok);
+  return libcp_new_binary(ctx, ND_COMMA, lhs, rhs, tok);
 }
 
 static void shape_init_exprs(LibcpContext *ctx, InitTree *init) {
@@ -2053,8 +2053,8 @@ static bool expand_decl(LibcpContext *ctx, Node *node) {
 
   if (var->ty->kind == TY_VLA) {
     // `var = alloca(<size>)`: the size chain computed just above.
-    lowered = new_binary(ctx, ND_ASSIGN, new_vla_ptr(ctx, var, tok),
-                         new_alloca(ctx, new_var_node(ctx, cg_type(var->ty)->vla_size, tok)),
+    lowered = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_vla_ptr(ctx, var, tok),
+                         libcp_new_alloca(ctx, libcp_new_var_node(ctx, cg_type(var->ty)->vla_size, tok)),
                          tok);
   } else if (node->init_resolved) {
     // The initializer comma; a pointer to a VLA reaches here too,
@@ -2075,16 +2075,16 @@ static bool expand_decl(LibcpContext *ctx, Node *node) {
 
   node->kind = ND_EXPR_STMT;
   node->lhs = (vla_size && lowered)
-                ? new_binary(ctx, ND_COMMA, vla_size, lowered, tok)
+                ? libcp_new_binary(ctx, ND_COMMA, vla_size, lowered, tok)
                 : (lowered ? lowered : vla_size);
-  add_type(ctx, node);
+  libcp_add_type(ctx, node);
   return true;
 }
 
 // Builds the `lhs op rhs` combination a compound assignment or an
 // atomic retry loop needs, given an operand whose pointer scaling has
-// already been applied. An additive operator goes through new_arith,
-// which is the shape `+`/`-` produce; the others are handed to add_type,
+// already been applied. An additive operator goes through libcp_new_arith,
+// which is the shape `+`/`-` produce; the others are handed to libcp_add_type,
 // which converts the multiplicative and bitwise ones and leaves the
 // shifts alone.
 static Node *combine(LibcpContext *ctx, NodeKind op, Node *lhs, Node *rhs, Token *tok) {
@@ -2092,10 +2092,10 @@ static Node *combine(LibcpContext *ctx, NodeKind op, Node *lhs, Node *rhs, Token
   // new_add/new_sub (this combines a read-modify-write value with its
   // scaled operand), so it is a plain machine arithmetic node too.
   if (op == ND_ADD || op == ND_SUB)
-    return mark_lowered(new_arith(ctx, op, lhs, rhs, tok));
+    return mark_lowered(libcp_new_arith(ctx, op, lhs, rhs, tok));
 
-  Node *node = new_binary(ctx, op, lhs, rhs, tok);
-  add_type(ctx, node);
+  Node *node = libcp_new_binary(ctx, op, lhs, rhs, tok);
+  libcp_add_type(ctx, node);
   return node;
 }
 
@@ -2126,8 +2126,8 @@ static Node *compound_op(LibcpContext *ctx, Node *node, Node *lhs, Token *tok) {
 // converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
 // to bitfields.
 static Node *to_assign(LibcpContext *ctx, Node *node) {
-  add_type(ctx, node->lhs);
-  add_type(ctx, node->rhs);
+  libcp_add_type(ctx, node->lhs);
+  libcp_add_type(ctx, node->rhs);
   Token *tok = node->tok;
 
   // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
@@ -2143,27 +2143,27 @@ static Node *to_assign(LibcpContext *ctx, Node *node) {
   if (node->lhs->kind == ND_MEMBER) {
     Node *operand = node->lhs->lhs;
     bool arrow = node->lhs->arrow_tok;
-    Obj *var = new_lvar("", pointer_to(ctx, arrow ? operand->ty->base : operand->ty));
-    Node *addr = arrow ? operand : new_unary(ctx, ND_ADDR, operand, tok);
+    Obj *var = new_lvar("", libcp_pointer_to(ctx, arrow ? operand->ty->base : operand->ty));
+    Node *addr = arrow ? operand : libcp_new_unary(ctx, ND_ADDR, operand, tok);
 
-    Node *expr1 = new_binary(ctx, ND_ASSIGN, new_var_node(ctx, var, tok),
+    Node *expr1 = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, var, tok),
                              addr, tok);
 
-    Node *expr2 = new_unary(ctx, ND_MEMBER,
-                            new_unary(ctx, ND_DEREF, new_var_node(ctx, var, tok), tok),
+    Node *expr2 = libcp_new_unary(ctx, ND_MEMBER,
+                            libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
                             tok);
     expr2->member = node->lhs->member;
 
-    Node *expr3 = new_unary(ctx, ND_MEMBER,
-                            new_unary(ctx, ND_DEREF, new_var_node(ctx, var, tok), tok),
+    Node *expr3 = libcp_new_unary(ctx, ND_MEMBER,
+                            libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
                             tok);
     expr3->member = node->lhs->member;
 
-    Node *expr4 = new_binary(ctx, ND_ASSIGN, expr2,
+    Node *expr4 = libcp_new_binary(ctx, ND_ASSIGN, expr2,
                              compound_op(ctx, node, expr3, tok),
                              tok);
 
-    return new_binary(ctx, ND_COMMA, expr1, expr4, tok);
+    return libcp_new_binary(ctx, ND_COMMA, expr1, expr4, tok);
   }
 
   // If A is an atomic type, Convert `A op= B` to
@@ -2185,34 +2185,34 @@ static Node *to_assign(LibcpContext *ctx, Node *node) {
                                          : new_sub(ctx, node->lhs, node->rhs, tok);
       rhs = operand->rhs;
     }
-    add_type(ctx, rhs);
+    libcp_add_type(ctx, rhs);
 
     Node head = {};
     Node *cur = &head;
 
-    Obj *addr = new_lvar("", pointer_to(ctx, node->lhs->ty));
+    Obj *addr = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
     Obj *val = new_lvar("", rhs->ty);
     Obj *old = new_lvar("", node->lhs->ty);
     Obj *new = new_lvar("", node->lhs->ty);
 
     cur = cur->next =
-      new_unary(ctx, ND_EXPR_STMT,
-                new_binary(ctx, ND_ASSIGN, new_var_node(ctx, addr, tok),
-                           new_unary(ctx, ND_ADDR, node->lhs, tok), tok),
+      libcp_new_unary(ctx, ND_EXPR_STMT,
+                libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, addr, tok),
+                           libcp_new_unary(ctx, ND_ADDR, node->lhs, tok), tok),
                 tok);
 
     cur = cur->next =
-      new_unary(ctx, ND_EXPR_STMT,
-                new_binary(ctx, ND_ASSIGN, new_var_node(ctx, val, tok), rhs, tok),
+      libcp_new_unary(ctx, ND_EXPR_STMT,
+                libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, val, tok), rhs, tok),
                 tok);
 
     cur = cur->next =
-      new_unary(ctx, ND_EXPR_STMT,
-                new_binary(ctx, ND_ASSIGN, new_var_node(ctx, old, tok),
-                           new_unary(ctx, ND_DEREF, new_var_node(ctx, addr, tok), tok), tok),
+      libcp_new_unary(ctx, ND_EXPR_STMT,
+                libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, old, tok),
+                           libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, addr, tok), tok), tok),
                 tok);
 
-    Node *loop = new_node(ctx, ND_DO, tok);
+    Node *loop = libcp_new_node(ctx, ND_DO, tok);
 
     // The retry loop takes its labels here rather than through a
     // shape_node descent: its interior is codegen-built lowered form
@@ -2229,51 +2229,51 @@ static Node *to_assign(LibcpContext *ctx, Node *node) {
     // `val` already holds the operand as `op` would have it - scaled
     // for an additive operator on a pointer - so the retry loop
     // combines it with the old value without scaling again.
-    Node *body = new_binary(ctx, ND_ASSIGN,
-                            new_var_node(ctx, new, tok),
-                            combine(ctx, node->op, new_var_node(ctx, old, tok),
-                                    new_var_node(ctx, val, tok), tok),
+    Node *body = libcp_new_binary(ctx, ND_ASSIGN,
+                            libcp_new_var_node(ctx, new, tok),
+                            combine(ctx, node->op, libcp_new_var_node(ctx, old, tok),
+                                    libcp_new_var_node(ctx, val, tok), tok),
                             tok);
 
-    loop->then = new_node(ctx, ND_BLOCK, tok);
-    loop->then->body = new_unary(ctx, ND_EXPR_STMT, body, tok);
+    loop->then = libcp_new_node(ctx, ND_BLOCK, tok);
+    loop->then->body = libcp_new_unary(ctx, ND_EXPR_STMT, body, tok);
 
-    Node *cas = new_node(ctx, ND_CAS, tok);
-    cas->cas_addr = new_var_node(ctx, addr, tok);
-    cas->cas_old = new_unary(ctx, ND_ADDR, new_var_node(ctx, old, tok), tok);
-    cas->cas_new = new_var_node(ctx, new, tok);
-    loop->cond = new_unary(ctx, ND_NOT, cas, tok);
+    Node *cas = libcp_new_node(ctx, ND_CAS, tok);
+    cas->cas_addr = libcp_new_var_node(ctx, addr, tok);
+    cas->cas_old = libcp_new_unary(ctx, ND_ADDR, libcp_new_var_node(ctx, old, tok), tok);
+    cas->cas_new = libcp_new_var_node(ctx, new, tok);
+    loop->cond = libcp_new_unary(ctx, ND_NOT, cas, tok);
 
     cur = cur->next = loop;
-    cur = cur->next = new_unary(ctx, ND_EXPR_STMT, new_var_node(ctx, new, tok), tok);
+    cur = cur->next = libcp_new_unary(ctx, ND_EXPR_STMT, libcp_new_var_node(ctx, new, tok), tok);
 
-    Node *stmt_expr = new_node(ctx, ND_STMT_EXPR, tok);
+    Node *stmt_expr = libcp_new_node(ctx, ND_STMT_EXPR, tok);
     stmt_expr->body = head.next;
     return stmt_expr;
   }
 
   // Convert `A op= B` to ``tmp = &A, *tmp = *tmp op B`.
-  Obj *var = new_lvar("", pointer_to(ctx, node->lhs->ty));
+  Obj *var = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
 
-  Node *expr1 = new_binary(ctx, ND_ASSIGN, new_var_node(ctx, var, tok),
-                           new_unary(ctx, ND_ADDR, node->lhs, tok), tok);
+  Node *expr1 = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, var, tok),
+                           libcp_new_unary(ctx, ND_ADDR, node->lhs, tok), tok);
 
   Node *expr2 =
-    new_binary(ctx, ND_ASSIGN,
-               new_unary(ctx, ND_DEREF, new_var_node(ctx, var, tok), tok),
-               compound_op(ctx, node, new_unary(ctx, ND_DEREF, new_var_node(ctx, var, tok), tok), tok),
+    libcp_new_binary(ctx, ND_ASSIGN,
+               libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
+               compound_op(ctx, node, libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok), tok),
                tok);
 
-  return new_binary(ctx, ND_COMMA, expr1, expr2, tok);
+  return libcp_new_binary(ctx, ND_COMMA, expr1, expr2, tok);
 }
 
 // Convert A++ to `(typeof A)((A += 1) - 1)`. Moved from parse.c.
 static Node *new_inc_dec(LibcpContext *ctx, Node *node, Token *tok, int addend) {
-  add_type(ctx, node);
-  Node *expr = new_binary(ctx, ND_ASSIGN, node, new_num(ctx, addend, tok), tok);
+  libcp_add_type(ctx, node);
+  Node *expr = libcp_new_binary(ctx, ND_ASSIGN, node, libcp_new_num(ctx, addend, tok), tok);
   expr->op = ND_ADD;
-  Node *sub = new_add(ctx, to_assign(ctx, expr), new_num(ctx, -addend, tok), tok);
-  return new_cast(ctx, sub, node->ty);
+  Node *sub = new_add(ctx, to_assign(ctx, expr), libcp_new_num(ctx, -addend, tok), tok);
+  return libcp_new_cast(ctx, sub, node->ty);
 }
 
 // The descent is pre-order: a loop or a switch owns its labels before
@@ -2301,7 +2301,7 @@ static void shape_node(LibcpContext *ctx, Node *node) {
       if (!node->init) {
         // nothing to do
       } else if (node->init->next) {
-        Node *blk = new_node(ctx, ND_BLOCK, node->init->tok);
+        Node *blk = libcp_new_node(ctx, ND_BLOCK, node->init->tok);
         blk->body = node->init;
         node->init = blk;
       }
@@ -2339,7 +2339,7 @@ static void shape_node(LibcpContext *ctx, Node *node) {
     return;
   case ND_LABEL:
     cg(node)->unique_label = new_label(ctx);
-    nodearray_push(ctx, &cg_labels, node);
+    libcp_nodearray_push(ctx, &cg_labels, node);
     shape_node(ctx, node->lhs);
     return;
   case ND_ASSIGN:
@@ -2354,7 +2354,7 @@ static void shape_node(LibcpContext *ctx, Node *node) {
       Node *nxt = node->next;
       *node = *result;
       node->next = nxt;
-      add_type(ctx, node);
+      libcp_add_type(ctx, node);
     }
     return;
   case ND_INCDEC: {
@@ -2376,13 +2376,13 @@ static void shape_node(LibcpContext *ctx, Node *node) {
       return;
     }
 
-    Node *expr = new_binary(ctx, ND_ASSIGN, operand, new_num(ctx, 1, tok), tok);
+    Node *expr = libcp_new_binary(ctx, ND_ASSIGN, operand, libcp_new_num(ctx, 1, tok), tok);
     expr->op = node->addend < 0 ? ND_SUB : ND_ADD;
     Node *result = to_assign(ctx, expr);
     Node *nxt = node->next;
     *node = *result;
     node->next = nxt;
-    add_type(ctx, node);
+    libcp_add_type(ctx, node);
     return;
   }
   case ND_FUNCALL:
@@ -2423,7 +2423,7 @@ static void shape_node(LibcpContext *ctx, Node *node) {
             shape_node(ctx, t->vla_len);
 
       Node *expr = vla_size_expr(ctx, ty, node->tok);
-      add_type(ctx, expr);
+      libcp_add_type(ctx, expr);
       Node *nxt = node->next;
       *node = *expr;
       node->next = nxt;
@@ -2448,9 +2448,9 @@ static void shape_node(LibcpContext *ctx, Node *node) {
       shape_init_exprs(ctx, node->init_resolved);
       Node *lowered = lvar_init_comma(ctx, var, node->init_resolved,
                                       node->decl_init->tok);
-      Node *comma = new_binary(ctx, ND_COMMA, lowered,
-                               new_var_node(ctx, var, node->tok), node->tok);
-      add_type(ctx, comma);
+      Node *comma = libcp_new_binary(ctx, ND_COMMA, lowered,
+                               libcp_new_var_node(ctx, var, node->tok), node->tok);
+      libcp_add_type(ctx, comma);
       Node *nxt = node->next;
       *node = *comma;
       node->next = nxt;
@@ -2467,7 +2467,7 @@ static void shape_node(LibcpContext *ctx, Node *node) {
 // writing the name each one jumps to. The undeclared-label check
 // already ran in sema, so every reference here matched there.
 static void resolve_label_refs(LibcpContext *ctx, Obj *fn) {
-  NodeArray *refs = sema_label_gotos(ctx, fn);
+  NodeArray *refs = libcp_sema_label_gotos(ctx, fn);
   if (!refs)
     return;
   for (int i = 0; i < refs->len; i++) {
@@ -2542,7 +2542,7 @@ static void assign_lvar_offsets(Obj *prog) {
           continue;
       }
 
-      top = align_to(top, 8);
+      top = libcp_align_to(top, 8);
       cg_obj(var)->offset = top;
       top += var->ty->size;
     }
@@ -2560,11 +2560,11 @@ static void assign_lvar_offsets(Obj *prog) {
         ? MAX(16, var->align) : var->align;
 
       bottom += var->ty->size;
-      bottom = align_to(bottom, align);
+      bottom = libcp_align_to(bottom, align);
       cg_obj(var)->offset = -bottom;
     }
 
-    cg_obj(fn)->stack_size = align_to(bottom, 16);
+    cg_obj(fn)->stack_size = libcp_align_to(bottom, 16);
   }
 }
 
@@ -2716,7 +2716,7 @@ static void emit_text(LibcpContext *ctx, Obj *prog) {
     if (fn->va_area) {
       int gp = 0, fp = 0;
       for (Obj *var = fn->params; var; var = var->next) {
-        if (is_flonum(var->ty))
+        if (libcp_is_flonum(var->ty))
           fp++;
         else
           gp++;
@@ -2804,14 +2804,14 @@ static void emit_text(LibcpContext *ctx, Obj *prog) {
 void codegen(LibcpContext *ctx, Obj *prog, FILE *out) {
   output_file = out;
 
-  File **files = get_input_files(ctx);
+  File **files = libcp_get_input_files(ctx);
   for (int i = 0; files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
 
   // The shaping pass runs first: it is what fills the label fields
   // gen_stmt reads and resolves the goto references, and nothing may
   // be assigned or emitted before it (PLAN contract 3).
-  label_base = unique_name_next(ctx);
+  label_base = libcp_unique_name_next(ctx);
   shape(ctx, prog);
 
   assign_lvar_offsets(prog);

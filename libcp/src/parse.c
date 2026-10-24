@@ -87,35 +87,35 @@ static bool is_function(LibcpContext *ctx, Token *tok);
 static Node *function_def(LibcpContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
 static Node *global_variable(LibcpContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
 
-Node *new_node(LibcpContext *ctx, NodeKind kind, Token *tok) {
+Node *libcp_new_node(LibcpContext *ctx, NodeKind kind, Token *tok) {
   Node *node = libcp_arena_calloc(ctx, 1, sizeof(Node));
   node->kind = kind;
   node->tok = tok;
   return node;
 }
 
-Node *new_binary(LibcpContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
-  Node *node = new_node(ctx, kind, tok);
+Node *libcp_new_binary(LibcpContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
+  Node *node = libcp_new_node(ctx, kind, tok);
   node->lhs = lhs;
   node->rhs = rhs;
   return node;
 }
 
-Node *new_unary(LibcpContext *ctx, NodeKind kind, Node *expr, Token *tok) {
-  Node *node = new_node(ctx, kind, tok);
+Node *libcp_new_unary(LibcpContext *ctx, NodeKind kind, Node *expr, Token *tok) {
+  Node *node = libcp_new_node(ctx, kind, tok);
   node->lhs = expr;
   return node;
 }
 
-Node *new_num(LibcpContext *ctx, int64_t val, Token *tok) {
-  Node *node = new_node(ctx, ND_NUM, tok);
+Node *libcp_new_num(LibcpContext *ctx, int64_t val, Token *tok) {
+  Node *node = libcp_new_node(ctx, ND_NUM, tok);
   node->val = val;
   return node;
 }
 
-char *get_ident(LibcpContext *ctx, Token *tok) {
+char *libcp_get_ident(LibcpContext *ctx, Token *tok) {
   if (tok->kind != TK_IDENT)
-    error_tok(ctx, tok, "expected an identifier");
+    libcp_error_tok(ctx, tok, "expected an identifier");
   return libcp_arena_strndup(ctx, tok->loc, tok->len);
 }
 
@@ -147,7 +147,7 @@ struct ParseScope {
   HashMap tags;
 };
 
-void parse_init(LibcpContext *ctx) {
+void libcp_parse_init(LibcpContext *ctx) {
   ctx->scope = libcp_arena_calloc(ctx, 1, sizeof(ParseScope));
 }
 
@@ -171,7 +171,7 @@ static Type *find_typedef(LibcpContext *ctx, Token *tok) {
     return NULL;
 
   for (ParseScope *sc = scope; sc; sc = sc->next) {
-    NameEntry *e = hashmap_get2(ctx, &sc->names, tok->loc, tok->len);
+    NameEntry *e = libcp_hashmap_get2(ctx, &sc->names, tok->loc, tok->len);
     if (e)
       return e->type_def;
   }
@@ -185,20 +185,20 @@ static Type *find_typedef(LibcpContext *ctx, Token *tok) {
 static void add_typedef(LibcpContext *ctx, Node *node) {
   NameEntry *e = libcp_arena_calloc(ctx, 1, sizeof(NameEntry));
   e->type_def = node->ty;
-  hashmap_put(ctx, &scope->names, get_ident(ctx, node->tok), e);
+  libcp_hashmap_put(ctx, &scope->names, libcp_get_ident(ctx, node->tok), e);
 }
 
 // Records a name a declarator just declared (a variable, function,
 // parameter or enum constant), so that it shadows a typedef of the same
 // spelling for the rest of the parse.
 static void add_declared_name(LibcpContext *ctx, Token *tok) {
-  hashmap_put(ctx, &scope->names, get_ident(ctx, tok), libcp_arena_calloc(ctx, 1, sizeof(NameEntry)));
+  libcp_hashmap_put(ctx, &scope->names, libcp_get_ident(ctx, tok), libcp_arena_calloc(ctx, 1, sizeof(NameEntry)));
 }
 
 // Find a struct/union/enum tag by name, in any enclosing scope.
 static Type *find_tag(LibcpContext *ctx, Token *tok) {
   for (ParseScope *sc = scope; sc; sc = sc->next) {
-    Type *ty = hashmap_get2(ctx, &sc->tags, tok->loc, tok->len);
+    Type *ty = libcp_hashmap_get2(ctx, &sc->tags, tok->loc, tok->len);
     if (ty)
       return ty;
   }
@@ -209,11 +209,11 @@ static Type *find_tag(LibcpContext *ctx, Token *tok) {
 // (re)defined, so that a previous forward declaration in the same scope
 // keeps its identity.
 static Type *find_current_tag(LibcpContext *ctx, Token *tok) {
-  return hashmap_get2(ctx, &scope->tags, tok->loc, tok->len);
+  return libcp_hashmap_get2(ctx, &scope->tags, tok->loc, tok->len);
 }
 
 static void push_tag_scope(LibcpContext *ctx, Token *tok, Type *ty) {
-  hashmap_put2(ctx, &scope->tags, tok->loc, tok->len, ty);
+  libcp_hashmap_put2(ctx, &scope->tags, tok->loc, tok->len, ty);
 }
 
 // Appends a chain of nodes to the chain `cur` points into and returns
@@ -293,64 +293,64 @@ static Type *declspec(LibcpContext *ctx, Token **rest, Token *tok, VarAttr *attr
     UNSIGNED = 1 << 18,
   };
 
-  Type *ty = ty_int;
+  Type *ty = libcp_ty_int;
   int counter = 0;
   bool is_atomic = false;
 
-  while (is_typename(ctx, tok) || equal(tok, "__attribute__")) {
+  while (is_typename(ctx, tok) || libcp_equal(tok, "__attribute__")) {
     // Declaration and function attributes are accepted in any specifier
     // position; the ones without a type meaning are ignored.
-    if (equal(tok, "__attribute__")) {
+    if (libcp_equal(tok, "__attribute__")) {
       tok = attribute_list(ctx, tok, NULL);
       continue;
     }
 
     // Handle storage class specifiers.
-    if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern") ||
-        equal(tok, "inline") || equal(tok, "_Thread_local") || equal(tok, "__thread")) {
+    if (libcp_equal(tok, "typedef") || libcp_equal(tok, "static") || libcp_equal(tok, "extern") ||
+        libcp_equal(tok, "inline") || libcp_equal(tok, "_Thread_local") || libcp_equal(tok, "__thread")) {
       if (!attr)
-        error_tok(ctx, tok, "storage class specifier is not allowed in this context");
+        libcp_error_tok(ctx, tok, "storage class specifier is not allowed in this context");
 
-      if (equal(tok, "typedef"))
+      if (libcp_equal(tok, "typedef"))
         attr->is_typedef = true;
-      else if (equal(tok, "static"))
+      else if (libcp_equal(tok, "static"))
         attr->is_static = true;
-      else if (equal(tok, "extern"))
+      else if (libcp_equal(tok, "extern"))
         attr->is_extern = true;
-      else if (equal(tok, "inline"))
+      else if (libcp_equal(tok, "inline"))
         attr->is_inline = true;
       else
         attr->is_tls = true;
 
       if (attr->is_typedef &&
           attr->is_static + attr->is_extern + attr->is_inline + attr->is_tls > 1)
-        error_tok(ctx, tok, "typedef may not be used together with static,"
+        libcp_error_tok(ctx, tok, "typedef may not be used together with static,"
                   " extern, inline, __thread or _Thread_local");
       tok = tok->next;
       continue;
     }
 
     // These keywords are recognized but ignored.
-    if (consume(&tok, tok, "const") || consume(&tok, tok, "volatile") ||
-        consume(&tok, tok, "auto") || consume(&tok, tok, "register") ||
-        consume(&tok, tok, "restrict") || consume(&tok, tok, "__restrict") ||
-        consume(&tok, tok, "__restrict__") || consume(&tok, tok, "_Noreturn"))
+    if (libcp_consume(&tok, tok, "const") || libcp_consume(&tok, tok, "volatile") ||
+        libcp_consume(&tok, tok, "auto") || libcp_consume(&tok, tok, "register") ||
+        libcp_consume(&tok, tok, "restrict") || libcp_consume(&tok, tok, "__restrict") ||
+        libcp_consume(&tok, tok, "__restrict__") || libcp_consume(&tok, tok, "_Noreturn"))
       continue;
 
-    if (equal(tok, "_Atomic")) {
+    if (libcp_equal(tok, "_Atomic")) {
       tok = tok->next;
-      if (equal(tok , "(")) {
+      if (libcp_equal(tok , "(")) {
         ty = typename(ctx, &tok, tok->next, specs);
-        tok = skip(ctx, tok, ")");
+        tok = libcp_skip(ctx, tok, ")");
       }
       is_atomic = true;
       continue;
     }
 
-    if (equal(tok, "_Alignas")) {
+    if (libcp_equal(tok, "_Alignas")) {
       if (!attr)
-        error_tok(ctx, tok, "_Alignas is not allowed in this context");
-      tok = skip(ctx, tok->next, "(");
+        libcp_error_tok(ctx, tok, "_Alignas is not allowed in this context");
+      tok = libcp_skip(ctx, tok->next, "(");
 
       // The `_Alignas(type)` form asks for a property of a type that
       // may not be complete yet, and the `_Alignas(expr)` form is a
@@ -361,26 +361,26 @@ static Type *declspec(LibcpContext *ctx, Token **rest, Token *tok, VarAttr *attr
         attr->align_expr = NULL;
       } else {
         attr->align_ty = NULL;
-        attr->align_expr = conditional(ctx, &tok, tok);
+        attr->align_expr = libcp_conditional(ctx, &tok, tok);
       }
-      tok = skip(ctx, tok, ")");
+      tok = libcp_skip(ctx, tok, ")");
       continue;
     }
 
     // Handle user-defined types.
     Type *ty2 = find_typedef(ctx, tok);
-    if (equal(tok, "struct") || equal(tok, "union") || equal(tok, "enum") ||
-        equal(tok, "typeof") || ty2) {
+    if (libcp_equal(tok, "struct") || libcp_equal(tok, "union") || libcp_equal(tok, "enum") ||
+        libcp_equal(tok, "typeof") || ty2) {
       if (counter)
         break;
 
-      if (equal(tok, "struct")) {
+      if (libcp_equal(tok, "struct")) {
         ty = struct_decl(ctx, &tok, tok->next, specs);
-      } else if (equal(tok, "union")) {
+      } else if (libcp_equal(tok, "union")) {
         ty = union_decl(ctx, &tok, tok->next, specs);
-      } else if (equal(tok, "enum")) {
+      } else if (libcp_equal(tok, "enum")) {
         ty = enum_specifier(ctx, &tok, tok->next, specs);
-      } else if (equal(tok, "typeof")) {
+      } else if (libcp_equal(tok, "typeof")) {
         ty = typeof_specifier(ctx, &tok, tok->next, specs);
       } else {
         ty = ty2;
@@ -392,61 +392,61 @@ static Type *declspec(LibcpContext *ctx, Token **rest, Token *tok, VarAttr *attr
     }
 
     // Handle built-in types.
-    if (equal(tok, "void"))
+    if (libcp_equal(tok, "void"))
       counter += VOID;
-    else if (equal(tok, "_Bool"))
+    else if (libcp_equal(tok, "_Bool"))
       counter += BOOL;
-    else if (equal(tok, "char"))
+    else if (libcp_equal(tok, "char"))
       counter += CHAR;
-    else if (equal(tok, "short"))
+    else if (libcp_equal(tok, "short"))
       counter += SHORT;
-    else if (equal(tok, "int"))
+    else if (libcp_equal(tok, "int"))
       counter += INT;
-    else if (equal(tok, "long"))
+    else if (libcp_equal(tok, "long"))
       counter += LONG;
-    else if (equal(tok, "float"))
+    else if (libcp_equal(tok, "float"))
       counter += FLOAT;
-    else if (equal(tok, "double"))
+    else if (libcp_equal(tok, "double"))
       counter += DOUBLE;
-    else if (equal(tok, "signed"))
+    else if (libcp_equal(tok, "signed"))
       counter |= SIGNED;
-    else if (equal(tok, "unsigned"))
+    else if (libcp_equal(tok, "unsigned"))
       counter |= UNSIGNED;
     else
       unreachable();
 
     switch (counter) {
     case VOID:
-      ty = ty_void;
+      ty = libcp_ty_void;
       break;
     case BOOL:
-      ty = ty_bool;
+      ty = libcp_ty_bool;
       break;
     case CHAR:
     case SIGNED + CHAR:
-      ty = ty_char;
+      ty = libcp_ty_char;
       break;
     case UNSIGNED + CHAR:
-      ty = ty_uchar;
+      ty = libcp_ty_uchar;
       break;
     case SHORT:
     case SHORT + INT:
     case SIGNED + SHORT:
     case SIGNED + SHORT + INT:
-      ty = ty_short;
+      ty = libcp_ty_short;
       break;
     case UNSIGNED + SHORT:
     case UNSIGNED + SHORT + INT:
-      ty = ty_ushort;
+      ty = libcp_ty_ushort;
       break;
     case INT:
     case SIGNED:
     case SIGNED + INT:
-      ty = ty_int;
+      ty = libcp_ty_int;
       break;
     case UNSIGNED:
     case UNSIGNED + INT:
-      ty = ty_uint;
+      ty = libcp_ty_uint;
       break;
     case LONG:
     case LONG + INT:
@@ -456,32 +456,32 @@ static Type *declspec(LibcpContext *ctx, Token **rest, Token *tok, VarAttr *attr
     case SIGNED + LONG + INT:
     case SIGNED + LONG + LONG:
     case SIGNED + LONG + LONG + INT:
-      ty = ty_long;
+      ty = libcp_ty_long;
       break;
     case UNSIGNED + LONG:
     case UNSIGNED + LONG + INT:
     case UNSIGNED + LONG + LONG:
     case UNSIGNED + LONG + LONG + INT:
-      ty = ty_ulong;
+      ty = libcp_ty_ulong;
       break;
     case FLOAT:
-      ty = ty_float;
+      ty = libcp_ty_float;
       break;
     case DOUBLE:
-      ty = ty_double;
+      ty = libcp_ty_double;
       break;
     case LONG + DOUBLE:
-      ty = ty_ldouble;
+      ty = libcp_ty_ldouble;
       break;
     default:
-      error_tok(ctx, tok, "invalid type");
+      libcp_error_tok(ctx, tok, "invalid type");
     }
 
     tok = tok->next;
   }
 
   if (is_atomic) {
-    ty = copy_type(ctx, ty);
+    ty = libcp_copy_type(ctx, ty);
     ty->is_atomic = true;
   }
 
@@ -492,9 +492,9 @@ static Type *declspec(LibcpContext *ctx, Token **rest, Token *tok, VarAttr *attr
 // func-params = ("void" | param ("," param)* ("," "...")?)? ")"
 // param       = declspec declarator
 static Type *func_params(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
-  if (equal(tok, "void") && equal(tok->next, ")")) {
+  if (libcp_equal(tok, "void") && libcp_equal(tok->next, ")")) {
     *rest = tok->next->next;
-    return func_type(ctx, ty);
+    return libcp_func_type(ctx, ty);
   }
 
   Type head = {};
@@ -502,14 +502,14 @@ static Type *func_params(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) 
   bool is_variadic = false;
   Node *specs = NULL;
 
-  while (!equal(tok, ")")) {
+  while (!libcp_equal(tok, ")")) {
     if (cur != &head)
-      tok = skip(ctx, tok, ",");
+      tok = libcp_skip(ctx, tok, ",");
 
-    if (equal(tok, "...")) {
+    if (libcp_equal(tok, "...")) {
       is_variadic = true;
       tok = tok->next;
-      skip(ctx, tok, ")");
+      libcp_skip(ctx, tok, ")");
       break;
     }
 
@@ -520,16 +520,16 @@ static Type *func_params(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) 
     if (ty2->kind == TY_ARRAY) {
       // "array of T" is converted to "pointer to T" only in the parameter
       // context. For example, *argv[] is converted to **argv by this.
-      ty2 = pointer_to(ctx, ty2->base);
+      ty2 = libcp_pointer_to(ctx, ty2->base);
     } else if (ty2->kind == TY_FUNC) {
       // Likewise, a function is converted to a pointer to a function
       // only in the parameter context.
-      ty2 = pointer_to(ctx, ty2);
+      ty2 = libcp_pointer_to(ctx, ty2);
     }
 
     // The parameter record is copied into the function type; its name
     // lives on that per-parameter copy, where sema reads it.
-    Type *param = copy_type(ctx, ty2);
+    Type *param = libcp_copy_type(ctx, ty2);
     param->name = decl.name;
     param->name_pos = decl.name_pos;
     cur = cur->next = param;
@@ -538,7 +538,7 @@ static Type *func_params(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) 
   if (cur == &head)
     is_variadic = true;
 
-  ty = func_type(ctx, ty);
+  ty = libcp_func_type(ctx, ty);
   ty->params = head.next;
   ty->is_variadic = is_variadic;
   // Enum constants a parameter's declspec defined (e.g.
@@ -551,33 +551,33 @@ static Type *func_params(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) 
 
 // array-dimensions = ("static" | "restrict")* const-expr? "]" type-suffix
 static Type *array_dimensions(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
-  while (equal(tok, "static") || equal(tok, "restrict"))
+  while (libcp_equal(tok, "static") || libcp_equal(tok, "restrict"))
     tok = tok->next;
 
-  if (equal(tok, "]")) {
+  if (libcp_equal(tok, "]")) {
     ty = type_suffix(ctx, rest, tok->next, ty);
-    return array_of(ctx, ty, -1);
+    return libcp_array_of(ctx, ty, -1);
   }
 
-  Node *expr = conditional(ctx, &tok, tok);
-  tok = skip(ctx, tok, "]");
+  Node *expr = libcp_conditional(ctx, &tok, tok);
+  tok = libcp_skip(ctx, tok, "]");
   ty = type_suffix(ctx, rest, tok, ty);
 
   // Whether the dimension denotes a fixed-length array or a VLA depends
   // on whether the length expression is a constant expression - a
   // semantic question. The expression is recorded here and sema decides
   // the type when it resolves the declarator (see resolve_type).
-  return array_of_dim(ctx, ty, expr);
+  return libcp_array_of_dim(ctx, ty, expr);
 }
 
 // type-suffix = "(" func-params
 //             | "[" array-dimensions
 //             | ε
 static Type *type_suffix(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
-  if (equal(tok, "("))
+  if (libcp_equal(tok, "("))
     return func_params(ctx, rest, tok->next, ty);
 
-  if (equal(tok, "["))
+  if (libcp_equal(tok, "["))
     return array_dimensions(ctx, rest, tok->next, ty);
 
   *rest = tok;
@@ -586,10 +586,10 @@ static Type *type_suffix(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) 
 
 // pointers = ("*" ("const" | "volatile" | "restrict")*)*
 static Type *pointers(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
-  while (consume(&tok, tok, "*")) {
-    ty = pointer_to(ctx, ty);
-    while (equal(tok, "const") || equal(tok, "volatile") || equal(tok, "restrict") ||
-           equal(tok, "__restrict") || equal(tok, "__restrict__"))
+  while (libcp_consume(&tok, tok, "*")) {
+    ty = libcp_pointer_to(ctx, ty);
+    while (libcp_equal(tok, "const") || libcp_equal(tok, "volatile") || libcp_equal(tok, "restrict") ||
+           libcp_equal(tok, "__restrict") || libcp_equal(tok, "__restrict__"))
       tok = tok->next;
   }
   *rest = tok;
@@ -603,7 +603,7 @@ static Type *pointers(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
 // records for sema to complete.
 static Type *declarator(LibcpContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(ctx, tok, "nesting too deep");
+    libcp_error_tok(ctx, tok, "nesting too deep");
   Type *node = declarator1(ctx, rest, tok, ty, decl);
   ctx->parse_depth--;
   return node;
@@ -612,11 +612,11 @@ static Type *declarator(LibcpContext *ctx, Token **rest, Token *tok, Type *ty, D
 static Type *declarator1(LibcpContext *ctx, Token **rest, Token *tok, Type *ty, DeclName *decl) {
   ty = pointers(ctx, &tok, tok, ty);
 
-  if (equal(tok, "(")) {
+  if (libcp_equal(tok, "(")) {
     Token *start = tok;
     Type dummy = {};
     declarator(ctx, &tok, start->next, &dummy, NULL);
-    tok = skip(ctx, tok, ")");
+    tok = libcp_skip(ctx, tok, ")");
     ty = type_suffix(ctx, rest, tok, ty);
     return declarator(ctx, &tok, start->next, ty, decl);
   }
@@ -646,7 +646,7 @@ static Type *declarator1(LibcpContext *ctx, Token **rest, Token *tok, Type *ty, 
 // abstract-declarator = pointers ("(" abstract-declarator ")")? type-suffix
 static Type *abstract_declarator(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(ctx, tok, "nesting too deep");
+    libcp_error_tok(ctx, tok, "nesting too deep");
   Type *node = abstract_declarator1(ctx, rest, tok, ty);
   ctx->parse_depth--;
   return node;
@@ -655,11 +655,11 @@ static Type *abstract_declarator(LibcpContext *ctx, Token **rest, Token *tok, Ty
 static Type *abstract_declarator1(LibcpContext *ctx, Token **rest, Token *tok, Type *ty) {
   ty = pointers(ctx, &tok, tok, ty);
 
-  if (equal(tok, "(")) {
+  if (libcp_equal(tok, "(")) {
     Token *start = tok;
     Type dummy = {};
     abstract_declarator(ctx, &tok, start->next, &dummy);
-    tok = skip(ctx, tok, ")");
+    tok = libcp_skip(ctx, tok, ")");
     ty = type_suffix(ctx, rest, tok, ty);
     return abstract_declarator(ctx, &tok, start->next, ty);
   }
@@ -678,12 +678,12 @@ static Type *typename(LibcpContext *ctx, Token **rest, Token *tok, Node **specs)
 }
 
 static bool consume_end(Token **rest, Token *tok) {
-  if (equal(tok, "}")) {
+  if (libcp_equal(tok, "}")) {
     *rest = tok->next;
     return true;
   }
 
-  if (equal(tok, ",") && equal(tok->next, "}")) {
+  if (libcp_equal(tok, ",") && libcp_equal(tok->next, "}")) {
     *rest = tok->next->next;
     return true;
   }
@@ -696,7 +696,7 @@ static bool consume_end(Token **rest, Token *tok) {
 //
 // enum-list      = ident ("=" num)? ("," ident ("=" num)?)* ","?
 static Type *enum_specifier(LibcpContext *ctx, Token **rest, Token *tok, Node **specs) {
-  Type *ty = enum_type(ctx);
+  Type *ty = libcp_enum_type(ctx);
 
   // Read a struct tag.
   Token *tag = NULL;
@@ -705,17 +705,17 @@ static Type *enum_specifier(LibcpContext *ctx, Token **rest, Token *tok, Node **
     tok = tok->next;
   }
 
-  if (tag && !equal(tok, "{")) {
+  if (tag && !libcp_equal(tok, "{")) {
     Type *ty = find_tag(ctx, tag);
     if (!ty)
-      error_tok(ctx, tag, "unknown enum type");
+      libcp_error_tok(ctx, tag, "unknown enum type");
     if (ty->kind != TY_ENUM)
-      error_tok(ctx, tag, "not an enum tag");
+      libcp_error_tok(ctx, tag, "not an enum tag");
     *rest = tok;
     return ty;
   }
 
-  tok = skip(ctx, tok, "{");
+  tok = libcp_skip(ctx, tok, "{");
 
   // Read an enum-list. Each member becomes a declaration record node
   // carrying the name, the optional explicit value expression and the
@@ -724,15 +724,15 @@ static Type *enum_specifier(LibcpContext *ctx, Token **rest, Token *tok, Node **
   int i = 0;
   while (!consume_end(rest, tok)) {
     if (i++ > 0)
-      tok = skip(ctx, tok, ",");
+      tok = libcp_skip(ctx, tok, ",");
 
     Token *name = tok;
     tok = tok->next;
     add_declared_name(ctx, name);
 
-    Node *node = new_node(ctx, ND_ENUM_CONST, name);
-    if (equal(tok, "="))
-      node->lhs = conditional(ctx, &tok, tok->next);
+    Node *node = libcp_new_node(ctx, ND_ENUM_CONST, name);
+    if (libcp_equal(tok, "="))
+      node->lhs = libcp_conditional(ctx, &tok, tok->next);
     node->ty_op = ty;
 
     add_spec(specs, node);
@@ -745,7 +745,7 @@ static Type *enum_specifier(LibcpContext *ctx, Token **rest, Token *tok, Node **
 
 // typeof-specifier = "(" (expr | typename) ")"
 static Type *typeof_specifier(LibcpContext *ctx, Token **rest, Token *tok, Node **specs) {
-  tok = skip(ctx, tok, "(");
+  tok = libcp_skip(ctx, tok, "(");
 
   Type *ty;
   if (is_typename(ctx, tok)) {
@@ -754,10 +754,10 @@ static Type *typeof_specifier(LibcpContext *ctx, Token **rest, Token *tok, Node 
     // What type an expression has is not a syntax question, so the
     // operand is recorded in a placeholder the declarator builds on;
     // sema annotates the expression and fills the record in.
-    ty = typeof_placeholder(ctx);
+    ty = libcp_typeof_placeholder(ctx);
     ty->typeof_expr = expr(ctx, &tok, tok);
   }
-  *rest = skip(ctx, tok, ")");
+  *rest = libcp_skip(ctx, tok, ")");
   return ty;
 }
 
@@ -778,14 +778,14 @@ static Node *declaration(LibcpContext *ctx, Token **rest, Token *tok, Type *base
   Node *cur = &head;
   int i = 0;
 
-  while (!equal(tok, ";")) {
+  while (!libcp_equal(tok, ";")) {
     if (i++ > 0)
-      tok = skip(ctx, tok, ",");
+      tok = libcp_skip(ctx, tok, ",");
 
     DeclName decl_name = {};
     Type *ty = declarator(ctx, &tok, tok, basety, &decl_name);
     if (!decl_name.name)
-      error_tok(ctx, decl_name.name_pos, "variable name omitted");
+      libcp_error_tok(ctx, decl_name.name_pos, "variable name omitted");
 
     // The declared name shadows a typedef of the same name for the rest
     // of the parse - before the initializer is parsed, as the old
@@ -794,13 +794,13 @@ static Node *declaration(LibcpContext *ctx, Token **rest, Token *tok, Type *base
     add_declared_name(ctx, name);
 
     Initializer *init = NULL;
-    if (equal(tok, "=")) {
+    if (libcp_equal(tok, "=")) {
       Token *eq = tok;
       init = init_record(ctx, &tok, tok->next);
       init->eq_tok = eq;
     }
 
-    Node *decl = new_node(ctx, ND_DECL, name);
+    Node *decl = libcp_new_node(ctx, ND_DECL, name);
     decl->ty_op = ty;
     decl->name_tok = name;
     if (attr)
@@ -848,25 +848,25 @@ static InitDesig *designators(LibcpContext *ctx, Token **rest, Token *tok) {
   InitDesig *cur = &head;
 
   while (1) {
-    if (equal(tok, "[")) {
+    if (libcp_equal(tok, "[")) {
       InitDesig *desig = libcp_arena_calloc(ctx, 1, sizeof(InitDesig));
       desig->tok = tok;
-      desig->begin = conditional(ctx, &tok, tok->next);
+      desig->begin = libcp_conditional(ctx, &tok, tok->next);
       desig->after_begin = tok;
-      if (equal(tok, "..."))
-        desig->end = conditional(ctx, &tok, tok->next);
+      if (libcp_equal(tok, "..."))
+        desig->end = libcp_conditional(ctx, &tok, tok->next);
       desig->rbracket = tok;
-      tok = skip(ctx, tok, "]");
+      tok = libcp_skip(ctx, tok, "]");
       cur = cur->next = desig;
       continue;
     }
 
-    if (equal(tok, ".")) {
+    if (libcp_equal(tok, ".")) {
       InitDesig *desig = libcp_arena_calloc(ctx, 1, sizeof(InitDesig));
       desig->tok = tok;
       tok = tok->next;
       if (tok->kind != TK_IDENT)
-        error_tok(ctx, tok, "expected a field designator");
+        libcp_error_tok(ctx, tok, "expected a field designator");
       desig->name = tok;
       tok = tok->next;
       cur = cur->next = desig;
@@ -890,7 +890,7 @@ static InitDesig *designators(LibcpContext *ctx, Token **rest, Token *tok) {
 // designator application and flexible-array sizing all happen in sema.
 static Initializer *init_record(LibcpContext *ctx, Token **rest, Token *tok) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(ctx, tok, "nesting too deep");
+    libcp_error_tok(ctx, tok, "nesting too deep");
   Initializer *node = init_record1(ctx, rest, tok);
   ctx->parse_depth--;
   return node;
@@ -900,7 +900,7 @@ static Initializer *init_record1(LibcpContext *ctx, Token **rest, Token *tok) {
   Initializer *rec = libcp_arena_calloc(ctx, 1, sizeof(Initializer));
   rec->tok = tok;
 
-  if (equal(tok, "{")) {
+  if (libcp_equal(tok, "{")) {
     rec->kind = INIT_LIST;
     tok = tok->next;
 
@@ -912,12 +912,12 @@ static Initializer *init_record1(LibcpContext *ctx, Token **rest, Token *tok) {
       InitItem *item = libcp_arena_calloc(ctx, 1, sizeof(InitItem));
       if (!first) {
         item->comma_tok = tok;
-        tok = skip(ctx, tok, ",");
+        tok = libcp_skip(ctx, tok, ",");
       }
       first = false;
 
       item->desigs = designators(ctx, &tok, tok);
-      if (item->desigs && equal(tok, "="))
+      if (item->desigs && libcp_equal(tok, "="))
         tok = tok->next;
       item->init = init_record(ctx, &tok, tok);
       cur = cur->next = item;
@@ -931,9 +931,9 @@ static Initializer *init_record1(LibcpContext *ctx, Token **rest, Token *tok) {
   // A string literal is a string initializer only when it is the whole
   // initializer. If an operator or a postfix follows, the literal starts
   // an ordinary expression (`"ab" + 1`, `"8.6" ? 0 : 1`, `"ab"[0]`).
-  if (tok->kind == TK_STR && (equal(tok->next, ",") ||
-                              equal(tok->next, "}") ||
-                              equal(tok->next, ";") ||
+  if (tok->kind == TK_STR && (libcp_equal(tok->next, ",") ||
+                              libcp_equal(tok->next, "}") ||
+                              libcp_equal(tok->next, ";") ||
                               tok->next->kind == TK_EOF)) {
     rec->kind = INIT_STR;
     rec->str_tok = tok;
@@ -960,25 +960,25 @@ static bool is_typename(LibcpContext *ctx, Token *tok) {
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
-      hashmap_put(ctx, map, kw[i], (void *)1);
+      libcp_hashmap_put(ctx, map, kw[i], (void *)1);
   }
 
-  return hashmap_get2(ctx, map, tok->loc, tok->len) || find_typedef(ctx, tok);
+  return libcp_hashmap_get2(ctx, map, tok->loc, tok->len) || find_typedef(ctx, tok);
 }
 
 // asm-stmt = "asm" ("volatile" | "inline")* "(" string-literal ")"
 static Node *asm_stmt(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = new_node(ctx, ND_ASM, tok);
+  Node *node = libcp_new_node(ctx, ND_ASM, tok);
   tok = tok->next;
 
-  while (equal(tok, "volatile") || equal(tok, "inline"))
+  while (libcp_equal(tok, "volatile") || libcp_equal(tok, "inline"))
     tok = tok->next;
 
-  tok = skip(ctx, tok, "(");
+  tok = libcp_skip(ctx, tok, "(");
   if (tok->kind != TK_STR || tok->ty->base->kind != TY_CHAR)
-    error_tok(ctx, tok, "expected string literal");
+    libcp_error_tok(ctx, tok, "expected string literal");
   node->asm_str = tok->str;
-  *rest = skip(ctx, tok->next, ")");
+  *rest = libcp_skip(ctx, tok->next, ")");
   return node;
 }
 
@@ -998,69 +998,69 @@ static Node *asm_stmt(LibcpContext *ctx, Token **rest, Token *tok) {
 //      | "{" compound-stmt
 //      | expr-stmt
 static Node *stmt(LibcpContext *ctx, Token **rest, Token *tok) {
-  if (equal(tok, "return")) {
+  if (libcp_equal(tok, "return")) {
     // The implicit conversion to the return type is sema's: the parser
     // does not know the enclosing function.
-    Node *node = new_node(ctx, ND_RETURN, tok);
-    if (consume(rest, tok->next, ";"))
+    Node *node = libcp_new_node(ctx, ND_RETURN, tok);
+    if (libcp_consume(rest, tok->next, ";"))
       return node;
 
     node->lhs = expr(ctx, &tok, tok->next);
-    *rest = skip(ctx, tok, ";");
+    *rest = libcp_skip(ctx, tok, ";");
     return node;
   }
 
-  if (equal(tok, "if")) {
-    Node *node = new_node(ctx, ND_IF, tok);
-    tok = skip(ctx, tok->next, "(");
+  if (libcp_equal(tok, "if")) {
+    Node *node = libcp_new_node(ctx, ND_IF, tok);
+    tok = libcp_skip(ctx, tok->next, "(");
     node->cond = expr(ctx, &tok, tok);
-    tok = skip(ctx, tok, ")");
+    tok = libcp_skip(ctx, tok, ")");
     node->then = stmt(ctx, &tok, tok);
-    if (equal(tok, "else"))
+    if (libcp_equal(tok, "else"))
       node->els = stmt(ctx, &tok, tok->next);
     *rest = tok;
     return node;
   }
 
-  if (equal(tok, "switch")) {
-    Node *node = new_node(ctx, ND_SWITCH, tok);
-    tok = skip(ctx, tok->next, "(");
+  if (libcp_equal(tok, "switch")) {
+    Node *node = libcp_new_node(ctx, ND_SWITCH, tok);
+    tok = libcp_skip(ctx, tok->next, "(");
     node->cond = expr(ctx, &tok, tok);
-    tok = skip(ctx, tok, ")");
+    tok = libcp_skip(ctx, tok, ")");
     node->then = stmt(ctx, rest, tok);
     return node;
   }
 
-  if (equal(tok, "case")) {
+  if (libcp_equal(tok, "case")) {
     // The values a case label stands for are constant expressions, so
     // they are recorded unevaluated; sema evaluates them into begin/end
     // when it resolves the node. `:` is where the range check is
     // anchored.
-    Node *node = new_node(ctx, ND_CASE, tok);
-    node->begin_expr = conditional(ctx, &tok, tok->next);
+    Node *node = libcp_new_node(ctx, ND_CASE, tok);
+    node->begin_expr = libcp_conditional(ctx, &tok, tok->next);
 
-    if (equal(tok, "...")) {
+    if (libcp_equal(tok, "...")) {
       // [GNU] Case ranges, e.g. "case 1 ... 5:"
-      node->end_expr = conditional(ctx, &tok, tok->next);
+      node->end_expr = libcp_conditional(ctx, &tok, tok->next);
     }
 
     node->colon_tok = tok;
-    tok = skip(ctx, tok, ":");
+    tok = libcp_skip(ctx, tok, ":");
     node->lhs = stmt(ctx, rest, tok);
     return node;
   }
 
-  if (equal(tok, "default")) {
-    Node *node = new_node(ctx, ND_CASE, tok);
+  if (libcp_equal(tok, "default")) {
+    Node *node = libcp_new_node(ctx, ND_CASE, tok);
     node->is_default = true;
-    tok = skip(ctx, tok->next, ":");
+    tok = libcp_skip(ctx, tok->next, ":");
     node->lhs = stmt(ctx, rest, tok);
     return node;
   }
 
-  if (equal(tok, "for")) {
-    Node *node = new_node(ctx, ND_FOR, tok);
-    tok = skip(ctx, tok->next, "(");
+  if (libcp_equal(tok, "for")) {
+    Node *node = libcp_new_node(ctx, ND_FOR, tok);
+    tok = libcp_skip(ctx, tok->next, "(");
 
     enter_scope(ctx);
 
@@ -1077,13 +1077,13 @@ static Node *stmt(LibcpContext *ctx, Token **rest, Token *tok) {
       node->init = expr_stmt(ctx, &tok, tok);
     }
 
-    if (!equal(tok, ";"))
+    if (!libcp_equal(tok, ";"))
       node->cond = expr(ctx, &tok, tok);
-    tok = skip(ctx, tok, ";");
+    tok = libcp_skip(ctx, tok, ";");
 
-    if (!equal(tok, ")"))
+    if (!libcp_equal(tok, ")"))
       node->inc = expr(ctx, &tok, tok);
-    tok = skip(ctx, tok, ")");
+    tok = libcp_skip(ctx, tok, ")");
 
     node->then = stmt(ctx, rest, tok);
 
@@ -1091,63 +1091,63 @@ static Node *stmt(LibcpContext *ctx, Token **rest, Token *tok) {
     return node;
   }
 
-  if (equal(tok, "while")) {
-    Node *node = new_node(ctx, ND_WHILE, tok);
-    tok = skip(ctx, tok->next, "(");
+  if (libcp_equal(tok, "while")) {
+    Node *node = libcp_new_node(ctx, ND_WHILE, tok);
+    tok = libcp_skip(ctx, tok->next, "(");
     node->cond = expr(ctx, &tok, tok);
-    tok = skip(ctx, tok, ")");
+    tok = libcp_skip(ctx, tok, ")");
     node->then = stmt(ctx, rest, tok);
     return node;
   }
 
-  if (equal(tok, "do")) {
-    Node *node = new_node(ctx, ND_DO, tok);
+  if (libcp_equal(tok, "do")) {
+    Node *node = libcp_new_node(ctx, ND_DO, tok);
     node->then = stmt(ctx, &tok, tok->next);
 
-    tok = skip(ctx, tok, "while");
-    tok = skip(ctx, tok, "(");
+    tok = libcp_skip(ctx, tok, "while");
+    tok = libcp_skip(ctx, tok, "(");
     node->cond = expr(ctx, &tok, tok);
-    tok = skip(ctx, tok, ")");
-    *rest = skip(ctx, tok, ";");
+    tok = libcp_skip(ctx, tok, ")");
+    *rest = libcp_skip(ctx, tok, ";");
     return node;
   }
 
-  if (equal(tok, "asm"))
+  if (libcp_equal(tok, "asm"))
     return asm_stmt(ctx, rest, tok);
 
-  if (equal(tok, "goto")) {
-    if (equal(tok->next, "*")) {
+  if (libcp_equal(tok, "goto")) {
+    if (libcp_equal(tok->next, "*")) {
       // [GNU] `goto *ptr` jumps to the address specified by `ptr`.
-      Node *node = new_node(ctx, ND_GOTO_EXPR, tok);
+      Node *node = libcp_new_node(ctx, ND_GOTO_EXPR, tok);
       node->lhs = expr(ctx, &tok, tok->next->next);
-      *rest = skip(ctx, tok, ";");
+      *rest = libcp_skip(ctx, tok, ";");
       return node;
     }
 
-    Node *node = new_node(ctx, ND_GOTO, tok);
-    node->label = get_ident(ctx, tok->next);
-    *rest = skip(ctx, tok->next->next, ";");
+    Node *node = libcp_new_node(ctx, ND_GOTO, tok);
+    node->label = libcp_get_ident(ctx, tok->next);
+    *rest = libcp_skip(ctx, tok->next->next, ";");
     return node;
   }
 
-  if (equal(tok, "break")) {
-    *rest = skip(ctx, tok->next, ";");
-    return new_node(ctx, ND_BREAK, tok);
+  if (libcp_equal(tok, "break")) {
+    *rest = libcp_skip(ctx, tok->next, ";");
+    return libcp_new_node(ctx, ND_BREAK, tok);
   }
 
-  if (equal(tok, "continue")) {
-    *rest = skip(ctx, tok->next, ";");
-    return new_node(ctx, ND_CONTINUE, tok);
+  if (libcp_equal(tok, "continue")) {
+    *rest = libcp_skip(ctx, tok->next, ";");
+    return libcp_new_node(ctx, ND_CONTINUE, tok);
   }
 
-  if (tok->kind == TK_IDENT && equal(tok->next, ":")) {
-    Node *node = new_node(ctx, ND_LABEL, tok);
+  if (tok->kind == TK_IDENT && libcp_equal(tok->next, ":")) {
+    Node *node = libcp_new_node(ctx, ND_LABEL, tok);
     node->label = libcp_arena_strndup(ctx, tok->loc, tok->len);
     node->lhs = stmt(ctx, rest, tok->next->next);
     return node;
   }
 
-  if (equal(tok, "{"))
+  if (libcp_equal(tok, "{"))
     return compound_stmt(ctx, rest, tok->next);
 
   return expr_stmt(ctx, rest, tok);
@@ -1160,15 +1160,15 @@ static Node *stmt(LibcpContext *ctx, Token **rest, Token *tok) {
 // function definitions) enter the chain at their source position; sema
 // removes them again before codegen sees the chain.
 static Node *compound_stmt(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = new_node(ctx, ND_BLOCK, tok);
+  Node *node = libcp_new_node(ctx, ND_BLOCK, tok);
   node->is_scope_block = true;
   Node head = {};
   Node *cur = &head;
 
   enter_scope(ctx);
 
-  while (!equal(tok, "}")) {
-    if (is_typename(ctx, tok) && !equal(tok->next, ":")) {
+  while (!libcp_equal(tok, "}")) {
+    if (is_typename(ctx, tok) && !libcp_equal(tok->next, ":")) {
       VarAttr attr = {};
       Node *specs = NULL;
       Type *basety = declspec(ctx, &tok, tok, &attr, &specs);
@@ -1204,14 +1204,14 @@ static Node *compound_stmt(LibcpContext *ctx, Token **rest, Token *tok) {
 
 // expr-stmt = expr? ";"
 static Node *expr_stmt(LibcpContext *ctx, Token **rest, Token *tok) {
-  if (equal(tok, ";")) {
+  if (libcp_equal(tok, ";")) {
     *rest = tok->next;
-    return new_node(ctx, ND_BLOCK, tok);
+    return libcp_new_node(ctx, ND_BLOCK, tok);
   }
 
-  Node *node = new_node(ctx, ND_EXPR_STMT, tok);
+  Node *node = libcp_new_node(ctx, ND_EXPR_STMT, tok);
   node->lhs = expr(ctx, &tok, tok);
-  *rest = skip(ctx, tok, ";");
+  *rest = libcp_skip(ctx, tok, ";");
   return node;
 }
 
@@ -1228,7 +1228,7 @@ static void struct_members(LibcpContext *ctx, Token **rest, Token *tok, Type *ty
   Member *cur = &head;
   int idx = 0;
 
-  while (!equal(tok, "}")) {
+  while (!libcp_equal(tok, "}")) {
     VarAttr attr = {};
     Token *decl_start = tok;
     Type *basety = declspec(ctx, &tok, tok, &attr, specs);
@@ -1240,7 +1240,7 @@ static void struct_members(LibcpContext *ctx, Token **rest, Token *tok, Type *ty
     // member that turns out not to be an aggregate.
     if ((basety->kind == TY_STRUCT || basety->kind == TY_UNION ||
          basety->kind == TY_TYPEOF) &&
-        consume(&tok, tok, ";")) {
+        libcp_consume(&tok, tok, ";")) {
       Member *mem = libcp_arena_calloc(ctx, 1, sizeof(Member));
       mem->tok = decl_start;
       mem->ty = basety;
@@ -1252,9 +1252,9 @@ static void struct_members(LibcpContext *ctx, Token **rest, Token *tok, Type *ty
     }
 
     // Regular struct members
-    while (!consume(&tok, tok, ";")) {
+    while (!libcp_consume(&tok, tok, ";")) {
       if (!first)
-        tok = skip(ctx, tok, ",");
+        tok = libcp_skip(ctx, tok, ",");
       first = false;
 
       Member *mem = libcp_arena_calloc(ctx, 1, sizeof(Member));
@@ -1266,12 +1266,12 @@ static void struct_members(LibcpContext *ctx, Token **rest, Token *tok, Type *ty
       mem->align_ty = attr.align_ty;
       mem->align_expr = attr.align_expr;
 
-      if (consume(&tok, tok, ":")) {
+      if (libcp_consume(&tok, tok, ":")) {
         mem->is_bitfield = true;
         // The width is a constant expression; it is recorded
         // unevaluated and sema evaluates it when the aggregate is
         // laid out.
-        mem->width_expr = conditional(ctx, &tok, tok);
+        mem->width_expr = libcp_conditional(ctx, &tok, tok);
       }
 
       cur = cur->next = mem;
@@ -1287,19 +1287,19 @@ static void struct_members(LibcpContext *ctx, Token **rest, Token *tok, Type *ty
 // `packed` and `aligned` are applied when a type record is given; the
 // known declaration/function attributes are recognized and ignored.
 static Token *skip_attribute_args(LibcpContext *ctx, Token *tok) {
-  if (!equal(tok, "("))
+  if (!libcp_equal(tok, "("))
     return tok;
 
   int depth = 0;
   for (; tok->kind != TK_EOF; tok = tok->next) {
-    if (equal(tok, "(")) {
+    if (libcp_equal(tok, "(")) {
       depth++;
-    } else if (equal(tok, ")")) {
+    } else if (libcp_equal(tok, ")")) {
       if (--depth == 0)
         return tok->next;
     }
   }
-  error_tok(ctx, tok, "unclosed attribute");
+  libcp_error_tok(ctx, tok, "unclosed attribute");
   return tok;
 }
 
@@ -1315,45 +1315,45 @@ static bool is_ignored_attribute(Token *tok) {
     NULL,
   };
   for (int i = 0; names[i]; i++)
-    if (equal(tok, names[i]))
+    if (libcp_equal(tok, names[i]))
       return true;
   return false;
 }
 
 static Token *attribute_list(LibcpContext *ctx, Token *tok, Type *ty) {
-  while (consume(&tok, tok, "__attribute__")) {
-    tok = skip(ctx, tok, "(");
-    tok = skip(ctx, tok, "(");
+  while (libcp_consume(&tok, tok, "__attribute__")) {
+    tok = libcp_skip(ctx, tok, "(");
+    tok = libcp_skip(ctx, tok, "(");
 
     bool first = true;
 
-    while (!consume(&tok, tok, ")")) {
+    while (!libcp_consume(&tok, tok, ")")) {
       if (!first)
-        tok = skip(ctx, tok, ",");
+        tok = libcp_skip(ctx, tok, ",");
       first = false;
 
-      if (consume(&tok, tok, "packed")) {
+      if (libcp_consume(&tok, tok, "packed")) {
         if (ty)
           ty->is_packed = true;
         continue;
       }
 
-      if (consume(&tok, tok, "aligned")) {
+      if (libcp_consume(&tok, tok, "aligned")) {
         // The alignment is a constant expression. It is applied only when
         // the attribute is attached to a type definition; declaration
         // positions pass NULL so the shared type records stay read-only.
-        if (consume(&tok, tok, "(")) {
+        if (libcp_consume(&tok, tok, "(")) {
           if (ty)
-            ty->align_expr = conditional(ctx, &tok, tok);
+            ty->align_expr = libcp_conditional(ctx, &tok, tok);
           else
-            (void)conditional(ctx, &tok, tok);
-          tok = skip(ctx, tok, ")");
+            (void)libcp_conditional(ctx, &tok, tok);
+          tok = libcp_skip(ctx, tok, ")");
         }
         continue;
       }
 
-      if (equal(tok, "cleanup")) {
-        warn_tok(ctx, tok, "cleanup attribute is ignored");
+      if (libcp_equal(tok, "cleanup")) {
+        libcp_warn_tok(ctx, tok, "cleanup attribute is ignored");
         tok = skip_attribute_args(ctx, tok->next);
         continue;
       }
@@ -1363,10 +1363,10 @@ static Token *attribute_list(LibcpContext *ctx, Token *tok, Type *ty) {
         continue;
       }
 
-      error_tok(ctx, tok, "unknown attribute");
+      libcp_error_tok(ctx, tok, "unknown attribute");
     }
 
-    tok = skip(ctx, tok, ")");
+    tok = libcp_skip(ctx, tok, ")");
   }
 
   return tok;
@@ -1374,7 +1374,7 @@ static Token *attribute_list(LibcpContext *ctx, Token *tok, Type *ty) {
 
 // struct-union-decl = attribute? ident? ("{" struct-members)?
 static Type *struct_union_decl(LibcpContext *ctx, Token **rest, Token *tok, Node **specs) {
-  Type *ty = struct_type(ctx);
+  Type *ty = libcp_struct_type(ctx);
   tok = attribute_list(ctx, tok, ty);
 
   // Read a tag.
@@ -1384,7 +1384,7 @@ static Type *struct_union_decl(LibcpContext *ctx, Token **rest, Token *tok, Node
     tok = tok->next;
   }
 
-  if (tag && !equal(tok, "{")) {
+  if (tag && !libcp_equal(tok, "{")) {
     *rest = tok;
 
     Type *ty2 = find_tag(ctx, tag);
@@ -1396,7 +1396,7 @@ static Type *struct_union_decl(LibcpContext *ctx, Token **rest, Token *tok, Node
     return ty;
   }
 
-  tok = skip(ctx, tok, "{");
+  tok = libcp_skip(ctx, tok, "{");
 
   // Construct a struct object. The member list is syntax; placing the
   // members is sema's job, which it does when the type is completed -
@@ -1416,7 +1416,7 @@ static Type *struct_union_decl(LibcpContext *ctx, Token **rest, Token *tok, Node
       // definition of the same tag in the same scope is a constraint
       // violation (C11 6.7.2.3p1), not a silent replacement.
       if (ty2->size >= 0)
-        error_tok(ctx, tag, "redefinition of tag");
+        libcp_error_tok(ctx, tag, "redefinition of tag");
       *ty2 = *ty;
       ret = ty2;
     } else {
@@ -1459,7 +1459,7 @@ static Type *union_decl(LibcpContext *ctx, Token **rest, Token *tok, Node **spec
 // anonymous ones in between), checks the operand and re-inserts the
 // dereference.
 static Node *struct_ref(LibcpContext *ctx, Node *node, Token *tok, Token *arrow) {
-  Node *mem = new_unary(ctx, ND_MEMBER, node, tok);
+  Node *mem = libcp_new_unary(ctx, ND_MEMBER, node, tok);
   mem->arrow_tok = arrow;
   return mem;
 }
@@ -1474,16 +1474,16 @@ static Node *funcall(LibcpContext *ctx, Token **rest, Token *tok, Node *fn) {
   Node head = {};
   Node *cur = &head;
 
-  while (!equal(tok, ")")) {
+  while (!libcp_equal(tok, ")")) {
     if (cur != &head)
-      tok = skip(ctx, tok, ",");
+      tok = libcp_skip(ctx, tok, ",");
 
     cur = cur->next = assign(ctx, &tok, tok);
   }
 
-  *rest = skip(ctx, tok, ")");
+  *rest = libcp_skip(ctx, tok, ")");
 
-  Node *node = new_unary(ctx, ND_FUNCALL, fn, tok);
+  Node *node = libcp_new_unary(ctx, ND_FUNCALL, fn, tok);
   node->args = head.next;
   return node;
 }
@@ -1498,27 +1498,27 @@ static Node *funcall(LibcpContext *ctx, Token **rest, Token *tok, Node *fn) {
 // controlling expression in `cond` and one ND_GENERIC_ASSOC per
 // association in `args`.
 static Node *generic_selection(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = new_node(ctx, ND_GENERIC, tok);
+  Node *node = libcp_new_node(ctx, ND_GENERIC, tok);
 
-  tok = skip(ctx, tok, "(");
+  tok = libcp_skip(ctx, tok, "(");
   node->cond = assign(ctx, &tok, tok);
 
   Node head = {};
   Node *cur = &head;
 
-  while (!consume(rest, tok, ")")) {
-    tok = skip(ctx, tok, ",");
+  while (!libcp_consume(rest, tok, ")")) {
+    tok = libcp_skip(ctx, tok, ",");
 
-    Node *assoc = new_node(ctx, ND_GENERIC_ASSOC, tok);
+    Node *assoc = libcp_new_node(ctx, ND_GENERIC_ASSOC, tok);
 
     // A "default:" association is the one that carries no type name.
-    if (equal(tok, "default")) {
-      tok = skip(ctx, tok->next, ":");
+    if (libcp_equal(tok, "default")) {
+      tok = libcp_skip(ctx, tok->next, ":");
     } else {
       Node *specs = NULL;
       assoc->ty_op = typename(ctx, &tok, tok, &specs);
       assoc->spec_decls = specs;
-      tok = skip(ctx, tok, ":");
+      tok = libcp_skip(ctx, tok, ":");
     }
     assoc->lhs = assign(ctx, &tok, tok);
 
@@ -1544,102 +1544,102 @@ static Node *generic_selection(LibcpContext *ctx, Token **rest, Token *tok) {
 static Node *primary(LibcpContext *ctx, Token **rest, Token *tok) {
   Token *start = tok;
 
-  if (equal(tok, "(") && equal(tok->next, "{")) {
+  if (libcp_equal(tok, "(") && libcp_equal(tok->next, "{")) {
     // This is a GNU statement expresssion.
-    Node *node = new_node(ctx, ND_STMT_EXPR, tok);
+    Node *node = libcp_new_node(ctx, ND_STMT_EXPR, tok);
     node->body = compound_stmt(ctx, &tok, tok->next->next)->body;
-    *rest = skip(ctx, tok, ")");
+    *rest = libcp_skip(ctx, tok, ")");
     return node;
   }
 
-  if (equal(tok, "(")) {
+  if (libcp_equal(tok, "(")) {
     Node *node = expr(ctx, &tok, tok->next);
-    *rest = skip(ctx, tok, ")");
+    *rest = libcp_skip(ctx, tok, ")");
     return node;
   }
 
-  if (equal(tok, "sizeof") && equal(tok->next, "(") && is_typename(ctx, tok->next->next)) {
+  if (libcp_equal(tok, "sizeof") && libcp_equal(tok->next, "(") && is_typename(ctx, tok->next->next)) {
     Node *specs = NULL;
     Type *ty = typename(ctx, &tok, tok->next->next, &specs);
-    *rest = skip(ctx, tok, ")");
+    *rest = libcp_skip(ctx, tok, ")");
 
     // Keep sizeof faithful; sema folds it to its value.
-    Node *node = new_node(ctx, ND_SIZEOF, start);
+    Node *node = libcp_new_node(ctx, ND_SIZEOF, start);
     node->ty_op = ty;
     node->spec_decls = specs;
     return node;
   }
 
-  if (equal(tok, "sizeof")) {
+  if (libcp_equal(tok, "sizeof")) {
     // Keep sizeof faithful; sema folds it to its value.
-    Node *node = new_node(ctx, ND_SIZEOF, tok);
+    Node *node = libcp_new_node(ctx, ND_SIZEOF, tok);
     node->lhs = unary(ctx, rest, tok->next);
     return node;
   }
 
-  if (equal(tok, "_Alignof") && equal(tok->next, "(") && is_typename(ctx, tok->next->next)) {
+  if (libcp_equal(tok, "_Alignof") && libcp_equal(tok->next, "(") && is_typename(ctx, tok->next->next)) {
     Node *specs = NULL;
     Type *ty = typename(ctx, &tok, tok->next->next, &specs);
-    *rest = skip(ctx, tok, ")");
+    *rest = libcp_skip(ctx, tok, ")");
 
-    Node *node = new_node(ctx, ND_ALIGNOF, start);
+    Node *node = libcp_new_node(ctx, ND_ALIGNOF, start);
     node->ty_op = ty;
     node->spec_decls = specs;
     return node;
   }
 
-  if (equal(tok, "_Alignof")) {
-    Node *node = new_node(ctx, ND_ALIGNOF, tok);
+  if (libcp_equal(tok, "_Alignof")) {
+    Node *node = libcp_new_node(ctx, ND_ALIGNOF, tok);
     node->lhs = unary(ctx, rest, tok->next);
     return node;
   }
 
-  if (equal(tok, "_Generic"))
+  if (libcp_equal(tok, "_Generic"))
     return generic_selection(ctx, rest, tok->next);
 
-  if (equal(tok, "__builtin_types_compatible_p")) {
+  if (libcp_equal(tok, "__builtin_types_compatible_p")) {
     // Both type operands are recorded; sema folds the node to 0 or 1.
-    Node *node = new_node(ctx, ND_TYPES_COMPATIBLE, start);
+    Node *node = libcp_new_node(ctx, ND_TYPES_COMPATIBLE, start);
     Node *specs = NULL;
-    tok = skip(ctx, tok->next, "(");
+    tok = libcp_skip(ctx, tok->next, "(");
     node->ty_op = typename(ctx, &tok, tok, &specs);
-    tok = skip(ctx, tok, ",");
+    tok = libcp_skip(ctx, tok, ",");
     node->ty_op2 = typename(ctx, &tok, tok, &specs);
     node->spec_decls = specs;
-    *rest = skip(ctx, tok, ")");
+    *rest = libcp_skip(ctx, tok, ")");
     return node;
   }
 
-  if (equal(tok, "__builtin_reg_class")) {
+  if (libcp_equal(tok, "__builtin_reg_class")) {
     // sema folds the node to the register class of its type operand.
-    Node *node = new_node(ctx, ND_REG_CLASS, start);
+    Node *node = libcp_new_node(ctx, ND_REG_CLASS, start);
     Node *specs = NULL;
-    tok = skip(ctx, tok->next, "(");
+    tok = libcp_skip(ctx, tok->next, "(");
     node->ty_op = typename(ctx, &tok, tok, &specs);
     node->spec_decls = specs;
-    *rest = skip(ctx, tok, ")");
+    *rest = libcp_skip(ctx, tok, ")");
     return node;
   }
 
-  if (equal(tok, "__builtin_compare_and_swap")) {
-    Node *node = new_node(ctx, ND_CAS, tok);
-    tok = skip(ctx, tok->next, "(");
+  if (libcp_equal(tok, "__builtin_compare_and_swap")) {
+    Node *node = libcp_new_node(ctx, ND_CAS, tok);
+    tok = libcp_skip(ctx, tok->next, "(");
     node->cas_addr = assign(ctx, &tok, tok);
-    tok = skip(ctx, tok, ",");
+    tok = libcp_skip(ctx, tok, ",");
     node->cas_old = assign(ctx, &tok, tok);
-    tok = skip(ctx, tok, ",");
+    tok = libcp_skip(ctx, tok, ",");
     node->cas_new = assign(ctx, &tok, tok);
-    *rest = skip(ctx, tok, ")");
+    *rest = libcp_skip(ctx, tok, ")");
     return node;
   }
 
-  if (equal(tok, "__builtin_atomic_exchange")) {
-    Node *node = new_node(ctx, ND_EXCH, tok);
-    tok = skip(ctx, tok->next, "(");
+  if (libcp_equal(tok, "__builtin_atomic_exchange")) {
+    Node *node = libcp_new_node(ctx, ND_EXCH, tok);
+    tok = libcp_skip(ctx, tok->next, "(");
     node->lhs = assign(ctx, &tok, tok);
-    tok = skip(ctx, tok, ",");
+    tok = libcp_skip(ctx, tok, ",");
     node->rhs = assign(ctx, &tok, tok);
-    *rest = skip(ctx, tok, ")");
+    *rest = libcp_skip(ctx, tok, ")");
     return node;
   }
 
@@ -1648,7 +1648,7 @@ static Node *primary(LibcpContext *ctx, Token **rest, Token *tok) {
     // one it denotes is not a syntax question, so the reference stays
     // faithful and sema's resolve pass binds it, using the scope stack
     // the tree structure gives it.
-    Node *node = new_node(ctx, ND_IDENT, tok);
+    Node *node = libcp_new_node(ctx, ND_IDENT, tok);
     *rest = tok->next;
     return node;
   }
@@ -1656,18 +1656,18 @@ static Node *primary(LibcpContext *ctx, Token **rest, Token *tok) {
   if (tok->kind == TK_STR) {
     // Keep the literal faithful; sema lowers it to a reference to an
     // anonymous global when it types the node.
-    Node *node = new_node(ctx, ND_STRING, tok);
+    Node *node = libcp_new_node(ctx, ND_STRING, tok);
     *rest = tok->next;
     return node;
   }
 
   if (tok->kind == TK_NUM) {
     Node *node;
-    if (is_flonum(tok->ty)) {
-      node = new_node(ctx, ND_NUM, tok);
+    if (libcp_is_flonum(tok->ty)) {
+      node = libcp_new_node(ctx, ND_NUM, tok);
       node->fval = tok->fval;
     } else {
-      node = new_num(ctx, tok->val, tok);
+      node = libcp_new_num(ctx, tok->val, tok);
     }
 
     node->ty = tok->ty;
@@ -1675,7 +1675,7 @@ static Node *primary(LibcpContext *ctx, Token **rest, Token *tok) {
     return node;
   }
 
-  error_tok(ctx, tok, "expected an expression");
+  libcp_error_tok(ctx, tok, "expected an expression");
 }
 
 //
@@ -1686,7 +1686,7 @@ static Node *primary(LibcpContext *ctx, Token **rest, Token *tok) {
 // consuming while the operator binds tighter than min_bp (left
 // associative: rbp == lbp; right associative: rbp == lbp - 1). The three
 // entry points keep the old names and meanings: expr allows comma, assign
-// allows assignment, conditional allows neither. The prefix forms are in
+// allows assignment, libcp_conditional allows neither. The prefix forms are in
 // expr_nud; the postfix forms are the led section of the loop below.
 enum {
   BP_COMMA = 1,
@@ -1761,7 +1761,7 @@ static bool infix_bp(Token *tok, NodeKind *kind, NodeKind *assign_op,
   int n = sizeof(infix_ops) / sizeof(*infix_ops);
 
   for (int i = 0; i < n; i++) {
-    if (!equal(tok, infix_ops[i].op))
+    if (!libcp_equal(tok, infix_ops[i].op))
       continue;
     *kind = infix_ops[i].kind;
     *assign_op = infix_ops[i].assign_op;
@@ -1779,16 +1779,16 @@ static Node *expr_bp(LibcpContext *ctx, Token **rest, Token *tok, int min_bp);
 // primary parser for everything atomic. Unary `+` is transparent and
 // builds no node, exactly as the cascade did.
 static Node *expr_nud(LibcpContext *ctx, Token **rest, Token *tok) {
-  if (equal(tok, "(") && is_typename(ctx, tok->next)) {
+  if (libcp_equal(tok, "(") && is_typename(ctx, tok->next)) {
     Token *start = tok;
     Node *specs = NULL;
     Type *ty = typename(ctx, &tok, tok->next, &specs);
-    tok = skip(ctx, tok, ")");
+    tok = libcp_skip(ctx, tok, ")");
 
     // A compound literal. Kept faithful, with the type and the
     // initializer record on the node; sema materializes the object.
-    if (equal(tok, "{")) {
-      Node *node = new_node(ctx, ND_COMPOUND_LITERAL, start);
+    if (libcp_equal(tok, "{")) {
+      Node *node = libcp_new_node(ctx, ND_COMPOUND_LITERAL, start);
       node->ty_op = ty;
       node->spec_decls = specs;
       node->decl_init = init_record(ctx, rest, tok);
@@ -1796,42 +1796,42 @@ static Node *expr_nud(LibcpContext *ctx, Token **rest, Token *tok) {
     }
 
     // A cast the source wrote: untyped, with the target type recorded
-    // for sema. is_implicit stays false (new_cast sets it for the casts
+    // for sema. is_implicit stays false (libcp_new_cast sets it for the casts
     // sema inserts).
-    Node *node = new_node(ctx, ND_CAST, start);
+    Node *node = libcp_new_node(ctx, ND_CAST, start);
     node->lhs = expr_bp(ctx, rest, tok, BP_CAST);
     node->ty_op = ty;
     node->spec_decls = specs;
     return node;
   }
 
-  if (equal(tok, "+"))
+  if (libcp_equal(tok, "+"))
     return expr_bp(ctx, rest, tok->next, BP_CAST);
 
-  if (equal(tok, "-"))
-    return new_unary(ctx, ND_NEG, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
+  if (libcp_equal(tok, "-"))
+    return libcp_new_unary(ctx, ND_NEG, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
-  if (equal(tok, "&"))
-    return new_unary(ctx, ND_ADDR, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
+  if (libcp_equal(tok, "&"))
+    return libcp_new_unary(ctx, ND_ADDR, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
-  if (equal(tok, "*"))
-    return new_unary(ctx, ND_DEREF, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
+  if (libcp_equal(tok, "*"))
+    return libcp_new_unary(ctx, ND_DEREF, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
-  if (equal(tok, "!"))
-    return new_unary(ctx, ND_NOT, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
+  if (libcp_equal(tok, "!"))
+    return libcp_new_unary(ctx, ND_NOT, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
-  if (equal(tok, "~"))
-    return new_unary(ctx, ND_BITNOT, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
+  if (libcp_equal(tok, "~"))
+    return libcp_new_unary(ctx, ND_BITNOT, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
-  if (equal(tok, "++")) {
-    Node *node = new_node(ctx, ND_INCDEC, tok);
+  if (libcp_equal(tok, "++")) {
+    Node *node = libcp_new_node(ctx, ND_INCDEC, tok);
     node->lhs = expr_bp(ctx, rest, tok->next, BP_CAST);
     node->addend = 1;
     return node;
   }
 
-  if (equal(tok, "--")) {
-    Node *node = new_node(ctx, ND_INCDEC, tok);
+  if (libcp_equal(tok, "--")) {
+    Node *node = libcp_new_node(ctx, ND_INCDEC, tok);
     node->lhs = expr_bp(ctx, rest, tok->next, BP_CAST);
     node->addend = -1;
     return node;
@@ -1839,9 +1839,9 @@ static Node *expr_nud(LibcpContext *ctx, Token **rest, Token *tok) {
 
   // [GNU] labels-as-values. Checked before any infix interpretation, so
   // `&&label` is not a binary `&&`.
-  if (equal(tok, "&&")) {
-    Node *node = new_node(ctx, ND_LABEL_VAL, tok);
-    node->label = get_ident(ctx, tok->next);
+  if (libcp_equal(tok, "&&")) {
+    Node *node = libcp_new_node(ctx, ND_LABEL_VAL, tok);
+    node->label = libcp_get_ident(ctx, tok->next);
     *rest = tok->next->next;
     return node;
   }
@@ -1853,7 +1853,7 @@ static Node *expr_nud(LibcpContext *ctx, Token **rest, Token *tok) {
 // entry wrappers below do not add a frame.
 static Node *expr_bp(LibcpContext *ctx, Token **rest, Token *tok, int min_bp) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(ctx, tok, "nesting too deep");
+    libcp_error_tok(ctx, tok, "nesting too deep");
 
   Node *node = expr_nud(ctx, rest, tok);
 
@@ -1867,35 +1867,35 @@ static Node *expr_bp(LibcpContext *ctx, Token **rest, Token *tok, int min_bp) {
     // The postfix (led) forms bind tighter than every infix operator:
     // call, subscript, member access and postfix increment/decrement.
     if (min_bp < BP_POSTFIX) {
-      if (equal(op, "(")) {
+      if (libcp_equal(op, "(")) {
         node = funcall(ctx, rest, op->next, node);
         continue;
       }
 
-      if (equal(op, "[")) {
+      if (libcp_equal(op, "[")) {
         Token *idx = op->next;
-        Node *subscript = new_node(ctx, ND_SUBSCRIPT, op);
+        Node *subscript = libcp_new_node(ctx, ND_SUBSCRIPT, op);
         subscript->lhs = node;
         subscript->rhs = expr(ctx, &idx, idx);
-        *rest = skip(ctx, idx, "]");
+        *rest = libcp_skip(ctx, idx, "]");
         node = subscript;
         continue;
       }
 
-      if (equal(op, ".")) {
+      if (libcp_equal(op, ".")) {
         node = struct_ref(ctx, node, op->next, NULL);
         *rest = op->next->next;
         continue;
       }
 
-      if (equal(op, "->")) {
+      if (libcp_equal(op, "->")) {
         node = struct_ref(ctx, node, op->next, op);
         *rest = op->next->next;
         continue;
       }
 
-      if (equal(op, "++")) {
-        Node *incdec = new_node(ctx, ND_INCDEC, op);
+      if (libcp_equal(op, "++")) {
+        Node *incdec = libcp_new_node(ctx, ND_INCDEC, op);
         incdec->lhs = node;
         incdec->is_post = true;
         incdec->addend = 1;
@@ -1904,8 +1904,8 @@ static Node *expr_bp(LibcpContext *ctx, Token **rest, Token *tok, int min_bp) {
         continue;
       }
 
-      if (equal(op, "--")) {
-        Node *incdec = new_node(ctx, ND_INCDEC, op);
+      if (libcp_equal(op, "--")) {
+        Node *incdec = libcp_new_node(ctx, ND_INCDEC, op);
         incdec->lhs = node;
         incdec->is_post = true;
         incdec->addend = -1;
@@ -1919,9 +1919,9 @@ static Node *expr_bp(LibcpContext *ctx, Token **rest, Token *tok, int min_bp) {
       break;
 
     if (kind == ND_COND) {
-      Node *cond = new_node(ctx, ND_COND, op);
+      Node *cond = libcp_new_node(ctx, ND_COND, op);
 
-      if (equal(op->next, ":")) {
+      if (libcp_equal(op->next, ":")) {
         // [GNU] `a ?: b`: only cond and els, with is_elvis set.
         cond->is_elvis = true;
         cond->cond = node;
@@ -1933,7 +1933,7 @@ static Node *expr_bp(LibcpContext *ctx, Token **rest, Token *tok, int min_bp) {
       Token *mid = NULL;
       cond->cond = node;
       cond->then = expr_bp(ctx, &mid, op->next, 0);
-      Token *colon = skip(ctx, mid, ":");
+      Token *colon = libcp_skip(ctx, mid, ":");
       cond->els = expr_bp(ctx, rest, colon, BP_COND - 1);
       node = cond;
       continue;
@@ -1941,13 +1941,13 @@ static Node *expr_bp(LibcpContext *ctx, Token **rest, Token *tok, int min_bp) {
 
     if (kind == ND_ASSIGN) {
       Node *rhs = expr_bp(ctx, rest, op->next, rbp);
-      Node *assign = new_binary(ctx, ND_ASSIGN, node, rhs, op);
+      Node *assign = libcp_new_binary(ctx, ND_ASSIGN, node, rhs, op);
       assign->op = assign_op;
       node = assign;
       continue;
     }
 
-    node = new_binary(ctx, kind, node, expr_bp(ctx, rest, op->next, rbp), op);
+    node = libcp_new_binary(ctx, kind, node, expr_bp(ctx, rest, op->next, rbp), op);
   }
 
   ctx->parse_depth--;
@@ -1968,7 +1968,7 @@ static Node *assign(LibcpContext *ctx, Token **rest, Token *tok) {
   return expr_bp(ctx, rest, tok, BP_ASSIGN - 1);
 }
 
-Node *conditional(LibcpContext *ctx, Token **rest, Token *tok) {
+Node *libcp_conditional(LibcpContext *ctx, Token **rest, Token *tok) {
   return expr_bp(ctx, rest, tok, BP_COND - 1);
 }
 
@@ -1980,17 +1980,17 @@ static Node *parse_typedef(LibcpContext *ctx, Token **rest, Token *tok, Type *ba
   Node *cur = &head;
   bool first = true;
 
-  while (!consume(&tok, tok, ";")) {
+  while (!libcp_consume(&tok, tok, ";")) {
     if (!first)
-      tok = skip(ctx, tok, ",");
+      tok = libcp_skip(ctx, tok, ",");
     first = false;
 
     DeclName decl = {};
     Type *ty = declarator(ctx, &tok, tok, basety, &decl);
     if (!decl.name)
-      error_tok(ctx, decl.name_pos, "typedef name omitted");
+      libcp_error_tok(ctx, decl.name_pos, "typedef name omitted");
 
-    Node *node = new_node(ctx, ND_TYPEDEF, decl.name);
+    Node *node = libcp_new_node(ctx, ND_TYPEDEF, decl.name);
     node->ty = ty;
     add_typedef(ctx, node);
     cur = cur->next = node;
@@ -2007,15 +2007,15 @@ static Node *function_def(LibcpContext *ctx, Token **rest, Token *tok, Type *bas
   DeclName decl = {};
   Type *ty = declarator(ctx, &tok, tok, basety, &decl);
   if (!decl.name)
-    error_tok(ctx, decl.name_pos, "function name omitted");
+    libcp_error_tok(ctx, decl.name_pos, "function name omitted");
 
-  Node *node = new_node(ctx, ND_FUNCDEF, tok);
+  Node *node = libcp_new_node(ctx, ND_FUNCDEF, tok);
   node->ty_op = ty;
   node->name_tok = decl.name;
   node->attr = *attr;
   add_declared_name(ctx, decl.name);
 
-  if (consume(&tok, tok, ";")) {
+  if (libcp_consume(&tok, tok, ";")) {
     *rest = tok;
     return node;
   }
@@ -2028,7 +2028,7 @@ static Node *function_def(LibcpContext *ctx, Token **rest, Token *tok, Type *bas
     if (p->name)
       add_declared_name(ctx, p->name);
 
-  tok = skip(ctx, tok, "{");
+  tok = libcp_skip(ctx, tok, "{");
   node->body = compound_stmt(ctx, &tok, tok);
   leave_scope(ctx);
   *rest = tok;
@@ -2043,24 +2043,24 @@ static Node *global_variable(LibcpContext *ctx, Token **rest, Token *tok, Type *
   Node *cur = &head;
   bool first = true;
 
-  while (!consume(&tok, tok, ";")) {
+  while (!libcp_consume(&tok, tok, ";")) {
     if (!first)
-      tok = skip(ctx, tok, ",");
+      tok = libcp_skip(ctx, tok, ",");
     first = false;
 
     DeclName decl = {};
     Type *ty = declarator(ctx, &tok, tok, basety, &decl);
     if (!decl.name)
-      error_tok(ctx, decl.name_pos, "variable name omitted");
+      libcp_error_tok(ctx, decl.name_pos, "variable name omitted");
 
     Token *name = decl.name;
     add_declared_name(ctx, name);
 
-    Node *node = new_node(ctx, ND_GVAR_DECL, tok);
+    Node *node = libcp_new_node(ctx, ND_GVAR_DECL, tok);
     node->ty_op = ty;
     node->name_tok = name;
     node->attr = *attr;
-    if (equal(tok, "="))
+    if (libcp_equal(tok, "="))
       node->decl_init = init_record(ctx, &tok, tok->next);
     cur = cur->next = node;
   }
@@ -2072,7 +2072,7 @@ static Node *global_variable(LibcpContext *ctx, Token **rest, Token *tok, Type *
 // Lookahead tokens and returns true if a given token is a start
 // of a function definition or declaration.
 static bool is_function(LibcpContext *ctx, Token *tok) {
-  if (equal(tok, ";"))
+  if (libcp_equal(tok, ";"))
     return false;
 
   Type dummy = {};
@@ -2085,8 +2085,9 @@ static bool is_function(LibcpContext *ctx, Token *tok) {
 // The top-level declaration-record chain this returns is what sema
 // walks, in source order, to declare the objects and analyze the
 // function bodies.
-Node *parse(LibcpContext *ctx, Token *tok) {
-  parse_init(ctx);
+Node *libcp_parse(LibcpContext *ctx, Token *tok) {
+  ENTER_RET(ctx, NULL);
+  libcp_parse_init(ctx);
   Node head = {};
   Node *cur = &head;
 
@@ -2112,5 +2113,6 @@ Node *parse(LibcpContext *ctx, Token *tok) {
     cur = chain_append(cur, global_variable(ctx, &tok, tok, basety, &attr));
   }
 
+  LEAVE(ctx);
   return head.next;
 }

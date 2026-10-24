@@ -32,44 +32,44 @@ static void hashmap_test(LibcpContext *ctx) {
   HashMap *map = libcp_arena_calloc(ctx, 1, sizeof(HashMap));
 
   for (int i = 0; i < 5000; i++)
-    hashmap_put(ctx, map, format(ctx, "key %d", i), (void *)(size_t)i);
+    libcp_hashmap_put(ctx, map, libcp_format(ctx, "key %d", i), (void *)(size_t)i);
   for (int i = 1000; i < 2000; i++)
-    hashmap_delete(ctx, map, format(ctx, "key %d", i));
+    libcp_hashmap_delete(ctx, map, libcp_format(ctx, "key %d", i));
   for (int i = 1500; i < 1600; i++)
-    hashmap_put(ctx, map, format(ctx, "key %d", i), (void *)(size_t)i);
+    libcp_hashmap_put(ctx, map, libcp_format(ctx, "key %d", i), (void *)(size_t)i);
   for (int i = 6000; i < 7000; i++)
-    hashmap_put(ctx, map, format(ctx, "key %d", i), (void *)(size_t)i);
+    libcp_hashmap_put(ctx, map, libcp_format(ctx, "key %d", i), (void *)(size_t)i);
 
   for (int i = 0; i < 1000; i++)
-    assert((size_t)hashmap_get(ctx, map, format(ctx, "key %d", i)) == i);
+    assert((size_t)libcp_hashmap_get(ctx, map, libcp_format(ctx, "key %d", i)) == i);
   for (int i = 1000; i < 1500; i++)
-    assert(hashmap_get(ctx, map, "no such key") == NULL);
+    assert(libcp_hashmap_get(ctx, map, "no such key") == NULL);
   for (int i = 1500; i < 1600; i++)
-    assert((size_t)hashmap_get(ctx, map, format(ctx, "key %d", i)) == i);
+    assert((size_t)libcp_hashmap_get(ctx, map, libcp_format(ctx, "key %d", i)) == i);
   for (int i = 1600; i < 2000; i++)
-    assert(hashmap_get(ctx, map, "no such key") == NULL);
+    assert(libcp_hashmap_get(ctx, map, "no such key") == NULL);
   for (int i = 2000; i < 5000; i++)
-    assert((size_t)hashmap_get(ctx, map, format(ctx, "key %d", i)) == i);
+    assert((size_t)libcp_hashmap_get(ctx, map, libcp_format(ctx, "key %d", i)) == i);
   for (int i = 5000; i < 6000; i++)
-    assert(hashmap_get(ctx, map, "no such key") == NULL);
+    assert(libcp_hashmap_get(ctx, map, "no such key") == NULL);
   for (int i = 6000; i < 7000; i++)
-    hashmap_put(ctx, map, format(ctx, "key %d", i), (void *)(size_t)i);
+    libcp_hashmap_put(ctx, map, libcp_format(ctx, "key %d", i), (void *)(size_t)i);
 
-  assert(hashmap_get(ctx, map, "no such key") == NULL);
+  assert(libcp_hashmap_get(ctx, map, "no such key") == NULL);
 
   // Delete-heavy traffic must not leave tombstones behind: once they
   // outnumber the live entries the table rehashes (C8).
   HashMap *tomb = libcp_arena_calloc(ctx, 1, sizeof(HashMap));
   for (int i = 0; i < 1000; i++)
-    hashmap_put(ctx, tomb, format(ctx, "t %d", i), (void *)(size_t)i);
+    libcp_hashmap_put(ctx, tomb, libcp_format(ctx, "t %d", i), (void *)(size_t)i);
   for (int i = 0; i < 900; i++)
-    hashmap_delete(ctx, tomb, format(ctx, "t %d", i));
+    libcp_hashmap_delete(ctx, tomb, libcp_format(ctx, "t %d", i));
   assert(tomb->ndeleted <= tomb->used - tomb->ndeleted);
-  assert(hashmap_get(ctx, tomb, "t 0") == NULL);
-  assert((size_t)hashmap_get(ctx, tomb, "t 999") == 999);
-  hashmap_put(ctx, tomb, "t 0", (void *)123);
-  assert((size_t)hashmap_get(ctx, tomb, "t 0") == 123);
-  assert((size_t)hashmap_get(ctx, tomb, "t 999") == 999);
+  assert(libcp_hashmap_get(ctx, tomb, "t 0") == NULL);
+  assert((size_t)libcp_hashmap_get(ctx, tomb, "t 999") == 999);
+  libcp_hashmap_put(ctx, tomb, "t 0", (void *)123);
+  assert((size_t)libcp_hashmap_get(ctx, tomb, "t 0") == 123);
+  assert((size_t)libcp_hashmap_get(ctx, tomb, "t 999") == 999);
 
   printf("hashmap: ok\n");
 }

@@ -42,8 +42,8 @@ static int raw_end_of(File *file, int off) {
   int lo = file->map[off];
   char *p = file->raw + lo;
 
-  if (is_line_break(p))
-    return lo + line_break_len(p);
+  if (libcp_is_line_break(p))
+    return lo + libcp_line_break_len(p);
 
   if (p[0] == '\\' && (p[1] == 'u' || p[1] == 'U')) {
     int digs = p[1] == 'u' ? 4 : 8;
@@ -93,7 +93,7 @@ static void verror_at(LibcpContext *ctx, char *filename, char *input, int line_n
   if (ctx && ctx->diag_fn) {
     char *msg = vformat(ctx, fmt, ap);
     LibcpDiagnostic d = {filename, line_no,
-                           display_width(ctx, line, loc - line) + 1,
+                           libcp_display_width(ctx, line, loc - line) + 1,
                            severity, msg};
     ctx->diag_fn(ctx->diag_user, &d);
     return;
@@ -108,7 +108,7 @@ static void verror_at(LibcpContext *ctx, char *filename, char *input, int line_n
   fprintf(stderr, "%.*s\n", (int)(end - line), line);
 
   // Show the error message.
-  int pos = display_width(ctx, line, loc - line) + indent;
+  int pos = libcp_display_width(ctx, line, loc - line) + indent;
 
   fprintf(stderr, "%*s", pos, ""); // print pos spaces.
   fprintf(stderr, "^ ");
@@ -118,7 +118,7 @@ static void verror_at(LibcpContext *ctx, char *filename, char *input, int line_n
 
 // Reports an error; unwinds to the current public entry, or exits when
 // the driver is outside one.
-void error(LibcpContext *ctx, char *fmt, ...) {
+void libcp_error(LibcpContext *ctx, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
 
@@ -135,7 +135,7 @@ void error(LibcpContext *ctx, char *fmt, ...) {
   raise_error(ctx);
 }
 
-void error_at(LibcpContext *ctx, char *loc, char *fmt, ...) {
+void libcp_error_at(LibcpContext *ctx, char *loc, char *fmt, ...) {
   int line_no = ctx->current_file->lines[raw_off(ctx->current_file, loc)];
 
   va_list ap;
@@ -146,7 +146,7 @@ void error_at(LibcpContext *ctx, char *loc, char *fmt, ...) {
   raise_error(ctx);
 }
 
-void error_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) {
+void libcp_error_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(ctx, tok->file->name, tok->file->contents, tok->line_no, tok->loc,
@@ -155,7 +155,7 @@ void error_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) {
   raise_error(ctx);
 }
 
-void warn_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) {
+void libcp_warn_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(ctx, tok->file->name, tok->file->contents, tok->line_no, tok->loc,
@@ -165,7 +165,7 @@ void warn_tok(LibcpContext *ctx, Token *tok, char *fmt, ...) {
 
 // The dump name of a token kind. Lives here, not in the driver, so the
 // provenance channel can use it without main.c.
-char *token_kind_name(LibcpContext *ctx, TokenKind kind) {
+char *libcp_token_kind_name(LibcpContext *ctx, TokenKind kind) {
   switch (kind) {
   case TK_IDENT:   return "ident";
   case TK_PUNCT:   return "punct";
@@ -179,21 +179,21 @@ char *token_kind_name(LibcpContext *ctx, TokenKind kind) {
 }
 
 // Consumes the current token if it matches `op`.
-bool equal(Token *tok, char *op) {
+bool libcp_equal(Token *tok, char *op) {
   // The length check comes first: a token longer than `op` must not make
   // memcmp read past the end of `op` (ASan found this in L3.4c).
   return (int)strlen(op) == tok->len && memcmp(tok->loc, op, tok->len) == 0;
 }
 
 // Ensure that the current token is `op`.
-Token *skip(LibcpContext *ctx, Token *tok, char *op) {
-  if (!equal(tok, op))
-    error_tok(ctx, tok, "expected '%s'", op);
+Token *libcp_skip(LibcpContext *ctx, Token *tok, char *op) {
+  if (!libcp_equal(tok, op))
+    libcp_error_tok(ctx, tok, "expected '%s'", op);
   return tok->next;
 }
 
-bool consume(Token **rest, Token *tok, char *str) {
-  if (equal(tok, str)) {
+bool libcp_consume(Token **rest, Token *tok, char *str) {
+  if (libcp_equal(tok, str)) {
     *rest = tok->next;
     return true;
   }
@@ -233,14 +233,14 @@ static bool startswith(char *p, char *q) {
 // If p does not point to a valid identifier, 0 is returned.
 static int read_ident(LibcpContext *ctx, char *start) {
   char *p = start;
-  uint32_t c = decode_utf8(ctx, &p, p);
-  if (!is_ident1(c))
+  uint32_t c = libcp_decode_utf8(ctx, &p, p);
+  if (!libcp_is_ident1(c))
     return 0;
 
   for (;;) {
     char *q;
-    c = decode_utf8(ctx, &q, p);
-    if (!is_ident2(c))
+    c = libcp_decode_utf8(ctx, &q, p);
+    if (!libcp_is_ident2(c))
       return p - start;
     p = q;
   }
@@ -277,10 +277,10 @@ static bool is_keyword(LibcpContext *ctx, Token *tok) {
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
-      hashmap_put(ctx, map, kw[i], (void *)1);
+      libcp_hashmap_put(ctx, map, kw[i], (void *)1);
   }
 
-  return hashmap_get2(ctx, map, tok->loc, tok->len);
+  return libcp_hashmap_get2(ctx, map, tok->loc, tok->len);
 }
 
 static int read_escaped_char(LibcpContext *ctx, char **new_pos, char *p) {
@@ -300,7 +300,7 @@ static int read_escaped_char(LibcpContext *ctx, char **new_pos, char *p) {
     // Read a hexadecimal number.
     p++;
     if (!isxdigit((unsigned char)*p))
-      error_at(ctx, p, "invalid hex escape sequence");
+      libcp_error_at(ctx, p, "invalid hex escape sequence");
 
     int c = 0;
     for (; isxdigit((unsigned char)*p); p++)
@@ -341,7 +341,7 @@ static char *string_literal_end(LibcpContext *ctx, char *p) {
   char *start = p;
   for (; *p != '"'; p++) {
     if (*p == '\n' || *p == '\0')
-      error_at(ctx, start, "unclosed string literal");
+      libcp_error_at(ctx, start, "unclosed string literal");
     if (*p == '\\')
       p++;
   }
@@ -361,7 +361,7 @@ static Token *read_string_literal(LibcpContext *ctx, char *start, char *quote, i
   }
 
   Token *tok = new_token(ctx, TK_STR, start, end + 1, raw_trivia);
-  tok->ty = array_of(ctx, ty_char, len + 1);
+  tok->ty = libcp_array_of(ctx, libcp_ty_char, len + 1);
   tok->str = buf;
   return tok;
 }
@@ -384,7 +384,7 @@ static Token *read_utf16_string_literal(LibcpContext *ctx, char *start, char *qu
       continue;
     }
 
-    uint32_t c = decode_utf8(ctx, &p, p);
+    uint32_t c = libcp_decode_utf8(ctx, &p, p);
     if (c < 0x10000) {
       // Encode a code point in 2 bytes.
       buf[len++] = c;
@@ -397,7 +397,7 @@ static Token *read_utf16_string_literal(LibcpContext *ctx, char *start, char *qu
   }
 
   Token *tok = new_token(ctx, TK_STR, start, end + 1, raw_trivia);
-  tok->ty = array_of(ctx, ty_ushort, len + 1);
+  tok->ty = libcp_array_of(ctx, libcp_ty_ushort, len + 1);
   tok->str = (char *)buf;
   return tok;
 }
@@ -415,11 +415,11 @@ static Token *read_utf32_string_literal(LibcpContext *ctx, char *start, char *qu
     if (*p == '\\')
       buf[len++] = read_escaped_char(ctx, &p, p + 1);
     else
-      buf[len++] = decode_utf8(ctx, &p, p);
+      buf[len++] = libcp_decode_utf8(ctx, &p, p);
   }
 
   Token *tok = new_token(ctx, TK_STR, start, end + 1, raw_trivia);
-  tok->ty = array_of(ctx, ty, len + 1);
+  tok->ty = libcp_array_of(ctx, ty, len + 1);
   tok->str = (char *)buf;
   return tok;
 }
@@ -427,17 +427,17 @@ static Token *read_utf32_string_literal(LibcpContext *ctx, char *start, char *qu
 static Token *read_char_literal(LibcpContext *ctx, char *start, char *quote, Type *ty, int raw_trivia) {
   char *p = quote + 1;
   if (*p == '\0')
-    error_at(ctx, start, "unclosed char literal");
+    libcp_error_at(ctx, start, "unclosed char literal");
 
   int c;
   if (*p == '\\')
     c = read_escaped_char(ctx, &p, p + 1);
   else
-    c = decode_utf8(ctx, &p, p);
+    c = libcp_decode_utf8(ctx, &p, p);
 
   char *end = strchr(p, '\'');
   if (!end)
-    error_at(ctx, p, "unclosed char literal");
+    libcp_error_at(ctx, p, "unclosed char literal");
 
   Token *tok = new_token(ctx, TK_NUM, start, end + 1, raw_trivia);
   tok->val = c;
@@ -465,7 +465,7 @@ static bool convert_pp_int(LibcpContext *ctx, Token *tok) {
   errno = 0;
   int64_t val = strtoul(p, &p, base);
   if (errno == ERANGE)
-    error_tok(ctx, tok, "integer literal is too large");
+    libcp_error_tok(ctx, tok, "integer literal is too large");
 
   // Read U, L or LL suffixes.
   bool l = false;
@@ -498,28 +498,28 @@ static bool convert_pp_int(LibcpContext *ctx, Token *tok) {
   Type *ty;
   if (base == 10) {
     if (l && u)
-      ty = ty_ulong;
+      ty = libcp_ty_ulong;
     else if (l)
-      ty = ty_long;
+      ty = libcp_ty_long;
     else if (u)
-      ty = (val >> 32) ? ty_ulong : ty_uint;
+      ty = (val >> 32) ? libcp_ty_ulong : libcp_ty_uint;
     else
-      ty = (val >> 31) ? ty_long : ty_int;
+      ty = (val >> 31) ? libcp_ty_long : libcp_ty_int;
   } else {
     if (l && u)
-      ty = ty_ulong;
+      ty = libcp_ty_ulong;
     else if (l)
-      ty = (val >> 63) ? ty_ulong : ty_long;
+      ty = (val >> 63) ? libcp_ty_ulong : libcp_ty_long;
     else if (u)
-      ty = (val >> 32) ? ty_ulong : ty_uint;
+      ty = (val >> 32) ? libcp_ty_ulong : libcp_ty_uint;
     else if (val >> 63)
-      ty = ty_ulong;
+      ty = libcp_ty_ulong;
     else if (val >> 32)
-      ty = ty_long;
+      ty = libcp_ty_long;
     else if (val >> 31)
-      ty = ty_uint;
+      ty = libcp_ty_uint;
     else
-      ty = ty_int;
+      ty = libcp_ty_int;
   }
 
   tok->kind = TK_NUM;
@@ -546,24 +546,24 @@ static void convert_pp_number(LibcpContext *ctx, Token *tok) {
 
   Type *ty;
   if (*end == 'f' || *end == 'F') {
-    ty = ty_float;
+    ty = libcp_ty_float;
     end++;
   } else if (*end == 'l' || *end == 'L') {
-    ty = ty_ldouble;
+    ty = libcp_ty_ldouble;
     end++;
   } else {
-    ty = ty_double;
+    ty = libcp_ty_double;
   }
 
   if (tok->loc + tok->len != end)
-    error_tok(ctx, tok, "invalid numeric constant");
+    libcp_error_tok(ctx, tok, "invalid numeric constant");
 
   tok->kind = TK_NUM;
   tok->fval = val;
   tok->ty = ty;
 }
 
-void convert_pp_tokens(LibcpContext *ctx, Token *tok) {
+void libcp_convert_pp_tokens(LibcpContext *ctx, Token *tok) {
   for (Token *t = tok; t->kind != TK_EOF; t = t->next) {
     if (is_keyword(ctx, t))
       t->kind = TK_KEYWORD;
@@ -578,7 +578,7 @@ static void add_line_numbers(Token *tok) {
     tok->line_no = tok->file->lines[raw_off(tok->file, tok->loc)];
 }
 
-Token *tokenize_string_literal(LibcpContext *ctx, Token *tok, Type *basety) {
+Token *libcp_tokenize_string_literal(LibcpContext *ctx, Token *tok, Type *basety) {
   // The re-scan needs the raw coordinates of the token it replaces, so
   // scan against the file that token belongs to (the running
   // `current_file` is whichever file was tokenized last). The `file` and
@@ -602,7 +602,7 @@ Token *tokenize_string_literal(LibcpContext *ctx, Token *tok, Type *basety) {
 }
 
 // Tokenize a given string and returns new tokens.
-Token *tokenize(LibcpContext *ctx, File *file) {
+Token *libcp_tokenize(LibcpContext *ctx, File *file) {
   ctx->current_file = file;
 
   char *p = file->contents;
@@ -632,7 +632,7 @@ Token *tokenize(LibcpContext *ctx, File *file) {
     if (startswith(p, "/*")) {
       char *q = strstr(p + 2, "*/");
       if (!q)
-        error_at(ctx, p, "unclosed block comment");
+        libcp_error_at(ctx, p, "unclosed block comment");
       p = q + 2;
       ctx->has_space = true;
       continue;
@@ -696,7 +696,7 @@ Token *tokenize(LibcpContext *ctx, File *file) {
 
     // Wide string literal
     if (startswith(p, "L\"")) {
-      cur = cur->next = read_utf32_string_literal(ctx, p, p + 1, ty_int, raw_trivia);
+      cur = cur->next = read_utf32_string_literal(ctx, p, p + 1, libcp_ty_int, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -704,7 +704,7 @@ Token *tokenize(LibcpContext *ctx, File *file) {
 
     // UTF-32 string literal
     if (startswith(p, "U\"")) {
-      cur = cur->next = read_utf32_string_literal(ctx, p, p + 1, ty_uint, raw_trivia);
+      cur = cur->next = read_utf32_string_literal(ctx, p, p + 1, libcp_ty_uint, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -712,7 +712,7 @@ Token *tokenize(LibcpContext *ctx, File *file) {
 
     // Character literal
     if (*p == '\'') {
-      cur = cur->next = read_char_literal(ctx, p, p, ty_int, raw_trivia);
+      cur = cur->next = read_char_literal(ctx, p, p, libcp_ty_int, raw_trivia);
       cur->val = (char)cur->val;
       p += cur->len;
       raw_trivia = raw_end(cur);
@@ -721,7 +721,7 @@ Token *tokenize(LibcpContext *ctx, File *file) {
 
     // UTF-16 character literal
     if (startswith(p, "u'")) {
-      cur = cur->next = read_char_literal(ctx, p, p + 1, ty_ushort, raw_trivia);
+      cur = cur->next = read_char_literal(ctx, p, p + 1, libcp_ty_ushort, raw_trivia);
       cur->val &= 0xffff;
       p += cur->len;
       raw_trivia = raw_end(cur);
@@ -730,7 +730,7 @@ Token *tokenize(LibcpContext *ctx, File *file) {
 
     // Wide character literal
     if (startswith(p, "L'")) {
-      cur = cur->next = read_char_literal(ctx, p, p + 1, ty_int, raw_trivia);
+      cur = cur->next = read_char_literal(ctx, p, p + 1, libcp_ty_int, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -738,7 +738,7 @@ Token *tokenize(LibcpContext *ctx, File *file) {
 
     // UTF-32 character literal
     if (startswith(p, "U'")) {
-      cur = cur->next = read_char_literal(ctx, p, p + 1, ty_uint, raw_trivia);
+      cur = cur->next = read_char_literal(ctx, p, p + 1, libcp_ty_uint, raw_trivia);
       p += cur->len;
       raw_trivia = raw_end(cur);
       continue;
@@ -762,7 +762,7 @@ Token *tokenize(LibcpContext *ctx, File *file) {
       continue;
     }
 
-    error_at(ctx, p, "invalid token");
+    libcp_error_at(ctx, p, "invalid token");
   }
 
   // The trailing trivia of the file belongs to the EOF token.
@@ -817,7 +817,7 @@ static char *read_file(LibcpContext *ctx, char *path, size_t *len) {
   if (buflen > INT32_MAX) {
     fclose(out);
     free(buf);
-    error(ctx, "file too large: %s", path);
+    libcp_error(ctx, "file too large: %s", path);
   }
 
   // fputc below grows the memstream's length by the terminator; keep the
@@ -843,11 +843,11 @@ static char *read_file(LibcpContext *ctx, char *path, size_t *len) {
   return buf;
 }
 
-File **get_input_files(LibcpContext *ctx) {
+File **libcp_get_input_files(LibcpContext *ctx) {
   return ctx->input_files;
 }
 
-File *new_file_len(LibcpContext *ctx, char *name, int file_no, char *contents, int len) {
+File *libcp_new_file_len(LibcpContext *ctx, char *name, int file_no, char *contents, int len) {
   File *file = libcp_arena_calloc(ctx, 1, sizeof(File));
   file->name = name;
   file->display_name = name;
@@ -856,7 +856,7 @@ File *new_file_len(LibcpContext *ctx, char *name, int file_no, char *contents, i
 
   // A synthetic buffer is scanned as it is: it is its own raw text, the
   // map is the identity and the line numbers are the plain newline
-  // count. (tokenize_file replaces these tables with the ones
+  // count. (libcp_tokenize_file_impl replaces these tables with the ones
   // make_scan_buffer builds.)
   file->raw = contents;
   file->map = libcp_arena_calloc(ctx, len + 2, sizeof(int));
@@ -872,17 +872,17 @@ File *new_file_len(LibcpContext *ctx, char *name, int file_no, char *contents, i
   return file;
 }
 
-File *new_file(LibcpContext *ctx, char *name, int file_no, char *contents) {
-  return new_file_len(ctx, name, file_no, contents, strlen(contents));
+File *libcp_new_file(LibcpContext *ctx, char *name, int file_no, char *contents) {
+  return libcp_new_file_len(ctx, name, file_no, contents, strlen(contents));
 }
 
 // True if p starts a line break: '\n', '\r\n' or '\r'.
-bool is_line_break(char *p) {
+bool libcp_is_line_break(char *p) {
   return *p == '\n' || *p == '\r';
 }
 
 // The length of the line break at p.
-int line_break_len(char *p) {
+int libcp_line_break_len(char *p) {
   return (*p == '\r' && p[1] == '\n') ? 2 : 1;
 }
 
@@ -911,7 +911,7 @@ static char *make_scan_buffer(LibcpContext *ctx, char *raw, int len, int **map_o
   if (len == 0 || raw[len - 1] != '\n')
     text[len] = '\n';
   // The raw length, plus the synthesized final newline. Never strlen:
-  // the raw text may contain a NUL, which tokenize_file diagnoses.
+  // the raw text may contain a NUL, which libcp_tokenize_file_impl diagnoses.
   int n = len;
   if (len == 0 || raw[len - 1] != '\n')
     n++;
@@ -937,17 +937,17 @@ static char *make_scan_buffer(LibcpContext *ctx, char *raw, int len, int **map_o
 
     // A backslash before a line break joins the lines: both bytes are
     // dropped, and the break is not a break for the lexer.
-    if (text[i] == '\\' && i + 1 < n && is_line_break(text + i + 1)) {
+    if (text[i] == '\\' && i + 1 < n && libcp_is_line_break(text + i + 1)) {
       pending++;
-      i += 1 + line_break_len(text + i + 1);
+      i += 1 + libcp_line_break_len(text + i + 1);
       continue;
     }
 
     // A line break becomes a single '\n'.
-    if (is_line_break(text + i)) {
+    if (libcp_is_line_break(text + i)) {
       map[j] = i;
       buf[j++] = '\n';
-      i += line_break_len(text + i);
+      i += libcp_line_break_len(text + i);
       line += 1 + pending;
       pending = 0;
       continue;
@@ -958,7 +958,7 @@ static char *make_scan_buffer(LibcpContext *ctx, char *raw, int len, int **map_o
       int digs = text[i + 1] == 'u' ? 4 : 8;
       uint32_t c = read_universal_char(text + i + 2, digs);
       if (c) {
-        int k = encode_utf8(buf + j, c);
+        int k = libcp_encode_utf8(buf + j, c);
         for (int e = 0; e < k; e++)
           map[j + e] = i;
         j += k;
@@ -1001,7 +1001,7 @@ static char *make_scan_buffer(LibcpContext *ctx, char *raw, int len, int **map_o
   return buf;
 }
 
-Token *tokenize_file(LibcpContext *ctx, char *path) {
+Token *libcp_tokenize_file_impl(LibcpContext *ctx, char *path) {
   size_t raw_len;
   char *raw = read_file(ctx, path, &raw_len);
   if (!raw)
@@ -1012,7 +1012,7 @@ Token *tokenize_file(LibcpContext *ctx, char *path) {
 
   // Save the filename for assembler .file directive.
   int file_no = ctx->next_file_no++;
-  File *file = new_file(ctx, path, file_no + 1, contents);
+  File *file = libcp_new_file(ctx, path, file_no + 1, contents);
 
   // The scan buffer replaces the identity tables new_file built.
   file->raw = raw;
@@ -1024,7 +1024,7 @@ Token *tokenize_file(LibcpContext *ctx, char *path) {
   // the first one before tokenizing.
   if (memchr(raw, 0, raw_len)) {
     ctx->current_file = file;
-    error_at(ctx, memchr(contents, 0, raw_len + 2), "NUL byte in source file");
+    libcp_error_at(ctx, memchr(contents, 0, raw_len + 2), "NUL byte in source file");
   }
 
   // Save the filename for assembler .file directive.
@@ -1040,5 +1040,5 @@ Token *tokenize_file(LibcpContext *ctx, char *path) {
   ctx->input_files_len = file_no + 1;
   file_no++;
 
-  return tokenize(ctx, file);
+  return libcp_tokenize(ctx, file);
 }

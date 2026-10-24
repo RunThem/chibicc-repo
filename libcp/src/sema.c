@@ -12,7 +12,7 @@
 //    alignments, bitfield widths, case values) and lays aggregates
 //    out;
 //
-//  - the annotation pass (add_type and type_chain) types every node,
+//  - the annotation pass (libcp_add_type and type_chain) types every node,
 //    inserts the implicit conversions the standard requires, runs the
 //    checks that need a typed tree, records the compile-time
 //    conclusions on the nodes (sizeof values, generic selections, the
@@ -33,11 +33,11 @@
 //
 // It also contains the constant expression evaluator (eval and
 // friends), which both passes use, and which the preprocessor uses
-// for `#if` through const_expr.
+// for `#if` through libcp_const_expr.
 //
 // A handful of its type-level tools are exported for consumers that
-// build nodes of their own - add_type, new_arith, usual_arith_conv,
-// get_common_type, new_cast and the node constructors (see libcp.h).
+// build nodes of their own - libcp_add_type, libcp_new_arith, usual_arith_conv,
+// libcp_get_common_type, libcp_new_cast and the node constructors (see libcp.h).
 // A consumer obtains its conversions from here rather than restating
 // them; what it contributes is the shape, not the semantics.
 
@@ -104,29 +104,29 @@ static Member *get_struct_member(Type *ty, Token *tok);
 // a numeric literal whose type is settled at birth rather than read off
 // a token. Exported (see libcp.h): a consumer that builds a node needs
 // it to arrive typed, and these are the shapes it cannot build itself.
-Node *new_var_node(LibcpContext *ctx, Obj *var, Token *tok) {
-  Node *node = new_node(ctx, ND_VAR, tok);
+Node *libcp_new_var_node(LibcpContext *ctx, Obj *var, Token *tok) {
+  Node *node = libcp_new_node(ctx, ND_VAR, tok);
   node->var = var;
   return node;
 }
 
-Node *new_vla_ptr(LibcpContext *ctx, Obj *var, Token *tok) {
-  Node *node = new_node(ctx, ND_VLA_PTR, tok);
+Node *libcp_new_vla_ptr(LibcpContext *ctx, Obj *var, Token *tok) {
+  Node *node = libcp_new_node(ctx, ND_VLA_PTR, tok);
   node->var = var;
   return node;
 }
 
-Node *new_long(LibcpContext *ctx, int64_t val, Token *tok) {
-  Node *node = new_node(ctx, ND_NUM, tok);
+Node *libcp_new_long(LibcpContext *ctx, int64_t val, Token *tok) {
+  Node *node = libcp_new_node(ctx, ND_NUM, tok);
   node->val = val;
-  node->ty = ty_long;
+  node->ty = libcp_ty_long;
   return node;
 }
 
-Node *new_ulong(LibcpContext *ctx, long val, Token *tok) {
-  Node *node = new_node(ctx, ND_NUM, tok);
+Node *libcp_new_ulong(LibcpContext *ctx, long val, Token *tok) {
+  Node *node = libcp_new_node(ctx, ND_NUM, tok);
   node->val = val;
-  node->ty = ty_ulong;
+  node->ty = libcp_ty_ulong;
   return node;
 }
 
@@ -136,15 +136,15 @@ Node *new_ulong(LibcpContext *ctx, long val, Token *tok) {
 // increment restores the operand's type with - comes through here, so
 // marking the node is a single assignment. A cast the source wrote
 // arrives as an ND_CAST node from the parser instead, which leaves the
-// flag false, and add_type resolves rather than builds it.
-Node *new_cast(LibcpContext *ctx, Node *expr, Type *ty) {
-  add_type(ctx, expr);
+// flag false, and libcp_add_type resolves rather than builds it.
+Node *libcp_new_cast(LibcpContext *ctx, Node *expr, Type *ty) {
+  libcp_add_type(ctx, expr);
 
   Node *node = libcp_arena_calloc(ctx, 1, sizeof(Node));
   node->kind = ND_CAST;
   node->tok = expr->tok;
   node->lhs = expr;
-  node->ty = copy_type(ctx, ty);
+  node->ty = libcp_copy_type(ctx, ty);
   node->is_implicit = true;
   return node;
 }
@@ -169,7 +169,7 @@ struct SemaScope {
 // is what lets a repeated libcp_sema without a reset start from the
 // same state as a reset one (the audit's label_gotos / unique_name_id
 // omission).
-void sema_state_clear(LibcpContext *ctx) {
+void libcp_sema_state_clear(LibcpContext *ctx) {
   ctx->sema_scope = NULL;
   ctx->locals = NULL;
   ctx->globals = NULL;
@@ -191,7 +191,7 @@ void sema_state_clear(LibcpContext *ctx) {
 //
 // A run starts with the fields cleared and a fresh root scope.
 static void sema_init(LibcpContext *ctx) {
-  sema_state_clear(ctx);
+  libcp_sema_state_clear(ctx);
   ctx->sema_scope = libcp_arena_calloc(ctx, 1, sizeof(Scope));
 }
 
@@ -214,7 +214,7 @@ static void leave_scope(LibcpContext *ctx) {
 // Find a variable by name.
 static VarScope *find_var(LibcpContext *ctx, Token *tok) {
   for (Scope *sc = scope; sc; sc = sc->next) {
-    VarScope *sc2 = hashmap_get2(ctx, &sc->vars, tok->loc, tok->len);
+    VarScope *sc2 = libcp_hashmap_get2(ctx, &sc->vars, tok->loc, tok->len);
     if (sc2)
       return sc2;
   }
@@ -223,7 +223,7 @@ static VarScope *find_var(LibcpContext *ctx, Token *tok) {
 
 static VarScope *push_scope(LibcpContext *ctx, char *name) {
   VarScope *sc = libcp_arena_calloc(ctx, 1, sizeof(VarScope));
-  hashmap_put(ctx, &scope->vars, name, sc);
+  libcp_hashmap_put(ctx, &scope->vars, name, sc);
   return sc;
 }
 
@@ -231,7 +231,7 @@ static VarScope *push_scope(LibcpContext *ctx, char *name) {
 // position of the declaration, anchored exactly as the parser used to.
 static void check_declared_void(LibcpContext *ctx, Token *tok, Type *ty) {
   if (ty->kind == TY_VOID)
-    error_tok(ctx, tok, "variable declared void");
+    libcp_error_tok(ctx, tok, "variable declared void");
 }
 
 // Looks up a function in the file scope.
@@ -240,7 +240,7 @@ static Obj *find_func(LibcpContext *ctx, char *name) {
   while (sc->next)
     sc = sc->next;
 
-  VarScope *sc2 = hashmap_get(ctx, &sc->vars, name);
+  VarScope *sc2 = libcp_hashmap_get(ctx, &sc->vars, name);
   if (sc2 && sc2->var && sc2->var->is_function)
     return sc2->var;
   return NULL;
@@ -259,11 +259,11 @@ static Obj *declare_function(LibcpContext *ctx, char *name, Type *ty, VarAttr *a
     // fn->is_function is always true here (the diagnostic lock
     // leaves it uncovered for exactly that reason).
     if (!fn->is_function)
-      error_tok(ctx, tok, "redeclared as a different kind of symbol");
+      libcp_error_tok(ctx, tok, "redeclared as a different kind of symbol");
     if (fn->is_definition && is_definition)
-      error_tok(ctx, tok, "redefinition of %s", name);
+      libcp_error_tok(ctx, tok, "redefinition of %s", name);
     if (!fn->is_static && attr->is_static)
-      error_tok(ctx, tok, "static declaration follows a non-static declaration");
+      libcp_error_tok(ctx, tok, "static declaration follows a non-static declaration");
     fn->is_definition = fn->is_definition || is_definition;
   } else {
     fn = new_gvar(ctx, name, ty);
@@ -281,7 +281,7 @@ static Obj *declare_function(LibcpContext *ctx, char *name, Type *ty, VarAttr *a
 // goto and [GNU] label-value nodes collected while its body was
 // annotated and checked (a label value can live outside the statement
 // tree, in a block-scope static initializer, which only the
-// annotation pass reaches - see add_type's ND_LABEL_VAL case).
+// annotation pass reaches - see libcp_add_type's ND_LABEL_VAL case).
 #define gotos (ctx->gotos)
 #define labels (ctx->labels)
 
@@ -299,7 +299,7 @@ static void check_labels(LibcpContext *ctx) {
         break;
       }
     if (!found)
-      error_tok(ctx, x->tok->next, "use of undeclared label");
+      libcp_error_tok(ctx, x->tok->next, "use of undeclared label");
   }
 }
 
@@ -360,22 +360,22 @@ static void check_node(LibcpContext *ctx, Node *node) {
     return;
   case ND_CASE:
     if (!switch_depth)
-      error_tok(ctx, node->tok, node->is_default ? "stray default" : "stray case");
+      libcp_error_tok(ctx, node->tok, node->is_default ? "stray default" : "stray case");
     check_node(ctx, node->lhs);
     return;
   case ND_BREAK:
     if (!loop_depth && !switch_depth)
-      error_tok(ctx, node->tok, "stray break");
+      libcp_error_tok(ctx, node->tok, "stray break");
     return;
   case ND_CONTINUE:
     if (!loop_depth)
-      error_tok(ctx, node->tok, "stray continue");
+      libcp_error_tok(ctx, node->tok, "stray continue");
     return;
   case ND_GOTO:
-    nodearray_push(ctx, &gotos, node);
+    libcp_nodearray_push(ctx, &gotos, node);
     return;
   case ND_LABEL:
-    nodearray_push(ctx, &labels, node);
+    libcp_nodearray_push(ctx, &labels, node);
     check_node(ctx, node->lhs);
     return;
   case ND_FUNCDEF:
@@ -420,7 +420,7 @@ static void scan_globals(LibcpContext *ctx) {
 
   for (Obj *var = globals; var; var = var->next)
     if (var->is_definition && !var->is_tentative)
-      hashmap_put(ctx, &reals, var->name, &real_tag);
+      libcp_hashmap_put(ctx, &reals, var->name, &real_tag);
 
   Obj head;
   Obj *cur = &head;
@@ -433,10 +433,10 @@ static void scan_globals(LibcpContext *ctx) {
 
     // A real definition of this name exists, or one tentative
     // definition of it already survived.
-    if (hashmap_get(ctx, &reals, var->name) || hashmap_get(ctx, &kept, var->name))
+    if (libcp_hashmap_get(ctx, &reals, var->name) || libcp_hashmap_get(ctx, &kept, var->name))
       continue;
 
-    hashmap_put(ctx, &kept, var->name, &kept_tag);
+    libcp_hashmap_put(ctx, &kept, var->name, &kept_tag);
     cur = cur->next = var;
   }
 
@@ -482,12 +482,12 @@ static void resolve_enum_records(LibcpContext *ctx, Node *recs) {
         val = eval(ctx, recs->lhs);
       }
       if (val < INT32_MIN || val > INT32_MAX)
-        error_tok(ctx, recs->lhs ? recs->lhs->tok : recs->tok,
+        libcp_error_tok(ctx, recs->lhs ? recs->lhs->tok : recs->tok,
                   "enum constant value is out of range for int");
       recs->val = val++;
       recs->ty_op = NULL;
 
-      VarScope *sc = push_scope(ctx, get_ident(ctx, recs->tok));
+      VarScope *sc = push_scope(ctx, libcp_get_ident(ctx, recs->tok));
       sc->enum_ty = ety;
       sc->enum_val = recs->val;
       recs = recs->next;
@@ -580,7 +580,7 @@ static void resolve_type(LibcpContext *ctx, Type *ty) {
     // the parser has already built the rest of the declarator's types on
     // top of it, and a per-parameter name already attached to this
     // record must survive the replacement (F1).
-    add_type(ctx, expr);
+    libcp_add_type(ctx, expr);
     resolve_type(ctx, expr->ty);
 
     Token *name = ty->name;
@@ -680,7 +680,7 @@ static int attr_align(LibcpContext *ctx, VarAttr *attr) {
 }
 
 static int align_down(int n, int align) {
-  return align_to(n - align + 1, align);
+  return libcp_align_to(n - align + 1, align);
 }
 
 // Completes the member records before they are placed: a member type
@@ -712,7 +712,7 @@ static void finalize_members(LibcpContext *ctx, Type *ty) {
   for (Member *mem = ty->members; mem; mem = mem->next)
     last = mem;
   if (last && last->ty->kind == TY_ARRAY && last->ty->array_len < 0) {
-    last->ty = array_of(ctx, last->ty->base, 0);
+    last->ty = libcp_array_of(ctx, last->ty->base, 0);
     ty->is_flexible = true;
   }
 }
@@ -727,14 +727,14 @@ static void eval_bitfield_widths(LibcpContext *ctx, Type *ty) {
       // expression that does not exceed the width of the member's type.
       // The mask builders below shift by this value, so an unchecked
       // width is both UB and a silent miscompile.
-      if (!is_integer(mem->ty))
-        error_tok(ctx, mem->tok, "bit-field has non-integer type");
+      if (!libcp_is_integer(mem->ty))
+        libcp_error_tok(ctx, mem->tok, "bit-field has non-integer type");
 
       int64_t width = eval(ctx, mem->width_expr);
       if (width < 0)
-        error_tok(ctx, mem->width_expr->tok, "negative width in bit-field");
+        libcp_error_tok(ctx, mem->width_expr->tok, "negative width in bit-field");
       if (width > mem->ty->size * 8)
-        error_tok(ctx, mem->width_expr->tok,
+        libcp_error_tok(ctx, mem->width_expr->tok,
                   "width of bit-field exceeds its type");
 
       mem->bit_width = width;
@@ -765,18 +765,18 @@ static void layout_struct(LibcpContext *ctx, Type *ty) {
     if (mem->is_bitfield && mem->bit_width == 0) {
       // Zero-width anonymous bitfield has a special meaning.
       // It affects only alignment.
-      bits = align_to(bits, mem->ty->size * 8);
+      bits = libcp_align_to(bits, mem->ty->size * 8);
     } else if (mem->is_bitfield) {
       int sz = mem->ty->size;
       if (bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
-        bits = align_to(bits, sz * 8);
+        bits = libcp_align_to(bits, sz * 8);
 
       mem->offset = align_down(bits / 8, sz);
       mem->bit_offset = bits % (sz * 8);
       bits += mem->bit_width;
     } else {
       if (!ty->is_packed)
-        bits = align_to(bits, mem->align * 8);
+        bits = libcp_align_to(bits, mem->align * 8);
       mem->offset = bits / 8;
       bits += mem->ty->size * 8;
     }
@@ -785,7 +785,7 @@ static void layout_struct(LibcpContext *ctx, Type *ty) {
       ty->align = mem->align;
   }
 
-  ty->size = align_to(bits, ty->align * 8) / 8;
+  ty->size = libcp_align_to(bits, ty->align * 8) / 8;
 }
 
 // Unions need no member offsets (they are all zero), only the union
@@ -805,7 +805,7 @@ static void layout_union(LibcpContext *ctx, Type *ty) {
     if (ty->size < mem->ty->size)
       ty->size = mem->ty->size;
   }
-  ty->size = align_to(ty->size, ty->align);
+  ty->size = libcp_align_to(ty->size, ty->align);
 }
 
 // Binds an unresolved name. A variable or function reference becomes
@@ -820,7 +820,7 @@ static void bind_ident(LibcpContext *ctx, Node *node) {
     // liveness analysis can tell which ones are actually needed.
     if (var->is_function) {
       if (sema_fn)
-        strarray_push(ctx, &sema_fn->refs, var->name);
+        libcp_strarray_push(ctx, &sema_fn->refs, var->name);
       else
         var->is_root = true;
     }
@@ -834,13 +834,13 @@ static void bind_ident(LibcpContext *ctx, Node *node) {
   if (sc && sc->enum_ty) {
     node->kind = ND_NUM;
     node->val = sc->enum_val;
-    node->ty = ty_int;
+    node->ty = libcp_ty_int;
     return;
   }
 
-  if (equal(tok->next, "("))
-    error_tok(ctx, tok, "implicit declaration of a function");
-  error_tok(ctx, tok, "undefined variable");
+  if (libcp_equal(tok->next, "("))
+    libcp_error_tok(ctx, tok, "implicit declaration of a function");
+  libcp_error_tok(ctx, tok, "undefined variable");
 }
 
 static Obj *new_var(LibcpContext *ctx, char *name, Type *ty) {
@@ -872,7 +872,7 @@ static Type *named_type(LibcpContext *ctx, Type *ty, Token *name_tok) {
   if (ty->kind == TY_VLA)
     return ty;
 
-  Type *copy = copy_type(ctx, ty);
+  Type *copy = libcp_copy_type(ctx, ty);
   copy->name = name_tok;
   return copy;
 }
@@ -889,7 +889,7 @@ static Obj *new_gvar(LibcpContext *ctx, char *name, Type *ty) {
 // A built-in declaration is registered in the file scope like any other
 // object, but it is not linked into the globals list: codegen never
 // emits it, and leaving it out keeps that list the plain result of the
-// current TU instead of something sema() has to detach afterwards.
+// current TU instead of something libcp_sema() has to detach afterwards.
 static Obj *new_builtin_gvar(LibcpContext *ctx, char *name, Type *ty) {
   Obj *var = new_var(ctx, name, ty);
   var->is_static = true;
@@ -913,12 +913,12 @@ static Obj *new_builtin_gvar(LibcpContext *ctx, char *name, Type *ty) {
 #define unique_name_id (ctx->unique_name_id)
 
 static char *new_unique_name(LibcpContext *ctx) {
-  return format(ctx, ".L..%d", unique_name_id++);
+  return libcp_format(ctx, ".L..%d", unique_name_id++);
 }
 
 // Read-only peek at the counter: a consumer that allocates its own
 // `.L..%d` labels (codegen's shaping pass) continues from here.
-int unique_name_next(LibcpContext *ctx) {
+int libcp_unique_name_next(LibcpContext *ctx) {
   return unique_name_id;
 }
 
@@ -936,8 +936,8 @@ static void create_param_lvars(LibcpContext *ctx, Type *param) {
   if (param) {
     create_param_lvars(ctx, param->next);
     if (!param->name)
-      error_tok(ctx, param->name_pos, "parameter name omitted");
-    new_lvar(ctx, get_ident(ctx, param->name), param);
+      libcp_error_tok(ctx, param->name_pos, "parameter name omitted");
+    new_lvar(ctx, libcp_get_ident(ctx, param->name), param);
   }
 }
 
@@ -955,47 +955,47 @@ static void begin_function(LibcpContext *ctx, Obj *fn, Type *ty) {
   // as the hidden first parameter.
   Type *rty = ty->return_ty;
   if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
-    new_lvar(ctx, "", pointer_to(ctx, rty));
+    new_lvar(ctx, "", libcp_pointer_to(ctx, rty));
 
   fn->params = locals;
 
   if (ty->is_variadic)
-    fn->va_area = new_lvar(ctx, "__va_area__", array_of(ctx, ty_char, 136));
-  fn->alloca_bottom = new_lvar(ctx, "__alloca_size__", pointer_to(ctx, ty_char));
+    fn->va_area = new_lvar(ctx, "__va_area__", libcp_array_of(ctx, libcp_ty_char, 136));
+  fn->alloca_bottom = new_lvar(ctx, "__alloca_size__", libcp_pointer_to(ctx, libcp_ty_char));
 
   // [https://www.sigbus.info/n1570#6.4.2.2p1] "__func__" is
   // automatically defined as a local variable containing
   // the current function name.
   push_scope(ctx, "__func__")->var =
-    new_string_literal(ctx, fn->name, array_of(ctx, ty_char, strlen(fn->name) + 1));
+    new_string_literal(ctx, fn->name, libcp_array_of(ctx, libcp_ty_char, strlen(fn->name) + 1));
 
   // [GNU] __FUNCTION__ is yet another name of __func__.
   push_scope(ctx, "__FUNCTION__")->var =
-    new_string_literal(ctx, fn->name, array_of(ctx, ty_char, strlen(fn->name) + 1));
+    new_string_literal(ctx, fn->name, libcp_array_of(ctx, libcp_ty_char, strlen(fn->name) + 1));
 }
 
 static void declare_builtin_functions(LibcpContext *ctx) {
-  Type *ty = func_type(ctx, pointer_to(ctx, ty_void));
-  ty->params = copy_type(ctx, ty_int);
+  Type *ty = libcp_func_type(ctx, libcp_pointer_to(ctx, libcp_ty_void));
+  ty->params = libcp_copy_type(ctx, libcp_ty_int);
   builtin_alloca = new_builtin_gvar(ctx, "alloca", ty);
   builtin_alloca->is_definition = false;
 }
 
 // Build the `alloca(<size>)` call node for a VLA declaration. The call
-// arrives fully typed, so add_type skips it and codegen recognizes the
+// arrives fully typed, so libcp_add_type skips it and codegen recognizes the
 // builtin by name.
-Node *new_alloca(LibcpContext *ctx, Node *sz) {
-  Node *node = new_unary(ctx, ND_FUNCALL, new_var_node(ctx, builtin_alloca, sz->tok), sz->tok);
+Node *libcp_new_alloca(LibcpContext *ctx, Node *sz) {
+  Node *node = libcp_new_unary(ctx, ND_FUNCALL, libcp_new_var_node(ctx, builtin_alloca, sz->tok), sz->tok);
   node->func_ty = builtin_alloca->ty;
   node->ty = builtin_alloca->ty->return_ty;
   node->args = sz;
-  add_type(ctx, sz);
+  libcp_add_type(ctx, sz);
   return node;
 }
 
 // Builds a binary arithmetic node out of operands a lowering has
 // already settled on: the usual arithmetic conversions are applied and
-// the node comes back fully typed, so add_type has nothing left to do
+// the node comes back fully typed, so libcp_add_type has nothing left to do
 // with it. This is what makes new_add/new_sub total - every `+`/`-` in
 // the tree, whether the parser wrote it or sema rebuilt it from a
 // compound assignment or a subscript, is scaled and converted exactly
@@ -1003,12 +1003,12 @@ Node *new_alloca(LibcpContext *ctx, Node *sz) {
 //
 // Exported: this is how a consumer obtains a typed binary node, and with
 // it sema's conversion decisions, without re-implementing either.
-Node *new_arith(LibcpContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
-  add_type(ctx, lhs);
-  add_type(ctx, rhs);
-  usual_arith_conv(ctx, &lhs, &rhs);
+Node *libcp_new_arith(LibcpContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
+  libcp_add_type(ctx, lhs);
+  libcp_add_type(ctx, rhs);
+  libcp_usual_arith_conv(ctx, &lhs, &rhs);
 
-  Node *node = new_binary(ctx, kind, lhs, rhs, tok);
+  Node *node = libcp_new_binary(ctx, kind, lhs, rhs, tok);
   node->ty = lhs->ty;
   return node;
 }
@@ -1026,7 +1026,7 @@ static void lower_funcall(LibcpContext *ctx, Node *node, Token *tok) {
 
   if (ty->kind != TY_FUNC &&
       (ty->kind != TY_PTR || ty->base->kind != TY_FUNC))
-    error_tok(ctx, fn->tok, "not a function");
+    libcp_error_tok(ctx, fn->tok, "not a function");
 
   if (ty->kind != TY_FUNC)
     ty = ty->base;
@@ -1039,19 +1039,19 @@ static void lower_funcall(LibcpContext *ctx, Node *node, Token *tok) {
 
   for (Node *arg = node->args; arg;) {
     Node *next = arg->next;
-    add_type(ctx, arg);
+    libcp_add_type(ctx, arg);
 
     if (!param_ty && !ty->is_variadic)
-      error_tok(ctx, tok, "too many arguments");
+      libcp_error_tok(ctx, tok, "too many arguments");
 
     if (param_ty) {
       if (param_ty->kind != TY_STRUCT && param_ty->kind != TY_UNION)
-        arg = new_cast(ctx, arg, param_ty);
+        arg = libcp_new_cast(ctx, arg, param_ty);
       param_ty = param_ty->next;
     } else if (arg->ty->kind == TY_FLOAT) {
       // If parameter type is omitted (e.g. in "..."), float
       // arguments are promoted to double.
-      arg = new_cast(ctx, arg, ty_double);
+      arg = libcp_new_cast(ctx, arg, libcp_ty_double);
     }
 
     arg->next = NULL;
@@ -1060,7 +1060,7 @@ static void lower_funcall(LibcpContext *ctx, Node *node, Token *tok) {
   }
 
   if (param_ty)
-    error_tok(ctx, tok, "too few arguments");
+    libcp_error_tok(ctx, tok, "too few arguments");
 
   node->args = head.next;
   node->ty = ty->return_ty;
@@ -1112,7 +1112,7 @@ static InitTree *new_resolved_init(LibcpContext *ctx, Type *ty, bool is_flexible
 }
 
 static Type *copy_struct_type(LibcpContext *ctx, Type *ty) {
-  ty = copy_type(ctx, ty);
+  ty = libcp_copy_type(ctx, ty);
 
   Member head = {};
   Member *cur = &head;
@@ -1138,14 +1138,14 @@ static int eval_desig_index(LibcpContext *ctx, Node *expr) {
 static void eval_array_desig(LibcpContext *ctx, InitDesig *d, Type *ty, int *begin, int *end) {
   *begin = eval_desig_index(ctx, d->begin);
   if (*begin >= ty->array_len)
-    error_tok(ctx, d->after_begin, "array designator index exceeds array bounds");
+    libcp_error_tok(ctx, d->after_begin, "array designator index exceeds array bounds");
 
   if (d->end) {
     *end = eval_desig_index(ctx, d->end);
     if (*end >= ty->array_len)
-      error_tok(ctx, d->rbracket, "array designator index exceeds array bounds");
+      libcp_error_tok(ctx, d->rbracket, "array designator index exceeds array bounds");
     if (*end < *begin)
-      error_tok(ctx, d->rbracket, "array designator range [%d, %d] is empty", *begin, *end);
+      libcp_error_tok(ctx, d->rbracket, "array designator range [%d, %d] is empty", *begin, *end);
   } else {
     *end = *begin;
   }
@@ -1174,15 +1174,15 @@ static Member *find_init_member(LibcpContext *ctx, Type *ty, Token *name) {
       return mem;
   }
 
-  error_tok(ctx, name, "struct has no such member");
+  libcp_error_tok(ctx, name, "struct has no such member");
 }
 
 // Turn a recorded string literal into an expression node referencing
 // its anonymous global, which is what a string initializer for a
 // non-array target used to parse into.
 static Node *materialize_str(LibcpContext *ctx, Initializer *rec) {
-  Node *node = new_node(ctx, ND_STRING, rec->str_tok);
-  add_type(ctx, node);
+  Node *node = libcp_new_node(ctx, ND_STRING, rec->str_tok);
+  libcp_add_type(ctx, node);
   return node;
 }
 
@@ -1196,19 +1196,19 @@ static void resolve_string(LibcpContext *ctx, Initializer *rec, InitTree *init) 
   case 1: {
     char *str = tok->str;
     for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(ctx, str[i], tok);
+      init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
     break;
   }
   case 2: {
     uint16_t *str = (uint16_t *)tok->str;
     for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(ctx, str[i], tok);
+      init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
     break;
   }
   case 4: {
     uint32_t *str = (uint32_t *)tok->str;
     for (int i = 0; i < len; i++)
-      init->children[i]->expr = new_num(ctx, str[i], tok);
+      init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
     break;
   }
   default:
@@ -1248,7 +1248,7 @@ static void resolve_desig(LibcpContext *ctx, InitTree *init, InitDesig *d, Initi
 
   if (!d->name) {
     if (init->ty->kind != TY_ARRAY)
-      error_tok(ctx, d->tok, "array index in non-array initializer");
+      libcp_error_tok(ctx, d->tok, "array index in non-array initializer");
 
     int begin, end;
     eval_array_desig(ctx, d, init->ty, &begin, &end);
@@ -1283,7 +1283,7 @@ static void resolve_desig(LibcpContext *ctx, InitTree *init, InitDesig *d, Initi
     return;
   }
 
-  error_tok(ctx, d->tok, "field name not in struct or union initializer");
+  libcp_error_tok(ctx, d->tok, "field name not in struct or union initializer");
 }
 
 // Fill array elements from sibling items (brace-elision continuation
@@ -1317,7 +1317,7 @@ static void resolve_array1(LibcpContext *ctx, Initializer *rec, InitTree *init) 
     if (i < init->ty->array_len) {
       resolve_item(ctx, &cursor, init->children[i]);
     } else {
-      warn_tok(ctx, it->init->tok, "excess elements in array initializer");
+      libcp_warn_tok(ctx, it->init->tok, "excess elements in array initializer");
       cursor = it->next;
     }
     i++;
@@ -1387,7 +1387,7 @@ static void resolve_union(LibcpContext *ctx, Initializer *rec, InitTree *init, I
       else
         resolve_desig(ctx, init->children[mem->idx], it->desigs, it->init, &next);
       if (next)
-        error_tok(ctx, next->comma_tok, "expected '}'");
+        libcp_error_tok(ctx, next->comma_tok, "expected '}'");
       return;
     }
 
@@ -1396,14 +1396,14 @@ static void resolve_union(LibcpContext *ctx, Initializer *rec, InitTree *init, I
       // The old parser dispatched on the closing brace here; only an
       // array first member came out of `{}` without an error.
       if (init->ty->members->ty->kind != TY_ARRAY)
-        error_tok(ctx, rec->tok->next, "expected an expression");
+        libcp_error_tok(ctx, rec->tok->next, "expected an expression");
       return;
     }
 
     InitItem *next = it->next;
     resolve_desig(ctx, init->children[0], it->desigs, it->init, &next);
     if (next)
-      error_tok(ctx, next->desigs ? next->desigs->tok : next->init->tok, "expected '}'");
+      libcp_error_tok(ctx, next->desigs ? next->desigs->tok : next->init->tok, "expected '}'");
     return;
   }
 
@@ -1471,7 +1471,7 @@ static void resolve_value(LibcpContext *ctx, Initializer *rec, InitTree *init, I
 
   if (ty->kind == TY_ARRAY && rec->kind == INIT_STR) {
     if (init->is_flexible)
-      *init = *new_resolved_init(ctx, array_of(ctx, ty->base, rec->str_tok->ty->array_len), false);
+      *init = *new_resolved_init(ctx, libcp_array_of(ctx, ty->base, rec->str_tok->ty->array_len), false);
     resolve_string(ctx, rec, init);
     return;
   }
@@ -1484,7 +1484,7 @@ static void resolve_value(LibcpContext *ctx, Initializer *rec, InitTree *init, I
       int len = (rec->kind == INIT_LIST) ? count_flex_list(ctx, rec->items, ty)
                                          : count_flex(ctx, rec, cursor, ty);
       *cursor = save;
-      *init = *new_resolved_init(ctx, array_of(ctx, ty->base, len), false);
+      *init = *new_resolved_init(ctx, libcp_array_of(ctx, ty->base, len), false);
     }
 
     if (rec->kind == INIT_LIST) {
@@ -1506,7 +1506,7 @@ static void resolve_value(LibcpContext *ctx, Initializer *rec, InitTree *init, I
     // `struct T x = y;` where y is a variable of type `struct T`.
     // Handle that case first.
     Node *expr = (rec->kind == INIT_STR) ? materialize_str(ctx, rec) : rec->expr;
-    add_type(ctx, expr);
+    libcp_add_type(ctx, expr);
     if (expr->ty->kind == TY_STRUCT) {
       init->expr = expr;
       return;
@@ -1527,13 +1527,13 @@ static void resolve_value(LibcpContext *ctx, Initializer *rec, InitTree *init, I
     // element, no designators.
     InitItem *it = rec->items;
     if (!it)
-      error_tok(ctx, rec->tok->next, "expected an expression");
+      libcp_error_tok(ctx, rec->tok->next, "expected an expression");
     if (it->desigs)
-      error_tok(ctx, it->desigs->tok, "expected an expression");
+      libcp_error_tok(ctx, it->desigs->tok, "expected an expression");
     InitItem *next = it->next;
     resolve_value(ctx, it->init, init, &next);
     if (next)
-      error_tok(ctx, next->comma_tok, "expected '}'");
+      libcp_error_tok(ctx, next->comma_tok, "expected '}'");
     return;
   }
 
@@ -1698,26 +1698,26 @@ static void serialize_gvar(LibcpContext *ctx, Node *node) {
   node->init_resolved = NULL;
 }
 
-Type *get_common_type(LibcpContext *ctx, Type *ty1, Type *ty2) {
+Type *libcp_get_common_type(LibcpContext *ctx, Type *ty1, Type *ty2) {
   if (ty1->base)
-    return pointer_to(ctx, ty1->base);
+    return libcp_pointer_to(ctx, ty1->base);
 
   if (ty1->kind == TY_FUNC)
-    return pointer_to(ctx, ty1);
+    return libcp_pointer_to(ctx, ty1);
   if (ty2->kind == TY_FUNC)
-    return pointer_to(ctx, ty2);
+    return libcp_pointer_to(ctx, ty2);
 
   if (ty1->kind == TY_LDOUBLE || ty2->kind == TY_LDOUBLE)
-    return ty_ldouble;
+    return libcp_ty_ldouble;
   if (ty1->kind == TY_DOUBLE || ty2->kind == TY_DOUBLE)
-    return ty_double;
+    return libcp_ty_double;
   if (ty1->kind == TY_FLOAT || ty2->kind == TY_FLOAT)
-    return ty_float;
+    return libcp_ty_float;
 
   if (ty1->size < 4)
-    ty1 = ty_int;
+    ty1 = libcp_ty_int;
   if (ty2->size < 4)
-    ty2 = ty_int;
+    ty2 = libcp_ty_int;
 
   if (ty1->size != ty2->size)
     return (ty1->size < ty2->size) ? ty2 : ty1;
@@ -1734,10 +1734,10 @@ Type *get_common_type(LibcpContext *ctx, Type *ty1, Type *ty2) {
 // be promoted to match with the other.
 //
 // This operation is called the "usual arithmetic conversion".
-void usual_arith_conv(LibcpContext *ctx, Node **lhs, Node **rhs) {
-  Type *ty = get_common_type(ctx, (*lhs)->ty, (*rhs)->ty);
-  *lhs = new_cast(ctx, *lhs, ty);
-  *rhs = new_cast(ctx, *rhs, ty);
+void libcp_usual_arith_conv(LibcpContext *ctx, Node **lhs, Node **rhs) {
+  Type *ty = libcp_get_common_type(ctx, (*lhs)->ty, (*rhs)->ty);
+  *lhs = libcp_new_cast(ctx, *lhs, ty);
+  *rhs = libcp_new_cast(ctx, *rhs, ty);
 }
 
 // Find a struct member by name, descending into anonymous members.
@@ -1780,14 +1780,14 @@ static void resolve_member(LibcpContext *ctx, Node *node) {
   // make, anchored at the arrow.
   if (arrow) {
     if (ty->kind != TY_PTR || !ty->base)
-      error_tok(ctx, arrow, "invalid pointer dereference");
+      libcp_error_tok(ctx, arrow, "invalid pointer dereference");
     if (ty->base->kind == TY_VOID)
-      error_tok(ctx, arrow, "dereferencing a void pointer");
+      libcp_error_tok(ctx, arrow, "dereferencing a void pointer");
     if (ty->base->kind != TY_STRUCT && ty->base->kind != TY_UNION)
-      error_tok(ctx, arrow, "not a struct nor a union");
+      libcp_error_tok(ctx, arrow, "not a struct nor a union");
     ty = ty->base;
   } else if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) {
-    error_tok(ctx, operand->tok, "not a struct nor a union");
+    libcp_error_tok(ctx, operand->tok, "not a struct nor a union");
   }
 
   // The access needs the members placed. A bare `struct S {...};`
@@ -1800,9 +1800,9 @@ static void resolve_member(LibcpContext *ctx, Node *node) {
   for (;;) {
     Member *mem = get_struct_member(ty, node->tok);
     if (!mem)
-      error_tok(ctx, node->tok, "no such member");
+      libcp_error_tok(ctx, node->tok, "no such member");
 
-    Node *link = new_unary(ctx, ND_MEMBER, cur, node->tok);
+    Node *link = libcp_new_unary(ctx, ND_MEMBER, cur, node->tok);
     link->member = mem;
     if (arrow) {
       // The dereference belongs to the innermost link. The marker
@@ -1843,13 +1843,13 @@ static void resolve_member(LibcpContext *ctx, Node *node) {
 // only - they are expressions in the source, and a real compiler reports
 // their errors too.
 static void select_generic(LibcpContext *ctx, Node *node) {
-  add_type(ctx, node->cond);
+  libcp_add_type(ctx, node->cond);
 
   Type *ty = node->cond->ty;
   if (ty->kind == TY_FUNC)
-    ty = pointer_to(ctx, ty);
+    ty = libcp_pointer_to(ctx, ty);
   else if (ty->kind == TY_ARRAY)
-    ty = pointer_to(ctx, ty->base);
+    ty = libcp_pointer_to(ctx, ty->base);
 
   Node *sel = NULL;
   for (Node *assoc = node->args; assoc; assoc = assoc->next) {
@@ -1858,18 +1858,18 @@ static void select_generic(LibcpContext *ctx, Node *node) {
         sel = assoc->lhs;
     } else {
       resolve_type(ctx, assoc->ty_op);
-      if (is_compatible(ty, assoc->ty_op))
+      if (libcp_is_compatible(ty, assoc->ty_op))
         sel = assoc->lhs;
     }
   }
 
   if (!sel)
-    error_tok(ctx, node->tok, "controlling expression type not compatible with"
+    libcp_error_tok(ctx, node->tok, "controlling expression type not compatible with"
               " any generic association type");
 
   for (Node *assoc = node->args; assoc; assoc = assoc->next)
     if (assoc->lhs != sel)
-      add_type(ctx, assoc->lhs);
+      libcp_add_type(ctx, assoc->lhs);
 
   // The conclusion of the selection: the result expression of the
   // association the controlling expression picked, recorded on the
@@ -1877,7 +1877,7 @@ static void select_generic(LibcpContext *ctx, Node *node) {
   // the consumer reads the field rather than a replaced tree (PLAN
   // A9.1). The selection itself is typed here for the same reason
   // the unselected ones are above.
-  add_type(ctx, sel);
+  libcp_add_type(ctx, sel);
   node->generic_sel = sel;
   node->ty = sel->ty;
 }
@@ -1908,7 +1908,7 @@ static void type_chain(LibcpContext *ctx, Node *head) {
       break;
     }
 
-    add_type(ctx, n);
+    libcp_add_type(ctx, n);
   }
 }
 
@@ -1923,7 +1923,7 @@ static void annotate_init_exprs(LibcpContext *ctx, InitTree *init) {
     return;
 
   if (init->expr) {
-    add_type(ctx, init->expr);
+    libcp_add_type(ctx, init->expr);
     return;
   }
 
@@ -1952,7 +1952,7 @@ static void annotate_init_exprs(LibcpContext *ctx, InitTree *init) {
 // once - which is also why a consumer must not run its own shaping over a
 // subtree twice: this guard stops a second *annotation*, not a second
 // *lowering* (PLAN contract 3(d)).
-void add_type(LibcpContext *ctx, Node *node) {
+void libcp_add_type(LibcpContext *ctx, Node *node) {
   if (!node || node->ty)
     return;
 
@@ -1985,21 +1985,21 @@ void add_type(LibcpContext *ctx, Node *node) {
       stmt_expr_value = NULL;
   }
 
-  add_type(ctx, node->lhs);
-  add_type(ctx, node->rhs);
-  add_type(ctx, node->cond);
-  add_type(ctx, node->then);
-  add_type(ctx, node->els);
+  libcp_add_type(ctx, node->lhs);
+  libcp_add_type(ctx, node->rhs);
+  libcp_add_type(ctx, node->cond);
+  libcp_add_type(ctx, node->then);
+  libcp_add_type(ctx, node->els);
   type_chain(ctx, node->init);
-  add_type(ctx, node->inc);
+  libcp_add_type(ctx, node->inc);
   type_chain(ctx, node->body);
 
   for (Node *n = node->args; n; n = n->next)
-    add_type(ctx, n);
+    libcp_add_type(ctx, n);
 
   switch (node->kind) {
   case ND_NUM:
-    node->ty = ty_int;
+    node->ty = libcp_ty_int;
     return;
   case ND_ADD:
   case ND_SUB: {
@@ -2008,25 +2008,25 @@ void add_type(LibcpContext *ctx, Node *node) {
     // element count) are the consumer's now (PLAN A4.1). What stays
     // here is the operand acceptance - the branches new_add/new_sub
     // check when they rebuild - and the result type. No conversion
-    // casts: the rebuilding new_arith runs the same usual_arith_conv
+    // casts: the rebuilding libcp_new_arith runs the same usual_arith_conv
     // it always did, and doubling it would stack cast nodes.
     Type *lt = node->lhs->ty;
     Type *rt = node->rhs->ty;
     if (node->kind == ND_ADD) {
       if (lt->base && rt->base)
-        error_tok(ctx, node->tok, "invalid operands");
+        libcp_error_tok(ctx, node->tok, "invalid operands");
     } else {
       if (lt->base && rt->base) {
         // The difference itself is an element count, so it is typed
         // long; the division that scales it down is built on top.
-        node->ty = ty_long;
+        node->ty = libcp_ty_long;
         return;
       }
-      if (!((is_numeric(lt) && is_numeric(rt)) ||
-            (lt->base && (lt->base->kind == TY_VLA || is_integer(rt)))))
-        error_tok(ctx, node->tok, "invalid operands");
+      if (!((libcp_is_numeric(lt) && libcp_is_numeric(rt)) ||
+            (lt->base && (lt->base->kind == TY_VLA || libcp_is_integer(rt)))))
+        libcp_error_tok(ctx, node->tok, "invalid operands");
     }
-    node->ty = get_common_type(ctx, lt, rt);
+    node->ty = libcp_get_common_type(ctx, lt, rt);
     return;
   }
   case ND_MUL:
@@ -2035,12 +2035,12 @@ void add_type(LibcpContext *ctx, Node *node) {
   case ND_BITAND:
   case ND_BITOR:
   case ND_BITXOR:
-    usual_arith_conv(ctx, &node->lhs, &node->rhs);
+    libcp_usual_arith_conv(ctx, &node->lhs, &node->rhs);
     node->ty = node->lhs->ty;
     return;
   case ND_NEG: {
-    Type *ty = get_common_type(ctx, ty_int, node->lhs->ty);
-    node->lhs = new_cast(ctx, node->lhs, ty);
+    Type *ty = libcp_get_common_type(ctx, libcp_ty_int, node->lhs->ty);
+    node->lhs = libcp_new_cast(ctx, node->lhs, ty);
     node->ty = ty;
     return;
   }
@@ -2056,9 +2056,9 @@ void add_type(LibcpContext *ctx, Node *node) {
       return;
     }
     if (node->lhs->ty->kind == TY_ARRAY)
-      error_tok(ctx, node->lhs->tok, "not an lvalue");
+      libcp_error_tok(ctx, node->lhs->tok, "not an lvalue");
     if (node->lhs->ty->kind != TY_STRUCT)
-      node->rhs = new_cast(ctx, node->rhs, node->lhs->ty);
+      node->rhs = libcp_new_cast(ctx, node->rhs, node->lhs->ty);
     node->ty = node->lhs->ty;
     return;
   case ND_INCDEC:
@@ -2077,13 +2077,13 @@ void add_type(LibcpContext *ctx, Node *node) {
     // consumer's (PLAN A4.1). The conversion does not care which way
     // the operands face - the common type is symmetric - so the cast
     // nodes land on the same operands either way.
-    usual_arith_conv(ctx, &node->lhs, &node->rhs);
-    node->ty = ty_int;
+    libcp_usual_arith_conv(ctx, &node->lhs, &node->rhs);
+    node->ty = libcp_ty_int;
     return;
   case ND_EQ:
   case ND_NE:
-    usual_arith_conv(ctx, &node->lhs, &node->rhs);
-    node->ty = ty_int;
+    libcp_usual_arith_conv(ctx, &node->lhs, &node->rhs);
+    node->ty = libcp_ty_int;
     return;
   case ND_FUNCALL:
     // Lower the faithful call node: the callee check, the argument
@@ -2093,7 +2093,7 @@ void add_type(LibcpContext *ctx, Node *node) {
   case ND_NOT:
   case ND_LOGOR:
   case ND_LOGAND:
-    node->ty = ty_int;
+    node->ty = libcp_ty_int;
     return;
   case ND_BITNOT:
   case ND_SHL:
@@ -2102,7 +2102,7 @@ void add_type(LibcpContext *ctx, Node *node) {
     // operands, so a narrow left operand makes the result `int`. The
     // result type is a conclusion consumers read (`sizeof`, `_Generic`),
     // not just an instruction-selection hint.
-    Type *ty = get_common_type(ctx, ty_int, node->lhs->ty);
+    Type *ty = libcp_get_common_type(ctx, libcp_ty_int, node->lhs->ty);
     node->ty = ty;
     return;
   }
@@ -2139,7 +2139,7 @@ void add_type(LibcpContext *ctx, Node *node) {
     // that case - it is what identifies the type.
     Type *ty = node->ty_op;
     if (!ty) {
-      add_type(ctx, node->lhs);
+      libcp_add_type(ctx, node->lhs);
       ty = node->lhs->ty;
     }
     // The operand's type is read for its size, so the layout has to be
@@ -2147,7 +2147,7 @@ void add_type(LibcpContext *ctx, Node *node) {
     // the pointer rules alone.
     resolve_type(ctx, ty);
 
-    node->ty = ty_ulong;
+    node->ty = libcp_ty_ulong;
     if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
       return;
 
@@ -2159,10 +2159,10 @@ void add_type(LibcpContext *ctx, Node *node) {
     // `val`, typed like the literal it always folded to.
     resolve_type(ctx, node->ty_op);
     resolve_type(ctx, node->ty_op2);
-    node->val = is_compatible(node->ty_op, node->ty_op2);
+    node->val = libcp_is_compatible(node->ty_op, node->ty_op2);
     node->ty_op = NULL;
     node->ty_op2 = NULL;
-    node->ty = ty_int;
+    node->ty = libcp_ty_int;
     return;
   case ND_REG_CLASS: {
     // `__builtin_reg_class(T)`: integer or pointer, floating-point,
@@ -2170,14 +2170,14 @@ void add_type(LibcpContext *ctx, Node *node) {
     resolve_type(ctx, node->ty_op);
     Type *ty = node->ty_op;
     int64_t val = 2;
-    if (is_integer(ty) || ty->kind == TY_PTR)
+    if (libcp_is_integer(ty) || ty->kind == TY_PTR)
       val = 0;
-    else if (is_flonum(ty))
+    else if (libcp_is_flonum(ty))
       val = 1;
 
     node->ty_op = NULL;
     node->val = val;
-    node->ty = ty_int;
+    node->ty = libcp_ty_int;
     return;
   }
   case ND_COND:
@@ -2191,15 +2191,15 @@ void add_type(LibcpContext *ctx, Node *node) {
       // lowered form concludes it.
       Type *ty = node->cond->ty;
       if (ty->kind == TY_VOID || node->els->ty->kind == TY_VOID)
-        node->ty = ty_void;
+        node->ty = libcp_ty_void;
       else
-        node->ty = get_common_type(ctx, ty, node->els->ty);
+        node->ty = libcp_get_common_type(ctx, ty, node->els->ty);
       return;
     }
     if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {
-      node->ty = ty_void;
+      node->ty = libcp_ty_void;
     } else {
-      usual_arith_conv(ctx, &node->then, &node->els);
+      libcp_usual_arith_conv(ctx, &node->then, &node->els);
       node->ty = node->then->ty;
     }
     return;
@@ -2216,13 +2216,13 @@ void add_type(LibcpContext *ctx, Node *node) {
     return;
   case ND_ADDR: {
     if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield)
-      error_tok(ctx, node->tok, "cannot take address of bitfield");
+      libcp_error_tok(ctx, node->tok, "cannot take address of bitfield");
 
     Type *ty = node->lhs->ty;
     if (ty->kind == TY_ARRAY)
-      node->ty = pointer_to(ctx, ty->base);
+      node->ty = libcp_pointer_to(ctx, ty->base);
     else
-      node->ty = pointer_to(ctx, ty);
+      node->ty = libcp_pointer_to(ctx, ty);
     return;
   }
   case ND_SUBSCRIPT: {
@@ -2235,16 +2235,16 @@ void add_type(LibcpContext *ctx, Node *node) {
     Type *lt = node->lhs->ty;
     Type *rt = node->rhs->ty;
 
-    if (!(is_numeric(lt) && is_numeric(rt)) && !lt->base && !rt->base)
-      error_tok(ctx, node->tok, "invalid operands");
+    if (!(libcp_is_numeric(lt) && libcp_is_numeric(rt)) && !lt->base && !rt->base)
+      libcp_error_tok(ctx, node->tok, "invalid operands");
     if (lt->base && rt->base)
-      error_tok(ctx, node->tok, "invalid operands");
+      libcp_error_tok(ctx, node->tok, "invalid operands");
 
     Type *base = lt->base ? lt->base : rt->base;
     if (!base)
-      error_tok(ctx, node->tok, "invalid pointer dereference");
+      libcp_error_tok(ctx, node->tok, "invalid pointer dereference");
     if (base->kind == TY_VOID)
-      error_tok(ctx, node->tok, "dereferencing a void pointer");
+      libcp_error_tok(ctx, node->tok, "dereferencing a void pointer");
     node->ty = base;
     return;
   }
@@ -2260,9 +2260,9 @@ void add_type(LibcpContext *ctx, Node *node) {
       return;
     }
     if (!node->lhs->ty->base)
-      error_tok(ctx, node->tok, "invalid pointer dereference");
+      libcp_error_tok(ctx, node->tok, "invalid pointer dereference");
     if (node->lhs->ty->base->kind == TY_VOID)
-      error_tok(ctx, node->tok, "dereferencing a void pointer");
+      libcp_error_tok(ctx, node->tok, "dereferencing a void pointer");
 
     node->ty = node->lhs->ty->base;
     // A struct or union read through a pointer is used by value from
@@ -2278,7 +2278,7 @@ void add_type(LibcpContext *ctx, Node *node) {
     // [GNU] A statement expression whose last statement is not an
     // expression statement has type void; gcc accepts it, and the
     // expression is valid wherever no value is needed.
-    node->ty = ty_void;
+    node->ty = libcp_ty_void;
     return;
   case ND_LABEL_VAL:
     // [GNU] `&&lbl` is matched with the labels of the function by
@@ -2286,23 +2286,23 @@ void add_type(LibcpContext *ctx, Node *node) {
     // expression can live outside the statement tree - a block-scope
     // static initializer holds one, and only the evaluator reaches it.
     // The type annotation makes this run exactly once per node.
-    nodearray_push(ctx, &gotos, node);
-    node->ty = pointer_to(ctx, ty_void);
+    libcp_nodearray_push(ctx, &gotos, node);
+    node->ty = libcp_pointer_to(ctx, libcp_ty_void);
     return;
   case ND_CAS:
-    add_type(ctx, node->cas_addr);
-    add_type(ctx, node->cas_old);
-    add_type(ctx, node->cas_new);
-    node->ty = ty_bool;
+    libcp_add_type(ctx, node->cas_addr);
+    libcp_add_type(ctx, node->cas_old);
+    libcp_add_type(ctx, node->cas_new);
+    node->ty = libcp_ty_bool;
 
     if (node->cas_addr->ty->kind != TY_PTR)
-      error_tok(ctx, node->cas_addr->tok, "pointer expected");
+      libcp_error_tok(ctx, node->cas_addr->tok, "pointer expected");
     if (node->cas_old->ty->kind != TY_PTR)
-      error_tok(ctx, node->cas_old->tok, "pointer expected");
+      libcp_error_tok(ctx, node->cas_old->tok, "pointer expected");
     return;
   case ND_EXCH:
     if (node->lhs->ty->kind != TY_PTR)
-      error_tok(ctx, node->lhs->tok, "pointer expected");
+      libcp_error_tok(ctx, node->lhs->tok, "pointer expected");
     node->ty = node->lhs->ty->base;
     return;
   case ND_CAST:
@@ -2318,7 +2318,7 @@ void add_type(LibcpContext *ctx, Node *node) {
     if (node->lhs) {
       Type *ty = sema_fn->ty->return_ty;
       if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
-        node->lhs = new_cast(ctx, node->lhs, ty);
+        node->lhs = libcp_new_cast(ctx, node->lhs, ty);
     }
     return;
   case ND_DECL: {
@@ -2347,14 +2347,14 @@ void add_type(LibcpContext *ctx, Node *node) {
       // the two standing side by side because whether a declaration is a
       // VLA one depends on the dimension being a constant expression;
       // the `=` is where that used to be reported.
-      error_tok(ctx, node->decl_init->eq_tok,
+      libcp_error_tok(ctx, node->decl_init->eq_tok,
                 "variable-sized object may not be initialized");
 
     if (var->ty->kind != TY_VLA) {
       // A declared object must have a complete, non-void type.
       check_declared_void(ctx, tok, var->ty);
       if (var->ty->size < 0)
-        error_tok(ctx, node->name_tok, "variable has incomplete type");
+        libcp_error_tok(ctx, node->name_tok, "variable has incomplete type");
     }
 
     annotate_init_exprs(ctx, node->init_resolved);
@@ -2395,7 +2395,7 @@ static int64_t eval(LibcpContext *ctx, Node *node) {
 // number. The latter form is accepted only as an initialization
 // expression for a global variable.
 //
-// The add_type at the entry is what types the tree before the switch
+// The libcp_add_type at the entry is what types the tree before the switch
 // runs - for the preprocessor it is the only annotation the
 // expression ever gets. It also still lowers part of the tree:
 // SUBSCRIPT arrives as DEREF, STRING as a VAR, sizeof as a number,
@@ -2405,9 +2405,9 @@ static int64_t eval(LibcpContext *ctx, Node *node) {
 // but the switch starts seeing faithful kinds, which the cases below
 // recognize alongside the lowered ones.
 static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
-  add_type(ctx, node);
+  libcp_add_type(ctx, node);
 
-  if (is_flonum(node->ty))
+  if (libcp_is_flonum(node->ty))
     return eval_double(ctx, node);
 
   switch (node->kind) {
@@ -2425,15 +2425,15 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
     Type *lt = node->lhs->ty;
     Type *rt = node->rhs->ty;
     if (lt->base && rt->base)
-      error_tok(ctx, node->tok, "invalid operands");
+      libcp_error_tok(ctx, node->tok, "invalid operands");
     if (lt->base && !rt->base) {
       if (lt->base->kind == TY_VLA)
-        error_tok(ctx, node->tok, "not a compile-time constant");
+        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
       return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs) * lt->base->size;
     }
     if (!lt->base && rt->base) {
       if (rt->base->kind == TY_VLA)
-        error_tok(ctx, node->tok, "not a compile-time constant");
+        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
       // The pointer side goes through eval2 with the caller's label
       // and unscaled, the numeric side carries the scale - the same
       // split the canonicalized lowered form had, with the pointer
@@ -2458,10 +2458,10 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
       return (lhs - rhs) / lt->base->size;
     }
     if (rt->base && !lt->base)
-      error_tok(ctx, node->tok, "invalid operands");
+      libcp_error_tok(ctx, node->tok, "invalid operands");
     if (lt->base) {
       if (lt->base->kind == TY_VLA)
-        error_tok(ctx, node->tok, "not a compile-time constant");
+        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
       return eval2(ctx, node->lhs, label) - eval(ctx, node->rhs) * lt->base->size;
     }
     return eval2(ctx, node->lhs, label) - eval(ctx, node->rhs);
@@ -2533,7 +2533,7 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
     return eval(ctx, node->lhs) || eval(ctx, node->rhs);
   case ND_CAST: {
     int64_t val = eval2(ctx, node->lhs, label);
-    if (is_integer(node->ty)) {
+    if (libcp_is_integer(node->ty)) {
       switch (node->ty->size) {
       case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
       case 2: return node->ty->is_unsigned ? (uint16_t)val : (int16_t)val;
@@ -2563,21 +2563,21 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
     // A plain `.` member takes the address of its operand instead.
     if (node->arrow_tok) {
       if (!label)
-        error_tok(ctx, node->tok, "not a compile-time constant");
+        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
       if (node->ty->kind != TY_ARRAY)
-        error_tok(ctx, node->tok, "invalid initializer");
+        libcp_error_tok(ctx, node->tok, "invalid initializer");
       return eval2(ctx, node->lhs, label) + node->member->offset;
     }
     if (!label)
-      error_tok(ctx, node->tok, "not a compile-time constant");
+      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
     if (node->ty->kind != TY_ARRAY)
-      error_tok(ctx, node->tok, "invalid initializer");
+      libcp_error_tok(ctx, node->tok, "invalid initializer");
     return eval_rval(ctx, node->lhs, label) + node->member->offset;
   case ND_VAR:
     if (!label)
-      error_tok(ctx, node->tok, "not a compile-time constant");
+      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
     if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
-      error_tok(ctx, node->tok, "invalid initializer");
+      libcp_error_tok(ctx, node->tok, "invalid initializer");
     label->name = node->var->name;
     return 0;
   case ND_STRING:
@@ -2585,7 +2585,7 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
     // is annotated; the node keeps its kind and points at the
     // object, so the address is read off the object directly.
     if (!label)
-      error_tok(ctx, node->tok, "not a compile-time constant");
+      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_COMPOUND_LITERAL:
@@ -2593,7 +2593,7 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
     // annotation pass serialized; the consumer reads the object -
     // the node keeps its kind since A9.2, like a string.
     if (node->var->is_local)
-      error_tok(ctx, node->tok, "not a compile-time constant");
+      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_SIZEOF:
@@ -2603,7 +2603,7 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
     // that one is not a constant; an alignment always is.
     Type *ty = node->ty_op ? node->ty_op : node->lhs->ty;
     if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
-      error_tok(ctx, node->tok, "not a compile-time constant");
+      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
     return node->val;
   }
   case ND_TYPES_COMPATIBLE:
@@ -2618,14 +2618,14 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
     return node->val;
   }
 
-  error_tok(ctx, node->tok, "not a compile-time constant");
+  libcp_error_tok(ctx, node->tok, "not a compile-time constant");
 }
 
 static int64_t eval_rval(LibcpContext *ctx, Node *node, LabelRef *label) {
   switch (node->kind) {
   case ND_VAR:
     if (node->var->is_local)
-      error_tok(ctx, node->tok, "not a compile-time constant");
+      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_DEREF:
@@ -2638,7 +2638,7 @@ static int64_t eval_rval(LibcpContext *ctx, Node *node, LabelRef *label) {
     // The file-scope literal's hidden global, as above: its address
     // is the object's, and a block-scope one is not a constant.
     if (node->var->is_local)
-      error_tok(ctx, node->tok, "not a compile-time constant");
+      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
     label->name = node->var->name;
     return 0;
   case ND_SUBSCRIPT: {
@@ -2648,7 +2648,7 @@ static int64_t eval_rval(LibcpContext *ctx, Node *node, LabelRef *label) {
     // the lowered `*(x+y)` evaluated to for that shape.
     Type *base = node->lhs->ty->base;
     if (base && base->kind == TY_VLA)
-      error_tok(ctx, node->tok, "not a compile-time constant");
+      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
     if (!base)
       return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs);
     return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs) * base->size;
@@ -2664,7 +2664,7 @@ static int64_t eval_rval(LibcpContext *ctx, Node *node, LabelRef *label) {
     return eval_rval(ctx, node->lhs, label) + node->member->offset;
   }
 
-  error_tok(ctx, node->tok, "invalid initializer");
+  libcp_error_tok(ctx, node->tok, "invalid initializer");
 }
 
 // Annotates first, like eval2, so it walks whatever shapes the
@@ -2675,7 +2675,7 @@ static int64_t eval_rval(LibcpContext *ctx, Node *node, LabelRef *label) {
 // kind, not because the fold hid it - otherwise a VLA silently
 // becomes a fixed array.
 static bool is_const_expr(LibcpContext *ctx, Node *node) {
-  add_type(ctx, node);
+  libcp_add_type(ctx, node);
 
   switch (node->kind) {
   case ND_ADD:
@@ -2729,8 +2729,8 @@ static bool is_const_expr(LibcpContext *ctx, Node *node) {
   return false;
 }
 
-int64_t const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = conditional(ctx, rest, tok);
+int64_t libcp_const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
+  Node *node = libcp_conditional(ctx, rest, tok);
   return eval(ctx, node);
 }
 
@@ -2738,9 +2738,9 @@ int64_t const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
 // sees are whatever the annotation pass currently produces, and the
 // faithful cases below take over as the lowerings leave it.
 static double eval_double(LibcpContext *ctx, Node *node) {
-  add_type(ctx, node);
+  libcp_add_type(ctx, node);
 
-  if (is_integer(node->ty)) {
+  if (libcp_is_integer(node->ty)) {
     if (node->ty->is_unsigned)
       return (unsigned long)eval(ctx, node);
     return eval(ctx, node);
@@ -2768,14 +2768,14 @@ static double eval_double(LibcpContext *ctx, Node *node) {
     // The selected association's expression.
     return eval_double(ctx, node->generic_sel);
   case ND_CAST:
-    if (is_flonum(node->lhs->ty))
+    if (libcp_is_flonum(node->lhs->ty))
       return eval_double(ctx, node->lhs);
     return eval(ctx, node->lhs);
   case ND_NUM:
     return node->fval;
   }
 
-  error_tok(ctx, node->tok, "not a compile-time constant");
+  libcp_error_tok(ctx, node->tok, "not a compile-time constant");
 }
 
 //
@@ -2883,9 +2883,9 @@ static void resolve_node(LibcpContext *ctx, Node *node) {
       Token *anchor = node->decl_init ? node->decl_init->eq_tok : node->tok;
       check_declared_void(ctx, anchor, node->ty_op);
       node->var = new_anon_gvar(ctx, node->ty_op);
-      push_scope(ctx, get_ident(ctx, node->name_tok))->var = node->var;
+      push_scope(ctx, libcp_get_ident(ctx, node->name_tok))->var = node->var;
     } else {
-      node->var = new_lvar(ctx, get_ident(ctx, node->name_tok),
+      node->var = new_lvar(ctx, libcp_get_ident(ctx, node->name_tok),
                            named_type(ctx, node->ty_op, node->name_tok));
       int align = attr_align(ctx, &node->attr);
       if (align)
@@ -2912,7 +2912,7 @@ static void resolve_node(LibcpContext *ctx, Node *node) {
     resolve_type_exprs(ctx, node->ty_op);
     resolve_type(ctx, node->ty_op);
 
-    Obj *var = new_gvar(ctx, get_ident(ctx, node->name_tok),
+    Obj *var = new_gvar(ctx, libcp_get_ident(ctx, node->name_tok),
                         named_type(ctx, node->ty_op, node->name_tok));
     var->is_definition = !node->attr.is_extern;
     var->is_static = node->attr.is_static;
@@ -2976,7 +2976,7 @@ static void resolve_node(LibcpContext *ctx, Node *node) {
       if (node->end_expr) {
         end = (int) eval(ctx, node->end_expr);
         if (end < begin)
-          error_tok(ctx, node->colon_tok, "empty case range specified");
+          libcp_error_tok(ctx, node->colon_tok, "empty case range specified");
       }
 
       node->begin = begin;
@@ -3032,7 +3032,7 @@ static void resolve_function(LibcpContext *ctx, Node *node) {
   resolve_type_exprs(ctx, ty);
   resolve_type(ctx, ty);
 
-  Obj *fn = declare_function(ctx, get_ident(ctx, node->name_tok),
+  Obj *fn = declare_function(ctx, libcp_get_ident(ctx, node->name_tok),
                              named_type(ctx, ty, node->name_tok), &node->attr,
                              node->tok, node->body != NULL);
   node->var = fn;
@@ -3086,7 +3086,7 @@ static void splice_locals(LibcpContext *ctx, Obj *fn) {
 // parked in the context (PLAN L3.1b): they are a sema -> codegen
 // handoff, not a layer-3/4 field of Obj. The parameter is not named
 // `gotos` because sema.c aliases that name to the context slot.
-void sema_store_label_gotos(LibcpContext *ctx, Obj *fn, NodeArray refs) {
+void libcp_sema_store_label_gotos(LibcpContext *ctx, Obj *fn, NodeArray refs) {
   LabelGotoList *l = libcp_arena_calloc(ctx, 1, sizeof(LabelGotoList));
   l->fn = fn;
   l->refs = refs;
@@ -3094,7 +3094,7 @@ void sema_store_label_gotos(LibcpContext *ctx, Obj *fn, NodeArray refs) {
   ctx->label_gotos = l;
 }
 
-NodeArray *sema_label_gotos(LibcpContext *ctx, Obj *fn) {
+NodeArray *libcp_sema_label_gotos(LibcpContext *ctx, Obj *fn) {
   for (LabelGotoList *l = ctx->label_gotos; l; l = l->next)
     if (l->fn == fn)
       return &l->refs;
@@ -3109,7 +3109,7 @@ static void analyze_function(LibcpContext *ctx, Obj *fn) {
   sema_fn = fn;
   Obj *save = locals;
   locals = NULL;
-  add_type(ctx, fn->body);
+  libcp_add_type(ctx, fn->body);
   check_control_flow(ctx, fn->body);
 
   // Hand the collected goto and label-value references to codegen's
@@ -3117,7 +3117,7 @@ static void analyze_function(LibcpContext *ctx, Obj *fn) {
   // label values that sit outside the statement tree (block-scope
   // static initializers) make this the only chain that reaches them
   // all.
-  sema_store_label_gotos(ctx, fn, gotos);
+  libcp_sema_store_label_gotos(ctx, fn, gotos);
   gotos = labels = (NodeArray){};
 
   splice_locals(ctx, fn);
@@ -3130,7 +3130,8 @@ static void analyze_function(LibcpContext *ctx, Obj *fn) {
 // codegen. A function record is resolved first, so that later records
 // see its name, and its body is annotated and descended right after -
 // the order the parser used to interleave declaration and analysis.
-Obj *sema(LibcpContext *ctx, Node *toplevel) {
+Obj *libcp_sema(LibcpContext *ctx, Node *toplevel) {
+  ENTER_RET(ctx, NULL);
   sema_init(ctx);
   declare_builtin_functions(ctx);
 
@@ -3157,5 +3158,6 @@ Obj *sema(LibcpContext *ctx, Node *toplevel) {
   // Mark the reachable functions live and drop the redundant tentative
   // definitions.
   finalize_globals(ctx);
+  LEAVE(ctx);
   return globals;
 }

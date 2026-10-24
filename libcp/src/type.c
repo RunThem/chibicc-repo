@@ -4,22 +4,22 @@
 // declarator never writes its name into a type record (parse.c keeps
 // the name in a per-declaration carrier), so two contexts parsing in
 // different threads never write the same record.
-Type *ty_void = &(Type){TY_VOID, 1, 1};
-Type *ty_bool = &(Type){TY_BOOL, 1, 1};
+Type *libcp_ty_void = &(Type){TY_VOID, 1, 1};
+Type *libcp_ty_bool = &(Type){TY_BOOL, 1, 1};
 
-Type *ty_char = &(Type){TY_CHAR, 1, 1};
-Type *ty_short = &(Type){TY_SHORT, 2, 2};
-Type *ty_int = &(Type){TY_INT, 4, 4};
-Type *ty_long = &(Type){TY_LONG, 8, 8};
+Type *libcp_ty_char = &(Type){TY_CHAR, 1, 1};
+Type *libcp_ty_short = &(Type){TY_SHORT, 2, 2};
+Type *libcp_ty_int = &(Type){TY_INT, 4, 4};
+Type *libcp_ty_long = &(Type){TY_LONG, 8, 8};
 
-Type *ty_uchar = &(Type){TY_CHAR, 1, 1, true};
-Type *ty_ushort = &(Type){TY_SHORT, 2, 2, true};
-Type *ty_uint = &(Type){TY_INT, 4, 4, true};
-Type *ty_ulong = &(Type){TY_LONG, 8, 8, true};
+Type *libcp_ty_uchar = &(Type){TY_CHAR, 1, 1, true};
+Type *libcp_ty_ushort = &(Type){TY_SHORT, 2, 2, true};
+Type *libcp_ty_uint = &(Type){TY_INT, 4, 4, true};
+Type *libcp_ty_ulong = &(Type){TY_LONG, 8, 8, true};
 
-Type *ty_float = &(Type){TY_FLOAT, 4, 4};
-Type *ty_double = &(Type){TY_DOUBLE, 8, 8};
-Type *ty_ldouble = &(Type){TY_LDOUBLE, 16, 16};
+Type *libcp_ty_float = &(Type){TY_FLOAT, 4, 4};
+Type *libcp_ty_double = &(Type){TY_DOUBLE, 8, 8};
+Type *libcp_ty_ldouble = &(Type){TY_LDOUBLE, 16, 16};
 
 static Type *new_type(LibcpContext *ctx, TypeKind kind, int size, int align) {
   Type *ty = libcp_arena_calloc(ctx, 1, sizeof(Type));
@@ -29,30 +29,30 @@ static Type *new_type(LibcpContext *ctx, TypeKind kind, int size, int align) {
   return ty;
 }
 
-bool is_integer(Type *ty) {
+bool libcp_is_integer(Type *ty) {
   TypeKind k = ty->kind;
   return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT ||
          k == TY_INT  || k == TY_LONG || k == TY_ENUM;
 }
 
-bool is_flonum(Type *ty) {
+bool libcp_is_flonum(Type *ty) {
   return ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE ||
          ty->kind == TY_LDOUBLE;
 }
 
-bool is_numeric(Type *ty) {
-  return is_integer(ty) || is_flonum(ty);
+bool libcp_is_numeric(Type *ty) {
+  return libcp_is_integer(ty) || libcp_is_flonum(ty);
 }
 
-bool is_compatible(Type *t1, Type *t2) {
+bool libcp_is_compatible(Type *t1, Type *t2) {
   if (t1 == t2)
     return true;
 
   if (t1->origin)
-    return is_compatible(t1->origin, t2);
+    return libcp_is_compatible(t1->origin, t2);
 
   if (t2->origin)
-    return is_compatible(t1, t2->origin);
+    return libcp_is_compatible(t1, t2->origin);
 
   if (t1->kind != t2->kind)
     return false;
@@ -68,9 +68,9 @@ bool is_compatible(Type *t1, Type *t2) {
   case TY_LDOUBLE:
     return true;
   case TY_PTR:
-    return is_compatible(t1->base, t2->base);
+    return libcp_is_compatible(t1->base, t2->base);
   case TY_FUNC: {
-    if (!is_compatible(t1->return_ty, t2->return_ty))
+    if (!libcp_is_compatible(t1->return_ty, t2->return_ty))
       return false;
     if (t1->is_variadic != t2->is_variadic)
       return false;
@@ -78,12 +78,12 @@ bool is_compatible(Type *t1, Type *t2) {
     Type *p1 = t1->params;
     Type *p2 = t2->params;
     for (; p1 && p2; p1 = p1->next, p2 = p2->next)
-      if (!is_compatible(p1, p2))
+      if (!libcp_is_compatible(p1, p2))
         return false;
     return p1 == NULL && p2 == NULL;
   }
   case TY_ARRAY:
-    if (!is_compatible(t1->base, t2->base))
+    if (!libcp_is_compatible(t1->base, t2->base))
       return false;
     return t1->array_len < 0 && t2->array_len < 0 &&
            t1->array_len == t2->array_len;
@@ -91,21 +91,21 @@ bool is_compatible(Type *t1, Type *t2) {
   return false;
 }
 
-Type *copy_type(LibcpContext *ctx, Type *ty) {
+Type *libcp_copy_type(LibcpContext *ctx, Type *ty) {
   Type *ret = libcp_arena_calloc(ctx, 1, sizeof(Type));
   *ret = *ty;
   ret->origin = ty;
   return ret;
 }
 
-Type *pointer_to(LibcpContext *ctx, Type *base) {
+Type *libcp_pointer_to(LibcpContext *ctx, Type *base) {
   Type *ty = new_type(ctx, TY_PTR, 8, 8);
   ty->base = base;
   ty->is_unsigned = true;
   return ty;
 }
 
-Type *func_type(LibcpContext *ctx, Type *return_ty) {
+Type *libcp_func_type(LibcpContext *ctx, Type *return_ty) {
   // The C spec disallows sizeof(<function type>), but
   // GCC allows that and the expression is evaluated to 1.
   Type *ty = new_type(ctx, TY_FUNC, 1, 1);
@@ -113,7 +113,7 @@ Type *func_type(LibcpContext *ctx, Type *return_ty) {
   return ty;
 }
 
-Type *array_of(LibcpContext *ctx, Type *base, int len) {
+Type *libcp_array_of(LibcpContext *ctx, Type *base, int len) {
   // A negative length asks for an incomplete array, and a negative base
   // size means the element type has no size yet - a dimension the parser
   // left for sema to decide is one way to get there. The product of the
@@ -129,7 +129,7 @@ Type *array_of(LibcpContext *ctx, Type *base, int len) {
   return ty;
 }
 
-Type *vla_of(LibcpContext *ctx, Type *base, Node *len) {
+Type *libcp_vla_of(LibcpContext *ctx, Type *base, Node *len) {
   Type *ty = new_type(ctx, TY_VLA, 8, 8);
   ty->base = base;
   ty->vla_len = len;
@@ -139,8 +139,8 @@ Type *vla_of(LibcpContext *ctx, Type *base, Node *len) {
 // An array whose dimension the parser could not decide: `dim` is the
 // length expression, which sema evaluates into a length - or, when it is
 // not a constant expression, turns the type into a VLA.
-Type *array_of_dim(LibcpContext *ctx, Type *base, Node *dim) {
-  Type *ty = array_of(ctx, base, -1);
+Type *libcp_array_of_dim(LibcpContext *ctx, Type *base, Node *dim) {
+  Type *ty = libcp_array_of(ctx, base, -1);
   ty->dim_len = dim;
   return ty;
 }
@@ -148,14 +148,14 @@ Type *array_of_dim(LibcpContext *ctx, Type *base, Node *dim) {
 // The type of a `typeof(expr)`, until sema annotates the operand and
 // fills this record in. Its size is negative like an incomplete type's,
 // so that a record nobody completed is rejected rather than measured.
-Type *typeof_placeholder(LibcpContext *ctx) {
+Type *libcp_typeof_placeholder(LibcpContext *ctx) {
   return new_type(ctx, TY_TYPEOF, -1, 1);
 }
 
-Type *enum_type(LibcpContext *ctx) {
+Type *libcp_enum_type(LibcpContext *ctx) {
   return new_type(ctx, TY_ENUM, 4, 4);
 }
 
-Type *struct_type(LibcpContext *ctx) {
+Type *libcp_struct_type(LibcpContext *ctx) {
   return new_type(ctx, TY_STRUCT, 0, 1);
 }

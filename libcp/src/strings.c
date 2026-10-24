@@ -1,6 +1,6 @@
 #include "libcp.h"
 
-void strarray_push(LibcpContext *ctx, StringArray *arr, char *s) {
+void libcp_strarray_push(LibcpContext *ctx, StringArray *arr, char *s) {
   if (!arr->data) {
     arr->data = libcp_arena_calloc(ctx, 8, sizeof(char *));
     arr->capacity = 8;
@@ -16,7 +16,7 @@ void strarray_push(LibcpContext *ctx, StringArray *arr, char *s) {
   arr->data[arr->len++] = s;
 }
 
-void nodearray_push(LibcpContext *ctx, NodeArray *arr, Node *node) {
+void libcp_nodearray_push(LibcpContext *ctx, NodeArray *arr, Node *node) {
   if (!arr->data) {
     arr->data = libcp_arena_calloc(ctx, 8, sizeof(Node *));
     arr->capacity = 8;
@@ -33,14 +33,14 @@ void nodearray_push(LibcpContext *ctx, NodeArray *arr, Node *node) {
 }
 
 // Round up `n` to the nearest multiple of `align`. For instance,
-// align_to(5, 8) returns 8 and align_to(11, 8) returns 16.
-int align_to(int n, int align) {
+// libcp_align_to(5, 8) returns 8 and libcp_align_to(11, 8) returns 16.
+int libcp_align_to(int n, int align) {
   return (n + align - 1) / align * align;
 }
 
 // \xHH for everything invisible (including the space, so that a dump
 // line never ends in whitespace that tools could strip).
-void print_escaped(FILE *out, char *p, int len) {
+void libcp_print_escaped(FILE *out, char *p, int len) {
   for (int i = 0; i < len; i++) {
     unsigned char c = p[i];
 
@@ -60,14 +60,14 @@ void print_escaped(FILE *out, char *p, int len) {
 
 // Returns true if a given file exists. Used by the preprocessor and the
 // driver; it lives in the library so a consumer does not need main.c.
-bool file_exists(char *path) {
+bool libcp_file_exists(char *path) {
   struct stat st;
   return !stat(path, &st);
 }
 
 // Takes a printf-style format string and returns a formatted string in
 // the context's arena.
-char *format(LibcpContext *ctx, char *fmt, ...) {
+char *libcp_format(LibcpContext *ctx, char *fmt, ...) {
   va_list ap;
   va_list ap2;
   va_start(ap, fmt);
