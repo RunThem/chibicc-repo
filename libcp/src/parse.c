@@ -71,26 +71,8 @@ static Node *stmt(LibcpContext *ctx, Token **rest, Token *tok);
 static Node *expr_stmt(LibcpContext *ctx, Token **rest, Token *tok);
 static Node *expr(LibcpContext *ctx, Token **rest, Token *tok);
 static Node *assign(LibcpContext *ctx, Token **rest, Token *tok);
-#if !LIBCP_PRATT_PARSE_FEATURE
-static Node *logor(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *logand(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *bitor(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *bitxor(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *bitand(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *equality(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *relational(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *shift(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *add(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *mul(LibcpContext *ctx, Token **rest, Token *tok);
-#endif
-#if !LIBCP_PRATT_PARSE_FEATURE
-static Node *cast(LibcpContext *ctx, Token **rest, Token *tok);
-#endif
 static Type *struct_decl(LibcpContext *ctx, Token **rest, Token *tok, Node **specs);
 static Type *union_decl(LibcpContext *ctx, Token **rest, Token *tok, Node **specs);
-#if !LIBCP_PRATT_PARSE_FEATURE
-static Node *postfix(LibcpContext *ctx, Token **rest, Token *tok);
-#endif
 static Node *funcall(LibcpContext *ctx, Token **rest, Token *tok, Node *node);
 static Node *unary(LibcpContext *ctx, Token **rest, Token *tok);
 // The body behind each depth-guarded entry (the wrapper increments
@@ -99,15 +81,6 @@ static Type *declarator1(LibcpContext *ctx, Token **rest, Token *tok, Type *ty, 
 static Type *abstract_declarator(LibcpContext *ctx, Token **rest, Token *tok, Type *ty);
 static Type *abstract_declarator1(LibcpContext *ctx, Token **rest, Token *tok, Type *ty);
 static Initializer *init_record1(LibcpContext *ctx, Token **rest, Token *tok);
-#if !LIBCP_PRATT_PARSE_FEATURE
-static Node *expr1(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *assign1(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *conditional1(LibcpContext *ctx, Token **rest, Token *tok);
-#endif
-#if !LIBCP_PRATT_PARSE_FEATURE
-static Node *cast1(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *unary1(LibcpContext *ctx, Token **rest, Token *tok);
-#endif
 static Node *primary(LibcpContext *ctx, Token **rest, Token *tok);
 static Node *parse_typedef(LibcpContext *ctx, Token **rest, Token *tok, Type *basety);
 static bool is_function(LibcpContext *ctx, Token *tok);
@@ -1242,430 +1215,7 @@ static Node *expr_stmt(LibcpContext *ctx, Token **rest, Token *tok) {
   return node;
 }
 
-#if !LIBCP_PRATT_PARSE_FEATURE
-// expr = assign ("," expr)?
-static Node *expr(LibcpContext *ctx, Token **rest, Token *tok) {
-  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(ctx, tok, "nesting too deep");
-  Node *node = expr1(ctx, rest, tok);
-  ctx->parse_depth--;
-  return node;
-}
 
-static Node *expr1(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = assign(ctx, &tok, tok);
-
-  // Comma is left-associative: `a, b, c` is `(a, b), c`, the shape the C
-  // grammar gives. Both parsers build this shape.
-  while (equal(tok, ",")) {
-    Token *start = tok;
-    node = new_binary(ctx, ND_COMMA, node, assign(ctx, &tok, tok->next), start);
-  }
-
-  *rest = tok;
-  return node;
-}
-
-// assign    = conditional (assign-op assign)?
-// assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^="
-//           | "<<=" | ">>="
-//
-// A compound assignment keeps its operator in `op`; sema rewrites it to
-// the read-modify-write form (handling the bitfield and atomic cases).
-static Node *assign(LibcpContext *ctx, Token **rest, Token *tok) {
-  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(ctx, tok, "nesting too deep");
-  Node *node = assign1(ctx, rest, tok);
-  ctx->parse_depth--;
-  return node;
-}
-
-static Node *assign1(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = conditional(ctx, &tok, tok);
-
-  if (equal(tok, "="))
-    return new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
-
-  if (equal(tok, "+=")) {
-    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
-    expr->op = ND_ADD;
-    return expr;
-  }
-
-  if (equal(tok, "-=")) {
-    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
-    expr->op = ND_SUB;
-    return expr;
-  }
-
-  if (equal(tok, "*=")) {
-    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
-    expr->op = ND_MUL;
-    return expr;
-  }
-
-  if (equal(tok, "/=")) {
-    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
-    expr->op = ND_DIV;
-    return expr;
-  }
-
-  if (equal(tok, "%=")) {
-    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
-    expr->op = ND_MOD;
-    return expr;
-  }
-
-  if (equal(tok, "&=")) {
-    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
-    expr->op = ND_BITAND;
-    return expr;
-  }
-
-  if (equal(tok, "|=")) {
-    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
-    expr->op = ND_BITOR;
-    return expr;
-  }
-
-  if (equal(tok, "^=")) {
-    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
-    expr->op = ND_BITXOR;
-    return expr;
-  }
-
-  if (equal(tok, "<<=")) {
-    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
-    expr->op = ND_SHL;
-    return expr;
-  }
-
-  if (equal(tok, ">>=")) {
-    Node *expr = new_binary(ctx, ND_ASSIGN, node, assign(ctx, rest, tok->next), tok);
-    expr->op = ND_SHR;
-    return expr;
-  }
-
-  *rest = tok;
-  return node;
-}
-
-// conditional = logor ("?" expr? ":" conditional)?
-Node *conditional(LibcpContext *ctx, Token **rest, Token *tok) {
-  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(ctx, tok, "nesting too deep");
-  Node *node = conditional1(ctx, rest, tok);
-  ctx->parse_depth--;
-  return node;
-}
-
-static Node *conditional1(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *cond = logor(ctx, &tok, tok);
-
-  if (!equal(tok, "?")) {
-    *rest = tok;
-    return cond;
-  }
-
-  if (equal(tok->next, ":")) {
-    // [GNU] `a ?: b`. Kept as-is in the tree with is_elvis set;
-    // sema lowers it to `tmp = a, tmp ? tmp : b`.
-    Node *node = new_node(ctx, ND_COND, tok);
-    node->is_elvis = true;
-    node->cond = cond;
-    node->els = conditional(ctx, rest, tok->next->next);
-    return node;
-  }
-
-  Node *node = new_node(ctx, ND_COND, tok);
-  node->cond = cond;
-  node->then = expr(ctx, &tok, tok->next);
-  tok = skip(ctx, tok, ":");
-  node->els = conditional(ctx, rest, tok);
-  return node;
-}
-
-// logor = logand ("||" logand)*
-static Node *logor(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = logand(ctx, &tok, tok);
-  while (equal(tok, "||")) {
-    Token *start = tok;
-    node = new_binary(ctx, ND_LOGOR, node, logand(ctx, &tok, tok->next), start);
-  }
-  *rest = tok;
-  return node;
-}
-
-// logand = bitor ("&&" bitor)*
-static Node *logand(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = bitor(ctx, &tok, tok);
-  while (equal(tok, "&&")) {
-    Token *start = tok;
-    node = new_binary(ctx, ND_LOGAND, node, bitor(ctx, &tok, tok->next), start);
-  }
-  *rest = tok;
-  return node;
-}
-
-// bitor = bitxor ("|" bitxor)*
-static Node *bitor(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = bitxor(ctx, &tok, tok);
-  while (equal(tok, "|")) {
-    Token *start = tok;
-    node = new_binary(ctx, ND_BITOR, node, bitxor(ctx, &tok, tok->next), start);
-  }
-  *rest = tok;
-  return node;
-}
-
-// bitxor = bitand ("^" bitand)*
-static Node *bitxor(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = bitand(ctx, &tok, tok);
-  while (equal(tok, "^")) {
-    Token *start = tok;
-    node = new_binary(ctx, ND_BITXOR, node, bitand(ctx, &tok, tok->next), start);
-  }
-  *rest = tok;
-  return node;
-}
-
-// bitand = equality ("&" equality)*
-static Node *bitand(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = equality(ctx, &tok, tok);
-  while (equal(tok, "&")) {
-    Token *start = tok;
-    node = new_binary(ctx, ND_BITAND, node, equality(ctx, &tok, tok->next), start);
-  }
-  *rest = tok;
-  return node;
-}
-
-// equality = relational ("==" relational | "!=" relational)*
-static Node *equality(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = relational(ctx, &tok, tok);
-
-  for (;;) {
-    Token *start = tok;
-
-    if (equal(tok, "==")) {
-      node = new_binary(ctx, ND_EQ, node, relational(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    if (equal(tok, "!=")) {
-      node = new_binary(ctx, ND_NE, node, relational(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    *rest = tok;
-    return node;
-  }
-}
-
-// relational = shift ("<" shift | "<=" shift | ">" shift | ">=" shift)*
-static Node *relational(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = shift(ctx, &tok, tok);
-
-  for (;;) {
-    Token *start = tok;
-
-    if (equal(tok, "<")) {
-      node = new_binary(ctx, ND_LT, node, shift(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    if (equal(tok, "<=")) {
-      node = new_binary(ctx, ND_LE, node, shift(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    if (equal(tok, ">")) {
-      node = new_binary(ctx, ND_GT, node, shift(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    if (equal(tok, ">=")) {
-      node = new_binary(ctx, ND_GE, node, shift(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    *rest = tok;
-    return node;
-  }
-}
-
-// shift = add ("<<" add | ">>" add)*
-static Node *shift(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = add(ctx, &tok, tok);
-
-  for (;;) {
-    Token *start = tok;
-
-    if (equal(tok, "<<")) {
-      node = new_binary(ctx, ND_SHL, node, add(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    if (equal(tok, ">>")) {
-      node = new_binary(ctx, ND_SHR, node, add(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    *rest = tok;
-    return node;
-  }
-}
-// add = mul ("+" mul | "-" mul)*
-static Node *add(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = mul(ctx, &tok, tok);
-
-  for (;;) {
-    Token *start = tok;
-
-    if (equal(tok, "+")) {
-      node = new_binary(ctx, ND_ADD, node, mul(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    if (equal(tok, "-")) {
-      node = new_binary(ctx, ND_SUB, node, mul(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    *rest = tok;
-    return node;
-  }
-}
-
-// mul = cast ("*" cast | "/" cast | "%" cast)*
-static Node *mul(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = cast(ctx, &tok, tok);
-
-  for (;;) {
-    Token *start = tok;
-
-    if (equal(tok, "*")) {
-      node = new_binary(ctx, ND_MUL, node, cast(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    if (equal(tok, "/")) {
-      node = new_binary(ctx, ND_DIV, node, cast(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    if (equal(tok, "%")) {
-      node = new_binary(ctx, ND_MOD, node, cast(ctx, &tok, tok->next), start);
-      continue;
-    }
-
-    *rest = tok;
-    return node;
-  }
-}
-#endif // !LIBCP_PRATT_PARSE_FEATURE
-
-#if !LIBCP_PRATT_PARSE_FEATURE
-// cast = "(" type-name ")" cast | unary
-static Node *cast(LibcpContext *ctx, Token **rest, Token *tok) {
-  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(ctx, tok, "nesting too deep");
-  Node *node = cast1(ctx, rest, tok);
-  ctx->parse_depth--;
-  return node;
-}
-
-static Node *cast1(LibcpContext *ctx, Token **rest, Token *tok) {
-  if (equal(tok, "(") && is_typename(ctx, tok->next)) {
-    Token *start = tok;
-    Node *specs = NULL;
-    Type *ty = typename(ctx, &tok, tok->next, &specs);
-    tok = skip(ctx, tok, ")");
-
-    // compound literal
-    if (equal(tok, "{"))
-      return unary(ctx, rest, start);
-
-    // Type cast: kept faithful and untyped, with the target type
-    // recorded for sema to complete and apply. This is a cast the
-    // source wrote, so is_implicit stays false; the casts sema inserts
-    // to carry out an implicit conversion are the ones new_cast marks.
-    Node *node = new_node(ctx, ND_CAST, start);
-    node->lhs = cast(ctx, rest, tok);
-    node->ty_op = ty;
-    node->spec_decls = specs;
-    return node;
-  }
-
-  return unary(ctx, rest, tok);
-}
-
-// unary = ("+" | "-" | "*" | "&" | "!" | "~") cast
-//       | ("++" | "--") unary
-//       | "&&" ident
-//       | postfix
-static Node *unary(LibcpContext *ctx, Token **rest, Token *tok) {
-  if (++ctx->parse_depth > MAX_PARSE_DEPTH)
-    error_tok(ctx, tok, "nesting too deep");
-  Node *node = unary1(ctx, rest, tok);
-  ctx->parse_depth--;
-  return node;
-}
-
-static Node *unary1(LibcpContext *ctx, Token **rest, Token *tok) {
-  if (equal(tok, "+"))
-    return cast(ctx, rest, tok->next);
-
-  if (equal(tok, "-"))
-    return new_unary(ctx, ND_NEG, cast(ctx, rest, tok->next), tok);
-
-  if (equal(tok, "&")) {
-    // The bitfield check lives in sema: it needs the operand's type.
-    return new_unary(ctx, ND_ADDR, cast(ctx, rest, tok->next), tok);
-  }
-
-  if (equal(tok, "*")) {
-    // [https://www.sigbus.info/n1570#6.5.3.2p4] This is an oddity
-    // in the C spec, but dereferencing a function shouldn't do
-    // anything. If foo is a function, `*foo`, `**foo` or `*****foo`
-    // are all equivalent to just `foo`. The check needs the operand's
-    // type, so sema drops the node when it sees one.
-    return new_unary(ctx, ND_DEREF, cast(ctx, rest, tok->next), tok);
-  }
-
-  if (equal(tok, "!"))
-    return new_unary(ctx, ND_NOT, cast(ctx, rest, tok->next), tok);
-
-  if (equal(tok, "~"))
-    return new_unary(ctx, ND_BITNOT, cast(ctx, rest, tok->next), tok);
-
-  // Read ++i as a faithful prefix increment; sema lowers it to i+=1
-  if (equal(tok, "++")) {
-    Node *node = new_node(ctx, ND_INCDEC, tok);
-    node->lhs = unary(ctx, rest, tok->next);
-    node->addend = 1;
-    return node;
-  }
-
-  // Read --i as a faithful prefix decrement; sema lowers it to i-=1
-  if (equal(tok, "--")) {
-    Node *node = new_node(ctx, ND_INCDEC, tok);
-    node->lhs = unary(ctx, rest, tok->next);
-    node->addend = -1;
-    return node;
-  }
-
-  // [GNU] labels-as-values
-  if (equal(tok, "&&")) {
-    Node *node = new_node(ctx, ND_LABEL_VAL, tok);
-    node->label = get_ident(ctx, tok->next);
-    *rest = tok->next->next;
-    return node;
-  }
-
-  return postfix(ctx, rest, tok);
-}
-#endif // !LIBCP_PRATT_PARSE_FEATURE
 
 // struct-members = (declspec declarator (","  declarator)* ";")*
 //
@@ -1914,92 +1464,6 @@ static Node *struct_ref(LibcpContext *ctx, Node *node, Token *tok, Token *arrow)
   return mem;
 }
 
-#if !LIBCP_PRATT_PARSE_FEATURE
-// postfix = "(" type-name ")" "{" initializer-list "}"
-//         = ident "(" func-args ")" postfix-tail*
-//         | primary postfix-tail*
-//
-// postfix-tail = "[" expr "]"
-//              | "(" func-args ")"
-//              | "." ident
-//              | "->" ident
-//              | "++"
-//              | "--"
-static Node *postfix(LibcpContext *ctx, Token **rest, Token *tok) {
-  if (equal(tok, "(") && is_typename(ctx, tok->next)) {
-    // Compound literal. Kept faithful: the type and the initializer
-    // record ride on the node, and sema materializes the hidden
-    // variable (an anonymous global at file scope, a hidden local in a
-    // block) when it resolves the node, then lowers it when typing.
-    Token *start = tok;
-    Node *specs = NULL;
-    Type *ty = typename(ctx, &tok, tok->next, &specs);
-    tok = skip(ctx, tok, ")");
-
-    Node *node = new_node(ctx, ND_COMPOUND_LITERAL, start);
-    node->ty_op = ty;
-    node->spec_decls = specs;
-    node->decl_init = init_record(ctx, rest, tok);
-    return node;
-  }
-
-  Node *node = primary(ctx, &tok, tok);
-
-  for (;;) {
-    if (equal(tok, "(")) {
-      node = funcall(ctx, &tok, tok->next, node);
-      continue;
-    }
-
-    if (equal(tok, "[")) {
-      Token *start = tok;
-      Node *idx = expr(ctx, &tok, tok->next);
-      tok = skip(ctx, tok, "]");
-      Node *subscript = new_node(ctx, ND_SUBSCRIPT, start);
-      subscript->lhs = node;
-      subscript->rhs = idx;
-      node = subscript;
-      continue;
-    }
-
-    if (equal(tok, ".")) {
-      node = struct_ref(ctx, node, tok->next, NULL);
-      tok = tok->next->next;
-      continue;
-    }
-
-    if (equal(tok, "->")) {
-      // x->y is short for (*x).y
-      node = struct_ref(ctx, node, tok->next, tok);
-      tok = tok->next->next;
-      continue;
-    }
-
-    if (equal(tok, "++")) {
-      Node *incdec = new_node(ctx, ND_INCDEC, tok);
-      incdec->lhs = node;
-      incdec->is_post = true;
-      incdec->addend = 1;
-      node = incdec;
-      tok = tok->next;
-      continue;
-    }
-
-    if (equal(tok, "--")) {
-      Node *incdec = new_node(ctx, ND_INCDEC, tok);
-      incdec->lhs = node;
-      incdec->is_post = true;
-      incdec->addend = -1;
-      node = incdec;
-      tok = tok->next;
-      continue;
-    }
-
-    *rest = tok;
-    return node;
-  }
-}
-#endif // !LIBCP_PRATT_PARSE_FEATURE
 
 // funcall = (assign ("," assign)*)? ")"
 //
@@ -2214,7 +1678,6 @@ static Node *primary(LibcpContext *ctx, Token **rest, Token *tok) {
   error_tok(ctx, tok, "expected an expression");
 }
 
-#if LIBCP_PRATT_PARSE_FEATURE
 //
 // The Pratt expression parser (PLAN-pratt-parse).
 //
@@ -2386,8 +1849,8 @@ static Node *expr_nud(LibcpContext *ctx, Token **rest, Token *tok) {
   return primary(ctx, rest, tok);
 }
 
-// The one expression loop. The depth gate counts here and only here in
-// the Pratt build; the entry wrappers below do not add a frame.
+// The one expression loop. The depth gate counts here and only here; the
+// entry wrappers below do not add a frame.
 static Node *expr_bp(LibcpContext *ctx, Token **rest, Token *tok, int min_bp) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     error_tok(ctx, tok, "nesting too deep");
@@ -2492,7 +1955,7 @@ static Node *expr_bp(LibcpContext *ctx, Token **rest, Token *tok, int min_bp) {
 }
 
 // primary's `sizeof expr` and `_Alignof expr` forms parse their operand
-// through the old `unary` name; in the Pratt build that is the cast layer.
+// through the `unary` name; here that is the cast layer.
 static Node *unary(LibcpContext *ctx, Token **rest, Token *tok) {
   return expr_bp(ctx, rest, tok, BP_CAST);
 }
@@ -2508,7 +1971,6 @@ static Node *assign(LibcpContext *ctx, Token **rest, Token *tok) {
 Node *conditional(LibcpContext *ctx, Token **rest, Token *tok) {
   return expr_bp(ctx, rest, tok, BP_COND - 1);
 }
-#endif // LIBCP_PRATT_PARSE_FEATURE
 
 // Parses typedef declarators into ND_TYPEDEF records. The name also
 // goes into the typedef-name oracle immediately: the grammar needs it

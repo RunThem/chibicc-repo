@@ -4,8 +4,8 @@
 // longer carries -hashmap-test / -arena-test / -sema-state-test.
 //
 // test/self-test.sh compiles this file with the host cc against
-// LIBCP_LIB and runs it, so the same tests exercise the default,
-// stage2, Pratt and stage2-Pratt archives.
+// LIBCP_LIB and runs it, so the same tests exercise the default and
+// stage2 archives.
 
 #include "libcp.h"
 

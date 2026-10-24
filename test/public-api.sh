@@ -9,8 +9,8 @@ set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cc=${CC:-cc}
-# LIBCP_LIB selects the archive to inspect; the Pratt gate points it at
-# pratt/libcp.a, whose public surface must be the same.
+# LIBCP_LIB selects the archive to inspect; test-stage2 points it at the
+# stage2 archive, whose public surface must be the same.
 lib=${LIBCP_LIB:-$root/libcp.a}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -165,8 +165,7 @@ done
 echo "public-api: D7 symbols present in libcp.a"
 
 # PLAN L3.3b: the shared library must export exactly D7. Only built on
-# Linux, and only inspected for the default archive (the Pratt build has
-# no shared library).
+# Linux, so only inspected there.
 if [ -z "${LIBCP_LIB:-}" ] && [ -f "$root/libcp.so" ]; then
   nm -D --defined-only "$root/libcp.so" | awk '{print $NF}' \
     | sort -u > "$tmp/soT"

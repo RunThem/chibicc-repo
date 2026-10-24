@@ -246,21 +246,23 @@ static Node *expr(LibcpContext *ctx, Token **rest, Token *tok);
 - `compound_stmt`: `{ ... }`, 建 `ND_BLOCK`, `is_scope_block = true`.
 - `stmt`: `if`, `for`, `while`, `do`, `switch`, `case`, `default`, 标签, `goto`, `break`, `continue`, `return`, `asm`, 空语句, 表达式语句.
 
-表达式层有两条路径, 见下一节.
+表达式层是一个绑定力循环, 见下一节.
 
-### 6.4.2 表达式解析的两种构建
+### 6.4.2 表达式解析: 一个绑定力循环
 
-默认构建使用 C 的优先级级联, 每个优先级一个函数:
+表达式层由一个 `expr_bp` 绑定力循环构成, 覆盖前缀, cast, 后缀, 二元, 赋值, `?:` 和逗号:
 
-```text
-assign -> conditional -> logor -> logand -> bitor -> bitxor -> bitand
-       -> equality -> relational -> shift -> add -> mul -> cast
-       -> unary -> postfix -> primary
-```
+- `infix_bp()` 把当前 token 翻译成操作符与绑定力(只读 `InfixOp` 表 + 线性查找).
+- 左结合 `rbp == lbp`, 右结合 `rbp == lbp - 1`; 具名 `BP_*` 常量.
+- 前缀形式在 `expr_nud`, 后缀形式是主循环的 led 段.
+- 三个入口保持名字与语义: `expr` 允许逗号, `assign` 允许赋值, `conditional` 两者都不允许.
 
-`LIBCP_PRATT_PARSE_FEATURE=1` 时, 表达式层换成一个 `expr_bp` 绑定力循环, 覆盖前缀, cast, 后缀, 二元, 赋值, `?:` 和逗号. 旧函数保留在 `#if !LIBCP_PRATT_PARSE_FEATURE` 下.
-
-两种构建的公共 API 相同, 树的形状也相同. `test/pratt-ab.sh` 在 41 个语料文件和 tinycc 真实构建上比较 `-dump-ast` 与 `-S`, 要求逐字节一致. 消费者链接哪个库, 就得到哪个解析器; 默认 `libcp.a` 是旧路径.
+历史上这里曾是与 C 优先级级联(每优先级一个函数)并存的双路径
+(`LIBCP_PRATT_PARSE_FEATURE` 开关, 见 `docs/12` §12.11 与
+`plans/PLAN-pratt-parse.md`); 2026-10-25 的 Pratt 单一路径线删掉了级联,
+Pratt 成为唯一实现, 开关与双构建一并移除. 迁移前的 41 个语料文件与
+tinycc 真实构建已由 `test/pratt-ab.sh` 锁定两路径 `-dump-ast` 与 `-S`
+逐字节一致, 迁移后由汇编快照基线继续锁定.
 
 ### 6.4.3 声明记录
 
@@ -438,5 +440,4 @@ if (n->kind == ND_DECL && n->decl_init) {
 - **宏调用不可见**. 树上只有展开后的结构. 来源查 provenance.
 - **语法检查范围有限**. 只有文法可判的 15 类诊断. 类型错误在第 4 层.
 - **深度上限 512**. 超深嵌套报诊断, 不返回部分树.
-- **两套表达式解析器**. 默认构建是级联, `LIBCP_PRATT_PARSE_FEATURE=1` 是绑定力循环. 两者的 AST 由 A/B 测试锁定为相同, 但消费者必须知道自己链接的是哪一个构建.
 - **GNU 扩展支持不完整**. `typeof`, 语句表达式, `&&label`, 范围 case, `asm` 有节点, 但不是每个细节都与 GCC 一致.

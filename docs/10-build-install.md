@@ -26,7 +26,6 @@ make libcp.a   # 只构建静态库
 | `libcp.so` | 指向 `libcp.so.0` 的符号链接, 仅 Linux |
 | `chibicc` | 参考编译器, 链接 `libcp.a` |
 | `libcp.pc` | pkg-config 文件, 仅由 `make libcp.pc` / `make check-library` / `make install` 生成, `make`(all)不构建它 |
-| `pratt/libcp.a` | Pratt 表达式解析构建的静态库, 仅显式构建 |
 | `stage2/libcp.a` | 自举构建的静态库 |
 
 编译选项在 Makefile 顶部:
@@ -44,24 +43,16 @@ CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch \
 | `chibicc` | 参考编译器 |
 | `libcp.a` | 静态库 |
 | `libcp.so` | 共享库, 仅 Linux |
-| `chibicc-pratt` | Pratt 表达式解析构建的编译器 |
-| `pratt/libcp.a` | Pratt 构建的静态库 |
 | `test` | 完整测试套件 |
 | `test-stage2` | 自举测试 |
-| `test-pratt` | Pratt 构建的测试套件 |
-| `test-both` | 默认与 Pratt 两套测试 |
-| `test-ab` | 两套构建的 AST 与汇编 A/B |
-| `test-stage2-pratt` | Pratt 构建的自举 |
 | `check-library` | 公共面与打包闸门 |
-| `check-library-pratt` | Pratt 库的公共面闸门 |
+| `check-context` | 隐式上下文审计 |
 | `install` | 安装头文件, 库, pkg-config 文件与 LICENSE |
 | `clean` | 清理构建产物 |
 | `docker-image` | 构建 amd64 测试镜像 |
 | `docker-test` | 容器内完整测试与自举 |
 | `docker-snapshot-diff` | 汇编快照零 diff |
 | `docker-test-thirdparty` | 真实项目构建 |
-| `docker-pratt-ab` | 容器内 Pratt A/B |
-| `docker-pratt-tinycc` | 容器内 tinycc 真实构建 |
 
 ## 10.4 安装
 
@@ -189,14 +180,6 @@ make test-stage2
 
 自举证明库代码能被自己编译. `setjmp` 与 `va_copy` 都在这条路径上被验证.
 
-Pratt 版本:
-
-```sh
-make test-stage2-pratt
-```
-
-用 `chibicc-pratt` 重编全部库对象, 再跑测试.
-
 ## 10.8 测试矩阵
 
 `make test` 依次运行:
@@ -282,15 +265,6 @@ THIRDPARTY=tinycc make docker-test-thirdparty
 
 依次构建 tinycc, libpng, git, sqlite, cpython. 很慢, 不属于 `make test`.
 
-Pratt A/B:
-
-```sh
-make docker-pratt-ab
-make docker-pratt-tinycc
-```
-
-`test/pratt-ab.sh` 对 41 个语料文件比较 `-dump-ast` 与 `-S`; `--thirdparty tinycc` 捕获 tinycc 构建的每条 `-c` 命令, 比较 AST 与汇编, 并让两个构建各跑 tinycc 测试套件.
-
 ## 10.11 在别的项目里使用
 
 ### 10.11.1 直接链接静态库
@@ -365,7 +339,7 @@ make ALLOCATOR_CFLAGS='-include mimalloc.h -DLIBCP_MALLOC=mi_malloc -DLIBCP_CALL
 
 **链接时报未定义符号.**
 
-确认链接了 `libcp.a` 或 `-lcp`. 如果用的是 stage2 或 pratt 库, 确认路径.
+确认链接了 `libcp.a` 或 `-lcp`. 如果用的是 stage2 库, 确认路径.
 
 **`pkg-config` 找不到 `libcp`.**
 

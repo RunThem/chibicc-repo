@@ -1,8 +1,8 @@
 # CI (CodeReview 2026-10-24 B1). The Linux runner is native x86-64, so
 # the full test set runs without Docker. The macOS job only builds the
 # compiler and exercises the host-runnable front-end channels: the
-# generated x86-64 code cannot be assembled there. The Pratt dual build
-# and the thirdparty projects stay on the manual Docker gates.
+# generated x86-64 code cannot be assembled there. The thirdparty
+# projects stay on the manual Docker gates.
 name: ci
 
 on:

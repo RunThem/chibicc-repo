@@ -6,8 +6,8 @@
 #
 # Report mode (default) prints what it finds and exits 0, so the gate can
 # land before the line is converted. `--strict` turns every finding into
-# a failure; `make check-context` and `make check-context-pratt` run the
-# strict form. LIBCP_LIB selects the archive to inspect.
+# a failure; `make check-context` runs the strict form. LIBCP_LIB selects
+# the archive to inspect.
 
 set -u
 

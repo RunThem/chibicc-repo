@@ -53,13 +53,6 @@ typedef LibcpNode Node;
 typedef LibcpNodeKind NodeKind;
 typedef LibcpTypeKind TypeKind;
 
-// The Pratt expression parser (PLAN-pratt-parse). 0 keeps the cascaded
-// expression functions; 1 compiles the Pratt implementation instead.
-// The default build is the old path; `make chibicc-pratt` passes 1.
-#ifndef LIBCP_PRATT_PARSE_FEATURE
-#define LIBCP_PRATT_PARSE_FEATURE 0
-#endif
-
 #define MAX(x, y) ((x) < (y) ? (y) : (x))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 

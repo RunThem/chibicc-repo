@@ -19,14 +19,6 @@ DRIVER_SRCS=main.c codegen.c
 DRIVER_OBJS=$(DRIVER_SRCS:.c=.o)
 PUBLIC_HDRS=$(wildcard libcp/include/libcp/*.h)
 
-# The Pratt expression parser build (PLAN-pratt-parse 4.1). Out-of-tree
-# objects, so the default build is never polluted by a CFLAGS switch the
-# makefile does not track.
-PRATT_CFLAGS=$(CFLAGS) -DLIBCP_PRATT_PARSE_FEATURE=1
-PRATT_LIB_OBJS=$(LIB_SRCS:$(LIB_DIR)/%.c=pratt/$(LIB_DIR)/%.o)
-PRATT_DRIVER_OBJS=$(DRIVER_OBJS:%=pratt/%)
-PRATT_TESTS=$(TEST_SRCS:test/%.c=pratt/test/%.exe)
-
 TEST_SRCS=$(wildcard test/*.c)
 TESTS=$(TEST_SRCS:.c=.exe)
 
@@ -49,21 +41,6 @@ chibicc: libcp.a $(DRIVER_OBJS)
 
 libcp.a: $(LIB_OBJS)
 	$(AR) rcs $@ $^
-
-# The Pratt build: `make chibicc-pratt` is the only target that turns the
-# feature on. It has its own archive and objects and never overwrites the
-# default ones.
-pratt/%.o: %.c $(LIB_HDR) $(PUBLIC_HDRS)
-	mkdir -p $(@D)
-	$(CC) $(PRATT_CFLAGS) -c -o $@ $<
-
-pratt/main.o pratt/codegen.o: driver.h
-
-pratt/libcp.a: $(PRATT_LIB_OBJS)
-	$(AR) rcs $@ $^
-
-chibicc-pratt: pratt/libcp.a $(PRATT_DRIVER_OBJS)
-	$(CC) $(PRATT_CFLAGS) -o $@ $(PRATT_DRIVER_OBJS) pratt/libcp.a $(LDFLAGS)
 
 # The shared library (PLAN L3.3b): Linux only, PIC objects built with
 # hidden visibility, D7 exported through LIBCP_API. macOS only
@@ -101,32 +78,6 @@ test: $(TESTS)
 	test/self-test.sh
 	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
 
-pratt/test/%.exe: chibicc-pratt test/%.c test/common test/test.h
-	mkdir -p pratt/test
-	./chibicc-pratt -Iinclude -Itest -c -o pratt/test/$*.o test/$*.c
-	$(CC) -pthread -o $@ pratt/test/$*.o -xc test/common
-
-test-pratt: $(PRATT_TESTS)
-	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
-	test/driver.sh ./chibicc-pratt
-	test/diagnostic.sh ./chibicc-pratt
-	test/warning.sh ./chibicc-pratt
-	test/shape.sh ./chibicc-pratt
-	test/ast.sh ./chibicc-pratt
-	test/trivia.sh ./chibicc-pratt
-	test/cst.sh ./chibicc-pratt
-	test/expand.sh ./chibicc-pratt
-	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" LIBCP_PRATT_PARSE_FEATURE=1 test/library.sh
-	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" LIBCP_PRATT_PARSE_FEATURE=1 test/self-test.sh
-	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" test/context-audit.sh --strict
-
-test-both: test test-pratt
-
-# The A/B equivalence harness: 41 test/*.c through -dump-ast and -S.
-# `test/pratt-ab.sh ... --thirdparty tinycc` is the real-project gate.
-test-ab: chibicc chibicc-pratt
-	test/pratt-ab.sh ./chibicc ./chibicc-pratt
-
 test-all: test test-stage2
 
 # The public-surface gate (PLAN L3.1d): header self-containment, a
@@ -138,22 +89,11 @@ check-library: $(CHECK_LIBS) libcp.pc
 	test/public-api.sh
 	test/install.sh
 
-# The same public-surface and consumer gates against the Pratt archive.
-# The headers and the D7 set are mode-independent; this proves the archive
-# built with LIBCP_PRATT_PARSE_FEATURE=1 still satisfies them. install.sh
-# is about the installed layout and is run once by check-library.
-check-library-pratt: pratt/libcp.a libcp.pc
-	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" LIBCP_PRATT_PARSE_FEATURE=1 test/library.sh
-	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" test/public-api.sh
-
 # The implicit-context gate (PLAN-explicit-context E10): the library has
 # no thread-local accessor, and codegen carries no context pointer of its
-# own. Run by test / test-pratt and available on its own.
+# own. Run by test and available on its own.
 check-context: libcp.a
 	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
-
-check-context-pratt: pratt/libcp.a
-	LIBCP_LIB="$(CURDIR)/pratt/libcp.a" test/context-audit.sh --strict
 
 # Stage 2
 
@@ -189,40 +129,6 @@ test-stage2: libcp.a stage2/libcp.a $(TESTS:test/%=stage2/test/%)
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/library.sh
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/self-test.sh
 
-# Stage 2 of the Pratt build: chibicc-pratt compiles the same sources with
-# the feature on, so the self-hosted compiler exercises the Pratt path.
-STAGE2_PRATT_LIB_OBJS=$(LIB_SRCS:$(LIB_DIR)/%.c=stage2-pratt/$(LIB_DIR)/%.o)
-
-stage2-pratt/chibicc: stage2-pratt/libcp.a $(DRIVER_OBJS:%=stage2-pratt/%)
-	$(CC) $(CFLAGS) -o $@ $(DRIVER_OBJS:%=stage2-pratt/%) stage2-pratt/libcp.a $(LDFLAGS)
-
-stage2-pratt/libcp.a: $(STAGE2_PRATT_LIB_OBJS)
-	$(AR) rcs $@ $^
-
-stage2-pratt/%.o: %.c chibicc-pratt $(LIB_HDR) $(PUBLIC_HDRS)
-	mkdir -p $(@D)
-	./chibicc-pratt -DLIBCP_PRATT_PARSE_FEATURE=1 -DLIBCP_DEFAULT_ALLOCATOR -Ilibcp/include -Ilibcp/src -c -o $@ $<
-
-stage2-pratt/main.o stage2-pratt/codegen.o: driver.h
-
-stage2-pratt/test/%.exe: stage2-pratt/chibicc test/%.c test/common test/test.h
-	mkdir -p stage2-pratt/test
-	./stage2-pratt/chibicc -Iinclude -Itest -c -o stage2-pratt/test/$*.o test/$*.c
-	$(CC) -pthread -o $@ stage2-pratt/test/$*.o -xc test/common
-
-test-stage2-pratt: libcp.a stage2-pratt/libcp.a $(TESTS:test/%=stage2-pratt/test/%)
-	for i in $(TESTS:test/%=stage2-pratt/test/%); do echo $$i; ./$$i || exit 1; echo; done
-	test/driver.sh ./stage2-pratt/chibicc
-	test/diagnostic.sh ./stage2-pratt/chibicc
-	test/warning.sh ./stage2-pratt/chibicc
-	test/shape.sh ./stage2-pratt/chibicc
-	test/ast.sh ./stage2-pratt/chibicc
-	test/trivia.sh ./stage2-pratt/chibicc
-	test/cst.sh ./stage2-pratt/chibicc
-	test/expand.sh ./stage2-pratt/chibicc
-	LIBCP_LIB="$(CURDIR)/stage2-pratt/libcp.a" LIBCP_PRATT_PARSE_FEATURE=1 test/library.sh
-	LIBCP_LIB="$(CURDIR)/stage2-pratt/libcp.a" LIBCP_PRATT_PARSE_FEATURE=1 test/self-test.sh
-
 # Packaging (PLAN L3.3c).
 
 libcp.pc: libcp.pc.in
@@ -249,7 +155,7 @@ endif
 # Misc.
 
 clean:
-	rm -rf chibicc libcp.a libcp.so libcp.so.0 libcp.pc libcp.pc.tmp tmp* $(TESTS) test/*.s test/*.exe stage2 pratt stage2-pratt chibicc-pratt
+	rm -rf chibicc libcp.a libcp.so libcp.so.0 libcp.pc libcp.pc.tmp tmp* $(TESTS) test/*.s test/*.exe stage2
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 # Docker (amd64 Linux) 测试环境: 本机是 macOS ARM64, chibicc 生成的 x86-64 代码
@@ -262,7 +168,7 @@ clean:
 THIRDPARTY ?= tinycc libpng git sqlite cpython
 
 # 拷贝源码到容器可写层(排除本机构建产物与 thirdparty 缓存)
-BOOT = mkdir -p /work && tar -C /src --exclude=./.git --exclude=./.cache --exclude=./.codegraph --exclude=./thirdparty --exclude=./chibicc --exclude=./chibicc-pratt --exclude=./libcp.a --exclude="./libcp.so*" --exclude=./stage2 --exclude=./stage2-pratt --exclude=./pratt --exclude=./compile_commands.json --exclude=./test/*.exe --exclude="*.o" --exclude="*.s" -cf - . | tar -C /work -xf -
+BOOT = mkdir -p /work && tar -C /src --exclude=./.git --exclude=./.cache --exclude=./.codegraph --exclude=./thirdparty --exclude=./chibicc --exclude=./libcp.a --exclude="./libcp.so*" --exclude=./stage2 --exclude=./compile_commands.json --exclude=./test/*.exe --exclude="*.o" --exclude="*.s" -cf - . | tar -C /work -xf -
 
 docker-image:
 	docker build --platform linux/amd64 -t chibicc:amd64 .
@@ -270,15 +176,6 @@ docker-image:
 docker-test: docker-image
 	docker run --rm --platform linux/amd64 -v $(CURDIR):/src:ro chibicc:amd64 \
 	  bash -c '$(BOOT) && cd /work && make -j$$(nproc) test-all'
-
-# Both expression parsers through stage 1 and their stage-2 builds.
-docker-test-both: docker-image
-	docker run --rm --platform linux/amd64 -v $(CURDIR):/src:ro chibicc:amd64 \
-	  bash -c '$(BOOT) && cd /work && make -j$$(nproc) test-both test-stage2 test-stage2-pratt'
-
-docker-test-pratt: docker-image
-	docker run --rm --platform linux/amd64 -v $(CURDIR):/src:ro chibicc:amd64 \
-	  bash -c '$(BOOT) && cd /work && make -j$$(nproc) test-pratt test-stage2-pratt'
 
 # 默认依次跑五个 thirdparty 脚本(由小到大), 可用 THIRDPARTY=git 或
 # THIRDPARTY="git sqlite" 选择子集. tinycc 实测约 15 s; git/sqlite/cpython
@@ -290,27 +187,6 @@ docker-test-pratt: docker-image
 docker-test-thirdparty: docker-image
 	docker run --rm --platform linux/amd64 -v $(CURDIR):/src chibicc:amd64 \
 	  bash -c '$(BOOT) && mkdir -p /work/thirdparty && cd /work && chmod +x /work/test/thirdparty/make && export PATH=/work/test/thirdparty:$$PATH && make -j$$(nproc) chibicc || exit 1; rc=0; for t in $(THIRDPARTY); do echo "=== thirdparty: $$t ==="; [ -d /src/thirdparty/$$t ] && cp -a /src/thirdparty/$$t /work/thirdparty/; bash test/thirdparty/$$t.sh || { echo "thirdparty/$$t.sh FAILED"; rc=1; }; mkdir -p /src/thirdparty && cp -an /work/thirdparty/$$t /src/thirdparty/ 2>/dev/null; done; exit $$rc'
-
-# Pratt A/B: the 41-file corpus first, then tinycc built twice on one
-# configure (the shim in test/pratt-ab.sh captures every $(CC) -c command
-# and compares -dump-ast and -S), with each build's test suite. The tinycc
-# clone cache is copied in and back out like docker-test-thirdparty.
-PRATT_AB_BOOT = $(BOOT) && mkdir -p /work/thirdparty && cd /work && chmod +x /work/test/thirdparty/make && export PATH=/work/test/thirdparty:$$PATH
-
-docker-pratt-ab: docker-image
-	docker run --rm --platform linux/amd64 -v $(CURDIR):/src chibicc:amd64 \
-	  bash -c '$(PRATT_AB_BOOT) && make -j$$(nproc) chibicc chibicc-pratt \
-	    && test/pratt-ab.sh ./chibicc ./chibicc-pratt \
-	    && { if [ -d /src/thirdparty/tinycc ]; then cp -a /src/thirdparty/tinycc /work/thirdparty/; fi; \
-	         bash test/pratt-ab.sh ./chibicc ./chibicc-pratt --thirdparty tinycc; rc=$$?; \
-	         mkdir -p /src/thirdparty; cp -an /work/thirdparty/tinycc /src/thirdparty/ 2>/dev/null; exit $$rc; }'
-
-docker-pratt-tinycc: docker-image
-	docker run --rm --platform linux/amd64 -v $(CURDIR):/src chibicc:amd64 \
-	  bash -c '$(PRATT_AB_BOOT) && make -j$$(nproc) chibicc chibicc-pratt \
-	    && { if [ -d /src/thirdparty/tinycc ]; then cp -a /src/thirdparty/tinycc /work/thirdparty/; fi; \
-	         bash test/pratt-ab.sh ./chibicc ./chibicc-pratt --thirdparty tinycc; rc=$$?; \
-	         mkdir -p /src/thirdparty; cp -an /work/thirdparty/tinycc /src/thirdparty/ 2>/dev/null; exit $$rc; }'
 
 # 同一个 thirdparty 脚本集的本地版(devcontainer 就是这类环境: x86_64 Linux,
 # chibicc 生成的 x86-64 汇编直接由 as/ld 消费, 不需要容器). 与 docker 版的两点
@@ -385,4 +261,4 @@ docker-snapshot-ndiff: docker-image
 	@rc=0; diff -ru .cache/.ndtmp/base .cache/.ndtmp/new || rc=1; rm -rf .cache/.ndtmp; \
 	  [ $$rc -eq 0 ] && echo "snapshot ndiff: empty" || { echo "snapshot ndiff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: all test clean test-stage2 test-all test-thirdparty check-library check-library-pratt check-context check-context-pratt install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff test-pratt test-both test-ab test-stage2-pratt docker-test-both docker-test-pratt docker-pratt-ab docker-pratt-tinycc
+.PHONY: all test clean test-stage2 test-all test-thirdparty check-library check-context install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff
