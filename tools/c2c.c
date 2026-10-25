@@ -32,6 +32,10 @@
 //
 // Usage: c2c [-I dir]... [-D name[=val]]... [-U name]... file.c
 
+// open_memstream and strndup are POSIX; say so before any include, so
+// the tool also builds under glibc's strict -std=c11.
+#define _POSIX_C_SOURCE 200809L
+
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -126,6 +130,7 @@ typedef struct TyInfo {
   bool emitted;         // definition already printed
   bool forwarded;       // forward declaration already printed
   bool collected;       // pre-pass aggregate cycle guard
+  int first_item;       // pre-pass: first top-level item reaching this record
 } TyInfo;
 
 #define TY_BUCKETS 509
@@ -135,6 +140,22 @@ typedef struct {
   TyInfo *buckets[TY_BUCKETS];
   LibcpType *pending[64]; // incomplete aggregates, file-top forward decls
   int pending_len;
+  // Aggregate definitions to re-establish as file-scope statements
+  // ahead of their first user (a standalone `struct T { ... };` leaves
+  // no chain node, so without this the definition would print inline
+  // wherever the record is first reached - possibly inside a
+  // parameter list or a sizeof, the wrong scope on re-parse).
+  LibcpType *flushable[128];
+  int flushable_len;
+  int cur_item;       // pre-pass: ordinal of the top-level item being walked
+  int cur_print_item; // print: ordinal of the top-level item being printed
+  int atomic_depth;   // >0 while spelling the inside of _Atomic(...)
+  // The aggregate whose definition is being printed right now. Its
+  // typedef name is not yet visible where it is being defined (a
+  // self-referential member spells `struct T`, never the typedef), so
+  // declspec_start skips the typedef shortcut for these records.
+  LibcpType *defining[16];
+  int defining_len;
   int errors;
 } Printer;
 
@@ -146,6 +167,7 @@ static TyInfo *ty_info(Printer *p, LibcpType *ty) {
       return info;
   info = calloc(1, sizeof(TyInfo));
   info->ty = ty;
+  info->first_item = -1; // 0 is a valid top-level ordinal
   h %= TY_BUCKETS;
   info->next = p->buckets[h];
   p->buckets[h] = info;
@@ -305,6 +327,24 @@ static void collect_type(Printer *p, LibcpType *ty) {
   if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
       !ty->layout_pending && ty->tag_tok && p->pending_len < 64)
     p->pending[p->pending_len++] = ty;
+
+  // A tagged, complete record re-establishes itself as a file-scope
+  // statement before its first user (see the Printer comment) - unless
+  // another definition of the same tag exists, in which case hoisting
+  // both would collide on re-parse and each prints inline instead.
+  if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && ty->tag_tok &&
+      ty->members && info->first_item < 0 && p->flushable_len < 128) {
+    bool shadowed = false;
+    for (int i = 0; i < p->flushable_len; i++)
+      if (p->flushable[i]->tag_tok->len == ty->tag_tok->len &&
+          !strncmp(p->flushable[i]->tag_tok->loc, ty->tag_tok->loc,
+                   ty->tag_tok->len))
+        shadowed = true;
+    if (!shadowed) {
+      info->first_item = p->cur_item;
+      p->flushable[p->flushable_len++] = ty;
+    }
+  }
 
   for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
     collect_type(p, mem->ty);
@@ -673,7 +713,9 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
 
   case ND_INCDEC:
     if (node->is_post) {
-      print_expr_ctx(p, e, node->lhs, 15);
+      // A postfix on a unary operand parenthesizes: (*p)-- must not
+      // re-lex as *p-- (the postfix binds the p).
+      print_expr_ctx(p, e, node->lhs, 16);
       e_op(e, node->addend < 0 ? "--" : "++");
     } else {
       e_op(e, node->addend < 0 ? "--" : "++");
@@ -711,7 +753,15 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
       return;
     }
     e_str(e, "sizeof ");
-    print_expr_ctx(p, e, node->lhs, 15);
+    // A cast or compound-literal operand has to parenthesize: glued,
+    // `sizeof (char)1` would read as the sizeof(type) form.
+    if (node->lhs->kind == ND_CAST || node->lhs->kind == ND_COMPOUND_LITERAL) {
+      e_str(e, "(");
+      print_expr_ctx(p, e, node->lhs, 1);
+      e_str(e, ")");
+    } else {
+      print_expr_ctx(p, e, node->lhs, 15);
+    }
     return;
 
   case ND_ALIGNOF:
@@ -722,7 +772,13 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
       return;
     }
     e_str(e, "_Alignof ");
-    print_expr_ctx(p, e, node->lhs, 15);
+    if (node->lhs->kind == ND_CAST || node->lhs->kind == ND_COMPOUND_LITERAL) {
+      e_str(e, "(");
+      print_expr_ctx(p, e, node->lhs, 1);
+      e_str(e, ")");
+    } else {
+      print_expr_ctx(p, e, node->lhs, 15);
+    }
     return;
 
   case ND_MEMBER:
@@ -949,12 +1005,15 @@ static void print_struct_spec_e(Printer *p, E *e, LibcpType *ty) {
 
   info->emitted = true;
   e_str(e, " {");
+  if (p->defining_len < 16)
+    p->defining[p->defining_len++] = ty;
   for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
     e_nl(e);
     e->indent++;
     print_member_e(p, e, mem);
     e->indent--;
   }
+  p->defining_len--;
   e_nl(e);
   e_str(e, "}");
   if (ty->is_packed)
@@ -973,8 +1032,27 @@ static void print_declspec_e(Printer *p, E *e, LibcpType *ty, bool defining) {
     return;
   }
 
-  if (ty->is_atomic)
+  // The plain `_Atomic ` prefix is for base-kind records only; a
+  // derived record spells in the parenthesized form below.
+  if (ty->is_atomic &&
+      !(p->atomic_depth == 0 &&
+        (ty->kind == TY_PTR || ty->kind == TY_ARRAY || ty->kind == TY_VLA ||
+         ty->kind == TY_FUNC)))
     e_str(e, "_Atomic ");
+
+  // An _Atomic on a derived record spells in parenthesized form:
+  // `_Atomic(int *) p`, never `int * _Atomic p` (chibicc reads only
+  // the declspec form back).
+  if (ty->is_atomic && p->atomic_depth == 0 &&
+      (ty->kind == TY_PTR || ty->kind == TY_ARRAY || ty->kind == TY_VLA ||
+       ty->kind == TY_FUNC)) {
+    p->atomic_depth++;
+    e_str(e, "_Atomic(");
+    print_full_type(p, e, ty, NULL, false);
+    e_str(e, ")");
+    p->atomic_depth--;
+    return;
+  }
 
   switch (ty->kind) {
   case TY_VOID:
@@ -1060,9 +1138,11 @@ static void sb_prepend_str(SB *sb, const char *s) {
       sb->cap *= 2;
     sb->s = realloc(sb->s, sb->cap);
   }
-  memmove(sb->s + n, sb->s, sb->len + 1);
+  if (sb->len)
+    memmove(sb->s + n, sb->s, sb->len);
   memcpy(sb->s, s, n);
   sb->len += n;
+  sb->s[sb->len] = '\0';
 }
 
 // Runs `fn` with a memory stream emitter and returns the text it
@@ -1085,14 +1165,21 @@ static char *capture(Printer *p, EmitFn fn, LibcpType *ty) {
 
 static void print_declarator(Printer *p, E *e, LibcpType *ty,
                              const LibcpToken *name, LibcpType *stop);
+static bool in_definition(Printer *p, LibcpType *ty);
 
 // Where the declspec of a full type starts: the outermost segment of
 // the derivation chain a typedef names (PLAN-c2c D5), or the base
 // type when none does. `typedef int (*fp)(int); fp f;` prints `fp f`
-// because the pointer-to-function segment is fp.
-static LibcpType *declspec_start(Printer *p, LibcpType *ty) {
+// because the pointer-to-function segment is fp. `avoid` suppresses
+// the shortcut at one exact record - the record a typedef is itself
+// naming, whose declaration must spell the type it introduces.
+static LibcpType *declspec_start(Printer *p, LibcpType *ty, LibcpType *avoid) {
   for (LibcpType *t = ty;;) {
-    if (ty_info(p, t)->tname)
+    if (t != avoid && ty_info(p, t)->tname && !in_definition(p, t))
+      return t;
+    // An _Atomic qualifier lives on one record of the chain and prints
+    // in the declspec, so the walk stops there (`_Atomic(int *) z`).
+    if (t->is_atomic && p->atomic_depth == 0)
       return t;
     switch (t->kind) {
     case TY_PTR:
@@ -1110,13 +1197,13 @@ static LibcpType *declspec_start(Printer *p, LibcpType *ty) {
 }
 
 // A full type in declaration position: the declspec, then the
-// declarator derived above it. `defining` suppresses the typedef
-// shortcut, so the record a typedef introduces never spells itself.
+// declarator derived above it.
 static void print_full_type(Printer *p, E *e, LibcpType *ty,
                             const LibcpToken *name, bool defining) {
-  LibcpType *start =
-      defining ? base_type(ty) : declspec_start(p, ty);
-  print_declspec_e(p, e, start, defining);
+  LibcpType *start = defining ? base_type(ty) : declspec_start(p, ty, NULL);
+  // A record whose definition is being printed spells itself by tag,
+  // never by the typedef name it is about to introduce.
+  print_declspec_e(p, e, start, defining || in_definition(p, start));
   if (name || ty != start)
     e_str(e, " ");
   print_declarator(p, e, ty, name, start);
@@ -1267,7 +1354,9 @@ static void print_init_list(Printer *p, LibcpInitializer *init) {
       e_str(&p->e, ",");
     e_str(&p->e, " ");
     first = false;
+    bool has_desig = false;
     for (LibcpInitDesig *d = item->desigs; d; d = d->next) {
+      has_desig = true;
       if (d->name) {
         e_str(&p->e, ".");
         e_tok(&p->e, d->name);
@@ -1280,8 +1369,9 @@ static void print_init_list(Printer *p, LibcpInitializer *init) {
         }
         e_str(&p->e, "]");
       }
-      e_str(&p->e, " = ");
     }
+    if (has_desig)
+      e_str(&p->e, " = ");
     print_init(p, item->init);
   }
   if (!first)
@@ -1322,16 +1412,31 @@ static void print_one_declarator(Printer *p, LibcpNode *node,
   }
 }
 
+// The declspec start a record's declaration will actually print with:
+// a typedef suppresses the typedef-name shortcut on the record it is
+// itself naming (see print_decl_head).
+static bool in_definition(Printer *p, LibcpType *ty) {
+  for (int i = 0; i < p->defining_len; i++)
+    if (p->defining[i] == ty)
+      return true;
+  return false;
+}
+
+static LibcpType *print_start(Printer *p, LibcpNode *node) {
+  LibcpType *avoid = node->kind == ND_TYPEDEF ? record_type(node) : NULL;
+  return declspec_start(p, record_type(node), avoid);
+}
+
 // True when `node` continues the declaration group of `first`: same
-// kind, the same declspec start (the base record, or the typedef-named
-// segment both derive above) and the same attributes (PLAN-c2c D3).
-// Grouping by the declspec start is what keeps every declarator of one
-// anonymous enum or struct definition inside the single statement that
-// spells it.
+// kind, same printed declspec start and same attributes (PLAN-c2c
+// D3). Grouping by the declspec start is what keeps every declarator
+// of one anonymous enum or struct definition inside the single
+// statement that spells it - and only groups that share one declspec
+// text round-trip: two typedefs never join, because each suppresses
+// the name shortcut at its own record (c35).
 static bool continues_group(Printer *p, LibcpNode *first, LibcpNode *node) {
   return node->kind == first->kind &&
-         declspec_start(p, record_type(node)) ==
-             declspec_start(p, record_type(first)) &&
+         print_start(p, node) == print_start(p, first) &&
          same_attr(&node->attr, &first->attr);
 }
 
@@ -1341,10 +1446,15 @@ static void print_stmt(Printer *p, LibcpNode *node);
 // declarator group - without any terminator; returns the last chain
 // node of the group. A for-loop's init declaration reuses this.
 static LibcpNode *print_decl_head(Printer *p, LibcpNode *node) {
-  bool defining = node->kind == ND_TYPEDEF;
   print_attr_prefix(p, node);
-  LibcpType *start = defining ? base_type(record_type(node))
-                              : declspec_start(p, record_type(node));
+  // A typedef suppresses the typedef-name shortcut only on the record
+  // it is itself naming: `typedef struct { int x; } P;` must spell the
+  // struct, while `typedef __va_elem va_list[1];` keeps __va_elem.
+  // The declspec prints structurally exactly when the suppressed
+  // record is where the declspec itself starts.
+  LibcpType *start = print_start(p, node);
+  bool defining = (node->kind == ND_TYPEDEF && start == record_type(node)) ||
+                  in_definition(p, start);
   print_declspec_e(p, &p->e, start, defining);
   e_str(&p->e, " ");
 
@@ -1382,6 +1492,7 @@ static LibcpNode *print_record(Printer *p, LibcpNode *node) {
 
 static void print_stmt(Printer *p, LibcpNode *node);
 static void print_chain(Printer *p, LibcpNode *node);
+static LibcpNode *print_top_item(Printer *p, LibcpNode *node);
 static LibcpNode *print_decl_head(Printer *p, LibcpNode *node);
 static LibcpNode *print_record(Printer *p, LibcpNode *node);
 static LibcpNode *print_enum_group(Printer *p, LibcpNode *node);
@@ -1513,13 +1624,21 @@ static void print_stmt(Printer *p, LibcpNode *node) {
 
   case ND_FOR: {
     e_str(&p->e, "for (");
-    // The init is a declaration record chain or one expression
-    // statement; the record group prints without its own terminator.
-    if (node->init) {
-      if (node->init->kind == ND_DECL)
-        print_decl_head(p, node->init);
-      else
-        print_expr_ctx(p, &p->e, node->init->lhs, 1);
+    // The init is a chain: enum-definition records may precede the
+    // declaration record (`for (enum { E = 2 } i = 0; ...)`), and an
+    // expression statement carries its expression in lhs. No
+    // terminators here - the `;`s are the for-head's own.
+    for (LibcpNode *n = node->init; n;) {
+      if (n->kind == ND_ENUM_CONST) {
+        n = print_enum_group(p, n)->next;
+        continue;
+      }
+      if (n->kind == ND_DECL) {
+        n = print_decl_head(p, n)->next;
+        continue;
+      }
+      print_expr_ctx(p, &p->e, n->lhs, 1);
+      n = n->next;
     }
     e_str(&p->e, ";");
     if (node->cond) {
@@ -1634,18 +1753,23 @@ static void print_stmt(Printer *p, LibcpNode *node) {
 // multi-declarator statements), enum-definition record runs, and
 // statements. Statements that follow a case label stay one indent
 // deeper until the next label, the layout every C printer uses.
+// One item of a statement chain: an enum-definition record run, a
+// declaration record (grouped), or a statement. Returns the last
+// chain node it consumed.
+static LibcpNode *print_top_item(Printer *p, LibcpNode *node) {
+  if (node->kind == ND_ENUM_CONST)
+    return print_enum_group(p, node);
+  if (node->kind == ND_DECL || node->kind == ND_GVAR_DECL ||
+      node->kind == ND_TYPEDEF || node->kind == ND_FUNCDEF)
+    return print_record(p, node);
+  print_stmt(p, node);
+  e_nl(&p->e);
+  return node;
+}
+
 static void print_chain(Printer *p, LibcpNode *node) {
   int case_lift = 0;
   for (; node;) {
-    if (node->kind == ND_ENUM_CONST) {
-      node = print_enum_group(p, node)->next;
-      continue;
-    }
-    if (node->kind == ND_DECL || node->kind == ND_GVAR_DECL ||
-        node->kind == ND_TYPEDEF || node->kind == ND_FUNCDEF) {
-      node = print_record(p, node)->next;
-      continue;
-    }
     if (node->kind == ND_CASE) {
       while (case_lift) {
         p->e.indent--;
@@ -1669,9 +1793,7 @@ static void print_chain(Printer *p, LibcpNode *node) {
       node = node->next->next;
       continue;
     }
-    print_stmt(p, node);
-    e_nl(&p->e);
-    node = node->next;
+    node = print_top_item(p, node)->next;
   }
   while (case_lift) {
     p->e.indent--;
@@ -1714,7 +1836,10 @@ static void add_define(LibcpContext *ctx, char *str) {
 
 static void on_diag(void *user, const LibcpDiagnostic *d) {
   Printer *p = user;
-  p->errors++;
+  // Warnings are advisory: the printed translation unit is still
+  // well-formed (an ignored attribute, say), so only errors fail.
+  if (d->severity == LIBCP_DIAG_ERROR)
+    p->errors++;
   fprintf(stderr, "c2c: %s:%d: %s\n", d->filename ? d->filename : "<c2c>",
           d->line, d->message);
 }
@@ -1722,7 +1847,7 @@ static void on_diag(void *user, const LibcpDiagnostic *d) {
 int main(int argc, char **argv) {
   const char *path = NULL;
 
-  Printer printer = {{stdout, 0, 1}, {0}, {0}, 0, 0};
+  Printer printer = {{stdout, 0, 1}, {0}, {0}, 0, {0}, 0, 0};
   Printer *p = &printer;
 
   LibcpContext *ctx = libcp_context_new();
@@ -1776,10 +1901,15 @@ int main(int argc, char **argv) {
   if (!tok || libcp_context_failed(ctx))
     return 1;
   LibcpNode *prog = libcp_parse(ctx, tok);
-  if (!prog || libcp_context_failed(ctx))
+  // An empty translation unit (a header with only directives) parses
+  // to a NULL chain - that is success, not failure.
+  if (libcp_context_failed(ctx))
     return 1;
 
-  collect_exprs(p, prog);
+  for (LibcpNode *item = prog; item; item = item->next) {
+    p->cur_item++;
+    collect_node(p, item);
+  }
 
   // Forward declarations for aggregates that stayed incomplete through
   // the whole parse come first (PLAN-c2c D7): a later same-tag
@@ -1796,7 +1926,27 @@ int main(int argc, char **argv) {
     e_nl(&p->e);
   }
 
-  print_chain(p, prog);
+  for (LibcpNode *node = prog; node;) {
+    // Standalone tag definitions the source had at file scope reprint
+    // ahead of the top-level item that first reaches them, so the tag
+    // lands in file scope, not inside a parameter list or a sizeof.
+    // The ordinal is per chain node (the pre-pass numbers every node,
+    // so a group that consumes several nodes advances it accordingly).
+    p->cur_print_item++;
+    for (int i = 0; i < p->flushable_len; i++) {
+      LibcpType *ty = p->flushable[i];
+      TyInfo *info = ty_info(p, ty);
+      if (info->emitted || info->first_item != p->cur_print_item)
+        continue;
+      print_struct_spec_e(p, &p->e, ty);
+      e_str(&p->e, ";");
+      e_nl(&p->e);
+    }
+    LibcpNode *last = print_top_item(p, node);
+    for (LibcpNode *n = node->next; n && n != last->next; n = n->next)
+      p->cur_print_item++;
+    node = last->next;
+  }
 
   libcp_context_free(ctx);
 

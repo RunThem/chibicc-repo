@@ -134,11 +134,13 @@ expect c05_structs <<'WANT'
 struct S {
   int a;
   int b;
-} s1, *s2;
+};
+struct S s1, *s2;
 union U {
   int i;
   float f;
-} u;
+};
+union U u;
 struct N {
   struct {
     int x;
@@ -147,7 +149,8 @@ struct N {
     int y;
     char z;
   };
-} n;
+};
+struct N n;
 WANT
 
 snippet c06_incomplete <<'SNIP'
@@ -279,11 +282,13 @@ struct B {
   unsigned int b : 5;
   int : 0;
   int c;
-} bb;
+};
+struct B bb;
 struct F {
   int n;
   char data[];
-} ff;
+};
+struct F ff;
 WANT
 
 snippet c14_attributes <<'SNIP'
@@ -297,10 +302,12 @@ expect c14_attributes <<'WANT'
 struct P2 {
   char c;
   int i;
-} __attribute__((packed)) p2;
+} __attribute__((packed));
+struct P2 p2;
 struct A2 {
   int x;
-} __attribute__((aligned(16))) a2;
+} __attribute__((aligned(16)));
+struct A2 a2;
 WANT
 
 snippet c15_dims <<'SNIP'
@@ -407,7 +414,8 @@ expect c21_postfix <<'WANT'
 struct S {
   int x;
   int y;
-} s, *sp;
+};
+struct S s, *sp;
 typedef int (*fp)(int);
 fp f;
 int a[3], e1 = s.x + sp->y, e2 = f(a[0]), e3 = (*f)(1), e4 = (&s)->x, e5 = a[0] + (&a)[0][1], e6 = 3[a];
@@ -473,7 +481,8 @@ expect c25_complit <<'WANT'
 struct S {
   int x;
   int y;
-} g = (struct S){ 1, 2 };
+};
+struct S g = (struct S){ 1, 2 };
 int *p = (int []){ 1, 2, 3 }, e = (int){ 5 };
 WANT
 
@@ -681,6 +690,9 @@ SNIP
 
 expect c33_local_records <<'WANT'
 static int g = 1;
+struct S {
+  int x;
+};
 int f(void) {
   static int s = 2;
   extern int e;
@@ -690,9 +702,7 @@ int f(void) {
     B
   };
   int t = A + B;
-  struct S {
-    int x;
-  } v = { .x = 3 };
+  struct S v = { .x = 3 };
   return t + v.x + s + e + g;
 }
 WANT
@@ -762,10 +772,11 @@ SNIP
 
 expect c34_coverage <<'WANT'
 int cvg = 5;
-typedef struct Cv {
+struct Cv {
   int a;
   int b;
-} Cv;
+};
+typedef struct Cv Cv;
 enum CvE {
   CVA,
   CVB = 2
@@ -876,6 +887,23 @@ void cvasm(void) {
 }
 WANT
 
+snippet c35_typedef_of_typedef <<'SNIP'
+typedef struct { int x; } E;
+typedef E arr_t[1];
+typedef arr_t arr2_t;
+E e;
+arr_t a;
+arr2_t b;
+SNIP
+
+expect c35_typedef_of_typedef <<'WANT'
+typedef struct {
+  int x;
+} E, arr_t[1], arr2_t[1];
+E e;
+arr_t a, b;
+WANT
+
 # 检查: 每个片段 (1) 输出与期望逐字节相同; (2) 对打印产物再打印逐字节不变。
 for name in $names; do
     checks=$((checks + 2))
@@ -913,6 +941,57 @@ kinds=$(sort -u "$tmp/kinds.all" | wc -l | tr -d ' ')
 if [ "$kinds" -lt 65 ]; then
     echo "c2c coverage: only $kinds node kinds reached (want >= 65)"
     fails=$((fails + 1))
+fi
+
+# 语料 round-trip: 对 test/*.c 与 include/*.h, 打印产物再解析得到的第 3 层
+# 树必须与原文的树形态相同 - -dump-ast 剥掉 @span 位置锚点与引号文本后
+# 逐字节比较 (kind, 结构字段, op/is_post/val/fval/label/attr/类型签名/
+# 初始化器形态全部保留; 字符串内容差异由 docker 的 -S 门逐字节兜底)。
+# 打印产物再打印必须逐字节不变。本机缺 Linux 系统头时探测跳过, docker
+# 内为权威。
+normalize_dump() {
+    # The driver's -dump-ast only accepts .c inputs; headers dump
+    # through a .c-named copy.
+    cp "$1" "$tmp/dump_input.c"
+    "$chibicc" -Iinclude -Itest -dump-ast "$tmp/dump_input.c" 2>/dev/null | sed -E -e 's/@[^ ]+//g' -e 's/"(\\.|[^"\\])*"//g'
+}
+
+if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
+   "$chibicc" -Iinclude -Itest -E "$tmp/probe.c" > /dev/null 2>&1; then
+    corpus_files=""
+    for f in test/*.c include/*.h; do
+        # line.c: #line 重设行号, 打印产物必然错位 (记录在 PLAN-c2c 1.4)。
+        # pragma-once.c: #include 指向自身, 树的形状取决于文件的路径身份
+        # (fmt.sh 的同款陷阱), 脱离原路径后展开结果不同。
+        [ "$f" = "test/line.c" ] && continue
+        [ "$f" = "test/pragma-once.c" ] && continue
+        corpus_files="$corpus_files $f"
+    done
+    for f in $corpus_files; do
+        checks=$((checks + 2))
+        if ! "$c2c_bin" -Iinclude -Itest -I/usr/include/x86_64-linux-gnu -I/usr/include "$f" > "$tmp/corpus.printed.c" 2> "$tmp/corpus.err"; then
+            echo "c2c/$f: c2c failed:"; cat "$tmp/corpus.err"
+            fails=$((fails + 1))
+            continue
+        fi
+        normalize_dump "$f" > "$tmp/corpus.n1"
+        normalize_dump "$tmp/corpus.printed.c" > "$tmp/corpus.n2"
+        if ! cmp -s "$tmp/corpus.n1" "$tmp/corpus.n2"; then
+            echo "c2c/$f: normalized AST differs:"
+            diff "$tmp/corpus.n1" "$tmp/corpus.n2" | head -10
+            fails=$((fails + 1))
+            continue
+        fi
+        if ! "$c2c_bin" -Iinclude -Itest -I/usr/include/x86_64-linux-gnu -I/usr/include "$tmp/corpus.printed.c" > "$tmp/corpus.printed2.c" 2>/dev/null \
+           || ! cmp -s "$tmp/corpus.printed.c" "$tmp/corpus.printed2.c"; then
+            echo "c2c/$f: not idempotent on the printed corpus"
+            fails=$((fails + 1))
+        fi
+    done
+    corpus_count=$(echo $corpus_files | wc -w | tr -d ' ')
+    echo "c2c corpus: $corpus_count files normalized-AST-equal and idempotent"
+else
+    echo "c2c corpus: skipped (no Linux system headers)"
 fi
 
 if [ $fails -ne 0 ]; then

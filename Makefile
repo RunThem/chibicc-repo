@@ -90,6 +90,8 @@ test: $(TESTS)
 	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
 	$(MAKE) fmt
 	test/fmt.sh ./chibicc ./fmt
+	$(MAKE) c2c
+	test/c2c.sh ./chibicc ./c2c
 
 test-all: test test-stage2
 
@@ -133,6 +135,9 @@ stage2/test/%.exe: stage2/chibicc test/%.c test/common test/test.h
 stage2/fmt: stage2/libcp.a tools/fmt.c
 	$(CC) $(CFLAGS) -o $@ tools/fmt.c stage2/libcp.a
 
+stage2/c2c: stage2/libcp.a tools/c2c.c
+	$(CC) $(CFLAGS) -o $@ tools/c2c.c stage2/libcp.a
+
 test-stage2: libcp.a stage2/libcp.a $(TESTS:test/%=stage2/test/%)
 	for i in $(TESTS:test/%=stage2/test/%); do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./stage2/chibicc
@@ -148,6 +153,8 @@ test-stage2: libcp.a stage2/libcp.a $(TESTS:test/%=stage2/test/%)
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/self-test.sh
 	$(MAKE) stage2/fmt
 	test/fmt.sh ./stage2/chibicc ./stage2/fmt
+	$(MAKE) stage2/c2c
+	test/c2c.sh ./stage2/chibicc ./stage2/c2c
 
 # Packaging (PLAN L3.3c).
 
