@@ -19,12 +19,17 @@
 #        ?: 与 elvis 与中段逗号; 调用/下标/成员/postfix 基座括号; 交换
 #        下标 (3[a]); 字符串拼接重发射/转义/宽字符前缀; 字面量拼写;
 #        _Generic 与类型谓词 builtin; 复合字面量; 原子 CAS/EXCH 重合成。
+#   CC4: 全部语句形态 (if/else 链, while/do/for 含声明 init 与空段,
+#        switch/case 区间/default 与 case 组缩进, 标签/计算 goto/
+#        &&label, break/continue, asm 与其空语句合并, 块与空语句);
+#        块内声明记录 (static/extern/typedef/enum/struct 局部化);
+#        语句表达式多行; c34 覆盖样本 + 覆盖审计 (69 kind 中 4 个
+#        sema 专属, parse 树可达的 65 个全部触达)。
 #
-# 用法: test/c2c.sh <chibicc> <c2c> (由 make test 与 make test-stage2 调用;
-# CC2 阶段尚不在 make test 内, 由开发循环手动调用)
+# 用法: test/c2c.sh <chibicc> <c2c> (由 make test 与 make test-stage2 调用)
 
-c2c_bin="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
-[ $# -ge 2 ] && [ "$2" != "-" ] && c2c_bin="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
+chibicc="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+c2c_bin="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 tmp=`mktemp -d /tmp/chibicc-c2c-XXXXXX`
 trap 'rm -rf $tmp' INT TERM HUP EXIT
 
@@ -484,6 +489,393 @@ _Atomic int ap, ao;
 int an = 1, r = __builtin_compare_and_swap(&ap, &ao, an), q = __builtin_atomic_exchange(&ap, an);
 WANT
 
+
+snippet c27_if_else <<'SNIP'
+int f(int a, int b) {
+  if (a) b = 1;
+  if (a) b = 2; else b = 3;
+  if (a) { b = 4; } else { b = 5; }
+  if (a) b = 6; else if (b) b = 7; else if (a) b = 8; else b = 9;
+  if (a) ;
+  return b;
+}
+SNIP
+
+expect c27_if_else <<'WANT'
+int f(int a, int b) {
+  if (a)
+    b = 1;
+  if (a)
+    b = 2;
+  else
+    b = 3;
+  if (a) {
+    b = 4;
+  } else {
+    b = 5;
+  }
+  if (a)
+    b = 6;
+  else if (b)
+    b = 7;
+  else if (a)
+    b = 8;
+  else
+    b = 9;
+  if (a)
+    ;
+  return b;
+}
+WANT
+
+snippet c28_loops <<'SNIP'
+int f(int n) {
+  int s = 0;
+  while (n) { n--; s += n; }
+  do s++; while (s < 10);
+  for (int i = 0, j = 1; i < n; i++, j *= 2) s += i * j;
+  for (;;) break;
+  for (; s > 100;) s--;
+  for (int i = 0; i < 3; i++) { if (i == 1) continue; s += i; }
+  return s;
+}
+SNIP
+
+expect c28_loops <<'WANT'
+int f(int n) {
+  int s = 0;
+  while (n) {
+    n--;
+    s += n;
+  }
+  do
+    s++;
+  while (s < 10);
+  for (int i = 0, j = 1; i < n; i++, j *= 2)
+    s += i * j;
+  for (;;)
+    break;
+  for (; s > 100;)
+    s--;
+  for (int i = 0; i < 3; i++) {
+    if (i == 1)
+      continue;
+    s += i;
+  }
+  return s;
+}
+WANT
+
+snippet c29_switch <<'SNIP'
+int f(int a) {
+  switch (a) {
+    case 1:
+      return 1;
+    case 2 ... 5:
+      return 2;
+    default:
+      break;
+  }
+  switch (a) { case 0: a = 1; }
+  return a;
+}
+SNIP
+
+expect c29_switch <<'WANT'
+int f(int a) {
+  switch (a) {
+    case 1:
+      return 1;
+    case 2 ... 5:
+      return 2;
+    default:
+      break;
+  }
+  switch (a) {
+    case 0:
+      a = 1;
+  }
+  return a;
+}
+WANT
+
+snippet c30_labels_goto <<'SNIP'
+int f(int n) {
+  void *p;
+  top:
+  if (n) { n--; goto top; }
+  p = &&end;
+  goto *p;
+  end:
+  return n;
+}
+SNIP
+
+expect c30_labels_goto <<'WANT'
+int f(int n) {
+  void *p;
+  top:
+    if (n) {
+      n--;
+      goto top;
+    }
+  p = &&end;
+  goto *p;
+  end:
+    return n;
+}
+WANT
+
+snippet c31_stmt_expr <<'SNIP'
+int f(int a) {
+  int b = ({ int t = a * 2; t + 1; });
+  b += ({ a++; a; });
+  return b;
+}
+SNIP
+
+expect c31_stmt_expr <<'WANT'
+int f(int a) {
+  int b = ({
+    int t = a * 2;
+    t + 1;
+  });
+  b += ({
+    a++;
+    a;
+  });
+  return b;
+}
+WANT
+
+snippet c32_asm <<'SNIP'
+void f(void) { asm("nop"); }
+void g(void) {
+  asm("mov $1, %rax\n\t"
+      "ret");
+}
+SNIP
+
+expect c32_asm <<'WANT'
+void f(void) {
+  asm("nop");
+}
+void g(void) {
+  asm("mov $1, %rax\n\tret");
+}
+WANT
+
+snippet c33_local_records <<'SNIP'
+static int g = 1;
+int f(void) {
+  static int s = 2;
+  extern int e;
+  typedef int T;
+  enum E { A, B };
+  struct S { int x; };
+  T t = A + B;
+  struct S v = { .x = 3 };
+  return t + v.x + s + e + g;
+}
+SNIP
+
+expect c33_local_records <<'WANT'
+static int g = 1;
+int f(void) {
+  static int s = 2;
+  extern int e;
+  typedef int T;
+  enum E {
+    A,
+    B
+  };
+  int t = A + B;
+  struct S {
+    int x;
+  } v = { .x = 3 };
+  return t + v.x + s + e + g;
+}
+WANT
+
+snippet c34_coverage <<'SNIP'
+int cvg = 5;
+typedef struct Cv { int a, b; } Cv;
+enum CvE { CVA, CVB = 2 };
+extern int cvext(int, ...);
+int cvfn(int x, int y) {
+  int a = 1, b = 2, r = 0;
+  Cv s, *sp = &s;
+  int arr[3] = { 1, 2, 3 };
+  char msg[] = "ok";
+  void *lp;
+  a += b; a -= b; a *= b; a /= b; a %= b; a &= b; a |= b; a ^= b;
+  a <<= b; a >>= b; a = b;
+  a = -a; a = !a; a = ~a; a = +a;
+  a = a + b * a / b % a - a;
+  a = a << b >> a;
+  a = a < b; a = a <= b; a = a > b; a = a >= b;
+  a = a == b; a = a != b;
+  a = a & b; a = a ^ b; a = a | b;
+  a = a && b; a = a || b;
+  a = a++ + ++b; a = a-- - --b;
+  a = arr[a]; a = 2[arr]; a = *sp + *(&arr[0]);
+  a = s.a + sp->b;
+  a = (int)a; a = (char)(long)a;
+  a = sizeof a + sizeof(int) + _Alignof(int);
+  a = a ? b : a; a = a ?: b;
+  a = (a, b);
+  a = _Generic(a, float: 1, int *: 2, default: 3);
+  a = __builtin_types_compatible_p(int, long) + __builtin_reg_class(int *);
+  if (a) b = 1; else b = 2;
+  if (a) { b = 3; } else if (b) { b = 4; } else { b = 5; }
+  while (a) a--;
+  do b++; while (b < 3);
+  for (int i = 0; i < 3; i++) a += i;
+  for (;;) break;
+  switch (a) {
+    case 1:
+      b = 1;
+      break;
+    case 2 ... 4:
+      break;
+    default:
+      break;
+  }
+  for (int i = 0; i < 3; i++) { if (i) continue; a += i; }
+  a = "xy"[0] + (int)"q";
+  goto cvlab;
+cvlab:
+  ;
+  lp = &&cvlab;
+  goto *lp;
+  {
+    a = ({ int t = b; t; });
+  }
+  a = (Cv){ 7, 8 }.a;
+  return a + CVA + msg[0] + (int)cvext(1, 2, 3);
+}
+int cvq(_Atomic(int) *p, _Atomic(int) *o, int n) {
+  return __builtin_compare_and_swap(p, o, n) + __builtin_atomic_exchange(p, n);
+}
+void cvasm(void) { asm("nop"); }
+SNIP
+
+expect c34_coverage <<'WANT'
+int cvg = 5;
+typedef struct Cv {
+  int a;
+  int b;
+} Cv;
+enum CvE {
+  CVA,
+  CVB = 2
+};
+extern int cvext(int, ...);
+int cvfn(int x, int y) {
+  int a = 1, b = 2, r = 0;
+  Cv s, *sp = &s;
+  int arr[3] = { 1, 2, 3 };
+  char msg[] = "ok";
+  void *lp;
+  a += b;
+  a -= b;
+  a *= b;
+  a /= b;
+  a %= b;
+  a &= b;
+  a |= b;
+  a ^= b;
+  a <<= b;
+  a >>= b;
+  a = b;
+  a = -a;
+  a = !a;
+  a = ~a;
+  a = a;
+  a = a + b * a / b % a - a;
+  a = a << b >> a;
+  a = a < b;
+  a = a <= b;
+  a = a > b;
+  a = a >= b;
+  a = a == b;
+  a = a != b;
+  a = a & b;
+  a = a ^ b;
+  a = a | b;
+  a = a && b;
+  a = a || b;
+  a = a++ + ++b;
+  a = a-- - --b;
+  a = arr[a];
+  a = 2[arr];
+  a = *sp + *&arr[0];
+  a = s.a + sp->b;
+  a = (int)a;
+  a = (char)(long)a;
+  a = sizeof a + sizeof(int) + _Alignof(int);
+  a = a ? b : a;
+  a = a ?: b;
+  a = (a, b);
+  a = _Generic(a, float: 1, int *: 2, default: 3);
+  a = __builtin_types_compatible_p(int, long) + __builtin_reg_class(int *);
+  if (a)
+    b = 1;
+  else
+    b = 2;
+  if (a) {
+    b = 3;
+  } else if (b) {
+    b = 4;
+  } else {
+    b = 5;
+  }
+  while (a)
+    a--;
+  do
+    b++;
+  while (b < 3);
+  for (int i = 0; i < 3; i++)
+    a += i;
+  for (;;)
+    break;
+  switch (a) {
+    case 1:
+      b = 1;
+      break;
+    case 2 ... 4:
+      break;
+    default:
+      break;
+  }
+  for (int i = 0; i < 3; i++) {
+    if (i)
+      continue;
+    a += i;
+  }
+  a = "xy"[0] + (int)"q";
+  goto cvlab;
+  cvlab:
+    ;
+  lp = &&cvlab;
+  goto *lp;
+  {
+    a = ({
+      int t = b;
+      t;
+    });
+  }
+  a = (Cv){ 7, 8 }.a;
+  return a + CVA + msg[0] + (int)cvext(1, 2, 3);
+}
+int cvq(_Atomic int *p, _Atomic int *o, int n) {
+  return __builtin_compare_and_swap(p, o, n) + __builtin_atomic_exchange(p, n);
+}
+void cvasm(void) {
+  asm("nop");
+}
+WANT
+
 # 检查: 每个片段 (1) 输出与期望逐字节相同; (2) 对打印产物再打印逐字节不变。
 for name in $names; do
     checks=$((checks + 2))
@@ -510,8 +902,21 @@ for name in $names; do
     fi
 done
 
+# 覆盖审计: 逐片段 dump 后合并 NodeKind 集合。69 个 kind 中 4 个是 sema
+# 专属 (ND_VAR / ND_VLA_PTR / ND_MEMZERO / ND_NULL_EXPR), parse 树可达的
+# 65 个必须全部被本脚本的片段触达。
+: > "$tmp/kinds.all"
+for name in $names; do
+    "$chibicc" -dump-ast "$tmp/$name.c" 2>/dev/null | grep -oE 'ND_[A-Z_]+' >> "$tmp/kinds.all"
+done
+kinds=$(sort -u "$tmp/kinds.all" | wc -l | tr -d ' ')
+if [ "$kinds" -lt 65 ]; then
+    echo "c2c coverage: only $kinds node kinds reached (want >= 65)"
+    fails=$((fails + 1))
+fi
+
 if [ $fails -ne 0 ]; then
-    echo "c2c lock: $fails of $checks checks FAILED"
+    echo "c2c lock: $fails checks FAILED"
     exit 1
 fi
-echo "c2c lock: $((checks / 2)) golden samples byte-exact and idempotent"
+echo "c2c lock: $((checks / 2)) golden samples byte-exact and idempotent, $kinds node kinds covered"

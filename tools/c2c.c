@@ -586,6 +586,7 @@ static void print_postfix_base(Printer *p, E *e, LibcpNode *node) {
 }
 
 static void print_stmt(Printer *p, LibcpNode *node);
+static void print_chain(Printer *p, LibcpNode *node);
 
 static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
   if (!node)
@@ -764,10 +765,16 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
     return;
 
   case ND_STMT_EXPR:
-    e_str(e, "({ ");
-    for (LibcpNode *stmt = node->body; stmt; stmt = stmt->next)
-      print_stmt(p, stmt);
-    e_str(e, " })");
+    e_str(e, "({");
+    if (node->body) {
+      e_nl(e);
+      e->indent++;
+      print_chain(p, node->body);
+      e->indent--;
+    } else {
+      e_str(e, " ");
+    }
+    e_str(e, "})");
     return;
 
   case ND_COMPOUND_LITERAL: {
@@ -1330,9 +1337,10 @@ static bool continues_group(Printer *p, LibcpNode *first, LibcpNode *node) {
 
 static void print_stmt(Printer *p, LibcpNode *node);
 
-// Prints a declaration record (and its declarator group) and returns
-// the last chain node it consumed, so the caller steps past the group.
-static LibcpNode *print_record(Printer *p, LibcpNode *node) {
+// The declaration's head - storage class, declspec, and the
+// declarator group - without any terminator; returns the last chain
+// node of the group. A for-loop's init declaration reuses this.
+static LibcpNode *print_decl_head(Printer *p, LibcpNode *node) {
   bool defining = node->kind == ND_TYPEDEF;
   print_attr_prefix(p, node);
   LibcpType *start = defining ? base_type(record_type(node))
@@ -1353,10 +1361,18 @@ static LibcpNode *print_record(Printer *p, LibcpNode *node) {
       print_one_declarator(p, last, start);
     }
   }
+  return last;
+}
+
+// Prints a declaration record (and its declarator group) and returns
+// the last chain node it consumed, so the caller steps past the group.
+static LibcpNode *print_record(Printer *p, LibcpNode *node) {
+  LibcpNode *last = print_decl_head(p, node);
 
   if (node->kind == ND_FUNCDEF && node->body) {
     e_str(&p->e, " ");
     print_stmt(p, node->body);
+    e_nl(&p->e);
     return last;
   }
   e_str(&p->e, ";");
@@ -1364,11 +1380,303 @@ static LibcpNode *print_record(Printer *p, LibcpNode *node) {
   return last;
 }
 
+static void print_stmt(Printer *p, LibcpNode *node);
+static void print_chain(Printer *p, LibcpNode *node);
+static LibcpNode *print_decl_head(Printer *p, LibcpNode *node);
+static LibcpNode *print_record(Printer *p, LibcpNode *node);
+static LibcpNode *print_enum_group(Printer *p, LibcpNode *node);
+
+// An escaped C string from raw contents: asm statements carry their
+// text decoded, so it is re-escaped here with the char-string rules.
+static void e_escaped_c_str(E *e, const char *s) {
+  e_str(e, "\"");
+  for (const unsigned char *c = (const unsigned char *)s; *c; c++) {
+    switch (*c) {
+    case '"':
+      e_str(e, "\\\"");
+      break;
+    case '\\':
+      e_str(e, "\\\\");
+      break;
+    case '\n':
+      e_str(e, "\\n");
+      break;
+    case '\t':
+      e_str(e, "\\t");
+      break;
+    case '\r':
+      e_str(e, "\\r");
+      break;
+    default:
+      if (*c < 0x20 || *c >= 0x7f)
+        e_fmt(e, "\\%03o", *c);
+      else
+        e_putc(e, *c);
+    }
+  }
+  e_str(e, "\"");
+}
+
+// A block: `{\n ...\n}`; an empty compound prints `{ }` on one line.
+// The scopeless block is the empty statement and prints `;` - braces
+// around it would change the tree.
+static void print_block(Printer *p, LibcpNode *node) {
+  if (!node->is_scope_block) {
+    if (!node->body) {
+      e_str(&p->e, ";");
+      return;
+    }
+    // Defensive: only sema's folded chains reach here, never a parse
+    // tree; print them as a plain block so nothing is lost.
+  }
+  if (!node->body) {
+    e_str(&p->e, "{ }");
+    return;
+  }
+  e_str(&p->e, "{");
+  e_nl(&p->e);
+  p->e.indent++;
+  print_chain(p, node->body);
+  p->e.indent--;
+  e_str(&p->e, "}");
+}
+
+// A statement nested under a head (if, else, while, for, do, switch,
+// case, label): a block shares the head's line, any other statement
+// moves to the next line one indent deeper. No braces are added - they
+// would grow an ND_BLOCK and change the tree (PLAN-c2c D3).
+static void print_substmt(Printer *p, LibcpNode *node) {
+  if (node && node->kind == ND_BLOCK && node->is_scope_block) {
+    e_str(&p->e, " ");
+    print_block(p, node);
+    return;
+  }
+  e_nl(&p->e);
+  p->e.indent++;
+  print_stmt(p, node);
+  p->e.indent--;
+}
+
 static void print_stmt(Printer *p, LibcpNode *node) {
-  (void)node;
-  p->errors++;
-  fprintf(stderr, "c2c: statements are CC4\n");
-  exit(2);
+  if (!node)
+    return;
+
+  switch (node->kind) {
+  case ND_BLOCK:
+    print_block(p, node);
+    return;
+
+  case ND_EXPR_STMT:
+    print_expr_ctx(p, &p->e, node->lhs, 1);
+    e_str(&p->e, ";");
+    return;
+
+  case ND_RETURN:
+    e_str(&p->e, "return");
+    if (node->lhs) {
+      e_str(&p->e, " ");
+      print_expr_ctx(p, &p->e, node->lhs, 1);
+    }
+    e_str(&p->e, ";");
+    return;
+
+  case ND_IF:
+    e_str(&p->e, "if (");
+    print_expr_ctx(p, &p->e, node->cond, 1);
+    e_str(&p->e, ")");
+    if (node->els && node->then && node->then->kind == ND_IF &&
+        !node->then->els) {
+      // A parsed tree never holds this shape (the else would have
+      // bound to the inner if); braced so an else can never rebind.
+      e_str(&p->e, " { ");
+      print_stmt(p, node->then);
+      e_str(&p->e, " }");
+    } else {
+      print_substmt(p, node->then);
+    }
+    if (node->els) {
+      if (p->e.last == '}') {
+        // A braced then-part keeps its else on the same line.
+        e_str(&p->e, " else");
+      } else {
+        e_nl(&p->e);
+        e_str(&p->e, "else");
+      }
+      if (node->els->kind == ND_IF) {
+        e_str(&p->e, " ");
+        print_stmt(p, node->els);
+      } else {
+        print_substmt(p, node->els);
+      }
+    }
+    return;
+
+  case ND_FOR: {
+    e_str(&p->e, "for (");
+    // The init is a declaration record chain or one expression
+    // statement; the record group prints without its own terminator.
+    if (node->init) {
+      if (node->init->kind == ND_DECL)
+        print_decl_head(p, node->init);
+      else
+        print_expr_ctx(p, &p->e, node->init->lhs, 1);
+    }
+    e_str(&p->e, ";");
+    if (node->cond) {
+      e_str(&p->e, " ");
+      print_expr_ctx(p, &p->e, node->cond, 1);
+    }
+    e_str(&p->e, ";");
+    if (node->inc) {
+      e_str(&p->e, " ");
+      print_expr_ctx(p, &p->e, node->inc, 1);
+    }
+    e_str(&p->e, ")");
+    print_substmt(p, node->then);
+    return;
+  }
+
+  case ND_WHILE:
+    e_str(&p->e, "while (");
+    print_expr_ctx(p, &p->e, node->cond, 1);
+    e_str(&p->e, ")");
+    print_substmt(p, node->then);
+    return;
+
+  case ND_DO:
+    e_str(&p->e, "do");
+    print_substmt(p, node->then);
+    if (p->e.last == '}')
+      e_str(&p->e, " while (");
+    else {
+      e_nl(&p->e);
+      e_str(&p->e, "while (");
+    }
+    print_expr_ctx(p, &p->e, node->cond, 1);
+    e_str(&p->e, ");");
+    return;
+
+  case ND_SWITCH:
+    e_str(&p->e, "switch (");
+    print_expr_ctx(p, &p->e, node->cond, 1);
+    e_str(&p->e, ")");
+    print_substmt(p, node->then);
+    return;
+
+  case ND_CASE:
+    if (node->is_default) {
+      e_str(&p->e, "default:");
+    } else {
+      e_str(&p->e, "case ");
+      print_expr_ctx(p, &p->e, node->begin_expr, 3); // constant-expression
+      if (node->end_expr) {
+        e_str(&p->e, " ... ");
+        print_expr_ctx(p, &p->e, node->end_expr, 3);
+      }
+      e_str(&p->e, ":");
+    }
+    print_substmt(p, node->lhs);
+    return;
+
+  case ND_LABEL:
+    e_str(&p->e, node->label);
+    e_str(&p->e, ":");
+    print_substmt(p, node->lhs);
+    return;
+
+  case ND_GOTO:
+    e_str(&p->e, "goto ");
+    e_str(&p->e, node->label);
+    e_str(&p->e, ";");
+    return;
+
+  case ND_GOTO_EXPR:
+    e_str(&p->e, "goto *");
+    print_expr_ctx(p, &p->e, node->lhs, 15);
+    e_str(&p->e, ";");
+    return;
+
+  case ND_BREAK:
+    e_str(&p->e, "break;");
+    return;
+
+  case ND_CONTINUE:
+    e_str(&p->e, "continue;");
+    return;
+
+  case ND_ASM:
+    // No `;` here: chibicc's asm statement does not consume its own
+    // terminator - the empty statement that follows it in the chain
+    // carries the `;`, and print_chain merges the two into one line.
+    e_str(&p->e, "asm(");
+    e_escaped_c_str(&p->e, node->asm_str);
+    e_str(&p->e, ")");
+    return;
+
+  case ND_DECL:
+  case ND_GVAR_DECL:
+  case ND_TYPEDEF:
+  case ND_FUNCDEF:
+    // Declaration records reach the chain printer, never a statement
+    // slot; print defensively as one anyway.
+    print_record(p, node);
+    return;
+
+  default:
+    p->errors++;
+    fprintf(stderr, "c2c: unprintable statement kind %d\n", (int)node->kind);
+    exit(2);
+  }
+}
+
+// The chain printer shared by file scope, block bodies, function
+// bodies and statement expressions: declaration records (grouped into
+// multi-declarator statements), enum-definition record runs, and
+// statements. Statements that follow a case label stay one indent
+// deeper until the next label, the layout every C printer uses.
+static void print_chain(Printer *p, LibcpNode *node) {
+  int case_lift = 0;
+  for (; node;) {
+    if (node->kind == ND_ENUM_CONST) {
+      node = print_enum_group(p, node)->next;
+      continue;
+    }
+    if (node->kind == ND_DECL || node->kind == ND_GVAR_DECL ||
+        node->kind == ND_TYPEDEF || node->kind == ND_FUNCDEF) {
+      node = print_record(p, node)->next;
+      continue;
+    }
+    if (node->kind == ND_CASE) {
+      while (case_lift) {
+        p->e.indent--;
+        case_lift--;
+      }
+      print_stmt(p, node);
+      e_nl(&p->e);
+      node = node->next;
+      p->e.indent++;
+      case_lift++;
+      continue;
+    }
+    // An asm statement's `;` is the empty statement that follows it;
+    // the two merge into one line (see ND_ASM).
+    if (node->kind == ND_ASM && node->next &&
+        node->next->kind == ND_BLOCK && !node->next->is_scope_block &&
+        !node->next->body) {
+      print_stmt(p, node);
+      e_str(&p->e, ";");
+      e_nl(&p->e);
+      node = node->next->next;
+      continue;
+    }
+    print_stmt(p, node);
+    e_nl(&p->e);
+    node = node->next;
+  }
+  while (case_lift) {
+    p->e.indent--;
+    case_lift--;
+  }
 }
 
 // A run of consecutive ND_ENUM_CONST records over one type record:
@@ -1488,13 +1796,7 @@ int main(int argc, char **argv) {
     e_nl(&p->e);
   }
 
-  for (LibcpNode *node = prog; node;) {
-    if (node->kind == ND_ENUM_CONST) {
-      node = print_enum_group(p, node)->next;
-      continue;
-    }
-    node = print_record(p, node)->next;
-  }
+  print_chain(p, prog);
 
   libcp_context_free(ctx);
 
