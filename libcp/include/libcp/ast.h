@@ -221,6 +221,14 @@ struct libcp_type {
   LibcpToken *name;
   LibcpToken *name_pos;
 
+  // The tag identifier of a struct/union/enum specifier, recorded by
+  // the parser at the forward-declaration and definition sites and
+  // shared by every use site that resolves to the record; an anonymous
+  // specifier carries NULL. The tag spelling otherwise lives only in
+  // the parser's scope, so this is a consumer's way to recover it
+  // (PLAN-c2c D2).
+  LibcpToken *tag_tok;
+
   // Array
   int array_len;
 

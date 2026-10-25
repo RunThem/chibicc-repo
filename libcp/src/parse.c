@@ -704,6 +704,8 @@ static Type *enum_specifier(LibcpContext *ctx, Token **rest, Token *tok, Node **
     tag = tok;
     tok = tok->next;
   }
+  if (tag)
+    ty->tag_tok = tag;
 
   if (tag && !libcp_equal(tok, "{")) {
     Type *ty = find_tag(ctx, tag);
@@ -1383,6 +1385,8 @@ static Type *struct_union_decl(LibcpContext *ctx, Token **rest, Token *tok, Node
     tag = tok;
     tok = tok->next;
   }
+  if (tag)
+    ty->tag_tok = tag;
 
   if (tag && !libcp_equal(tok, "{")) {
     *rest = tok;
