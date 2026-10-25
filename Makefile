@@ -68,6 +68,11 @@ test/%.exe: chibicc test/%.c test/common test/test.h
 fmt: libcp.a tools/fmt.c
 	$(CC) $(CFLAGS) -o $@ tools/fmt.c libcp.a
 
+# The C-to-C printer (PLAN-c2c): the library's second real consumer,
+# over layer 3, built against libcp.a through the public headers only.
+c2c: libcp.a tools/c2c.c
+	$(CC) $(CFLAGS) -o $@ tools/c2c.c libcp.a
+
 test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./chibicc
@@ -170,7 +175,7 @@ endif
 # Misc.
 
 clean:
-	rm -rf chibicc fmt libcp.a libcp.so libcp.so.0 libcp.pc libcp.pc.tmp tmp* $(TESTS) test/*.s test/*.exe stage2
+	rm -rf chibicc fmt c2c libcp.a libcp.so libcp.so.0 libcp.pc libcp.pc.tmp tmp* $(TESTS) test/*.s test/*.exe stage2
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 # Docker (amd64 Linux) 测试环境: 本机是 macOS ARM64, chibicc 生成的 x86-64 代码
