@@ -18,11 +18,16 @@
   特例.
 - 实测: 48 语料文件 UNPARSED **770 -> 45**(arith.c 61 -> 0,
   initializer.c 114 -> 0 等; 判据 "< 60" 达成).
-- 残余 45 的成因(golden 锁定): macro.c 19(原始流上的宏形状如 `M1 5`,
-  本就不是合法 C 表达式, 属宏保真边界, 合法保留), attribute.c 14
-  (`offsetof(struct __attribute__((packed)) {...}, a)` 属性内嵌 struct),
-  varargs.c 4 / tls.c 1 / typedef.c 1(include 提供的 typedef, W2 的 seed
-  口径), string.c 3, atomic.c 3(`_Atomic` 声明形).
+- 残余 45 的成因(golden 锁定; 2026-10-25 收尾后逐形复测修正过一次分类):
+  macro.c 19(原始流上的宏形状如 `M1 5`, 本就不是合法 C 表达式, 属宏保真
+  边界, 合法保留), attribute.c 14(`offsetof(struct __attribute__((packed))
+  {...}, a)` 属性内嵌 struct), varargs.c 4 / atomic.c 3 / tls.c 1(include
+  提供的 typedef: va_list 与 pthread_t, W2 的 seed 口径; atomic.c 首版
+  误记为 `_Atomic` 声明形, 复测修正), string.c 3(初始化器位置的字符串
+  后缀: `int x = "abc"[0];` 失败而同形表达式语句 `x = "abc"[0];` 与
+  `int x = y[0];` 均成功 - 疑为初始化器路径对 TK_STR 的快路径未走完整
+  postfix), typedef.c 1(文件级 typedef 名同时作变量名的歧义角落:
+  `MyInt = MyInt + 1;` 被 decl_start 判为声明后失败且无表达式回退).
 - cst.sh 新增 4 个 dump 样本(65 个, 既有 61 个逐字节不变); 通道与
   docker-test / 快照全绿.
 
@@ -117,9 +122,32 @@
   `snapshot diff: empty`; 容器 check-library(D7 38 个齐, `.so` 恰好
   D7); tinycc thirdparty 全绿.
 
-## 9. 后续(不在本线)
+## 9. 后续(2026-10-25 用户拍板: 全部挂到 C→C 打印器线上评估)
 
-- C→C 打印器: 第二个消费者(第 3/4 层), user-data 扩展点与 AST 侧手感的
-  证据来源.
-- trivia 分段迭代器(6.2)与残余 UNPARSED 成因的进一步收编(属性内嵌
-  struct / `_Atomic`), 各自独立小线, golden 已锁现状.
+用户决定: 暂不修复下列任何一项, 先落地 C→C 打印器(第二个消费者, 第 3/4
+层), 在实现它的过程中带真实需求重新评估每一项的看法. 记录在案的分析:
+
+**残余 UNPARSED 的收编判定**(修正后分类, 见 1 节): 45 个中只有 18 个
+属于"值得收编"的真文法缺口 - attribute.c 14(真实代码里 packed struct +
+offsetof 常见, 价值最高, 改动在 decl_specs 的 struct/属性 raw-group 组
+合), string.c 3(初始化器快路径), typedef.c 1(语句层回退或向前看); 预算
+半天级. 8 个 include-typedef 已由 seed API 解决, golden 不含 seed 是刻
+意口径; 19 个 macro 形状**明确不收编** - 收编只有两条路, 都违反已决
+策略(CST 预处理前 / 不引入宏调用节点), 它们是宏保真决策的正确代价.
+
+**trivia 分段迭代器**(6.2 的展开): 候选形态是 trivia 分段枚举
+(SPACE / NEWLINE / COMMENT / CONTINUATION / BOM)加迭代器, 实现约 60 行;
+拍板口径: 孤立 CR 算不算 NEWLINE, BOM 独立段还是 SPACE, 续行段边界,
+迭代器形态与命名. 验收方式: fmt.c 删掉手写扫描换用它(第二次手感验证).
+推迟理由: 单一消费者证据不足; C→C 打印器若打印时自造空白, 则它也不
+需要, 证据会更完整.
+
+**range 语义**(6.4 的展开): 保持现状的理由 - 改 FUNCDEF 锚点是行为
+变化(诊断插入符被 diagnostic.sh 逐字节锁定); "锚点极值"契约零字段成本;
+docs/09 已写明消费者组合义务(spec_decls). 若 C→C 打印器被"range 不含
+声明说明符"实际绊住, 再议便捷函数 libcp_decl_range 或 first/last token
+记录(后者是构造点级大改, 需独立拍板).
+
+**per-node user data**: formatter 的负结果(6.6)加上 C→C 打印器的证据
+共同构成该决策的完整输入 - C→C 是改写型消费者, 正是最可能需要挂节点
+数据的形态.
