@@ -14,6 +14,11 @@
 #        基本类型结构化展开; 存储类与 _Alignas; _Atomic 与 typeof 两形态;
 #        原型形态 (无原型/(void)/变参/无名参数); packed/aligned 规范位;
 #        维度表达式。
+#   CC3: 全部二元运算符与优先级括号; 复合赋值与赋值链; 前后缀自增自减;
+#        一元运算与拼写粘连守卫 (- -x); 嵌套 cast; sizeof/_Alignof 两形态;
+#        ?: 与 elvis 与中段逗号; 调用/下标/成员/postfix 基座括号; 交换
+#        下标 (3[a]); 字符串拼接重发射/转义/宽字符前缀; 字面量拼写;
+#        _Generic 与类型谓词 builtin; 复合字面量; 原子 CAS/EXCH 重合成。
 #
 # 用法: test/c2c.sh <chibicc> <c2c> (由 make test 与 make test-stage2 调用;
 # CC2 阶段尚不在 make test 内, 由开发循环手动调用)
@@ -303,6 +308,180 @@ SNIP
 
 expect c15_dims <<'WANT'
 int n, a[n], b[3], c[], d[2][n];
+WANT
+
+snippet c16_binary <<'SNIP'
+int a, b, c, d;
+int e1 = a + b - c * d / a % b;
+int e2 = (a + b) * (c - d);
+int e3 = a << b >> c;
+int e4 = a < b <= c > d >= a;
+int e5 = a == b != c;
+int e6 = a & b ^ c | d;
+int e7 = a && b || c && d;
+int e8 = a + b * c - d / a;
+int e9 = a ? b : c ? d : a;
+int e10 = (a ? b : c) ? d : a;
+SNIP
+
+expect c16_binary <<'WANT'
+int a, b, c, d, e1 = a + b - c * d / a % b, e2 = (a + b) * (c - d), e3 = a << b >> c, e4 = a < b <= c > d >= a, e5 = a == b != c, e6 = a & b ^ c | d, e7 = a && b || c && d, e8 = a + b * c - d / a, e9 = a ? b : c ? d : a, e10 = (a ? b : c) ? d : a;
+WANT
+
+snippet c17_assign <<'SNIP'
+int a, b, c;
+int e1 = a = b = c;
+int e2[] = {0};
+int e3 = (a += 1);
+int e4 = (a -= 2) + (b *= 3) + (c /= 4) + (a %= 5) + (b &= 6) + (c |= 7) + (a ^= 8) + (b <<= 9) + (c >>= 10);
+SNIP
+
+expect c17_assign <<'WANT'
+int a, b, c, e1 = a = b = c, e2[] = { 0 }, e3 = a += 1, e4 = (a -= 2) + (b *= 3) + (c /= 4) + (a %= 5) + (b &= 6) + (c |= 7) + (a ^= 8) + (b <<= 9) + (c >>= 10);
+WANT
+
+snippet c18_unary <<'SNIP'
+int a, b;
+int e1 = - -a;
+int e2 = -+a;
+int e3 = &a;
+int e4 = *(&a);
+int e5 = !-a;
+int e6 = ~a;
+int e7 = --(a + b);
+int e8 = (a = b, b);
+SNIP
+
+expect c18_unary <<'WANT'
+int a, b, e1 = - -a, e2 = -a, e3 = &a, e4 = *&a, e5 = !-a, e6 = ~a, e7 = --(a + b), e8 = (a = b, b);
+WANT
+
+snippet c19_cast_sizeof <<'SNIP'
+int a;
+void *p;
+int e1 = (int)(long)(char)a;
+int e2 = (int *)p;
+int e3 = sizeof(int *);
+int e4 = sizeof a;
+int e5 = sizeof(a + 1);
+int e6 = _Alignof(int);
+SNIP
+
+expect c19_cast_sizeof <<'WANT'
+int a;
+void *p;
+int e1 = (int)(long)(char)a, e2 = (int *)p, e3 = sizeof(int *), e4 = sizeof a, e5 = sizeof (a + 1), e6 = _Alignof(int);
+WANT
+
+snippet c20_cond <<'SNIP'
+int a, b, c;
+int e1 = a ?: b;
+int e2 = (a ?: b) ?: c;
+int e3 = a ? (b, c) : (a, b);
+SNIP
+
+expect c20_cond <<'WANT'
+int a, b, c, e1 = a ?: b, e2 = (a ?: b) ?: c, e3 = a ? b, c : (a, b);
+WANT
+
+snippet c21_postfix <<'SNIP'
+struct S { int x, y; };
+struct S s, *sp;
+typedef int (*fp)(int);
+fp f;
+int a[3];
+int e1 = s.x + sp->y;
+int e2 = f(a[0]);
+int e3 = (*f)(1);
+int e4 = (&s)->x;
+int e5 = a[0] + (&a)[0][1];
+int e6 = 3[a];
+SNIP
+
+expect c21_postfix <<'WANT'
+struct S {
+  int x;
+  int y;
+} s, *sp;
+typedef int (*fp)(int);
+fp f;
+int a[3], e1 = s.x + sp->y, e2 = f(a[0]), e3 = (*f)(1), e4 = (&s)->x, e5 = a[0] + (&a)[0][1], e6 = 3[a];
+WANT
+
+snippet c22_strings <<'SNIP'
+char s1[] = "a" "b" "c";
+char s2[] = "tab\there";
+char s3[] = "quote\"inside";
+char s4[] = "back\\slash";
+int s5[] = L"wide";
+int s6[] = L"a" L"b";
+short s7[] = u"u16";
+SNIP
+
+expect c22_strings <<'WANT'
+char s1[] = "abc", s2[] = "tab\there", s3[] = "quote\"inside", s4[] = "back\\slash";
+int s5[] = L"wide", s6[] = L"ab";
+short s7[] = u"u16";
+WANT
+
+snippet c23_literals <<'SNIP'
+int e1 = 0x1f + 0377 + 07;
+int e2 = 'a' + '\n' + '\0';
+unsigned e3 = 1u + 2U;
+long e4 = 1l + 2L;
+double e5 = .5 + 1. + 1e10 + 1.5e-3 + 0x1p3;
+float e6 = 1.0f + 2.0F;
+SNIP
+
+expect c23_literals <<'WANT'
+int e1 = 0x1f + 0377 + 07, e2 = 'a' + '\n' + '\0';
+unsigned int e3 = 1u + 2U;
+long e4 = 1l + 2L;
+double e5 = .5 + 1. + 1e10 + 1.5e-3 + 0x1p3;
+float e6 = 1.0f + 2.0F;
+WANT
+
+snippet c24_generic <<'SNIP'
+int a;
+float f;
+int *p;
+int e1 = _Generic(a, int: 1, float: 2, default: 3);
+int e2 = _Generic(a + 1, int *: 1, default: 0);
+int e3 = __builtin_types_compatible_p(int, unsigned int);
+int e4 = __builtin_reg_class(int);
+SNIP
+
+expect c24_generic <<'WANT'
+int a;
+float f;
+int *p, e1 = _Generic(a, int: 1, float: 2, default: 3), e2 = _Generic(a + 1, int *: 1, default: 0), e3 = __builtin_types_compatible_p(int, unsigned int), e4 = __builtin_reg_class(int);
+WANT
+
+snippet c25_complit <<'SNIP'
+struct S { int x, y; };
+struct S g = (struct S){ 1, 2 };
+int *p = (int[]){ 1, 2, 3 };
+int e = (int){ 5 };
+SNIP
+
+expect c25_complit <<'WANT'
+struct S {
+  int x;
+  int y;
+} g = (struct S){ 1, 2 };
+int *p = (int []){ 1, 2, 3 }, e = (int){ 5 };
+WANT
+
+snippet c26_atomics <<'SNIP'
+_Atomic(int) ap, ao;
+int an = 1;
+int r = __builtin_compare_and_swap(&ap, &ao, an);
+int q = __builtin_atomic_exchange(&ap, an);
+SNIP
+
+expect c26_atomics <<'WANT'
+_Atomic int ap, ao;
+int an = 1, r = __builtin_compare_and_swap(&ap, &ao, an), q = __builtin_atomic_exchange(&ap, an);
 WANT
 
 # 检查: 每个片段 (1) 输出与期望逐字节相同; (2) 对打印产物再打印逐字节不变。

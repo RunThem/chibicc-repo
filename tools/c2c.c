@@ -50,7 +50,16 @@ typedef struct {
   FILE *out;
   int indent;
   int at_bol;
+  int last; // last byte emitted, for the maximal-munch guard
 } E;
+
+// Two same punctuation bytes glued together would lex as one longer
+// token (`--`, `++`, `&&`, `||`, `<<`, `>>`); e_op keeps them apart.
+static bool munch_pair(int a, int b) {
+  if (a != b)
+    return false;
+  return a == '-' || a == '+' || a == '&' || a == '|' || a == '<' || a == '>';
+}
 
 static void e_putc(E *e, int c) {
   if (e->at_bol) {
@@ -59,6 +68,7 @@ static void e_putc(E *e, int c) {
     e->at_bol = 0;
   }
   fputc(c, e->out);
+  e->last = c;
 }
 
 static void e_write(E *e, const char *s, int len) {
@@ -67,6 +77,13 @@ static void e_write(E *e, const char *s, int len) {
 }
 
 static void e_str(E *e, const char *s) { e_write(e, s, strlen(s)); }
+
+// Emits one token, guarding against gluing with the previous byte.
+static void e_op(E *e, const char *s) {
+  if (!e->at_bol && munch_pair(e->last, s[0]))
+    fputc(' ', e->out);
+  e_str(e, s);
+}
 
 static void e_fmt(E *e, const char *fmt, ...) {
   char buf[64];
@@ -297,23 +314,530 @@ static void collect_type(Printer *p, LibcpType *ty) {
   }
 }
 
+// A string literal, from the token's decoded contents: adjacent
+// literals were joined during preprocessing, so the token's spelling
+// covers only the first piece. The encoding prefix is recovered from
+// the element type (L"" widens to int, u"" to short); plain char
+// needs none.
+//
+// Escaping is chosen so the text can never re-lex differently: char
+// strings use three-digit octal escapes for non-printables (octal
+// stops at three digits by itself), and wide strings escape per
+// element, padding \x to the element's full width and also escaping a
+// hex-digit element that directly follows an escape (a hex escape
+// absorbs any following hex digits).
+static void e_str_literal(E *e, const LibcpToken *tok) {
+  if (!tok)
+    return;
+  LibcpType *base = tok->ty ? tok->ty->base : NULL;
+  int esz = base ? base->size : 1;
+  if (esz == 4)
+    e_str(e, "L");
+  else if (esz == 2)
+    e_str(e, "u");
+  e_str(e, "\"");
+  int elems = tok->ty ? tok->ty->array_len - 1 : 0;
+  bool escaped = false;
+  for (int i = 0; i < elems; i++) {
+    uint32_t v = 0;
+    if (esz == 1)
+      v = (unsigned char)tok->str[i];
+    else if (esz == 2)
+      memcpy(&v, tok->str + 2 * i, 2);
+    else
+      memcpy(&v, tok->str + 4 * i, 4);
+    bool hexdigit = (v >= '0' && v <= '9') || (v >= 'a' && v <= 'f') ||
+                    (v >= 'A' && v <= 'F');
+    if (esz == 1 && v >= 0x20 && v < 0x7f && v != '"' && v != '\\') {
+      e_putc(e, v);
+      escaped = false;
+      continue;
+    }
+    if (esz > 1 && v >= 0x20 && v < 0x7f && v != '"' && v != '\\' &&
+        (!hexdigit || !escaped)) {
+      e_putc(e, v);
+      escaped = false;
+      continue;
+    }
+    switch (v) {
+    case '"':
+      e_str(e, "\\\"");
+      break;
+    case '\\':
+      e_str(e, "\\\\");
+      break;
+    case '\n':
+      e_str(e, "\\n");
+      break;
+    case '\t':
+      e_str(e, "\\t");
+      break;
+    case '\r':
+      e_str(e, "\\r");
+      break;
+    case '\a':
+      e_str(e, "\\a");
+      break;
+    case '\b':
+      e_str(e, "\\b");
+      break;
+    case '\f':
+      e_str(e, "\\f");
+      break;
+    case '\v':
+      e_str(e, "\\v");
+      break;
+    default:
+      if (esz == 1)
+        e_fmt(e, "\\%03o", v);
+      else if (esz == 2)
+        e_fmt(e, "\\x%04x", v);
+      else
+        e_fmt(e, "\\x%08x", v);
+      escaped = true;
+      continue;
+    }
+    escaped = true;
+  }
+  e_str(e, "\"");
+}
+
 // ---------------------------------------------------------------------------
-// Expression printing. CC2 covers what a declaration can reach
-// (identifiers, numeric literals); the full precedence engine is
-// PLAN-c2c CC3.
+// Expression printing with the C precedence ladder (PLAN-c2c D8). A
+// node prints its children at a context level; a child whose own
+// level falls below the context is parenthesized. The one place the
+// ladder is not enough is a postfix base: under a call, a subscript
+// or a member access, anything that is not itself a postfix form or
+// an atom parenthesizes.
+
+static int expr_level(LibcpNode *node) {
+  switch (node->kind) {
+  case ND_FUNCALL:
+  case ND_SUBSCRIPT:
+  case ND_MEMBER:
+    return 16;
+  case ND_INCDEC:
+    return node->is_post ? 16 : 15;
+  case ND_NEG:
+  case ND_NOT:
+  case ND_BITNOT:
+  case ND_ADDR:
+  case ND_DEREF:
+  case ND_CAST:
+  case ND_SIZEOF:
+  case ND_ALIGNOF:
+  case ND_LABEL_VAL:
+    return 15;
+  case ND_MUL:
+  case ND_DIV:
+  case ND_MOD:
+    return 13;
+  case ND_ADD:
+  case ND_SUB:
+    return 12;
+  case ND_SHL:
+  case ND_SHR:
+    return 11;
+  case ND_LT:
+  case ND_LE:
+  case ND_GT:
+  case ND_GE:
+    return 10;
+  case ND_EQ:
+  case ND_NE:
+    return 9;
+  case ND_BITAND:
+    return 8;
+  case ND_BITXOR:
+    return 7;
+  case ND_BITOR:
+    return 6;
+  case ND_LOGAND:
+    return 5;
+  case ND_LOGOR:
+    return 4;
+  case ND_COND:
+    return 3;
+  case ND_ASSIGN:
+    return 2;
+  case ND_COMMA:
+    return 1;
+  default:
+    return 17; // atoms
+  }
+}
+
+static bool is_atom_or_postfix(LibcpNode *node) {
+  switch (node->kind) {
+  case ND_IDENT:
+  case ND_NUM:
+  case ND_STRING:
+  case ND_VAR:
+  case ND_COMPOUND_LITERAL:
+  case ND_STMT_EXPR:
+  case ND_LABEL_VAL:
+  case ND_FUNCALL:
+  case ND_SUBSCRIPT:
+  case ND_MEMBER:
+    return true;
+  case ND_INCDEC:
+    return node->is_post;
+  default:
+    return false;
+  }
+}
+
+static const char *binary_op_str(LibcpNodeKind kind) {
+  switch (kind) {
+  case ND_ADD:
+    return "+";
+  case ND_SUB:
+    return "-";
+  case ND_MUL:
+    return "*";
+  case ND_DIV:
+    return "/";
+  case ND_MOD:
+    return "%";
+  case ND_BITAND:
+    return "&";
+  case ND_BITOR:
+    return "|";
+  case ND_BITXOR:
+    return "^";
+  case ND_SHL:
+    return "<<";
+  case ND_SHR:
+    return ">>";
+  case ND_EQ:
+    return "==";
+  case ND_NE:
+    return "!=";
+  case ND_LT:
+    return "<";
+  case ND_LE:
+    return "<=";
+  case ND_GT:
+    return ">";
+  case ND_GE:
+    return ">=";
+  case ND_LOGAND:
+    return "&&";
+  case ND_LOGOR:
+    return "||";
+  default:
+    return "?";
+  }
+}
+
+static const char *compound_assign_str(LibcpNodeKind kind) {
+  switch (kind) {
+  case ND_ADD:
+    return "+=";
+  case ND_SUB:
+    return "-=";
+  case ND_MUL:
+    return "*=";
+  case ND_DIV:
+    return "/=";
+  case ND_MOD:
+    return "%=";
+  case ND_BITAND:
+    return "&=";
+  case ND_BITOR:
+    return "|=";
+  case ND_BITXOR:
+    return "^=";
+  case ND_SHL:
+    return "<<=";
+  case ND_SHR:
+    return ">>=";
+  default:
+    return "?=";
+  }
+}
+
+static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx);
+static void print_init(Printer *p, LibcpInitializer *init);
 
 static void print_expr_e(Printer *p, E *e, LibcpNode *node) {
+  print_expr_ctx(p, e, node, 1);
+}
+// A type name in expression position: a cast, sizeof(type), a _Generic
+// association or a type-predicate builtin argument.
+static LibcpType *base_type(LibcpType *ty);
+static void print_declspec_e(Printer *p, E *e, LibcpType *ty, bool defining);
+static void print_full_type(Printer *p, E *e, LibcpType *ty,
+                            const LibcpToken *name, bool defining);
+static void print_typename_e(Printer *p, E *e, LibcpType *ty) {
+  print_full_type(p, e, ty, NULL, false);
+}
+
+static void print_postfix_base(Printer *p, E *e, LibcpNode *node) {
+  if (is_atom_or_postfix(node)) {
+    // 16, not 17: a postfix chain (a call, subscript or member series)
+    // continues without parentheses.
+    print_expr_ctx(p, e, node, 16);
+    return;
+  }
+  e_str(e, "(");
+  print_expr_ctx(p, e, node, 1);
+  e_str(e, ")");
+}
+
+static void print_stmt(Printer *p, LibcpNode *node);
+
+static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
   if (!node)
     return;
+
+  if (expr_level(node) < ctx) {
+    e_str(e, "(");
+    print_expr_ctx(p, e, node, 1);
+    e_str(e, ")");
+    return;
+  }
+
+  int lv = expr_level(node);
+
   switch (node->kind) {
   case ND_IDENT:
   case ND_NUM:
     e_tok(e, node->tok);
     return;
+  case ND_STRING:
+    e_str_literal(e, node->tok);
+    return;
+  case ND_VAR: // sema-bound; defensive at layer 3
+    e_str(e, node->var ? node->var->name : "");
+    return;
+  case ND_NULL_EXPR: // sema-built; defensive at layer 3
+    e_str(e, "((void)0)");
+    return;
+
+  // Binary operators, left-associative: the left side may repeat the
+  // operator's own level, the right side may not.
+  case ND_ADD:
+  case ND_SUB:
+  case ND_MUL:
+  case ND_DIV:
+  case ND_MOD:
+  case ND_BITAND:
+  case ND_BITOR:
+  case ND_BITXOR:
+  case ND_SHL:
+  case ND_SHR:
+  case ND_EQ:
+  case ND_NE:
+  case ND_LT:
+  case ND_LE:
+  case ND_GT:
+  case ND_GE:
+  case ND_LOGAND:
+  case ND_LOGOR:
+    print_expr_ctx(p, e, node->lhs, lv);
+    e_str(e, " ");
+    e_op(e, binary_op_str(node->kind));
+    e_str(e, " ");
+    print_expr_ctx(p, e, node->rhs, lv + 1);
+    return;
+
+  case ND_ASSIGN:
+    print_expr_ctx(p, e, node->lhs, 15);
+    e_str(e, " ");
+    e_op(e, node->op ? compound_assign_str(node->op) : "=");
+    e_str(e, " ");
+    print_expr_ctx(p, e, node->rhs, 2);
+    return;
+
+  case ND_COMMA:
+    print_expr_ctx(p, e, node->lhs, 1);
+    e_str(e, ", ");
+    print_expr_ctx(p, e, node->rhs, 2);
+    return;
+
+  case ND_COND:
+    // The middle is a full expression; the tail recurses to the right.
+    print_expr_ctx(p, e, node->cond, 4);
+    if (node->is_elvis) {
+      e_str(e, " ?: ");
+      print_expr_ctx(p, e, node->els, 3);
+      return;
+    }
+    e_str(e, " ? ");
+    print_expr_ctx(p, e, node->then, 1);
+    e_str(e, " : ");
+    print_expr_ctx(p, e, node->els, 3);
+    return;
+
+  case ND_INCDEC:
+    if (node->is_post) {
+      print_expr_ctx(p, e, node->lhs, 15);
+      e_op(e, node->addend < 0 ? "--" : "++");
+    } else {
+      e_op(e, node->addend < 0 ? "--" : "++");
+      print_expr_ctx(p, e, node->lhs, 15);
+    }
+    return;
+
+  case ND_NEG:
+  case ND_NOT:
+  case ND_BITNOT:
+  case ND_ADDR:
+  case ND_DEREF: {
+    const char *op = node->kind == ND_NEG     ? "-"
+                     : node->kind == ND_NOT   ? "!"
+                     : node->kind == ND_BITNOT ? "~"
+                     : node->kind == ND_ADDR  ? "&"
+                                              : "*";
+    e_op(e, op);
+    print_expr_ctx(p, e, node->lhs, 15);
+    return;
+  }
+
+  case ND_CAST:
+    e_str(e, "(");
+    print_typename_e(p, e, node->ty_op);
+    e_str(e, ")");
+    print_expr_ctx(p, e, node->lhs, 15);
+    return;
+
+  case ND_SIZEOF:
+    if (node->ty_op) {
+      e_str(e, "sizeof(");
+      print_typename_e(p, e, node->ty_op);
+      e_str(e, ")");
+      return;
+    }
+    e_str(e, "sizeof ");
+    print_expr_ctx(p, e, node->lhs, 15);
+    return;
+
+  case ND_ALIGNOF:
+    if (node->ty_op) {
+      e_str(e, "_Alignof(");
+      print_typename_e(p, e, node->ty_op);
+      e_str(e, ")");
+      return;
+    }
+    e_str(e, "_Alignof ");
+    print_expr_ctx(p, e, node->lhs, 15);
+    return;
+
+  case ND_MEMBER:
+    print_postfix_base(p, e, node->lhs);
+    if (node->arrow_tok)
+      e_str(e, "->");
+    else
+      e_str(e, ".");
+    // The member name rides the token while unbound (layer 3) and the
+    // member record once sema has bound it.
+    if (node->member && node->member->name)
+      e_tok(e, node->member->name);
+    else
+      e_tok(e, node->tok);
+    return;
+
+  case ND_SUBSCRIPT:
+    print_postfix_base(p, e, node->lhs);
+    e_str(e, "[");
+    print_expr_ctx(p, e, node->rhs, 1);
+    e_str(e, "]");
+    return;
+
+  case ND_FUNCALL:
+    print_postfix_base(p, e, node->lhs);
+    e_str(e, "(");
+    bool first = true;
+    for (LibcpNode *arg = node->args; arg; arg = arg->next) {
+      if (!first)
+        e_str(e, ", ");
+      first = false;
+      print_expr_ctx(p, e, arg, 2);
+    }
+    e_str(e, ")");
+    return;
+
+  case ND_LABEL_VAL:
+    e_op(e, "&&");
+    e_str(e, node->label);
+    return;
+
+  case ND_STMT_EXPR:
+    e_str(e, "({ ");
+    for (LibcpNode *stmt = node->body; stmt; stmt = stmt->next)
+      print_stmt(p, stmt);
+    e_str(e, " })");
+    return;
+
+  case ND_COMPOUND_LITERAL: {
+    e_str(e, "(");
+    print_typename_e(p, e, node->ty_op);
+    e_str(e, ")");
+    // The grammar of a compound literal is `( type-name ) { ... }`;
+    // a scalar initializer the parser kept as an expression still
+    // prints braced.
+    if (node->decl_init && node->decl_init->kind != INIT_LIST) {
+      e_str(e, "{ ");
+      print_init(p, node->decl_init);
+      e_str(e, " }");
+      return;
+    }
+    print_init(p, node->decl_init);
+    return;
+  }
+
+  case ND_GENERIC:
+    e_str(e, "_Generic(");
+    print_expr_ctx(p, e, node->cond, 2);
+    for (LibcpNode *assoc = node->args; assoc; assoc = assoc->next) {
+      e_str(e, ", ");
+      if (assoc->ty_op) {
+        print_typename_e(p, e, assoc->ty_op);
+      } else {
+        e_str(e, "default");
+      }
+      e_str(e, ": ");
+      print_expr_ctx(p, e, assoc->lhs, 2);
+    }
+    e_str(e, ")");
+    return;
+
+  case ND_TYPES_COMPATIBLE:
+    e_str(e, "__builtin_types_compatible_p(");
+    print_typename_e(p, e, node->ty_op);
+    e_str(e, ", ");
+    print_typename_e(p, e, node->ty_op2);
+    e_str(e, ")");
+    return;
+
+  case ND_REG_CLASS:
+    e_str(e, "__builtin_reg_class(");
+    print_typename_e(p, e, node->ty_op);
+    e_str(e, ")");
+    return;
+
+  case ND_CAS:
+    e_str(e, "__builtin_compare_and_swap(");
+    print_expr_ctx(p, e, node->cas_addr, 2);
+    e_str(e, ", ");
+    print_expr_ctx(p, e, node->cas_old, 2);
+    e_str(e, ", ");
+    print_expr_ctx(p, e, node->cas_new, 2);
+    e_str(e, ")");
+    return;
+
+  case ND_EXCH:
+    e_str(e, "__builtin_atomic_exchange(");
+    print_expr_ctx(p, e, node->lhs, 2);
+    e_str(e, ", ");
+    print_expr_ctx(p, e, node->rhs, 2);
+    e_str(e, ")");
+    return;
+
   default:
     p->errors++;
-    fprintf(stderr, "c2c: expression kind %d not printable yet\n",
-            (int)node->kind);
+    fprintf(stderr, "c2c: unprintable expression kind %d\n", (int)node->kind);
     exit(2);
   }
 }
@@ -323,7 +847,7 @@ static void print_expr_e(Printer *p, E *e, LibcpNode *node) {
 
 static void print_declspec_e(Printer *p, E *e, LibcpType *ty, bool defining);
 static void print_declarator(Printer *p, E *e, LibcpType *ty,
-                             const LibcpToken *name);
+                             const LibcpToken *name, LibcpType *stop);
 
 // The base of a declarator's derivation chain: the declspec type the
 // derived layers (pointer, array, function) wrap.
@@ -368,7 +892,7 @@ static void print_enum_spec_e(Printer *p, E *e, LibcpType *ty) {
     e_tok(e, node->tok);
     if (node->lhs) {
       e_str(e, " = ");
-      print_expr_e(p, e, node->lhs);
+      print_expr_ctx(p, e, node->lhs, 3); // constant-expression
     }
     e->indent--;
     first = false;
@@ -384,22 +908,18 @@ static void print_enum_spec_e(Printer *p, E *e, LibcpType *ty) {
 static void print_member_e(Printer *p, E *e, LibcpMember *mem) {
   if (mem->align_expr) {
     e_str(e, "_Alignas(");
-    print_expr_e(p, e, mem->align_expr);
+    print_expr_ctx(p, e, mem->align_expr, 3); // constant-expression
     e_str(e, ") ");
   }
   if (mem->align_ty) {
     e_str(e, "_Alignas(");
-    print_declspec_e(p, e, base_type(mem->align_ty), false);
-    print_declarator(p, e, mem->align_ty, NULL);
+    print_full_type(p, e, mem->align_ty, NULL, false);
     e_str(e, ") ");
   }
-  print_declspec_e(p, e, base_type(mem->ty), false);
-  if (mem->name || mem->ty->kind != base_type(mem->ty)->kind)
-    e_str(e, " ");
-  print_declarator(p, e, mem->ty, mem->name);
+  print_full_type(p, e, mem->ty, mem->name, false);
   if (mem->width_expr) {
     e_str(e, " : ");
-    print_expr_e(p, e, mem->width_expr);
+    print_expr_ctx(p, e, mem->width_expr, 3); // constant-expression
   }
   e_str(e, ";");
 }
@@ -434,7 +954,7 @@ static void print_struct_spec_e(Printer *p, E *e, LibcpType *ty) {
     e_str(e, " __attribute__((packed))");
   if (ty->align_expr) {
     e_str(e, " __attribute__((aligned(");
-    print_expr_e(p, e, ty->align_expr);
+    print_expr_ctx(p, e, ty->align_expr, 3); // constant-expression
     e_str(e, ")))");
   }
 }
@@ -557,14 +1077,50 @@ static char *capture(Printer *p, EmitFn fn, LibcpType *ty) {
 }
 
 static void print_declarator(Printer *p, E *e, LibcpType *ty,
-                             const LibcpToken *name);
+                             const LibcpToken *name, LibcpType *stop);
+
+// Where the declspec of a full type starts: the outermost segment of
+// the derivation chain a typedef names (PLAN-c2c D5), or the base
+// type when none does. `typedef int (*fp)(int); fp f;` prints `fp f`
+// because the pointer-to-function segment is fp.
+static LibcpType *declspec_start(Printer *p, LibcpType *ty) {
+  for (LibcpType *t = ty;;) {
+    if (ty_info(p, t)->tname)
+      return t;
+    switch (t->kind) {
+    case TY_PTR:
+    case TY_ARRAY:
+    case TY_VLA:
+      t = t->base;
+      continue;
+    case TY_FUNC:
+      t = t->return_ty;
+      continue;
+    default:
+      return t;
+    }
+  }
+}
+
+// A full type in declaration position: the declspec, then the
+// declarator derived above it. `defining` suppresses the typedef
+// shortcut, so the record a typedef introduces never spells itself.
+static void print_full_type(Printer *p, E *e, LibcpType *ty,
+                            const LibcpToken *name, bool defining) {
+  LibcpType *start =
+      defining ? base_type(ty) : declspec_start(p, ty);
+  print_declspec_e(p, e, start, defining);
+  if (name || ty != start)
+    e_str(e, " ");
+  print_declarator(p, e, ty, name, start);
+}
 
 // The dimension suffix of one array layer.
 static void emit_dim(Printer *p, E *e, LibcpType *ty) {
   LibcpNode *dim = ty->dim_len ? ty->dim_len : ty->vla_len;
   if (dim) {
     e_str(e, "[");
-    print_expr_e(p, e, dim);
+    print_expr_ctx(p, e, dim, 2); // assignment-expression
     e_str(e, "]");
   } else if (ty->array_len > 0) {
     e_fmt(e, "[%d]", ty->array_len);
@@ -585,12 +1141,7 @@ static void emit_params(Printer *p, E *e, LibcpType *fn) {
       if (!first)
         e_str(e, ", ");
       first = false;
-      print_declspec_e(p, e, base_type(param), false);
-      // A parameter always has a derivation or a name; an abstract
-      // bare `int` takes no trailing space.
-      if (param->name || param->kind != base_type(param)->kind)
-        e_str(e, " ");
-      print_declarator(p, e, param, param->name);
+      print_full_type(p, e, param, param->name, false);
     }
     if (fn->is_variadic)
       e_str(e, ", ...");
@@ -599,15 +1150,19 @@ static void emit_params(Printer *p, E *e, LibcpType *fn) {
 }
 
 // Builds the declarator text around the name by walking the type
-// record's derivation chain outside-in. A pointer layer prepends "*";
-// a function or array layer appends its suffix, wrapping what has
-// accumulated so far in parentheses when a "*" is exposed - exactly
-// the C rule that a postfix suffix binds tighter than a pointer.
-static void decl_chain(Printer *p, LibcpType *ty, SB *sb) {
+// record's derivation chain outside-in, stopping where the declspec
+// takes over (the base type, or a typedef-named segment). A pointer
+// layer prepends "*"; a function or array layer appends its suffix,
+// wrapping what has accumulated so far in parentheses when a "*" is
+// exposed - exactly the C rule that a postfix suffix binds tighter
+// than a pointer.
+static void decl_chain(Printer *p, LibcpType *ty, SB *sb, LibcpType *stop) {
+  if (ty == stop)
+    return;
   switch (ty->kind) {
   case TY_PTR:
     sb_prepend_str(sb, "*");
-    decl_chain(p, ty->base, sb);
+    decl_chain(p, ty->base, sb, stop);
     return;
   case TY_ARRAY:
   case TY_VLA: {
@@ -618,7 +1173,7 @@ static void decl_chain(Printer *p, LibcpType *ty, SB *sb) {
     char *dim = capture(p, emit_dim, ty);
     sb_str(sb, dim);
     free(dim);
-    decl_chain(p, ty->base, sb);
+    decl_chain(p, ty->base, sb, stop);
     return;
   }
   case TY_FUNC: {
@@ -629,7 +1184,7 @@ static void decl_chain(Printer *p, LibcpType *ty, SB *sb) {
     char *params = capture(p, emit_params, ty);
     sb_str(sb, params);
     free(params);
-    decl_chain(p, ty->return_ty, sb);
+    decl_chain(p, ty->return_ty, sb, stop);
     return;
   }
   default:
@@ -638,11 +1193,11 @@ static void decl_chain(Printer *p, LibcpType *ty, SB *sb) {
 }
 
 static void print_declarator(Printer *p, E *e, LibcpType *ty,
-                             const LibcpToken *name) {
+                             const LibcpToken *name, LibcpType *stop) {
   SB sb = {0};
   if (name && name->len)
     sb_push(&sb, name->loc, name->len);
-  decl_chain(p, ty, &sb);
+  decl_chain(p, ty, &sb, stop);
   if (sb.len)
     e_str(e, sb.s);
   free(sb.s);
@@ -667,13 +1222,12 @@ static void print_attr_prefix(Printer *p, LibcpNode *node) {
     e_str(e, "_Thread_local ");
   if (attr->align_expr) {
     e_str(e, "_Alignas(");
-    print_expr_e(p, e, attr->align_expr);
+    print_expr_ctx(p, e, attr->align_expr, 3); // constant-expression
     e_str(e, ") ");
   }
   if (attr->align_ty) {
     e_str(e, "_Alignas(");
-    print_declspec_e(p, e, base_type(attr->align_ty), false);
-    print_declarator(p, e, attr->align_ty, NULL);
+    print_full_type(p, e, attr->align_ty, NULL, false);
     e_str(e, ") ");
   }
   if (attr->align) {
@@ -695,29 +1249,66 @@ static bool same_attr(LibcpVarAttr *a, LibcpVarAttr *b) {
 }
 
 // ---------------------------------------------------------------------------
-// Initializer and statement printing. Lists and statements are
-// PLAN-c2c CC4.
+// Initializer printing: the faithful record as written, designators
+// and brace nesting included (PLAN-c2c D3).
+
+static void print_init_list(Printer *p, LibcpInitializer *init) {
+  e_str(&p->e, "{");
+  bool first = true;
+  for (LibcpInitItem *item = init->items; item; item = item->next) {
+    if (!first)
+      e_str(&p->e, ",");
+    e_str(&p->e, " ");
+    first = false;
+    for (LibcpInitDesig *d = item->desigs; d; d = d->next) {
+      if (d->name) {
+        e_str(&p->e, ".");
+        e_tok(&p->e, d->name);
+      } else {
+        e_str(&p->e, "[");
+        print_expr_ctx(p, &p->e, d->begin, 3); // constant-expression
+        if (d->end) {
+          e_str(&p->e, " ... ");
+          print_expr_ctx(p, &p->e, d->end, 3);
+        }
+        e_str(&p->e, "]");
+      }
+      e_str(&p->e, " = ");
+    }
+    print_init(p, item->init);
+  }
+  if (!first)
+    e_str(&p->e, " ");
+  e_str(&p->e, "}");
+}
 
 static void print_init(Printer *p, LibcpInitializer *init) {
   if (!init)
     return;
   switch (init->kind) {
   case INIT_EXPR:
-    print_expr_e(p, &p->e, init->expr);
+    // An initializer is an assignment-expression: a top-level comma
+    // would otherwise split into another declarator on re-parse.
+    print_expr_ctx(p, &p->e, init->expr, 2);
     return;
   case INIT_STR:
-    e_tok(&p->e, init->str_tok);
+    e_str_literal(&p->e, init->str_tok);
+    return;
+  case INIT_LIST:
+    print_init_list(p, init);
     return;
   default:
     p->errors++;
-    fprintf(stderr, "c2c: initializer lists are CC4\n");
+    fprintf(stderr, "c2c: unknown initializer kind %d\n", init->kind);
     exit(2);
   }
 }
 
-// One declarator of a declaration group: name, dims, initializer.
-static void print_one_declarator(Printer *p, LibcpNode *node) {
-  print_declarator(p, &p->e, record_type(node), record_name_tok(node));
+// One declarator of a declaration group: name, dims, initializer,
+// derived above the group's shared declspec start.
+static void print_one_declarator(Printer *p, LibcpNode *node,
+                                 LibcpType *start) {
+  print_declarator(p, &p->e, record_type(node), record_name_tok(node), start);
   if (node->decl_init) {
     e_str(&p->e, " = ");
     print_init(p, node->decl_init);
@@ -725,13 +1316,15 @@ static void print_one_declarator(Printer *p, LibcpNode *node) {
 }
 
 // True when `node` continues the declaration group of `first`: same
-// kind, same declspec record (the base the declarators derive from)
-// and same attributes (PLAN-c2c D3). Grouping by the base record is
-// what keeps every declarator of one anonymous enum or struct
-// definition inside the single statement that spells it.
-static bool continues_group(LibcpNode *first, LibcpNode *node) {
+// kind, the same declspec start (the base record, or the typedef-named
+// segment both derive above) and the same attributes (PLAN-c2c D3).
+// Grouping by the declspec start is what keeps every declarator of one
+// anonymous enum or struct definition inside the single statement that
+// spells it.
+static bool continues_group(Printer *p, LibcpNode *first, LibcpNode *node) {
   return node->kind == first->kind &&
-         base_type(record_type(node)) == base_type(record_type(first)) &&
+         declspec_start(p, record_type(node)) ==
+             declspec_start(p, record_type(first)) &&
          same_attr(&node->attr, &first->attr);
 }
 
@@ -740,22 +1333,24 @@ static void print_stmt(Printer *p, LibcpNode *node);
 // Prints a declaration record (and its declarator group) and returns
 // the last chain node it consumed, so the caller steps past the group.
 static LibcpNode *print_record(Printer *p, LibcpNode *node) {
+  bool defining = node->kind == ND_TYPEDEF;
   print_attr_prefix(p, node);
-  print_declspec_e(p, &p->e, base_type(record_type(node)),
-                   node->kind == ND_TYPEDEF);
+  LibcpType *start = defining ? base_type(record_type(node))
+                              : declspec_start(p, record_type(node));
+  print_declspec_e(p, &p->e, start, defining);
   e_str(&p->e, " ");
 
   LibcpNode *last = node;
-  print_one_declarator(p, node);
+  print_one_declarator(p, node, start);
 
-  // Consecutive records over the same type record and attributes join
-  // into one multi-declarator statement (PLAN-c2c D3); a function
+  // Consecutive records over the same declspec start and attributes
+  // join into one multi-declarator statement (PLAN-c2c D3); a function
   // definition never joins.
   if (node->kind != ND_FUNCDEF) {
-    while (last->next && continues_group(node, last->next)) {
+    while (last->next && continues_group(p, node, last->next)) {
       last = last->next;
       e_str(&p->e, ", ");
-      print_one_declarator(p, last);
+      print_one_declarator(p, last, start);
     }
   }
 
