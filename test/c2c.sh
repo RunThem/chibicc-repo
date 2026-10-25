@@ -690,9 +690,6 @@ SNIP
 
 expect c33_local_records <<'WANT'
 static int g = 1;
-struct S {
-  int x;
-};
 int f(void) {
   static int s = 2;
   extern int e;
@@ -702,7 +699,9 @@ int f(void) {
     B
   };
   int t = A + B;
-  struct S v = { .x = 3 };
+  struct S {
+    int x;
+  } v = { .x = 3 };
   return t + v.x + s + e + g;
 }
 WANT
@@ -899,7 +898,9 @@ SNIP
 expect c35_typedef_of_typedef <<'WANT'
 typedef struct {
   int x;
-} E, arr_t[1], arr2_t[1];
+} E;
+typedef E arr_t[1];
+typedef arr_t arr2_t;
 E e;
 arr_t a, b;
 WANT
@@ -992,6 +993,63 @@ if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
     echo "c2c corpus: $corpus_count files normalized-AST-equal and idempotent"
 else
     echo "c2c corpus: skipped (no Linux system headers)"
+fi
+
+# -S 汇编逐字节等价: 打印产物编译出的汇编必须与原文逐字节相同。只在能
+# 就地汇编的环境跑 (有系统头, 即容器内)。.file 伪指令嵌源路径, 所以原地
+# 工作: 原文件先编译, 打印产物覆盖后再编译, cmp 两个 .s, 然后还原。容器
+# 里的 /work 是一次性副本, 就地改写是安全的。时间宏钉死 (macro.c 把
+# __DATE__/__TIME__ 当字符串用)。自举语料 (编译器自己的 ~15k 行源码) 一并
+# 入门 (PLAN-c2c 拍板 2)。
+if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
+   "$chibicc" -Iinclude -Itest -E "$tmp/probe.c" > /dev/null 2>&1; then
+    s_fails=0
+    s_count=0
+    for f in test/*.c main.c codegen.c libcp/src/*.c; do
+        # line.c: __LINE__/__FILE__ 经 #line 重设, 打印产物必然错位。
+        [ "$f" = "test/line.c" ] && continue
+        s_count=$((s_count + 1))
+        # 旗标按语料分家, 与 Makefile 的构建规则一致: test 语料吃
+        # -Iinclude -Itest; 自举语料 (main.c, codegen.c, libcp/src) 吃
+        # -Ilibcp/include -Ilibcp/src, 其中 libcp 内部源与 codegen.c 走
+        # 内部 umbrella, 还要 -DLIBCP_DEFAULT_ALLOCATOR。
+        case "$f" in
+        libcp/src/*.c|codegen.c|main.c)
+            flags="-DLIBCP_DEFAULT_ALLOCATOR -Ilibcp/include -Ilibcp/src -Iinclude" ;;
+        *)                       flags="-Iinclude -Itest" ;;
+        esac
+        cp "$f" "$tmp/orig.bak"
+        # 时间宏必须内联 (fmt.sh 的同款坑): 经变量展开会丢字面引号。
+        "$chibicc" $flags -D__TIMESTAMP__='"Mon Jan  1 00:00:00 2024"' \
+            -D__DATE__='"Jan  1 2024"' -D__TIME__='"00:00:00"' \
+            -S -o "$tmp/a.s" "$f" 2>/dev/null
+        # shellcheck disable=SC2086
+        "$c2c_bin" $flags -D__TIMESTAMP__='"Mon Jan  1 00:00:00 2024"' \
+            -D__DATE__='"Jan  1 2024"' -D__TIME__='"00:00:00"' \
+            -I/usr/include/x86_64-linux-gnu -I/usr/include "$f" > "$tmp/p.c" 2>/dev/null
+        cp "$tmp/p.c" "$f"
+        "$chibicc" $flags -D__TIMESTAMP__='"Mon Jan  1 00:00:00 2024"' \
+            -D__DATE__='"Jan  1 2024"' -D__TIME__='"00:00:00"' \
+            -S -o "$tmp/b.s" "$f" 2>/dev/null
+        mv "$tmp/orig.bak" "$f"
+        # 展开后的单文件没有 #include 行, .file 的头文件表与 .loc 的行号
+        # 本质上与原文不同 (fmt 保留 include 行所以能逐字节)。这里剥离调试
+        # 行信息后比较: 指令序列, 标签, 数据与重定位逐字节。
+        grep -vE '^[[:space:]]*\.(file|loc)[[:space:]]' "$tmp/a.s" > "$tmp/a.n.s"
+        grep -vE '^[[:space:]]*\.(file|loc)[[:space:]]' "$tmp/b.s" > "$tmp/b.n.s"
+        if ! cmp -s "$tmp/a.n.s" "$tmp/b.n.s"; then
+            echo "c2c/s-equiv/$f: assembly differs"
+            s_fails=$((s_fails + 1))
+        fi
+    done
+    if [ $s_fails -ne 0 ]; then
+        echo "c2c s-equiv: $s_fails of $s_count files differ"
+        fails=$((fails + s_fails))
+    else
+        echo "c2c s-equiv: $s_count files assembly-identical"
+    fi
+else
+    echo "c2c s-equiv: skipped (no Linux system headers)"
 fi
 
 if [ $fails -ne 0 ]; then
