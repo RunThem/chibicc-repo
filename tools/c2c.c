@@ -1,7 +1,9 @@
-// c2c - the C-to-C printer (plans/PLAN-c2c.md): the library's second
-// real consumer, over layer 3. It tokenizes, preprocesses and parses a
-// translation unit and prints the faithful syntax tree back as one
-// fully expanded C source file.
+// c2c - the C-to-C printer (plans/PLAN-c2c.md): a regression gate over
+// layer 3, not a supported tool (2026-10-26 positioning). It tokenizes,
+// preprocesses and parses a translation unit and prints the faithful
+// syntax tree back as one fully expanded C source file; test/c2c.sh
+// uses the printed form to prove the tree is complete (golden bytes,
+// normalized-AST equality, byte-identical -S over the corpus).
 //
 // Output policy (PLAN-c2c 1.4, D3-D8):
 // - The input is the preprocessed stream, so macros and #includes are

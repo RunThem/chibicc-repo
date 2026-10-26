@@ -1,8 +1,9 @@
 #!/bin/bash
 # C→C 打印器测试 (plans/PLAN-c2c.md): 逐字节锁定 c2c 的打印输出。
 #
-# c2c 是库的第二个真实消费者: tokenize -> preprocess -> parse 之后把第 3 层
-# 忠实语法树打印回单一展开后的翻译单元。输出策略: 注释丢弃, 空白全部自造
+# c2c 只作为 make test / make test-stage2 的回归闸门(2026-10-26 定位), 不是
+# 支持的工具: tokenize -> preprocess -> parse 后打印回单一展开后的翻译单元。
+# 输出策略: 注释丢弃, 空白全部自造
 # (2 空格缩进, 一声明一行), 拼写从 token 原文取, tag 从 Type 记录的 tag_tok
 # 取, 枚举定义由 ND_ENUM_CONST 记录重组, 未使用的独立 tag 定义消失 (首次
 # 使用时内联打印), 同 declspec 记录的连续声明合并为多 declarator 语句。

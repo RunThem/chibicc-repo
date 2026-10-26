@@ -18,4 +18,5 @@
 /compile_commands.json
 /.zcodeignore
 /fmt
-/fmt.dSYM
+/c2c
+*.dSYM

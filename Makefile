@@ -68,8 +68,10 @@ test/%.exe: chibicc test/%.c test/common test/test.h
 fmt: libcp.a tools/fmt.c
 	$(CC) $(CFLAGS) -o $@ tools/fmt.c libcp.a
 
-# The C-to-C printer (PLAN-c2c): the library's second real consumer,
-# over layer 3, built against libcp.a through the public headers only.
+# The C-to-C printer (PLAN-c2c): a regression gate over layer 3, run by
+# make test / make test-stage2 only. It is not part of `all` and not
+# installed; test/c2c.sh uses it to prove the layer-3 tree regenerates a
+# compilable TU (golden bytes, normalized AST, byte-identical -S).
 c2c: libcp.a tools/c2c.c
 	$(CC) $(CFLAGS) -o $@ tools/c2c.c libcp.a
 
@@ -135,6 +137,7 @@ stage2/test/%.exe: stage2/chibicc test/%.c test/common test/test.h
 stage2/fmt: stage2/libcp.a tools/fmt.c
 	$(CC) $(CFLAGS) -o $@ tools/fmt.c stage2/libcp.a
 
+# The same gate against the self-hosted archive.
 stage2/c2c: stage2/libcp.a tools/c2c.c
 	$(CC) $(CFLAGS) -o $@ tools/c2c.c stage2/libcp.a
 
