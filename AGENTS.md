@@ -1,8 +1,10 @@
 # AGENTS.md - chibicc(C 前端库 fork)
 
-本仓库是 Rui Ueyama 的 chibicc(小型 C11 编译器, 约 9k 行)的 fork; 库化后源码分为 `libcp/src/`(库实现)与根目录的 `main.c` / `codegen.c`(参考消费者). 项目目标已从"教学用编译器"重定位为:
+本仓库是 Rui Ueyama 的 chibicc(小型 C11 编译器, 约 9k 行)的 fork. 库化已完成:
 
-**把 C 前端(tokenize / preprocess / parse / sema)做成一个可复用的库**, 供编译器之外的其他软件使用 - formatter(格式化), C 转 C 的源到源代码生成, linter, 静态分析等. chibicc 本体退化为"驱动器 + x86-64 codegen", 作为这个库的参考消费者. 上游 README(含 "Design principles" 一节)描述的是上游的教学定位; 与本文件冲突时, 以本文件为准. 库化(阶段 5)已完成: 库名 `libcp`(2026-10-23 由 `libchibicc` 改名, 二进制仍叫 `chibicc`), 公共头根 `libcp/include/libcp/`, 公共符号 `libcp_` / `Libcp` 前缀; 库实现全部在 `libcp/src/`(含 facade `lib.c` 与内部 umbrella `libcp.h`), 根目录只保留驱动器 `main.c` 与 `codegen.c`.
+**C 前端(tokenize / preprocess / parse / sema)是一个可复用的库**. chibicc 本体退化为"驱动器 + x86-64 codegen", 作为这个库的参考消费者. 上游 README(含 "Design principles" 一节)描述的是上游的教学定位; 与本文件冲突时, 以本文件为准. 库文档在 `docs/`.
+
+库名 `libcp`(展开为 "Library C Parse", 是品牌 token 而不是描述), 二进制仍叫 `chibicc`, 预定义宏 `__chibicc__` 不变; 公共头根 `libcp/include/libcp/`, 公共符号 `libcp_` / `Libcp` 前缀; 库实现全部在 `libcp/src/`(含 facade `lib.c` 与内部 umbrella `libcp.h`), 根目录只保留驱动器 `main.c` 与 `codegen.c`. 只承诺源码兼容, 不承诺 ABI.
 
 ## 全局约定
 
@@ -13,133 +15,80 @@
 
 流水线按"中间表示"划成 5 层; 每层是一个干净的阶段边界, 也是库对外暴露的一种能力:
 
-1. **Token 流(trivia 保留)** - tokenize 的改造目标: 空白/注释/换行作为 trivia 挂在 token 上, 不丢弃; 拼写/位置/编码等文本级信息完整.
-2. **CST(lossless 具体语法树, 已实现)** - 建立在预处理**之前**的原始文本上, 预处理指令(`#define`/`#if` 等)本身是树的节点, 条件分支全部保留; 每个语法 token 与标点都是显式节点, trivia 挂靠; 保证逐字节还原源码. 服务 formatter 与精确重构. 实现见 `libcp/src/cst.c` 与 `test/cst.sh`. 这个前置位置是边界而不是实现细节: 预处理不可逆, 把 CST 建在展开后的 token 流上会失去逐字节重建契约, 展开后的语法形态由第 3 层承担, 源码映射由 provenance 承担(分析见"开放决策与已决事项").
-3. **语法层 AST(忠实, 无类型)** - 从预处理后的 token 流下降: 消解标点与括号, 但保留每一种源码写法的区分(`a[i]` vs `*(a+i)`, `while` vs `for`, `op=` 复合赋值, `>` vs 交换操作数, 隐式 cast 有标记); 不做降级, 不查名字, 不算类型. 服务 C→C 代码生成等语法级工具. 宏调用不在本层保留为节点: 本层的树建立在展开后的 token 流上, 宏保真由第 2 层 CST 与 token provenance 承担(2026-10-18 拍板, 见"开放决策与已决事项").
-4. **sema 产物(纯标注, 保留源码写法)** - 名字解析(绑定到 Obj), 类型检查与标注, 常量求值, 结构体布局, 以及编译期必需的语义结论(泛型选择, sizeof 结论, 隐式 cast 带标记); 语言规定存在的对象(字符串字面量的匿名全局, 复合字面量的无名字对象, ABI 对象)在这一层物化. 不带任何"为某个后端发射服务的整形"(指针算术缩放, 复合赋值/自增自减的读写回环, 关系运算符换序, 临时槽, 语句重排) - 这些属于消费者. 该边界已达成(A9.2 审计), 见"路线图".
-5. **汇编(codegen)** - x86-64 System V / GAS / ELF, 不属于库. codegen 直接消费第 4 层的标注树, 自己决定怎么把源码写法落成 x86-64(含它需要的临时槽与语句重排).
+1. **Token 流(trivia 保留)** - 空白/注释/换行作为 trivia 挂在 token 上; 拼写/位置/编码完整; 预处理前的 token 流可逐字节重建输入文件.
+2. **CST(lossless)** - 建在预处理**之前**的原始文本上: 预处理指令与条件分支都是节点, trivia 挂靠, 逐字节还原源码. 前置位置是边界: 预处理不可逆, 展开后的语法形态归第 3 层, 源码映射归 provenance.
+3. **语法层 AST(忠实, 无类型)** - 从展开流下降, 保留源码写法(如 `a[i]` 不降成 `*(a+i)`, 隐式 cast 有标记); 不降级, 不绑名, 不算类型; 宏调用不建节点, 宏保真归 CST 与 provenance.
+4. **sema 产物(纯标注)** - 名字解析, 类型检查与标注, 常量求值, 布局与语义结论; 语言规定存在的对象在此物化; 不做任何为发射服务的整形.
+5. **汇编(codegen)** - x86-64 System V / GAS / ELF, 不属于库; 消费第 4 层标注树, 自己决定整形与发射.
 
-消费方式: 编译器(驱动器 + codegen)走 1→(展开)→3→4→5 的编译路径; formatter 只消费 1→2; C→C codegen 消费 3; 语义级工具消费 4(标注树对源到源与语义工具都是可直接使用的形态).
+## 面向库的硬性规则
 
-## 面向库的硬性规则(存量代码按路线图收敛, 新代码立即生效)
+- 不新增 `exit()`: 库层错误走诊断回调 + longjmp 到公共入口; 默认处理器逐字节复现旧输出; 新代码不得引入新的 exit 点(驱动器与默认处理器路径除外).
+- 不新增静态全局状态: 语义状态全部在 `LibcpContext`(parse.c 只剩只读关键字表缓存); 新代码把状态放进 context.
+- 库层无隐式上下文: 新增或修改的内部函数若直接或传递地触碰 arena, 格式化, 容器, 诊断或 context 字段, 必须以 `LibcpContext *ctx` 作首参. 不得新增 `libcp_ctx()` 或 TLS; `make check-context` 是必跑门; `codegen.c` 不得有 `cg_ctx`.
+- API 纪律: 公共头(`libcp/include/libcp/`)与内部头(`libcp/src/libcp.h`)分离, 不泄漏编译器内部假设(Linux 路径, 单次进程生命周期, 直接 exit 等).
+- 后端整形只允许出现在 codegen.c: 指针缩放, 读写回环, 临时槽, 语句重排, 标签与唯一名分配都不是库层的事; 库层只做标注与语义结论.
+- 检查与诊断留在库层: 左值性, 实参个数, 位域取地址, VLA 不得初始化, 不完整类型等检查不得随后端搬走; 文案与锚点以 `test/diagnostic.sh` 为准.
 
-- 不新增 `exit()` 调用: 现有 `libcp_error_tok` 直接 exit(1), 库化线(L2.6)把它改成诊断回调 + longjmp 到公共入口, 默认处理器仍逐字节复现旧输出; 新代码不得引入新的 exit 点(驱动器与默认处理器路径除外).
-- 不新增静态全局状态: 语义状态已全部收到 sema.c(10 个文件域 static: `locals` / `globals` / `sema_fn` / `builtin_alloca` / 作用域表 `scope` / goto 配对检查的 `gotos` / `labels` / 检查用的 `loop_depth` / `switch_depth` / `resolving_body`; 外加 `new_unique_name` 的 `unique_name_id` 计数器. 控制流标签与控制流整形的 static 已随 A2.1 移入 codegen, `decl_remove` 随 A8.1 消失), 与库的可重入性冲突; parse.c 只剩 `scope`(typedef/tag 分类 oracle)与 `is_typename` 的关键字表缓存(建一次后只读). 库化线(L2.2-L2.5)把这些 static 全部收进 `LibcpContext`; 显式上下文线(2026-10-23)把访问方式改为显式传参, 不同 context 可在不同线程并存, 同一 context 不跨线程并发. 新代码把状态放进 context 结构.
-- 库层无隐式上下文: 新增或修改的内部函数若直接或传递地触碰 arena, `libcp_format`, `libcp_strarray_push` / `libcp_nodearray_push`, hashmap 变更, 诊断, 或读写 `LibcpContext` 字段, 必须以 `LibcpContext *ctx` 作首参. 不得新增 `libcp_ctx()` 或线程局部存储; `test/context-audit.sh` / `make check-context` 是每步必跑的门, `codegen.c` 不得有文件域 context 指针(`cg_ctx`).
-- API 纪律: 公共头(未来从 `libcp/src/libcp.h` 拆出)与内部头分离; 中间表示边界处不泄漏编译器内部假设(Linux 路径, 单次进程生命周期, 直接 exit 等).
-- 后端整形只允许出现在 codegen.c: 指针算术缩放, 读写回环, 临时槽与隐藏变量, 语句重排, 标签与唯一名分配, 都不是库层的事. 库层(sema 及以下)只做标注与语义结论(含物化语言规定存在的对象). 该红线经 A9.2 的逐项 grep 证实已达成(缩放/回环/标签/重排/临时槽/调用 codegen 在库层均为 0 处; 库层的建槽只剩语言与 ABI 对象), 佐证留档于 `plans/RESULT-codegen-direct.md` 的 A9.2 一节.
-- 检查与诊断留在库层: 夹在降级代码里的检查(左值性, 实参个数, 位域取地址, VLA 不得初始化, 不完整类型等)在降级搬走时必须在库层显式保留; 文案与插入符锚点以 `test/diagnostic.sh` 的逐字节锁定为准.
-- 库名与公共头命名已定(2026-10-19): `libcp`, `<libcp/...>`, `libcp_` / `Libcp` 前缀; 只承诺源码兼容, 不承诺 ABI.
+## 已定边界(新决策仍由用户拍板, 不擅自推翻)
 
-## 路线图
-
-语法语义拆分线(阶段 3 + 4)已细化为 22 步可勾选执行清单并**全部完成**(终态: parse.c 2531 行纯语法 + sema.c 1552 行, codegen.c 零改动; 计划与执行记录已归档为 `plans/PLAN-split.md` / `plans/RESULT-split.md`). 其后的忠实层收尾线(阀门口径放宽)同样**已全部完成** - 解除字节冻结造成的忠实层偏差后, parse.c 的表达式层达到"无类型标注, 无名字绑定, 无常量求值"的第 3 层形态(终态: parse.c 2148 行 + sema.c 3145 行 + libcp.h 704 行; codegen.c 相对 5f53ed0 零改动; 计划与执行记录已归档为 `plans/PLAN-faithful.md` / `plans/RESULT-faithful.md`).
-
-**codegen 直连 sema 产物线(取消 sema 降级)已完成并归档** - **阶段 A, 阶段 B 与 B2 均已全部完成**(A0.1-A10.2, B0-B1.3 与 B2.0-B2.2, 计划与执行记录已归档为 `plans/PLAN-codegen-direct.md` / `plans/RESULT-codegen-direct.md`): codegen 直接消费第 4 层的标注树, sema 不再做任何"为发射服务的整形", `add_type` 经 A9.2 逐 case 审计为纯标注遍; 第 4 层的边界按"语义结论归库层, 发射便利与临时槽归消费者"重划(判据见 `plans/PLAN-codegen-direct.md`), 上面第 1-5 条即终态. 阶段 B 与 B2 把"只需换发射方式"的整形项(下标, 箭头成员, `>`/`>=`, elvis, `while`, break/continue, 声明展开, 加减法的指针缩放)从整形遍搬进了发射点, 且除 elvis 的临时槽移除与 B2 的嵌套 VLA 维度修正外指令序列逐字节不变; 整形遍的残留 = 需要槽/语句/标签的项(op= 与自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配, 记录摘除).
-
-**trivia 保留线(路线图阶段 1)已完成并归档** - 用户 2026-10-12 拍板开工, 同线完成(T0.1-T3.2, 终态 443b4c2; 计划与执行记录已归档为 `plans/PLAN-trivia.md` / `plans/RESULT-trivia.md`): tokenize 的 token 流保留空白/注释/换行等 trivia, **预处理前的 token 流可逐字节重建输入文件**(`test/*.c` 与 `include/*.h` 全部 48 个文件, 以及 CRLF / 孤立 CR / BOM / 无末行换行 / 续行 / universal chars 的边界样本; 例外清单清零), 且一切既有消费者的可观察行为逐字节不变(docker-test 含自举 + 汇编快照 diff 为空 + 诊断 55 例 + 形状 33 段 + -E 归一化锁定). 落地形态: 扫描缓冲保持 T1 前的文字效果, 新增 `File.raw`(原样文本)与 `File.map` / `File.lines`(scan 偏移到 raw 偏移, raw 偏移到行号的映射, 由 `make_scan_buffer` 一遍产出), token 的 `trivia` / `trivia_len` / `raw_loc` / `raw_len` 均为 raw 坐标; 驱动器新增只读旗标 `-dump-tokens`(T/R 行)与 `-reconstruct`(重建原始字节), 测试在 `test/trivia.sh`. 设计相对计划的偏离(双缓冲取代"缓冲即原文件 + 词法透明化")与理由见 `plans/RESULT-trivia.md` 的 T2.1 一节; 计划里的 T2.2(universal chars 保原拼写)已由该设计吸收.
-
-**CST 线(路线图阶段 2)已完成** - 用户 2026-10-17 拍板开工, 同线完成(C0.1-C3.2, 终态见本线 C3.2 提交; 计划与执行记录已归档为 `plans/PLAN-cst.md` / `plans/RESULT-cst.md`): 在预处理**之前**的原始文本上建 lossless 具体语法树, 预处理指令是树中的节点, 条件分支全部保留, 每个语法 token 与标点是显式叶子, trivia 挂在 token 叶子上, 叶子按序重建逐字节等于输入文件. 终态: `libcp/src/cst.c` 2254 行, 55 个 `CstKind`, 三个只读通道 `-dump-cst` / `-reconstruct-cst` / `-verify-cst` 不接编译路径; 48 个语料文件 + 15 个边界样本重建零例外, 叶子按序与 token 流逐指针相等; `test/cst.sh` 305 项断言 / 61 个 dump 样本, 覆盖每一种节点; `libcp/src/tokenize.c` / `libcp/src/preprocess.c` / `libcp/src/parse.c` / `libcp/src/sema.c` / `libcp/src/type.c` / `codegen.c` 零改动. 库化(阶段 5)与产品化验证(阶段 6)在其后完成, 见下文.
-
-**宏展开 provenance 线(阶段 5 的前置)已完成** - 用户 2026-10-18 拍板开工, 同线完成(M0.1-M2.2, 终态见本线 M2.2 提交; 计划与执行记录已归档为 `plans/PLAN-provenance.md` / `plans/RESULT-provenance.md`): 每次展开建 `LibcpMacroExpansion` 记录, 每个产物 token 携带 `LibcpMacroProv` 链(最内层在前, 只 prepend); 调用点宏名 token / function-like 的 `rparen` / 展开时刻的 `LibcpMacro` / `#define` 名 token / 实参序号与实参 token 列表 / 嵌套链经 `libcp/src/libcp.h` 的 11 个访问器查询(`LibcpMacro` / `LibcpMacroArg` / `LibcpMacroParam` 仍留在 `libcp/src/preprocess.c`, 不进入公共面); 新增只读通道 `-dump-expansions` / `-verify-expansions`, 由 `test/expand.sh` 锁定(29 个 dump 样本 / 3 个 chain 形状样本 / 17 个 verify 样本 / 48 个语料文件的全量校验). `-E` / 诊断 / trivia / CST 逐字节不变, 汇编快照为空 diff; `libcp/src/parse.c` / `libcp/src/sema.c` / `libcp/src/type.c` / `codegen.c` 零改动. 同日裁决的宏保真策略(消费展开流, 不引入宏调用节点, 放弃宏内手术)见"开放决策与已决事项".
-
-**库边界固化线(路线图阶段 5)已完成并归档** - 用户 2026-10-19 拍板: 库名 `libcp`(2026-10-23 由 `libchibicc` 改名, 见"开放决策与已决事项"), 公共头 `<libcp/...>`, 公共符号 `libcp_` / `Libcp` 前缀, 只承诺源码兼容; 一个 context 一个翻译单元; 公共 `Node` / `Obj` 只保留第 3/4 层字段, codegen 字段进 codegen 私有表. 已完成: L1 把 codegen 字段(`is_lowered` / `brk_label` / `cont_label` / `pass_by_stack` / `ret_buffer` / `unique_label` / case 链 / `goto_next` / `Obj.offset` / `stack_size` / `Type.vla_size`)移出公共面; L2 建立 `LibcpContext`(arena, 诊断回调 + longjmp 错误边界, 配置与 reset)并把 19 个文件域 static 与函数域 static 全部收进去, 库层约 60 个分配点改走 arena; L3.0 把 CST 的 children 数组收进 arena 并用 ASan 分配统计锁定 "reset 后活字节不增长"; L3.1a 把公共头移到 `libcp/include/libcp/`, L3.1b 拆成 9 个公共头并让 context 不透明, L3.1c/L3.1d 锁定头文件卫生并新增 `test/public-api.sh` / `make check-library`, L3.2a 把公共类型与 tag 全部改成 `Libcp*` / `struct libcp_*` 并把 `libcp_reconstruct` 搬进库, L3.2b 拍板 `.a` 内部符号可见并加上 D7 存在性检查, L3.3a 产出 `libcp.a` 并让 `chibicc` 链接它, L3.3b 产出 Linux `libcp.so`(只导出 D7), L3.3c 让 stage2 重编库对象并补上 `make install` / `libcp.pc` / `LIBCP_VERSION`, L3.4a-c 用 `test/library.sh` 覆盖 reconstruct / provenance / include / define、四个错误返回、同线程与跨线程双 context, 并用 ASan+UBSan 重编库对象做零 UB 与活字节闸门(该闸门修掉了 `equal()` 的越界读); `test/library.sh` 用宿主 cc 链接静态库跑通 tokenize -> preprocess -> parse -> sema / CST / 诊断回调 / reset. 计划与执行记录在 `plans/PLAN.md` / `plans/RESULT.md`(本线). 阶段 5 的 L3.5 与 L4 闸门已于 2026-10-19 全绿(docker-test 含自举与 stage2, snapshot 为空, check-library 含 install / pkg-config / `.so`), **阶段 5 完成并归档**. 其后 L5 产品化验证线(原阶段 6)已于 2026-10-25 同日完成(计划与执行记录见 `plans/PLAN-l5.md` / `plans/RESULT-l5.md`): CST 覆盖(UNPARSED 770->45, golden 锁定), `libcp_cst_seed_typedef`, formatter MVP(`tools/fmt.c`, 行保持, `-S` 逐字节等价), `libcp_node_source_range` 与诊断展开点; C→C 打印器为后续第二个消费者.
-
-每个阶段完成时三道闸门必须全绿: `make docker-test`(含自举), 汇编等价性 diff(阶段 0 建立), 该阶段新增的针对性测试. 阶段内行为不允许变化, 变化只发生在阶段边界并单独提交.
-
-**表达式 Pratt 解析线(附加线)已完成** - 用户 2026-10-21 拍板开工, 同线完成(P0-P6; 计划与执行记录已归档为 `plans/PLAN-pratt-parse.md` / `plans/RESULT-pratt-parse.md`): 表达式层改为一个 `expr_bp` 绑定力循环, 覆盖前缀, cast, 后缀, 二元, 赋值, `?:` 与逗号. 落地时以 `LIBCP_PRATT_PARSE_FEATURE=0/1` 双构建并存, 旧级联保留在 `#if !` 下, 只读通道 `-dump-ast` 与 `test/ast.sh`(85 例)先于重写落地, `test/pratt-ab.sh` 让 41 个语料文件与 tinycc 真实构建的 AST 和汇编逐字节相同. 2026-10-25 的 Pratt 单一路径线删掉旧级联与全部双构建, Pratt 成为唯一表达式路径(见下).
-
-**显式 LibcpContext 传参线已完成** - 用户 2026-10-23 拍板开工, 同线完成(E0-E11; 计划与执行记录见 `plans/PLAN-explicit-context.md` / `plans/RESULT-explicit-context.md`): 删除 `libcp_active_ctx` / `libcp_ctx()` / `libcp_context_activate`, `libcp/` 内不再有 `_Thread_local`; 每个触碰 arena, 诊断, 格式化, 容器或 context 字段的内部函数以 `LibcpContext *ctx` 为首参, `codegen()` 也接收并穿透驱动器传下的 ctx(无 `cg_ctx`). 公共 API, 公共头与 D7 逐字节不变; 诊断回调里创建 / 使用 / 释放另一个 context 由 `test/library.sh` 的 `check_context_scope` 锁定, 新增 `test/context-audit.sh` 与 `make check-context` 闸门(Pratt 版闸门随双构建移除). 该线一次性 AST 改写器的三个盲区记录在 `plans/RESULT-explicit-context.md`, 其中两个(Pratt 分支不可见, 跨模式重名)随下一条线的双模式消失而结构性消失.
-
-**Pratt 单一路径与内部符号前缀线已完成** - 用户 2026-10-25 拍板开工, 同线完成(计划与执行记录见 `plans/PLAN-pratt-default.md` / `plans/RESULT-pratt-default.md`): 其一, 旧级联表达式解析器删除(parse.c 约 509 行 / 21 个函数), `LIBCP_PRATT_PARSE_FEATURE` 开关, `chibicc-pratt` 二进制, out-of-tree `pratt/` / `stage2-pratt/` 构建与 `test-pratt` / `test-both` / `test-ab` / `test-stage2-pratt` / `check-library-pratt` / `check-context-pratt` 及对应 Docker 目标全部移除, Pratt 成为唯一表达式路径, `test/pratt-ab.sh` 删除(迁移等价性依据是 Pratt 线已锁定的 41 语料 + tinycc 逐字节一致, 迁移后由汇编快照基线与 docker-test 继续锁定); 其二, `.a` 的全部无前缀外部内部符号(106 个: 93 函数 + 13 个 `ty_*` 变量)统一加 `libcp_` 前缀, 21 个与公共 API 撞名的门面薄包装中 20 个合并(实现原地改用公共名, 错误边界 `ENTER_RET` / `LEAVE` 随实现搬到 `libcp.h`, `cst_reconstruct` / `cst_verify` / `expansion_verify` 为此补了 ctx 首参), `tokenize_file` 因 preprocess 的 `#include` 路径需要原始 NULL 返回行为而保留一层(`libcp_tokenize_file_impl`); 归档外部符号 128 个全部 `libcp_` 前缀, 废止 L3.2b 的"内部符号不重命名"策略(见"开放决策与已决事项"). 该线同时使显式 ctx 线 AST 改写器的三个盲区中两个随双模式消失而结构性消失.
-
-0. **等价性基线**: 在 docker 里对全部 `test/*.c` 与自举产物跑 `./chibicc -S`, 存汇编快照; 之后每阶段结束逐字节 diff, 防行为回归.
-1. **trivia 保留**(已实现): tokenize 的 token 流保留注释/空白/换行(以及 CRLF 与反斜杠续行)为 trivia; token 携带 raw 坐标的 trivia 与拼写切片, 预处理前的流可逐字节重建输入文件; 配 `test/trivia.sh`(dump 断言 / 全量 round-trip / -E 与诊断锚点锁定).
-2. **CST**(已实现): 建立在原始文本(含预处理指令)上的 lossless 树; 预处理指令是节点(`#define` 对象 / 函数宏与变参, `#undef`, `#include`, `#line` 与 GNU 行标记, `#pragma`, `#error`, 空指令与未知指令), 条件指令成 `CST_PP_IF` / `CST_PP_BRANCH` 且所有分支保留(不求值, 不展开); 每个语法 token 与标点是显式叶子, trivia 挂在 token 上; 验收标准是逐字节 round-trip(重建结果 == 输入文件), 且叶子按序与 token 流一一对应. 终态见 `libcp/src/cst.c` 与 `test/cst.sh`.
-3. **忠实语法 AST**(已实现): 新增 21 个 NodeKind(上游 48 + 21 = 69): 忠实写法类 `ND_SUBSCRIPT`, `ND_GT`/`ND_GE`, `ND_INCDEC`, `ND_WHILE`, `ND_BREAK`/`ND_CONTINUE`, `ND_SIZEOF`/`ND_ALIGNOF`, `ND_STRING`; 未决引用类 `ND_IDENT`(parser 不绑定的名字); 声明记录类 `ND_DECL`, `ND_GVAR_DECL`, `ND_FUNCDEF`, `ND_TYPEDEF`, `ND_ENUM_CONST`, `ND_COMPOUND_LITERAL`; sema 侧载体类 `ND_GENERIC`/`ND_GENERIC_ASSOC`, `ND_TYPES_COMPATIBLE`, `ND_REG_CLASS`. 上游 48 个 kind 中 5 个加忠实性字段(`ND_ASSIGN.op`; `ND_CAST` 的 `ty_op` 与 `is_implicit`; `ND_MEMBER` 的 `arrow_tok`; `ND_COND` 的 `is_elvis`; `ND_FOR` 的标签槽); `ND_MEMZERO` 退出 parse 的树(sema 降级时重建). parse.c 原约 55 处不忠实构造点(复合赋值/自增自减重写, 指针算术缩放, 初始化器拍平, sizeof 折叠, 字符串字面量转匿名全局, 关系运算符交换操作数等)已全部消除, 降级逻辑在 sema.
-4. **sema 独立 pass**(已实现, 现行线继续收边): parse.c 去语义化 - 名字解析/类型检查/常量求值/结构体布局/降级全部搬出到新的 sema.c; 解析器只保留 typedef 名字分类 oracle(C 文法要求的最小语义反馈). `eval/eval2/eval_double/is_const_expr`, `add_type`, `struct_decl` 布局, `write_gvar_data` 等随之迁移. 现行线把其中的"降级"再移一层: sema 只留标注, 整形归 codegen(见上).
-5. **库边界固化**(已实现, 见 `plans/PLAN.md` / `plans/RESULT.md`): 错误处理回调化, static 全局收敛为 context 对象, 公共头/内部头拆分, Makefile 新增 `libcp.a` / `libcp.so` 构建目标与 `test/library.sh`; L3.5 与 L4 闸门 2026-10-19 全绿.
-6. **产品化验证(L5, 必选, 已完成)**: CST formatter(`tools/fmt.c`)作为第一个真实消费者验证了 lossless / trivia / CST 覆盖 / API 手感; 计划与执行记录见 `plans/PLAN-l5.md` / `plans/RESULT-l5.md`(API 手感发现清单在 RESULT 第 6 节).
-7. **C→C 打印器(第 3 层回归闸门, 已完成)**: 用户 2026-10-25 拍板开工, 同日完成(CC0-CC7; 计划与执行记录见 `plans/PLAN-c2c.md` / `plans/RESULT-c2c.md`): `tools/c2c.c` 消费 tokenize -> preprocess -> parse 的第 3 层树, 打印单一展开后的翻译单元(注释丢弃, 拼写与 tag 保真, typedef 名恢复, 枚举重组, 文件作用域 tag 定义的再锚定). 库侧唯一改动是 `LibcpType.tag_tok`(struct/union/enum 的 tag 拼写记录, 源码兼容追加). 闸门: 35 个 golden 片段逐字节(覆盖 parse 树可达的全部 65 个 NodeKind), 46 个语料文件的归一化 AST 等价与幂等, **54 个文件(41 个 test/*.c + 自举源约 15k 行)的 -S 汇编逐字节等价**(剥离 .file/.loc 调试行信息; line.c 与 pragma-once.c 例外并记录). 用户 2026-10-26 定位: c2c 只作为 `make test` / `make test-stage2` 的回归闸门, 不进入 `all`, 不安装, 不做产品化(改写 / 插桩 / 重构 / 源码回写都不在范围); L5 挂来的三项遗留(trivia 迭代器 / range / UNPARSED)与 per-node user data 扩展点据此关闭, 详见"开放决策与已决事项".
-
-## 开放决策与已决事项(新决策仍由用户拍板, 不擅自定)
-
-- 已定 (2026-11-01): 库内类型命名 - 取消 `libcp/src/libcp.h` 的短名别名块, 实现直接使用 `Libcp*` 前缀名; 库内私有类型 (含单文件私有 struct / enum / typedef) 同样以 `Libcp*` 命名, tag 统一 `struct libcp_*`. 只改拼写, 不改公共 API: 内部头仍不安装, 内部类型不进入公共面.
-- 已定 (2026-10-18): 语法层 AST 对宏调用的保真策略 - 消费展开后的 token 流, 不引入宏调用节点; 宏保真由第 2 层 CST 与 token provenance 共同承担; 放弃宏展开内部的外科式编辑. provenance 侧已落地并归档(`plans/PLAN-provenance.md` / `plans/RESULT-provenance.md`), 公共面是 11 个访问器与两个只读通道.
-- 已定 (2026-10-19): 公共 `Node` / `Obj` 的形状 - 公共面只保留第 3/4 层字段; codegen 的 `brk_label` / `cont_label` / `ret_buffer` / `unique_label` / `is_lowered` / `pass_by_stack` / case 链 / `goto_next` 与 `Obj.offset` / `stack_size` 进 codegen 私有表; `Relocation.label` 改为 `Node *label_node`. 实施见 `plans/PLAN.md` L1.
-- 已定 (2026-10-19, 改名 2026-10-23): 库名与公共头命名 - 最初定为 `libchibicc` / `<chibicc/...>` / `chibicc_` / `Chibicc`, 2026-10-23 整体改为 `libcp` / `<libcp/...>` / `libcp_` / `Libcp` / `LIBCP_`. `libcp` 展开为 "Library C Parse", 是品牌 token 而不是描述 - 描述由 README 首段与 `libcp.pc` 的 `Description` 承担; 文档里不把本库称作或类比为 Clang. 二进制 `chibicc` 保留原名(参考消费者仍是上游 chibicc 的驱动器与后端; `chibicc-pratt` 于 2026-10-25 随 Pratt 单一路径线移除, 见下), 预定义宏 `__chibicc__` 不变(它标识编译器实现, 改了就是行为变化). `plans/**` 是历史归档(含 `CodeReview-Result.md` 与 `CodeReview-2026-10-24.md` 两份审核记录), 保留旧名不回溯改写. 只承诺源码兼容, 不承诺 ABI. 见 `plans/PLAN-rename-libcp.md` / `plans/RESULT-rename-libcp.md`.
-- 已定 (2026-10-25): Pratt 单一路径与内部符号前缀 - 旧级联表达式解析器删除, Pratt 成为唯一表达式路径; `LIBCP_PRATT_PARSE_FEATURE` 开关, `chibicc-pratt` 二进制与全部双构建测试 / A/B / Docker 目标移除, 对 2026-10-23 "chibicc-pratt 保留原名" 记录的修订. 同日废止 L3.2b 的"`.a` 内部符号不做源码级重命名"策略: 归档内全部外部符号统一 `libcp_` 前缀, 21 个撞名门面薄包装中 20 个合并(实现直接用公共名, 唯一例外 `libcp_tokenize_file_impl` 保留一层供 preprocess 的 `#include` 路径取原始 NULL 返回); 内部符号仍不是 API(公共头不声明, 消费者不得调用, 不承诺源码兼容). 见 `plans/PLAN-pratt-default.md`.
-- 已定 (2026-10-25): L5 产品化验证 - CST 覆盖口径(语句表达式 / 类型名实参 / _Generic 成结构, 残余 UNPARSED 由 `test/cst-stats.sh` golden 锁定), include 提供的 typedef 由消费者 `libcp_cst_seed_typedef` 供给(库不猜), formatter MVP 落在 `tools/fmt.c`(行保持策略), 诊断回调带 token 与展开链. D7 由 36 增至 38(均为源码兼容追加). 见 `plans/PLAN-l5.md` / `plans/RESULT-l5.md`.
-- 已定 (2026-10-25): C→C 打印器线 - tag 在库内记录(`LibcpType.tag_tok`, parse.c 的 struct/union/enum 说明符各一处赋值), 不做工具侧合成名; 自举语料(main.c + codegen.c + libcp/src/*.c)作为 -S 汇编等价门的必过项; 注释丢弃(注释保真归 CST formatter). 见 `plans/PLAN-c2c.md`.
-- 已定 (2026-10-26): c2c 只作为回归闸门 - `tools/c2c.c` 由 `make test` / `make test-stage2` 的 `test/c2c.sh` 调用, 不进入 `all`, 不安装, 不作为支持的工具或产品; 打印逻辑不搬进库, 不做改写 / 插桩 / 重构 / 源码回写. 据此关闭 L5 挂来的三项遗留(trivia 分段迭代器 / `libcp_node_source_range` 语义收紧 / CST UNPARSED 吸收)与 per-node user data 扩展点 - 四者都只为"改写型消费者"服务. 闸门本身保留: 35 golden / 46 语料归一化 AST / 54 文件 -S 汇编逐字节.
-- 已定 (2026-10-26 关闭): per-node user data 扩展点 - C→C 打印器(计划预期的"改写型消费者")落地后仍是只读遍历 + 遍历者自建 side table(指针键哈希), 零节点改写零挂载; 两个消费者(formatter 与 c2c)均给出负证据. **不引入**: 公共面不提供 per-node user data 扩展点; 2026-10-26 随 c2c 的闸门定位确认关闭. 见 `plans/RESULT-c2c.md` 第 4 节.
-- 已定 (2026-10-19): arena 与 context 的 API 形态 - 一个 context 一个翻译单元; `new` / `free` / `reset` 三态; reset 保留配置并释放全部 per-TU 内存; 不做逐对象 free, 不做 per-phase arena. 实施见 `plans/PLAN.md` L2.
-- 已定 (2026-10-26 关闭): trivia 分段迭代器不进公共面 - 2026-10-25 提出于 L5 手感清单(把注释/续行/换行/BOM 的解读口径收进库), 原计划凭 C→C 打印器线上的消费者证据拍板; c2c 定位为回归闸门后不做改写, 没有消费者, 关闭. 候选形态与口径留在 `plans/RESULT-l5.md` 第 9 节作为历史记录.
-- 已定 (2026-10-19 提出, 2026-10-25 关闭): 是否让 CST 消费预处理后的 token 流, 并从 CST 反向还原宏展开前的 token 流 - **不做**, 维持现状. 分析结论: 反向还原不可行 - (a) 预处理前的 token 流已经是未展开的流与原始文本, 不需要反向; (b) 展开流丢失的信息无法由 provenance 补回: 未选中的 `#if` 分支, 指令行(`#define` / `#include` / ...)与 include 边界, 零产出展开(`#define E` 后写 `E` 不留下任何可挂链的产物 token), `#` / `##` 的合成拼写, 以及宏调用实参之间的 trivia 与布局; (c) 展开产物的 `trivia` / `raw_loc` 指向宏体或合成缓冲(`libcp/src/preprocess.c` 的 `copy_token` / `paste` / `new_str_token`), `cst_reconstruct` 会重复宏体并漏掉调用点. 现状维持: CST 建在预处理前; 展开后的语法形态用第 3 层 `libcp_parse`; 展开 token 的来源用 provenance 的 11 个访问器. 若将来确实需要展开流的树形表示, 新增独立的 expanded-view 产物, 不改变第 2 层的含义. 关闭记录见 `plans/PLAN-l5.md` 1.2.
+- 命名: `libcp` / `<libcp/...>` / `libcp_` / `Libcp` / `LIBCP_`; 库内私有类型同样带 `Libcp` / `struct libcp_*`; 二进制 `chibicc`, 预定义宏 `__chibicc__` 与 `plans/**` 的旧名不回溯改写; 只承诺源码兼容.
+- 公共 IR: `LibcpNode` / `LibcpObj` 只保留第 3/4 层字段; codegen 状态在 `codegen.c` 私有表; sema 只标注, 不整形.
+- context: 一个 context 一个翻译单元; `new` / `free` / `reset` 三态; reset 保留配置并释放全部 per-TU 内存; 不做逐对象 free, 不做 per-phase arena.
+- 宏保真: 消费展开后的 token 流, 不引入宏调用节点; 宏保真由 CST 与 provenance 承担; 放弃宏展开内部的外科式编辑.
+- CST 只建在预处理之前: 不做展开流 CST, 也不从 CST 反向还原宏展开前的 token 流.
+- 公共面不提供 per-node user data 扩展点, 也不提供 trivia 分段迭代器: 两个消费者(formatter 与 c2c)都只需要只读遍历.
+- c2c 只是 `make test` / `make test-stage2` 的回归闸门: 不进入 `all`, 不安装, 不做产品化(改写 / 插桩 / 重构 / 源码回写都不在范围).
+- 分配器: `<libcp/allocator.h>` 的四个 `LIBCP_*` 宏; 单开关 `LIBCP_DEFAULT_ALLOCATOR`, 未定义时嵌入方必须提供全部四个, 不做逐宏回退; 编译期配置, 只有重编库才生效.
+- 公共面: 10 个公共头只声明 D7; `.a` 的内部符号统一 `libcp_` 前缀但不是 API(消费者不得调用, 不承诺源码兼容); `.so` 只导出 D7.
 
 ## 构建与测试
 
 - `make` - 构建 `chibicc` 二进制(纯 C11, 无外部依赖; CFLAGS 定义在 Makefile 中).
 - `make check-context` - 隐式上下文审计(`test/context-audit.sh --strict`): 库层无访问器 / 无 TLS / `.a` 无访问器符号, `codegen.c` 无 `cg_ctx`; 由 `make test` 一并调用.
-- `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 最后依次运行 `test/driver.sh ./chibicc`(命令行选项检查), `test/diagnostic.sh ./chibicc`(诊断锁定 68 例逐字节), `test/warning.sh ./chibicc`(警告锁定: 数组 excess elements), `test/shape.sh ./chibicc`(发射形状回归锁 34 段), `test/ast.sh ./chibicc`(第 3 层 AST 形态锁 85 例逐字节), `test/trivia.sh ./chibicc`(trivia 通道: -dump-tokens / -reconstruct / -E 与行号锚点锁定), `test/cst.sh ./chibicc`(CST 通道: -dump-cst / -reconstruct-cst / -verify-cst, 全量 round-trip 与树形 dump), `test/expand.sh ./chibicc`(provenance 通道: -dump-expansions / -verify-expansions, 样本断言与全量语料校验), `test/library.sh`(公共面消费者与 ASan 闸门), `test/allocator.sh`(用替换分配器重编全库, 锁定调用与 free 后活块归零)与 `test/self-test.sh`(库内自测: hashmap / arena / sema 状态重置), 最后 `make fmt` 构建 `tools/fmt.c`(CST formatter MVP, L5 的第一个真实消费者)并由 `test/fmt.sh ./chibicc ./fmt` 验证(幂等 / 行数与注释数量不变 / 容器内 -S 逐字节等价), 以及 `make c2c` 构建 `tools/c2c.c`(第 3 层回归闸门, 不随 `make` / `make install` 发布)并由 `test/c2c.sh ./chibicc ./c2c` 验证(35 golden / 46 语料归一化 AST / 54 文件 -S 汇编逐字节); `test/cst-stats.sh ./chibicc` 在 cst.sh 之后锁定每文件 UNPARSED 覆盖 golden(`update` 子命令显式更新).
+- `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 再依次跑 `test/driver.sh`(命令行选项), `test/diagnostic.sh`(诊断逐字节), `test/warning.sh`(警告逐字节), `test/shape.sh`(发射形状), `test/ast.sh`(第 3 层 AST 形态), `test/trivia.sh`(trivia 通道), `test/cst.sh`(CST 通道), `test/expand.sh`(provenance), `test/library.sh`(公共面与 ASan), `test/allocator.sh`(分配器替换), `test/self-test.sh`(库内自测), `test/cst-stats.sh`(UNPARSED golden), 最后 `make fmt` + `test/fmt.sh`(formatter)与 `make c2c` + `test/c2c.sh`(第 3 层回归闸门, 不随 `make` / `make install` 发布).
 - `make test-stage2` - 自举检查: 用 chibicc 编译它自己, 再重跑全部测试.
 - `make test-all` - 以上两项合计. `make clean` 用于清理.
 - 单独运行某个特性测试: `make test/sizeof.exe && ./test/sizeof.exe`(模式规则会自动处理).
-- 没有 Linux 后端时只验证前端: `./chibicc -E file.c`(仅预处理), `./chibicc -S file.c`(输出汇编文本), `./chibicc -dump-tokens file.c`(原始 token 流与 trivia 的 T/R 行 dump), `./chibicc -reconstruct file.c`(按 token 流重建原始字节), `./chibicc -dump-cst file.c`(CST 树形 dump), `./chibicc -reconstruct-cst file.c`(按 CST 叶子重建原始字节), `./chibicc -verify-cst file.c`(叶子序列与 token 流逐指针校验), `./chibicc -dump-expansions file.c`(预处理后 token 的 provenance 链 dump), `./chibicc -dump-ast file.c`(第 3 层忠实语法树的确定性 dump, 在 parse 之后 sema 之前早退)或 `./chibicc -verify-expansions file.c`(provenance 链校验; 这些通道与 trivia.sh / cst.sh / expand.sh / ast.sh 一样在本机可跑).
-- 库构建目标: `make libcp.a` 产出静态库(已实现); Linux 下 `make` 同时构建 `libcp.so`(PIC + `-fvisibility=hidden` + SONAME `libcp.so.0`, D7 经 `LIBCP_API` 导出, macOS 只承诺 `.a`); `chibicc` 链接静态库; `make install PREFIX=... [DESTDIR=...]` 安装 10 个公共头, `libcp.a`, Linux 下 `.so` 与 `libcp.pc`, `pkg-config --cflags --libs libcp` 可用; `LIBCP_VERSION` / `libcp_version()` 为 `0.1.0`(与 Makefile `VERSION` 同步); `make test-stage2` 用 chibicc 重编库对象(`stage2/libcp.a`)并让 `test/library.sh` 链接它. 公共头在 `libcp/include/libcp/`, 拆成 umbrella `libcp/src/libcp.h` 与 `allocator.h` / `context.h` / `diagnostic.h` / `token.h` / `cst.h` / `ast.h` / `sema.h` / `preprocess.h` / `provenance.h`, 每个头可单独编译, 消费者只 include `<libcp/libcp.h>`; `test/library.sh` 由 `make test` 与 `make test-stage2` 调用. `make check-library` 跑 `test/library.sh` / `test/allocator.sh` / `test/public-api.sh` / `test/install.sh`(公共头自包含 + 消费者只依赖 D7 + `.a` 中 D7 全部存在 + `.so` 只导出 D7 + install / pkg-config 布局). `.a` 的内部符号策略(2026-10-25 起): 归档内全部外部符号统一 `libcp_` 前缀(128 个), 但内部符号仍不是 API - 公共头不声明, 消费者不得调用, 不承诺源码兼容. `test/library.sh` 的最后一轮用 `-fsanitize=address,undefined` 重编库对象, 检查 UB、每轮 reset 的活字节上界与 `context_free` 后回到基线.
+- 只验证前端(本机无 Linux 后端): `-E`(预处理), `-S`(汇编文本), `-dump-tokens` / `-reconstruct`(第 1 层), `-dump-cst` / `-reconstruct-cst` / `-verify-cst`(第 2 层), `-dump-expansions` / `-verify-expansions`(provenance), `-dump-ast`(第 3 层, parse 后 sema 前早退).
+- 库构建: `make libcp.a`; Linux 下 `make` 也产 `libcp.so`(PIC, 只导出 D7, SONAME `libcp.so.0`; macOS 只承诺 `.a`), `chibicc` 链接静态库; `make install PREFIX=... [DESTDIR=...]` 装 10 个公共头, 库与 `libcp.pc`, `pkg-config --cflags --libs libcp` 可用; `LIBCP_VERSION` / `libcp_version()` 为 `0.1.0`. `make test-stage2` 用 chibicc 重编库对象(`stage2/libcp.a`). `make check-library` 跑 library / allocator / public-api / install 四个脚本(头文件自包含, 消费者只依赖 D7, `.a` 的 D7 齐全, `.so` 只导出 D7, install / pkg-config 布局); `test/library.sh` 最后一轮用 ASan+UBSan 重编库对象, 查 UB 与 reset 后活字节归零.
+- 每次改动必须过三道闸门: `make docker-test`(含自举), 汇编等价性 diff(`make docker-snapshot-diff`), 该改动新增的针对性测试. 行为变化必须单独提交.
 
 ## 平台陷阱与 Docker 测试环境(本工作区为 macOS ARM64)
 
-chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码了 Linux 路径(`/usr/include/x86_64-linux-gnu` 等)与 gcc/`ld` 调用. 编译器本体在本机**可以构建**, 但它生成的代码无法在本机汇编或运行, 直接跑 `make test` 会在汇编阶段失败. 只做前端检查可用 `./chibicc -E file.c`(仅预处理)或 `./chibicc -S file.c`(输出汇编文本).
+chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码了 Linux 路径(`/usr/include/x86_64-linux-gnu` 等)与 gcc/`ld` 调用. 编译器本体在本机**可以构建**, 但它生成的代码无法在本机汇编或运行, 直接跑 `make test` 会在汇编阶段失败.
 
 完整测试通过 Docker 运行(OrbStack, amd64 容器走 Rosetta, 本机已具备):
 
 - `make docker-image` - 构建依赖镜像 `chibicc:amd64`(ubuntu:22.04, amd64, 一次性约 90 s).
-- `make docker-test` - 自研测试集 + 自举, 分钟级. 仓库以只读挂载, 源码拷贝到容器可写层后构建运行, 本机构建产物不受影响.
-- `make docker-test-thirdparty` - 依次跑 test/thirdparty 五个脚本(tinycc libpng git sqlite cpython, 由小到大); `THIRDPARTY=git` 可单跑一个. tinycc 实测约 15 s; git/sqlite/cpython 的测试套件需要数小时, 首次运行需要网络 clone. clone 缓存保存在仓库的 `thirdparty/` 目录(已被 .gitignore 忽略, 跨运行复用; 若某个 clone 损坏, 直接删掉对应子目录重新拉).
-- Rosetta 下 tcc 的 106_pthread/112_backtrace/113_btdll 三个用例(信号/TLS/线程类)会不稳定 SIGSEGV, 与 chibicc 无关; `test/thirdparty/make` 是一个 PATH shim(文件名必须是 make), 会在 make test 前移除这三个用例的源文件使其被跳过, 其余 110+ 用例照常. 真正的 x86-64 Linux 上无需此 shim.
-- 为什么一切都要在容器可写层(/work)跑: 实测 tcc 的 `-run`/bcheck 运行时只认 overlayfs - 在 virtiofs 挂载路径或 docker volume(ext4)上会确定性 SIGSEGV(tinycc 112_backtrace 用例, 失败点还会漂移). 因此挂载目录只提供源码与 clone 缓存, 构建与测试全部发生在 /work, 这同时避免 darwin/linux 产物互相污染.
-- 镜像内已把 `git@github.com:` 全局重写为 HTTPS(thirdparty 脚本用的是 SSH 地址, 容器里没有 SSH key); chibicc 运行时只调用 `as` 和 `ld` 并按 Ubuntu 路径找 crt/libgcc, 镜像里的 gcc 工具链满足.
+- `make docker-test` - 自研测试集 + 自举, 分钟级; 仓库只读挂载, 构建与测试在容器可写层, 本机构建产物不受影响.
+- `make docker-test-thirdparty` - 五个第三方脚本(tinycc libpng git sqlite cpython, 由小到大); `THIRDPARTY=git` 可单跑; 很慢且首次需要网络; clone 缓存在 `thirdparty/`(.gitignore, 损坏就删).
+- Rosetta 下 tcc 的 106_pthread / 112_backtrace / 113_btdll 会不稳定 SIGSEGV, 与 chibicc 无关; `test/thirdparty/make` 是 PATH shim(文件名必须是 make), 测试前移除这三个用例; 真 x86-64 Linux 不需要.
+- 构建与测试必须在容器可写层(/work): tcc 的 `-run`/bcheck 只认 overlayfs, virtiofs 或 docker volume 上确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存, 也避免 darwin/linux 产物互相污染.
+- 镜像内 `git@github.com:` 已重写为 HTTPS; chibicc 只调用 `as` / `ld` 并按 Ubuntu 路径找 crt/libgcc.
 
-## 现状与代码地图
+## 代码地图
 
-现状: 语法语义拆分线, 忠实层收尾线, codegen 直连线(阶段 A + 阶段 B + B2), trivia 保留线(阶段 1), CST 线(阶段 2)与宏展开 provenance 线(阶段 5 的前置)均已完成; 表达式 Pratt 解析线(附加线)已完成, 其后 Pratt 单一路径线(2026-10-25)删掉旧级联, Pratt 是唯一表达式路径; **显式上下文线已完成**: 库层与 `codegen.c` 都以 `LibcpContext *ctx` 为首参, 无 TLS, 无访问器; `test/context-audit.sh` / `make check-context` 是永久闸门.
-
-**库改名已完成** (2026-10-23): `libchibicc` / `<chibicc/...>` / `chibicc_` / `Chibicc` / `CHIBICC_` 全部改为 `libcp` / `<libcp/...>` / `libcp_` / `Libcp` / `LIBCP_`; 产物是 `libcp.a` / `libcp.so.0` / `libcp.pc` / `-lcp`, 安装到 `include/libcp/`. 行为零变化: 汇编快照为空 diff, 诊断与四个只读通道逐字节不变. 二进制、`__chibicc__` 与历史归档不变, 理由见"开放决策与已决事项".
-
-**分配器替换面已落地** (2026-10-23): 公共头 `<libcp/allocator.h>` 提供 `LIBCP_MALLOC` / `LIBCP_CALLOC` / `LIBCP_REALLOC` / `LIBCP_FREE`, 选择只有一个构建期开关: 定义 `LIBCP_DEFAULT_ALLOCATOR` 时四个宏全部展开为 libc, 未定义时嵌入方必须提供全部四个, 缺一个在库构建时(`LIBCP_INTERNAL`)于包含处 `#error`, 不做逐宏回退. Makefile 的 `ALLOCATOR_CFLAGS` 默认是 `-DLIBCP_DEFAULT_ALLOCATOR`, 自定义构建覆盖它并给出四个宏(例如 mimalloc 的 `mi_malloc` / `mi_calloc` / `mi_realloc` / `mi_free`, 见 docs/10 的 10.11.5); stage2 规则固定使用默认分配器. 库自有内存(context 对象, 配置数组与字符串, arena 块及其头部)全部经由这四个宏取得与归还, 读文件时 `open_memstream` 的缓冲仍属 libc. 宏是编译期配置, 只有重编库才生效, 消费者对预编译库定义宏不起作用; `test/allocator.sh` 在不定义开关的前提下用计数替换版重编全库, 锁定替换确实被调用, 缺宏会被诊断且 `libcp_context_free` 后活块归零.
-
-**C→C 打印器线(第 3 层回归闸门)已完成**(2026-10-25; `plans/PLAN-c2c.md` / `plans/RESULT-c2c.md`): `tools/c2c.c` 以 `test/c2c.sh` 锁定第 3 层树的完整性(35 golden / 46 语料归一化 AST / 54 文件 -S 汇编逐字节), 库侧唯一 API 追加是 `LibcpType.tag_tok`; 2026-10-26 起定位为纯回归闸门, 不进入 `all`, 不安装, 不做产品化(见"开放决策与已决事项").
-
-**库边界固化线(阶段 5)已完成**(`plans/PLAN.md` / `plans/RESULT.md`): L1 把 codegen 字段移出公共 IR, L2 把库层状态收进 `LibcpContext` 并建立 arena / 诊断回调 / reset, L3.0-L3.4 完成 CST arena 契约、9 个公共头与不透明 context、`Libcp*` 命名、`.a` / `.so` / stage2 库对象 / install / pkg-config、错误模型与 ASan+UBSan 闸门; L5 产品化验证线(formatter / 覆盖 / source mapping)已完成(`plans/PLAN-l5.md` / `plans/RESULT-l5.md`) - 第 3 层(忠实语法 AST)与第 4 层(sema 产物)在 parse.c / sema.c 之间分开; sema.c 持有名字解析(作用域表), 类型检查, 常量求值, 结构体布局与结论记录, **不做任何降级**(A9.2 审计: add_type 34 个 case 全部纯标注, 无形状改写); codegen 直接消费标注树 - 需要后端整形的项分两处落地: 只需换发射方式的(`x[y]`, `p->x`, `>`/`>=`, elvis, `while`, break/continue, 声明初始化链, 加减法的指针缩放)在**发射点就地处理**, 需要槽/语句/标签的(op=, 自增自减, VLA 尺寸, 返回缓冲, 复合字面量, case 链与标签分配)留在整形遍(契约 3 的六条不变量, 见该文件头注释); parse.c 只建忠实语法形状(表达式无类型, 名字不绑定, 常量不求值), 保留文法分类 oracle(typedef 名 / tag)与判定表 A 的 15 处文法可判诊断; 第 1 层的 token 流保留 trivia 且可逐字节重建输入文件; 第 2 层(CST)在 `libcp/src/cst.c`, 从 `tokenize_file()` 的直接输出建树, 只走三个只读通道, 编译路径不感知它; 预处理后 token 的 provenance 链在 `libcp/src/preprocess.c`(记录与链)与 `libcp/src/provenance.c`(两个只读通道), 编译路径同样不感知它(见"路线图"). 改动前先了解现状:
-
-- `libcp/src/libcp.h` - 内部 umbrella: 先定义 `LIBCP_INTERNAL`, 引入实现所需的系统头, `MAX` / `MIN` 与 `__attribute__` 兜底, 再 include 公共 umbrella `libcp/include/libcp/libcp.h`, 实现直接使用 `Libcp*` 前缀名, 不再有短名别名 (2026-11-01 拍板); 库内私有类型与 tag 同样以 `Libcp` / `struct libcp_*` 命名. 公共面在 L3.1b 拆成 9 个头(`context.h` / `diagnostic.h` / `token.h` / `cst.h` / `ast.h` / `sema.h` / `preprocess.h` / `provenance.h` + umbrella, 之后新增 `allocator.h` 共 10 个), L3.2a 起公共类型与 tag 全部是 `Libcp*` / `struct libcp_*`, 公共头只剩 D7 函数与第 1-4 层 IR 类型; `LibcpContext` 在公共面只有前向声明, 完整定义, `LibcpJmpFrame`, `LibcpArenaBlock`, `LibcpHashMap`, `LibcpNodeArray` 与 `LibcpParseScope` / `LibcpSemaScope` / `LibcpCondIncl` 的前向声明都在库内部头 `libcp/src/libcp.h`. 公共 IR 类型(`LibcpToken`, `LibcpObj`, `LibcpNode`, `LibcpType`, `LibcpMember`, `LibcpVarAttr`, CST 的 `LibcpCstKind` / `LibcpCstNode`)只保留源码 / 语义字段; codegen 的 per-node / per-type / per-obj 状态在 `codegen.c` 私有表; sema -> codegen 的标签引用交接(原 `LibcpObj.label_gotos`)也在 context 的 `LibcpLabelGotoList` 里, 不进公共 `LibcpObj`(L3.1b). `LibcpFile` 除 `contents`(扫描缓冲)外有 `raw`(文件原样文本)与 `map` / `lines`(scan 偏移到 raw 偏移, raw 偏移到行号的两张表); `LibcpToken` 除 `loc` / `len`(扫描坐标)外有 `trivia` / `trivia_len` 与 `raw_loc` / `raw_len`(raw 坐标: 前置被跳过字节与拼写), 以及 `prov`(宏展开 provenance 链头; 源 token 为 NULL). `libcp_reconstruct` 已在 `libcp/src/lib.c`(L3.2a), 与 `libcp_tokenize_*` 同层. `LibcpMacroExpansion` / `LibcpMacroProv` 只前向声明: 记录是 `libcp/src/preprocess.c` 的不透明对象, 公共面是 11 个 `libcp_` 前缀访问器(`libcp_token_provenance` / `libcp_macro_prov_*` / `libcp_macro_expansion_*`)与两个通道函数(`libcp_expansion_dump` / `libcp_expansion_verify`), 它们与管线入口(`libcp_preprocess` / `libcp_parse` / `libcp_sema` / `libcp_tokenize_file`)和 CST 四通道自 2026-10-25 起直接以公共名定义在实现文件里(原 `lib.c` 薄包装已合并, 错误边界宏 `ENTER_RET` / `LEAVE` 在内部 umbrella).
-- `libcp/src/tokenize.c` - 词法, 第 1 层的落点. 扫描缓冲仍是"被改写过的文本"(换行归一, 续行删除, \u 改写 - 见 `make_scan_buffer`, 它一遍产出缓冲与两张映射表, 取代了 T1 前就地改写的三个 pass), 但每个 token 记录 raw 坐标的 trivia 与拼写, 因此 token 流可逐字节重建原文件; 行号由 `lines` 表按旧 pass 的"挪换行"语义复现(`add_line_numbers` / `error_at` 用它), 诊断显示与 -E 逐字节不变. 宏与合成缓冲路径(paste / new_str_token)不承诺 trivia(合同只覆盖 `tokenize_file` 的直接输出).
-- `libcp/src/preprocess.c` - 宏展开与预处理指令, 输入输出都是 token 列表. provenance 的写入点: `expand_macro` 的 handler 分支(内建宏, `is_builtin` 记录), object-like 分支与 function-like 分支(调用名 token / `rparen` / 展开时刻的 `LibcpMacro` / `LibcpMacroArg` 列表), `subst` 的每个产物分支(body 层与 arg 层, `LibcpMacroArg.index` 给序号), 以及 `join_adjacent_string_literals` 的重扫点(`prov` 保存 / 恢复). 记录与链节点都是 arena 对象, 只 prepend, 共享尾不可变; `LibcpToken.origin` 的旧语义不动(`__FILE__` / `__LINE__` 仍靠它走到最外层调用点).
-- `libcp/src/provenance.c` - 宏展开 provenance 的两个只读通道(不接编译路径). `-dump-expansions` 在 `preprocess()` 之后每个非 EOF token 一行: `T <file>:<phys-line|@synth> <kind> <spelling> <chain>`, chain 是 `-` 或若干 entry(`<macro>@<call>:<body|argN>:<def>`, 最内层在前, `>` 连接, 合成位置打 `@synth`, 无 `#define` 打 `?:?`); `-verify-expansions` 校验链的深度 / 唯一性 / 记录完整性 / 名字一致 / 实参序号与列表, 失败用 `fprintf` 报一条含物理位置的消息并返回 false(exit 1, 不调用 error).
-- `libcp/src/cst.c` - CST, 第 2 层的落点(2402 行, 只读分支, 不接编译路径). 从 `libcp_tokenize_file_impl()` 的直接输出建 lossless 树: 每个 token 是显式叶子, 定界符成组, 语句 / 声明 / 表达式按文法分组, 预处理指令是节点(指令行按 `at_bol` 切分, `#define` 的对象 / 函数宏分界与 `libcp/src/preprocess.c` 一致, `#if` / `#elif` / `#else` / `#endif` 成 `PP_IF` / `PP_BRANCH` 且分支全保留). 文法不能覆盖的跨度是 `CST_UNPARSED`(其子节点是已建的叶子, 不复制 token); 解析是全函数, 不报诊断, 不调用预处理器, 不求值, 不展开. 三个通道 `cst_dump` / `cst_reconstruct` / `cst_verify` 分别锁树形, 逐字节重建, 叶子与 token 流逐指针相等. 建树必须在 `libcp_preprocess` 之前(或对同一文件二次 tokenize): 预处理会原地改写输入链的 `next`, 并把展开产物接进来(见 `libcp/include/libcp/preprocess.h`).
-- `libcp/src/parse.c` - 递归下降解析器(2118 行; 表达式层是一个 `expr_bp` 绑定力循环: `InfixOp` 只读表 + 线性查找, 具名 `BP_*` 常量, 三个入口 `expr` / `assign` / `conditional` 保持旧名与语义, 详见 `plans/PLAN-pratt-parse.md` 与 `plans/PLAN-pratt-default.md`), 只做语法分析与忠实建树: 声明产出记录节点(ND_DECL / ND_GVAR_DECL / ND_FUNCDEF / ND_TYPEDEF / ND_ENUM_CONST)交 sema 消费, 待补全的类型记录(数组维度 / typeof 操作数 / 对齐 / 位宽)挂在类型或节点上留给 sema. 唯一的语义反馈是文法必需的 typedef/tag 分类 oracle; 作用域栈现在在 `LibcpContext`(`parse_init` 建根), 文件里只剩只读关键字表缓存. 诊断只剩 plans/RESULT-split.md 判定表 A 的 15 处文法可判项(B/C/D 已清空, 见 plans/RESULT-faithful.md 的 R4.2); parse 不在构造现场调用任何降级(旧的时序原则已废止).
-- `libcp/src/sema.c` - 语义分析(3163 行), 每个函数体两趟(见文件头注释): resolve 遍历重建作用域并绑名, 声明对象, 补全类型(维度 / typeof / 对齐 / 位宽 / case 值)与布局; 标注遍历(`libcp_add_type`/`type_chain`)定型, 插隐式 cast, 跑检查, 写结论(物化字符串/复合字面量/块域 static 数据镜像), 不改写树形状. 控制流四检查与 goto/label 配对检查随后跑(纯检查, 不分配名字); 标签与唯一名分配在 codegen. 常量求值(`eval`/`eval2`/`eval_double`/`is_const_expr`/`libcp_const_expr`)与全局初始化器序列化(`write_gvar_data`)也在这一侧, 预处理器 `#if` 经 `const_expr` 调用. 全部语义状态在 `LibcpContext`(PLAN L2.5).
-- `libcp/src/type.c` - 类型构造器与类型谓词(`is_compatible`/`is_integer` 等).
-- `codegen.c` - 整形遍(残留) + 发射点就地降级 + AST 翻译成 x86-64 汇编文本, 无优化 pass. 整形遍在 `codegen()` 入口先于一切赋值与发射运行(契约 3 的六条不变量见文件头注释), 只剩需要槽/语句/标签的项: 控制流标签分配(case 链与 goto/label 配对), **VLA 声明**的展开(运行时尺寸槽必须先于帧布局)与其余记录的**残留项到达**(`shape_init_exprs` 只走不再改), 复合赋值与自增自减, 调用返回缓冲, 复合字面量; 发射点就地处理的是下标(`gen_addr`/`gen_expr` 经 `new_add` 现建现发), 箭头成员(`gen_addr` 按 `arrow_tok`), `>`/`>=`(二元尾部换序), elvis(`gen_expr(ND_COND)` 无槽), `while` 与 break/continue(`gen_stmt` + 发射侧环境标签栈), 声明初始化链(`gen_stmt(ND_DECL)` 就地摊), 加减法的缩放与 `num+ptr` 规范化(`gen_expr` 顶部把未标记的 `ND_ADD`/`ND_SUB` 替换成 `new_add`/`new_sub` 的产物 - 三个降级工厂把产物记在 codegen 私有的 `CgNode.is_lowered` 里, 公共 `Node` 不再带标记; 发射点只降级没标记的, 即忠实节点). 该线(阶段 A + B + B2)的每一步与验证见 `plans/PLAN-codegen-direct.md` / `plans/RESULT-codegen-direct.md`.
-- `main.c` - 驱动器; 创建 `LibcpContext` 并经 `libcp/src/lib.c` 的公共入口调用各阶段; 只读旗标 `-dump-tokens` / `-reconstruct`(第 1 层), `-dump-cst` / `-reconstruct-cst` / `-verify-cst`(第 2 层)与 `-dump-expansions` / `-verify-expansions`(预处理后的 provenance)在 `cc1()` 的早退口返回, 不写目标文件, 不汇编. `libcp/src/lib.c` 是库 facade(context / arena / 诊断边界 / 公共包装), 公共入口以 `ctx` 为首参, 内部函数显式收 `ctx`, 无 TLS 访问器; 库自有内存经 `<libcp/allocator.h>` 的 `LIBCP_*` 宏取得与归还, `libcp_arena_*` 是 arena 的分配入口; `libcp/src/hashmap.c`(字符串驻留哈希表), `libcp/src/unicode.c`(UTF 编码表), `libcp/src/strings.c`(字符串辅助)为基础设施.
-- `driver.h` - 根目录的驱动器内部头: `codegen()` 与 `opt_fpic` / `opt_fcommon` 的声明, 只被 `main.c` / `codegen.c` 包含. 库内部头(`libcp/src/libcp.h`)不含任何驱动器声明, 因此 `libcp/` 可整体移到其他项目.
-
-本节的代码地图已补入库化线的落点(`libcp/src/lib.c`, `LibcpContext`, 公共头路径 `libcp/include/libcp/`); L3.1b / L3.2 完成后再删除公共头仍含内部声明与短 typedef 的描述. 设计原则里的 arena reset 已落地为 `libcp_context_new/free/reset`.
+- `libcp/include/libcp/` - 10 个公共头; 消费者只 include `<libcp/libcp.h>`.
+- `libcp/src/libcp.h`, `lib.c` - 内部 umbrella 与不透明类型定义; facade(context / arena / 诊断边界 / 公共入口).
+- `libcp/src/tokenize.c`, `preprocess.c`, `provenance.c` - 第 1 层与预处理; provenance 记录与两个只读通道(不接编译路径).
+- `libcp/src/cst.c` - 第 2 层; 必须在 `libcp_preprocess` 之前建树(预处理会改写输入链).
+- `libcp/src/parse.c`, `sema.c`, `type.c` - 第 3/4 层与类型系统.
+- `main.c`, `driver.h`, `codegen.c` - 驱动器, 驱动器内部头, x86-64 发射(codegen 不属于库).
+- `libcp/src/hashmap.c`, `unicode.c`, `strings.c` - 基础设施.
+- `tools/fmt.c`, `tools/c2c.c` - CST formatter 与第 3 层回归闸门(c2c 不安装).
+- `include/`, `test/` - 自举头文件; 特性测试与 `test/*.sh` 行为锁.
 
 ## 设计原则
 
-- 可读性优先于巧妙. 路线图内的阶段化重构是本项目明确授权的工作; 除此之外不做顺手的"改进", 不重组无关代码, 不用宏/高阶函数合并解析器里有意的重复. 表达式层的显式豁免: 允许一个只读绑定力表 (`InfixOp`) 加一个 `expr_bp` 循环(`libcp/src/parse.c`); 中缀分派用该表加线性查找, 前缀/后缀仍是 `if` 分支, 具名 `BP_*` 常量, 不使用函数指针数组, 语句与声明层继续沿用每产生式一个函数.
-- 内存: 一律整块分配, 从不逐对象 `free`; 库语境下生命周期按"一个 context 一个翻译单元一个 arena"设计, 整体 reset 已落地为 `libcp_context_new/free/reset`(`libcp/src/lib.c`). 底层块来自 `<libcp/allocator.h>` 的 `LIBCP_*` 宏(默认构建定义 `LIBCP_DEFAULT_ALLOCATOR` 用 libc, 自定义构建必须提供全部四个宏). 简单但慢的算法是可接受的设计.
-- codegen 中没有优化 pass - 这是故意的, 保留.
-- `include/` 存放 chibicc 自带的自举头文件(`stddef.h`, `stdarg.h`, `stdbool.h`, `float.h`, `stdalign.h`, `stdatomic.h`, `stdnoreturn.h`), 通过 `-Iinclude` 使用, 保持不变.
+- 可读性优先于巧妙. 除用户明确要求外不做顺手的"改进", 不重组无关代码, 不用宏/高阶函数合并解析器里有意的重复. 表达式层是唯一豁免: 一个只读绑定力表(`InfixOp`)加一个 `expr_bp` 循环; 前缀/后缀仍是 `if` 分支, 具名 `BP_*`, 不用函数指针数组, 语句与声明层每产生式一个函数.
+- 内存: 整块分配, 从不逐对象 `free`; 一个 context 一个翻译单元一个 arena, 整体 `libcp_context_new/free/reset`; 底层块来自 `<libcp/allocator.h>` 的 `LIBCP_*`; 简单但慢的算法可接受.
+- codegen 没有优化 pass - 故意的, 保留.
+- `include/` 是 chibicc 自带的自举头(`stddef.h`, `stdarg.h`, `stdbool.h`, `float.h`, `stdalign.h`, `stdatomic.h`, `stdnoreturn.h`), 通过 `-Iinclude` 使用.
 
 ## 测试约定
 
-- 每个特性对应一个 `test/<feature>.c`; 测试使用 `test/test.h` 中的 `ASSERT(expected, expr)`(打印表达式与结果, 失败即退出), 并链接 `test/common` 以获得 `assert()` 辅助函数与共享符号. 新测试加到对应的特性文件里; 仅在必要时才扩展 `test/test.h`/`test/common`.
-- CST 的测试在 `test/cst.sh`: 48 个语料文件 + 15 个边界样本的逐字节 round-trip, `-verify-cst` 的叶子序列检查(48 个语料文件), 61 个 dump 样本(覆盖全部 55 个 `CstKind`)与相应重建, 305 项断言, 由 `make test` 与 `make test-stage2` 各跑一遍. 忠实 AST 用打印/结构断言; 阶段改造期间用汇编快照 diff 防行为回归.
-- provenance 的测试在 `test/expand.sh`: 29 个 `-dump-expansions` 样本(每个 `subst` 分支至少一个; 链逐字节锁定), 3 个只锁链形状的样本(`__DATE__` / `__TIMESTAMP__` 的取值不稳定, 宽字符串重扫沿用既有的 `line_no = 0`), 17 个 `-verify-expansions` 样本, 以及 48 个语料文件的全量校验(本机缺 Linux 系统头时探测跳过, docker 内为权威). `subst` 新增分支必须同时更新 `plans/PLAN.md` 的记录清单与本脚本.
-- `test/diagnostic.sh` 逐字节锁定诊断文案与插入符锚点(68 例); `test/warning.sh` 逐字节锁定警告文案与插入符(数组初始化器的 excess elements, 每个超额元素一条), 编译必须成功; `test/shape.sh` 锁定发射形状(34 段: 每个片段用 `$chibicc -S` 汇编后断言助记符序列 `want` / 整行正则 `wantline` / 不得出现的形 `absent`). 两者都由 `make test` 与 `make test-stage2` 调用, 即自举出的编译器也要过一遍; 改 codegen 的发射形时必须同步更新 shape.sh 的对应片段.
-- 第 3 层 AST 形态锁在 `test/ast.sh`: 85 个片段逐字节锁定 `-dump-ast` 输出(全部二元运算符与复合赋值, 结合性, 逗号在四种上下文, `?:` 与 elvis, 前后缀自增自减, 一元, 嵌套 cast, sizeof / _Alignof 两种形式, 复合字面量, 语句表达式, _Generic, 两个 builtin, `&&label`, 调用/下标/成员, 全部初始化器形态, 语句形状, 声明记录与 _Alignas, 宏展开的 `@synth` 锚点, 以及三个语义非法但语法合法的输入). 由 `make test` 与 `make test-stage2` 各跑一遍. 逗号在 AST 中是左结合 (`a, b, c` 建 `(a, b), c`), 由 a79 用例锁定.
-- 库内自测在 `test/self/self-test.c`, 由 `test/self-test.sh` 用宿主 cc 链接 `LIBCP_LIB` 运行; default / stage2 两套归档都跑一遍. 它使用 `.a` 的内部符号, 不属于公共 API. 自测代码不再编译进 `libcp.a`; 驱动器的 `-hashmap-test` / `-arena-test` / `-sema-state-test` 选项已移除.
-- `test/thirdparty/*.sh` 用 chibicc 构建真实项目(git, sqlite, libpng, cpython, tinycc) - 很慢, 仅限 Linux, 不属于 `make test`.
+- 每个特性对应一个 `test/<feature>.c`, 用 `test/test.h` 的 `ASSERT(expected, expr)` 并链接 `test/common`; 新用例加进对应的特性文件, 仅在必要时扩展 `test/test.h` / `test/common`.
+- 行为锁都在 `test/*.sh`, 由 `make test` 与 `make test-stage2` 各跑一遍; 改 codegen 的发射形必须同步更新 `test/shape.sh`, `subst` 新增分支必须同步更新 `test/expand.sh`, UNPARSED golden 用 `test/cst-stats.sh update` 更新.
+- 库内自测在 `test/self/`, 使用 `.a` 内部符号, 不属于公共 API.
+- `test/thirdparty/*.sh` 很慢且仅限 Linux, 不属于 `make test`.
