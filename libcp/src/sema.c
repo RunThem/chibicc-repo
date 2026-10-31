@@ -29,7 +29,7 @@
 //    rewrites those checks used to ride along with are the shaping
 //    pass's, and the goto and label-value references each function
 //    collected for the pairing check are handed over through
-//    Obj.label_gotos.
+//    LibcpObj.label_gotos.
 //
 // It also contains the constant expression evaluator (eval and
 // friends), which both passes use, and which the preprocessor uses
@@ -45,45 +45,45 @@
 
 // `fn->locals` is the field the context's `locals` list is spliced
 // into; these helpers keep the field access out of the macro below.
-static Obj *obj_locals(Obj *fn) {
+static LibcpObj *obj_locals(LibcpObj *fn) {
   return fn->locals;
 }
 
-static void set_obj_locals(Obj *fn, Obj *v) {
+static void set_obj_locals(LibcpObj *fn, LibcpObj *v) {
   fn->locals = v;
 }
 
-static int64_t eval(LibcpContext *ctx, Node *node);
+static int64_t eval(LibcpContext *ctx, LibcpNode *node);
 
 // The target an address constant resolves to. `name` is a symbol the
 // serializer can write down now; `node` is a [GNU] `&&label` whose
 // `.L` name codegen allocates later.
 typedef struct {
   char *name;
-  Node *node;
-} LabelRef;
+  LibcpNode *node;
+} LibcpLabelRef;
 
-static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label);
-static int64_t eval_rval(LibcpContext *ctx, Node *node, LabelRef *label);
-static double eval_double(LibcpContext *ctx, Node *node);
-static bool is_const_expr(LibcpContext *ctx, Node *node);
-static void layout_struct(LibcpContext *ctx, Type *ty);
-static void layout_union(LibcpContext *ctx, Type *ty);
-static void type_chain(LibcpContext *ctx, Node *head);
-static void check_control_flow(LibcpContext *ctx, Node *body);
-static void analyze_function(LibcpContext *ctx, Obj *fn);
-static void resolve_node(LibcpContext *ctx, Node *node);
-static void resolve_chain(LibcpContext *ctx, Node *node);
-static void resolve_function(LibcpContext *ctx, Node *node);
-static void resolve_enum_records(LibcpContext *ctx, Node *recs);
-static void resolve_type_exprs(LibcpContext *ctx, Type *ty);
-static void resolve_type(LibcpContext *ctx, Type *ty);
-static void serialize_gvar(LibcpContext *ctx, Node *node);
-static int attr_align(LibcpContext *ctx, VarAttr *attr);
-static Obj *new_gvar(LibcpContext *ctx, char *name, Type *ty);
-static Obj *new_lvar(LibcpContext *ctx, char *name, Type *ty);
+static int64_t eval2(LibcpContext *ctx, LibcpNode *node, LibcpLabelRef *label);
+static int64_t eval_rval(LibcpContext *ctx, LibcpNode *node, LibcpLabelRef *label);
+static double eval_double(LibcpContext *ctx, LibcpNode *node);
+static bool is_const_expr(LibcpContext *ctx, LibcpNode *node);
+static void layout_struct(LibcpContext *ctx, LibcpType *ty);
+static void layout_union(LibcpContext *ctx, LibcpType *ty);
+static void type_chain(LibcpContext *ctx, LibcpNode *head);
+static void check_control_flow(LibcpContext *ctx, LibcpNode *body);
+static void analyze_function(LibcpContext *ctx, LibcpObj *fn);
+static void resolve_node(LibcpContext *ctx, LibcpNode *node);
+static void resolve_chain(LibcpContext *ctx, LibcpNode *node);
+static void resolve_function(LibcpContext *ctx, LibcpNode *node);
+static void resolve_enum_records(LibcpContext *ctx, LibcpNode *recs);
+static void resolve_type_exprs(LibcpContext *ctx, LibcpType *ty);
+static void resolve_type(LibcpContext *ctx, LibcpType *ty);
+static void serialize_gvar(LibcpContext *ctx, LibcpNode *node);
+static int attr_align(LibcpContext *ctx, LibcpVarAttr *attr);
+static LibcpObj *new_gvar(LibcpContext *ctx, char *name, LibcpType *ty);
+static LibcpObj *new_lvar(LibcpContext *ctx, char *name, LibcpType *ty);
 static char *new_unique_name(LibcpContext *ctx);
-static Member *get_struct_member(Type *ty, Token *tok);
+static LibcpMember *get_struct_member(LibcpType *ty, LibcpToken *tok);
 
 // All local variable instances created for the function being analyzed
 // are accumulated to this list.
@@ -104,27 +104,27 @@ static Member *get_struct_member(Type *ty, Token *tok);
 // a numeric literal whose type is settled at birth rather than read off
 // a token. Exported (see libcp.h): a consumer that builds a node needs
 // it to arrive typed, and these are the shapes it cannot build itself.
-Node *libcp_new_var_node(LibcpContext *ctx, Obj *var, Token *tok) {
-  Node *node = libcp_new_node(ctx, ND_VAR, tok);
+LibcpNode *libcp_new_var_node(LibcpContext *ctx, LibcpObj *var, LibcpToken *tok) {
+  LibcpNode *node = libcp_new_node(ctx, ND_VAR, tok);
   node->var = var;
   return node;
 }
 
-Node *libcp_new_vla_ptr(LibcpContext *ctx, Obj *var, Token *tok) {
-  Node *node = libcp_new_node(ctx, ND_VLA_PTR, tok);
+LibcpNode *libcp_new_vla_ptr(LibcpContext *ctx, LibcpObj *var, LibcpToken *tok) {
+  LibcpNode *node = libcp_new_node(ctx, ND_VLA_PTR, tok);
   node->var = var;
   return node;
 }
 
-Node *libcp_new_long(LibcpContext *ctx, int64_t val, Token *tok) {
-  Node *node = libcp_new_node(ctx, ND_NUM, tok);
+LibcpNode *libcp_new_long(LibcpContext *ctx, int64_t val, LibcpToken *tok) {
+  LibcpNode *node = libcp_new_node(ctx, ND_NUM, tok);
   node->val = val;
   node->ty = libcp_ty_long;
   return node;
 }
 
-Node *libcp_new_ulong(LibcpContext *ctx, long val, Token *tok) {
-  Node *node = libcp_new_node(ctx, ND_NUM, tok);
+LibcpNode *libcp_new_ulong(LibcpContext *ctx, long val, LibcpToken *tok) {
+  LibcpNode *node = libcp_new_node(ctx, ND_NUM, tok);
   node->val = val;
   node->ty = libcp_ty_ulong;
   return node;
@@ -137,10 +137,10 @@ Node *libcp_new_ulong(LibcpContext *ctx, long val, Token *tok) {
 // marking the node is a single assignment. A cast the source wrote
 // arrives as an ND_CAST node from the parser instead, which leaves the
 // flag false, and libcp_add_type resolves rather than builds it.
-Node *libcp_new_cast(LibcpContext *ctx, Node *expr, Type *ty) {
+LibcpNode *libcp_new_cast(LibcpContext *ctx, LibcpNode *expr, LibcpType *ty) {
   libcp_add_type(ctx, expr);
 
-  Node *node = libcp_arena_calloc(ctx, 1, sizeof(Node));
+  LibcpNode *node = libcp_arena_calloc(ctx, 1, sizeof(LibcpNode));
   node->kind = ND_CAST;
   node->tok = expr->tok;
   node->lhs = expr;
@@ -151,16 +151,15 @@ Node *libcp_new_cast(LibcpContext *ctx, Node *expr, Type *ty) {
 
 // An object or an enum constant the resolve pass has declared.
 typedef struct {
-  Obj *var;
-  Type *enum_ty;
+  LibcpObj *var;
+  LibcpType *enum_ty;
   int enum_val;
-} VarScope;
+} LibcpVarScope;
 
 // Represents a block scope.
-typedef struct SemaScope Scope;
-struct SemaScope {
-  Scope *next;
-  HashMap vars;
+struct libcp_sema_scope {
+  LibcpSemaScope *next;
+  LibcpHashMap vars;
 };
 
 // Zeroes the sema-owned context fields. It allocates nothing: the
@@ -175,8 +174,8 @@ void libcp_sema_state_clear(LibcpContext *ctx) {
   ctx->globals = NULL;
   ctx->sema_fn = NULL;
   ctx->builtin_alloca = NULL;
-  ctx->gotos = (NodeArray){};
-  ctx->labels = (NodeArray){};
+  ctx->gotos = (LibcpNodeArray){};
+  ctx->labels = (LibcpNodeArray){};
   ctx->label_gotos = NULL;
   ctx->loop_depth = 0;
   ctx->switch_depth = 0;
@@ -192,7 +191,7 @@ void libcp_sema_state_clear(LibcpContext *ctx) {
 // A run starts with the fields cleared and a fresh root scope.
 static void sema_init(LibcpContext *ctx) {
   libcp_sema_state_clear(ctx);
-  ctx->sema_scope = libcp_arena_calloc(ctx, 1, sizeof(Scope));
+  ctx->sema_scope = libcp_arena_calloc(ctx, 1, sizeof(LibcpSemaScope));
 }
 
 #define scope (ctx->sema_scope)
@@ -202,7 +201,7 @@ static void sema_init(LibcpContext *ctx) {
 #define builtin_alloca (ctx->builtin_alloca)
 
 static void enter_scope(LibcpContext *ctx) {
-  Scope *sc = libcp_arena_calloc(ctx, 1, sizeof(Scope));
+  LibcpSemaScope *sc = libcp_arena_calloc(ctx, 1, sizeof(LibcpSemaScope));
   sc->next = scope;
   scope = sc;
 }
@@ -212,35 +211,35 @@ static void leave_scope(LibcpContext *ctx) {
 }
 
 // Find a variable by name.
-static VarScope *find_var(LibcpContext *ctx, Token *tok) {
-  for (Scope *sc = scope; sc; sc = sc->next) {
-    VarScope *sc2 = libcp_hashmap_get2(ctx, &sc->vars, tok->loc, tok->len);
+static LibcpVarScope *find_var(LibcpContext *ctx, LibcpToken *tok) {
+  for (LibcpSemaScope *sc = scope; sc; sc = sc->next) {
+    LibcpVarScope *sc2 = libcp_hashmap_get2(ctx, &sc->vars, tok->loc, tok->len);
     if (sc2)
       return sc2;
   }
   return NULL;
 }
 
-static VarScope *push_scope(LibcpContext *ctx, char *name) {
-  VarScope *sc = libcp_arena_calloc(ctx, 1, sizeof(VarScope));
+static LibcpVarScope *push_scope(LibcpContext *ctx, char *name) {
+  LibcpVarScope *sc = libcp_arena_calloc(ctx, 1, sizeof(LibcpVarScope));
   libcp_hashmap_put(ctx, &scope->vars, name, sc);
   return sc;
 }
 
 // A block-scope declaration may not declare a void object. `tok` is the
 // position of the declaration, anchored exactly as the parser used to.
-static void check_declared_void(LibcpContext *ctx, Token *tok, Type *ty) {
+static void check_declared_void(LibcpContext *ctx, LibcpToken *tok, LibcpType *ty) {
   if (ty->kind == TY_VOID)
     libcp_error_tok(ctx, tok, "variable declared void");
 }
 
 // Looks up a function in the file scope.
-static Obj *find_func(LibcpContext *ctx, char *name) {
-  Scope *sc = scope;
+static LibcpObj *find_func(LibcpContext *ctx, char *name) {
+  LibcpSemaScope *sc = scope;
   while (sc->next)
     sc = sc->next;
 
-  VarScope *sc2 = libcp_hashmap_get(ctx, &sc->vars, name);
+  LibcpVarScope *sc2 = libcp_hashmap_get(ctx, &sc->vars, name);
   if (sc2 && sc2->var && sc2->var->is_function)
     return sc2->var;
   return NULL;
@@ -249,9 +248,9 @@ static Obj *find_func(LibcpContext *ctx, char *name) {
 // Declares a function at file scope, or checks a redeclaration against
 // the object declared before. `tok` is the token following the
 // declarator and `is_definition` says whether a body follows.
-static Obj *declare_function(LibcpContext *ctx, char *name, Type *ty, VarAttr *attr, Token *tok,
+static LibcpObj *declare_function(LibcpContext *ctx, char *name, LibcpType *ty, LibcpVarAttr *attr, LibcpToken *tok,
                              bool is_definition) {
-  Obj *fn = find_func(ctx, name);
+  LibcpObj *fn = find_func(ctx, name);
 
   if (fn) {
     // Redeclaration. The first check is unreachable in the current
@@ -291,7 +290,7 @@ static Obj *declare_function(LibcpContext *ctx, char *name, Type *ty, VarAttr *a
 // is written by codegen's shaping pass, which is what allocates it.
 static void check_labels(LibcpContext *ctx) {
   for (int i = 0; i < gotos.len; i++) {
-    Node *x = gotos.data[i];
+    LibcpNode *x = gotos.data[i];
     bool found = false;
     for (int j = 0; j < labels.len; j++)
       if (!strcmp(x->label, labels.data[j]->label)) {
@@ -314,17 +313,17 @@ static void check_labels(LibcpContext *ctx) {
 #define loop_depth (ctx->loop_depth)
 #define switch_depth (ctx->switch_depth)
 
-static void check_node(LibcpContext *ctx, Node *node);
+static void check_node(LibcpContext *ctx, LibcpNode *node);
 
-static void check_chain(LibcpContext *ctx, Node *node) {
-  for (Node *n = node; n; n = n->next)
+static void check_chain(LibcpContext *ctx, LibcpNode *node) {
+  for (LibcpNode *n = node; n; n = n->next)
     check_node(ctx, n);
 }
 
 // Descends every subtree a node owns, statements and expressions alike:
 // a break can sit in a statement expression, which is an expression
 // node holding a statement chain.
-static void check_children(LibcpContext *ctx, Node *node) {
+static void check_children(LibcpContext *ctx, LibcpNode *node) {
   check_node(ctx, node->lhs);
   check_node(ctx, node->rhs);
   check_node(ctx, node->cond);
@@ -341,7 +340,7 @@ static void check_children(LibcpContext *ctx, Node *node) {
 
 // Pre-order, like the shaping pass it mirrors: the checks of a loop
 // fire inside it, the stray check of a case inside its switch.
-static void check_node(LibcpContext *ctx, Node *node) {
+static void check_node(LibcpContext *ctx, LibcpNode *node) {
   if (!node)
     return;
 
@@ -391,18 +390,18 @@ static void check_node(LibcpContext *ctx, Node *node) {
   }
 }
 
-static void check_control_flow(LibcpContext *ctx, Node *body) {
+static void check_control_flow(LibcpContext *ctx, LibcpNode *body) {
   check_chain(ctx, body);
   check_labels(ctx);
 }
 
-static void mark_live(LibcpContext *ctx, Obj *var) {
+static void mark_live(LibcpContext *ctx, LibcpObj *var) {
   if (!var->is_function || var->is_live)
     return;
   var->is_live = true;
 
   for (int i = 0; i < var->refs.len; i++) {
-    Obj *fn = find_func(ctx, var->refs.data[i]);
+    LibcpObj *fn = find_func(ctx, var->refs.data[i]);
     if (fn)
       mark_live(ctx, fn);
   }
@@ -415,17 +414,17 @@ static void mark_live(LibcpContext *ctx, Obj *var) {
 // tentative declaration made this quadratic (C6).
 static void scan_globals(LibcpContext *ctx) {
   char real_tag, kept_tag;
-  HashMap reals = {};
-  HashMap kept = {};
+  LibcpHashMap reals = {};
+  LibcpHashMap kept = {};
 
-  for (Obj *var = globals; var; var = var->next)
+  for (LibcpObj *var = globals; var; var = var->next)
     if (var->is_definition && !var->is_tentative)
       libcp_hashmap_put(ctx, &reals, var->name, &real_tag);
 
-  Obj head;
-  Obj *cur = &head;
+  LibcpObj head;
+  LibcpObj *cur = &head;
 
-  for (Obj *var = globals; var; var = var->next) {
+  for (LibcpObj *var = globals; var; var = var->next) {
     if (!var->is_tentative) {
       cur = cur->next = var;
       continue;
@@ -447,7 +446,7 @@ static void scan_globals(LibcpContext *ctx) {
 // Finishes the translated unit: marks the functions reachable from a
 // root live and drops the redundant tentative definitions.
 static void finalize_globals(LibcpContext *ctx) {
-  for (Obj *var = globals; var; var = var->next)
+  for (LibcpObj *var = globals; var; var = var->next)
     if (var->is_root)
       mark_live(ctx, var);
 
@@ -460,12 +459,12 @@ static void finalize_globals(LibcpContext *ctx) {
 // value continues the running value of the list, exactly as the old
 // on-the-spot evaluation did. Each record is consumed (ty_op cleared)
 // so that a later walk skips it.
-static void resolve_enum_records(LibcpContext *ctx, Node *recs) {
+static void resolve_enum_records(LibcpContext *ctx, LibcpNode *recs) {
   // The walk stops at the first record that is not an enum constant:
   // on the top-level and block chains the run is followed by whatever
   // declaration record comes next, which carries its own type payload.
   while (recs && recs->kind == ND_ENUM_CONST) {
-    Type *ety = recs->ty_op;
+    LibcpType *ety = recs->ty_op;
     if (!ety) {
       recs = recs->next;
       continue;
@@ -487,7 +486,7 @@ static void resolve_enum_records(LibcpContext *ctx, Node *recs) {
       recs->val = val++;
       recs->ty_op = NULL;
 
-      VarScope *sc = push_scope(ctx, libcp_get_ident(ctx, recs->tok));
+      LibcpVarScope *sc = push_scope(ctx, libcp_get_ident(ctx, recs->tok));
       sc->enum_ty = ety;
       sc->enum_val = recs->val;
       recs = recs->next;
@@ -500,7 +499,7 @@ static void resolve_enum_records(LibcpContext *ctx, Node *recs) {
 // dimension or operand is settled before the outer one wrapped in it -
 // the order the parser's own recursion gave. A record is cleared as it is
 // consumed, so calling this again costs nothing.
-static void resolve_type(LibcpContext *ctx, Type *ty) {
+static void resolve_type(LibcpContext *ctx, LibcpType *ty) {
   if (!ty)
     return;
 
@@ -560,7 +559,7 @@ static void resolve_type(LibcpContext *ctx, Type *ty) {
       ty->spec_decls = NULL;
     }
     resolve_type(ctx, ty->return_ty);
-    for (Type *param = ty->params; param; param = param->next)
+    for (LibcpType *param = ty->params; param; param = param->next)
       resolve_type(ctx, param);
     break;
   default:
@@ -573,7 +572,7 @@ static void resolve_type(LibcpContext *ctx, Type *ty) {
   }
 
   if (ty->typeof_expr) {
-    Node *expr = ty->typeof_expr;
+    LibcpNode *expr = ty->typeof_expr;
     ty->typeof_expr = NULL;
 
     // The operand's type fills this record in rather than replacing it:
@@ -583,15 +582,15 @@ static void resolve_type(LibcpContext *ctx, Type *ty) {
     libcp_add_type(ctx, expr);
     resolve_type(ctx, expr->ty);
 
-    Token *name = ty->name;
-    Token *name_pos = ty->name_pos;
+    LibcpToken *name = ty->name;
+    LibcpToken *name_pos = ty->name_pos;
     *ty = *expr->ty;
     ty->name = name;
     ty->name_pos = name_pos;
   }
 
   if (ty->dim_len) {
-    Node *dim = ty->dim_len;
+    LibcpNode *dim = ty->dim_len;
     ty->dim_len = NULL;
 
     // A dimension that is not a constant expression, like the base of a
@@ -615,7 +614,7 @@ static void resolve_type(LibcpContext *ctx, Type *ty) {
 // bound and the declaration records inside (a statement expression can
 // appear in a constant context) get declared, so that the evaluations
 // resolve_type performs afterwards find a complete picture.
-static void resolve_type_exprs(LibcpContext *ctx, Type *ty) {
+static void resolve_type_exprs(LibcpContext *ctx, LibcpType *ty) {
   if (!ty)
     return;
 
@@ -630,7 +629,7 @@ static void resolve_type_exprs(LibcpContext *ctx, Type *ty) {
     break;
   case TY_FUNC:
     resolve_type_exprs(ctx, ty->return_ty);
-    for (Type *param = ty->params; param; param = param->next)
+    for (LibcpType *param = ty->params; param; param = param->next)
       resolve_type_exprs(ctx, param);
     break;
   case TY_STRUCT:
@@ -640,7 +639,7 @@ static void resolve_type_exprs(LibcpContext *ctx, Type *ty) {
     // bounds the recursion exactly as it does for the layout.
     if (ty->layout_pending) {
       ty->layout_pending = false;
-      for (Member *mem = ty->members; mem; mem = mem->next) {
+      for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
         resolve_type_exprs(ctx, mem->ty);
         resolve_node(ctx, mem->width_expr);
         resolve_node(ctx, mem->align_expr);
@@ -662,7 +661,7 @@ static void resolve_type_exprs(LibcpContext *ctx, Type *ty) {
 // read once the type is complete, and the `_Alignas(expr)` one as a
 // constant expression to evaluate. The value is cached, because one
 // declaration declares several objects and each of them asks.
-static int attr_align(LibcpContext *ctx, VarAttr *attr) {
+static int attr_align(LibcpContext *ctx, LibcpVarAttr *attr) {
   if (!attr)
     return 0;
   if (attr->align_expr) {
@@ -687,8 +686,8 @@ static int align_down(int n, int align) {
 // may still carry parser stashes (a dimension, a typeof operand), and
 // the `_Alignas` forms are settled here. A trailing incomplete-array
 // member becomes the zero-sized flexible array member.
-static void finalize_members(LibcpContext *ctx, Type *ty) {
-  for (Member *mem = ty->members; mem; mem = mem->next) {
+static void finalize_members(LibcpContext *ctx, LibcpType *ty) {
+  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
     resolve_type_exprs(ctx, mem->ty);
     resolve_type(ctx, mem->ty);
 
@@ -708,8 +707,8 @@ static void finalize_members(LibcpContext *ctx, Type *ty) {
   // If the last element is an array of incomplete type, it's
   // called a "flexible array member". It should behave as if
   // if were a zero-sized array.
-  Member *last = NULL;
-  for (Member *mem = ty->members; mem; mem = mem->next)
+  LibcpMember *last = NULL;
+  for (LibcpMember *mem = ty->members; mem; mem = mem->next)
     last = mem;
   if (last && last->ty->kind == TY_ARRAY && last->ty->array_len < 0) {
     last->ty = libcp_array_of(ctx, last->ty->base, 0);
@@ -720,8 +719,8 @@ static void finalize_members(LibcpContext *ctx, Type *ty) {
 // Evaluate the recorded bitfield width expressions of a member list.
 // The parser records the width unevaluated; layout is where the value
 // is first needed.
-static void eval_bitfield_widths(LibcpContext *ctx, Type *ty) {
-  for (Member *mem = ty->members; mem; mem = mem->next) {
+static void eval_bitfield_widths(LibcpContext *ctx, LibcpType *ty) {
+  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
     if (mem->width_expr) {
       // C11 6.7.2.1p4: the width is a nonnegative integer constant
       // expression that does not exceed the width of the member's type.
@@ -747,7 +746,7 @@ static void eval_bitfield_widths(LibcpContext *ctx, Type *ty) {
 // and alignment. The parser builds the member list (the syntax shape)
 // and marks it complete; resolve_type calls this on first sight, and
 // nested aggregates are laid out inner-first by the resolve order.
-static void layout_struct(LibcpContext *ctx, Type *ty) {
+static void layout_struct(LibcpContext *ctx, LibcpType *ty) {
   // An `aligned` attribute on the type is a constant expression the
   // parser recorded; it has to be settled before the offsets are.
   resolve_type(ctx, ty);
@@ -761,7 +760,7 @@ static void layout_struct(LibcpContext *ctx, Type *ty) {
 
   int bits = 0;
 
-  for (Member *mem = ty->members; mem; mem = mem->next) {
+  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
     if (mem->is_bitfield && mem->bit_width == 0) {
       // Zero-width anonymous bitfield has a special meaning.
       // It affects only alignment.
@@ -790,7 +789,7 @@ static void layout_struct(LibcpContext *ctx, Type *ty) {
 
 // Unions need no member offsets (they are all zero), only the union
 // of the member sizes and the largest member alignment.
-static void layout_union(LibcpContext *ctx, Type *ty) {
+static void layout_union(LibcpContext *ctx, LibcpType *ty) {
   resolve_type(ctx, ty);
 
   if (ty->size < 0)
@@ -799,7 +798,7 @@ static void layout_union(LibcpContext *ctx, Type *ty) {
   finalize_members(ctx, ty);
   eval_bitfield_widths(ctx, ty);
 
-  for (Member *mem = ty->members; mem; mem = mem->next) {
+  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
     if (ty->align < mem->align)
       ty->align = mem->align;
     if (ty->size < mem->ty->size)
@@ -810,10 +809,10 @@ static void layout_union(LibcpContext *ctx, Type *ty) {
 
 // Binds an unresolved name. A variable or function reference becomes
 // ND_VAR; an enum constant becomes ND_NUM.
-static void bind_ident(LibcpContext *ctx, Node *node) {
-  Token *tok = node->tok;
-  VarScope *sc = find_var(ctx, tok);
-  Obj *var = sc ? sc->var : NULL;
+static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
+  LibcpToken *tok = node->tok;
+  LibcpVarScope *sc = find_var(ctx, tok);
+  LibcpObj *var = sc ? sc->var : NULL;
 
   if (var) {
     // For "static inline" functions, record the reference so that the
@@ -843,8 +842,8 @@ static void bind_ident(LibcpContext *ctx, Node *node) {
   libcp_error_tok(ctx, tok, "undefined variable");
 }
 
-static Obj *new_var(LibcpContext *ctx, char *name, Type *ty) {
-  Obj *var = libcp_arena_calloc(ctx, 1, sizeof(Obj));
+static LibcpObj *new_var(LibcpContext *ctx, char *name, LibcpType *ty) {
+  LibcpObj *var = libcp_arena_calloc(ctx, 1, sizeof(LibcpObj));
   var->name = name;
   var->ty = ty;
   resolve_type(ctx, ty);
@@ -853,8 +852,8 @@ static Obj *new_var(LibcpContext *ctx, char *name, Type *ty) {
   return var;
 }
 
-static Obj *new_lvar(LibcpContext *ctx, char *name, Type *ty) {
-  Obj *var = new_var(ctx, name, ty);
+static LibcpObj *new_lvar(LibcpContext *ctx, char *name, LibcpType *ty) {
+  LibcpObj *var = new_var(ctx, name, ty);
   var->is_local = true;
   var->next = locals;
   locals = var;
@@ -868,17 +867,17 @@ static Obj *new_lvar(LibcpContext *ctx, char *name, Type *ty) {
 // keys its runtime size on, and a typedef'd VLA is shared by the
 // declarations that use it on purpose (A10.2), so it is returned as is;
 // its name slot stays unset.
-static Type *named_type(LibcpContext *ctx, Type *ty, Token *name_tok) {
+static LibcpType *named_type(LibcpContext *ctx, LibcpType *ty, LibcpToken *name_tok) {
   if (ty->kind == TY_VLA)
     return ty;
 
-  Type *copy = libcp_copy_type(ctx, ty);
+  LibcpType *copy = libcp_copy_type(ctx, ty);
   copy->name = name_tok;
   return copy;
 }
 
-static Obj *new_gvar(LibcpContext *ctx, char *name, Type *ty) {
-  Obj *var = new_var(ctx, name, ty);
+static LibcpObj *new_gvar(LibcpContext *ctx, char *name, LibcpType *ty) {
+  LibcpObj *var = new_var(ctx, name, ty);
   var->next = globals;
   var->is_static = true;
   var->is_definition = true;
@@ -890,8 +889,8 @@ static Obj *new_gvar(LibcpContext *ctx, char *name, Type *ty) {
 // object, but it is not linked into the globals list: codegen never
 // emits it, and leaving it out keeps that list the plain result of the
 // current TU instead of something libcp_sema() has to detach afterwards.
-static Obj *new_builtin_gvar(LibcpContext *ctx, char *name, Type *ty) {
-  Obj *var = new_var(ctx, name, ty);
+static LibcpObj *new_builtin_gvar(LibcpContext *ctx, char *name, LibcpType *ty) {
+  LibcpObj *var = new_var(ctx, name, ty);
   var->is_static = true;
   var->is_definition = true;
   return var;
@@ -922,17 +921,17 @@ int libcp_unique_name_next(LibcpContext *ctx) {
   return unique_name_id;
 }
 
-static Obj *new_anon_gvar(LibcpContext *ctx, Type *ty) {
+static LibcpObj *new_anon_gvar(LibcpContext *ctx, LibcpType *ty) {
   return new_gvar(ctx, new_unique_name(ctx), ty);
 }
 
-static Obj *new_string_literal(LibcpContext *ctx, char *p, Type *ty) {
-  Obj *var = new_anon_gvar(ctx, ty);
+static LibcpObj *new_string_literal(LibcpContext *ctx, char *p, LibcpType *ty) {
+  LibcpObj *var = new_anon_gvar(ctx, ty);
   var->init_data = p;
   return var;
 }
 
-static void create_param_lvars(LibcpContext *ctx, Type *param) {
+static void create_param_lvars(LibcpContext *ctx, LibcpType *param) {
   if (param) {
     create_param_lvars(ctx, param->next);
     if (!param->name)
@@ -947,13 +946,13 @@ static void create_param_lvars(LibcpContext *ctx, Type *param) {
 // __FUNCTION__ strings. The resolve pass calls this once it reaches the
 // function body, so that everything is created in the same order as
 // before.
-static void begin_function(LibcpContext *ctx, Obj *fn, Type *ty) {
+static void begin_function(LibcpContext *ctx, LibcpObj *fn, LibcpType *ty) {
   locals = NULL;
   create_param_lvars(ctx, ty->params);
 
   // A buffer for a struct/union return value is passed
   // as the hidden first parameter.
-  Type *rty = ty->return_ty;
+  LibcpType *rty = ty->return_ty;
   if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
     new_lvar(ctx, "", libcp_pointer_to(ctx, rty));
 
@@ -975,7 +974,7 @@ static void begin_function(LibcpContext *ctx, Obj *fn, Type *ty) {
 }
 
 static void declare_builtin_functions(LibcpContext *ctx) {
-  Type *ty = libcp_func_type(ctx, libcp_pointer_to(ctx, libcp_ty_void));
+  LibcpType *ty = libcp_func_type(ctx, libcp_pointer_to(ctx, libcp_ty_void));
   ty->params = libcp_copy_type(ctx, libcp_ty_int);
   builtin_alloca = new_builtin_gvar(ctx, "alloca", ty);
   builtin_alloca->is_definition = false;
@@ -984,8 +983,8 @@ static void declare_builtin_functions(LibcpContext *ctx) {
 // Build the `alloca(<size>)` call node for a VLA declaration. The call
 // arrives fully typed, so libcp_add_type skips it and codegen recognizes the
 // builtin by name.
-Node *libcp_new_alloca(LibcpContext *ctx, Node *sz) {
-  Node *node = libcp_new_unary(ctx, ND_FUNCALL, libcp_new_var_node(ctx, builtin_alloca, sz->tok), sz->tok);
+LibcpNode *libcp_new_alloca(LibcpContext *ctx, LibcpNode *sz) {
+  LibcpNode *node = libcp_new_unary(ctx, ND_FUNCALL, libcp_new_var_node(ctx, builtin_alloca, sz->tok), sz->tok);
   node->func_ty = builtin_alloca->ty;
   node->ty = builtin_alloca->ty->return_ty;
   node->args = sz;
@@ -1003,12 +1002,12 @@ Node *libcp_new_alloca(LibcpContext *ctx, Node *sz) {
 //
 // Exported: this is how a consumer obtains a typed binary node, and with
 // it sema's conversion decisions, without re-implementing either.
-Node *libcp_new_arith(LibcpContext *ctx, NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
+LibcpNode *libcp_new_arith(LibcpContext *ctx, LibcpNodeKind kind, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok) {
   libcp_add_type(ctx, lhs);
   libcp_add_type(ctx, rhs);
   libcp_usual_arith_conv(ctx, &lhs, &rhs);
 
-  Node *node = libcp_new_binary(ctx, kind, lhs, rhs, tok);
+  LibcpNode *node = libcp_new_binary(ctx, kind, lhs, rhs, tok);
   node->ty = lhs->ty;
   return node;
 }
@@ -1020,9 +1019,9 @@ Node *libcp_new_arith(LibcpContext *ctx, NodeKind kind, Node *lhs, Node *rhs, To
 // recorded - a struct or union one tells the consumer to allocate the
 // buffer the call writes into. `tok` is the call's closing paren, where
 // the argument-count diagnostics are anchored.
-static void lower_funcall(LibcpContext *ctx, Node *node, Token *tok) {
-  Node *fn = node->lhs;
-  Type *ty = fn->ty;
+static void lower_funcall(LibcpContext *ctx, LibcpNode *node, LibcpToken *tok) {
+  LibcpNode *fn = node->lhs;
+  LibcpType *ty = fn->ty;
 
   if (ty->kind != TY_FUNC &&
       (ty->kind != TY_PTR || ty->base->kind != TY_FUNC))
@@ -1033,12 +1032,12 @@ static void lower_funcall(LibcpContext *ctx, Node *node, Token *tok) {
 
   node->func_ty = ty;
 
-  Type *param_ty = ty->params;
-  Node head = {};
-  Node *cur = &head;
+  LibcpType *param_ty = ty->params;
+  LibcpNode head = {};
+  LibcpNode *cur = &head;
 
-  for (Node *arg = node->args; arg;) {
-    Node *next = arg->next;
+  for (LibcpNode *arg = node->args; arg;) {
+    LibcpNode *next = arg->next;
     libcp_add_type(ctx, arg);
 
     if (!param_ty && !ty->is_variadic)
@@ -1071,8 +1070,8 @@ static void lower_funcall(LibcpContext *ctx, Node *node, Token *tok) {
   // here is the conclusion - the return type - which the pass reads.
 }
 
-static InitTree *new_resolved_init(LibcpContext *ctx, Type *ty, bool is_flexible) {
-  InitTree *init = libcp_arena_calloc(ctx, 1, sizeof(InitTree));
+static LibcpInitTree *new_resolved_init(LibcpContext *ctx, LibcpType *ty, bool is_flexible) {
+  LibcpInitTree *init = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitTree));
   init->ty = ty;
 
   if (ty->kind == TY_ARRAY) {
@@ -1081,7 +1080,7 @@ static InitTree *new_resolved_init(LibcpContext *ctx, Type *ty, bool is_flexible
       return init;
     }
 
-    init->children = libcp_arena_calloc(ctx, ty->array_len, sizeof(InitTree *));
+    init->children = libcp_arena_calloc(ctx, ty->array_len, sizeof(LibcpInitTree *));
     for (int i = 0; i < ty->array_len; i++)
       init->children[i] = new_resolved_init(ctx, ty->base, false);
     return init;
@@ -1090,14 +1089,14 @@ static InitTree *new_resolved_init(LibcpContext *ctx, Type *ty, bool is_flexible
   if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
     // Count the number of struct members.
     int len = 0;
-    for (Member *mem = ty->members; mem; mem = mem->next)
+    for (LibcpMember *mem = ty->members; mem; mem = mem->next)
       len++;
 
-    init->children = libcp_arena_calloc(ctx, len, sizeof(InitTree *));
+    init->children = libcp_arena_calloc(ctx, len, sizeof(LibcpInitTree *));
 
-    for (Member *mem = ty->members; mem; mem = mem->next) {
+    for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
       if (is_flexible && ty->is_flexible && !mem->next) {
-        InitTree *child = libcp_arena_calloc(ctx, 1, sizeof(InitTree));
+        LibcpInitTree *child = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitTree));
         child->ty = mem->ty;
         child->is_flexible = true;
         init->children[mem->idx] = child;
@@ -1111,13 +1110,13 @@ static InitTree *new_resolved_init(LibcpContext *ctx, Type *ty, bool is_flexible
   return init;
 }
 
-static Type *copy_struct_type(LibcpContext *ctx, Type *ty) {
+static LibcpType *copy_struct_type(LibcpContext *ctx, LibcpType *ty) {
   ty = libcp_copy_type(ctx, ty);
 
-  Member head = {};
-  Member *cur = &head;
-  for (Member *mem = ty->members; mem; mem = mem->next) {
-    Member *m = libcp_arena_calloc(ctx, 1, sizeof(Member));
+  LibcpMember head = {};
+  LibcpMember *cur = &head;
+  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
+    LibcpMember *m = libcp_arena_calloc(ctx, 1, sizeof(LibcpMember));
     *m = *mem;
     cur = cur->next = m;
   }
@@ -1127,7 +1126,7 @@ static Type *copy_struct_type(LibcpContext *ctx, Type *ty) {
 }
 
 // Evaluate a recorded designator index expression.
-static int eval_desig_index(LibcpContext *ctx, Node *expr) {
+static int eval_desig_index(LibcpContext *ctx, LibcpNode *expr) {
   return eval(ctx, expr);
 }
 
@@ -1135,7 +1134,7 @@ static int eval_desig_index(LibcpContext *ctx, Node *expr) {
 // array being designated. Anchors mirror the old parse-time checks:
 // the begin bound reports at the token following the begin expression,
 // the end bound and the empty range at `]`.
-static void eval_array_desig(LibcpContext *ctx, InitDesig *d, Type *ty, int *begin, int *end) {
+static void eval_array_desig(LibcpContext *ctx, LibcpInitDesig *d, LibcpType *ty, int *begin, int *end) {
   *begin = eval_desig_index(ctx, d->begin);
   if (*begin >= ty->array_len)
     libcp_error_tok(ctx, d->after_begin, "array designator index exceeds array bounds");
@@ -1154,8 +1153,8 @@ static void eval_array_desig(LibcpContext *ctx, InitDesig *d, Type *ty, int *beg
 // Find the member a `.name` designator refers to. If the name lives
 // inside an anonymous struct member, that (nameless) member is
 // returned and the caller re-applies the designator to its subtree.
-static Member *find_init_member(LibcpContext *ctx, Type *ty, Token *name) {
-  for (Member *mem = ty->members; mem; mem = mem->next) {
+static LibcpMember *find_init_member(LibcpContext *ctx, LibcpType *ty, LibcpToken *name) {
+  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
     // Anonymous struct or union member
     if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) &&
         !mem->name) {
@@ -1180,16 +1179,16 @@ static Member *find_init_member(LibcpContext *ctx, Type *ty, Token *name) {
 // Turn a recorded string literal into an expression node referencing
 // its anonymous global, which is what a string initializer for a
 // non-array target used to parse into.
-static Node *materialize_str(LibcpContext *ctx, Initializer *rec) {
-  Node *node = libcp_new_node(ctx, ND_STRING, rec->str_tok);
+static LibcpNode *materialize_str(LibcpContext *ctx, LibcpInitializer *rec) {
+  LibcpNode *node = libcp_new_node(ctx, ND_STRING, rec->str_tok);
   libcp_add_type(ctx, node);
   return node;
 }
 
 // Expand a string literal into the elements of a character array,
 // one character (of the element width) per element.
-static void resolve_string(LibcpContext *ctx, Initializer *rec, InitTree *init) {
-  Token *tok = rec->str_tok;
+static void resolve_string(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init) {
+  LibcpToken *tok = rec->str_tok;
   int len = MIN(init->ty->array_len, tok->ty->array_len);
 
   switch (init->ty->base->size) {
@@ -1216,22 +1215,22 @@ static void resolve_string(LibcpContext *ctx, Initializer *rec, InitTree *init) 
   }
 }
 
-static void resolve_value(LibcpContext *ctx, Initializer *rec, InitTree *init, InitItem **cursor);
-static void resolve_desig(LibcpContext *ctx, InitTree *init, InitDesig *d, Initializer *rec, InitItem **cursor);
-static void resolve_array1(LibcpContext *ctx, Initializer *rec, InitTree *init);
-static void resolve_array_cont(LibcpContext *ctx, InitTree *init, int i, InitItem **cursor);
-static void resolve_struct1(LibcpContext *ctx, Initializer *rec, InitTree *init);
-static void resolve_struct_cont(LibcpContext *ctx, InitTree *init, Member *mem, InitItem **cursor);
-static void resolve_struct_first(LibcpContext *ctx, InitTree *init, Member *mem, Initializer *rec, InitItem **cursor);
-static void resolve_union(LibcpContext *ctx, Initializer *rec, InitTree *init, InitItem **cursor);
-static int count_flex_list(LibcpContext *ctx, InitItem *items, Type *ty);
-static int count_flex(LibcpContext *ctx, Initializer *rec, InitItem **cursor, Type *ty);
+static void resolve_value(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init, LibcpInitItem **cursor);
+static void resolve_desig(LibcpContext *ctx, LibcpInitTree *init, LibcpInitDesig *d, LibcpInitializer *rec, LibcpInitItem **cursor);
+static void resolve_array1(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init);
+static void resolve_array_cont(LibcpContext *ctx, LibcpInitTree *init, int i, LibcpInitItem **cursor);
+static void resolve_struct1(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init);
+static void resolve_struct_cont(LibcpContext *ctx, LibcpInitTree *init, LibcpMember *mem, LibcpInitItem **cursor);
+static void resolve_struct_first(LibcpContext *ctx, LibcpInitTree *init, LibcpMember *mem, LibcpInitializer *rec, LibcpInitItem **cursor);
+static void resolve_union(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init, LibcpInitItem **cursor);
+static int count_flex_list(LibcpContext *ctx, LibcpInitItem *items, LibcpType *ty);
+static int count_flex(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitItem **cursor, LibcpType *ty);
 
 // Consume one braced-list item: apply its designator chain (if any)
 // and resolve its value. *cursor advances past the item and any
 // siblings the value consumes through brace elision.
-static void resolve_item(LibcpContext *ctx, InitItem **cursor, InitTree *init) {
-  InitItem *it = *cursor;
+static void resolve_item(LibcpContext *ctx, LibcpInitItem **cursor, LibcpInitTree *init) {
+  LibcpInitItem *it = *cursor;
   *cursor = it->next;
   resolve_desig(ctx, init, it->desigs, it->init, cursor);
 }
@@ -1240,7 +1239,7 @@ static void resolve_item(LibcpContext *ctx, InitItem **cursor, InitTree *init) {
 // is the record-driven form of the old designation(): `[n]` moves
 // within an array, `.name` within a struct or union, and after a
 // struct member the following siblings continue with the next members.
-static void resolve_desig(LibcpContext *ctx, InitTree *init, InitDesig *d, Initializer *rec, InitItem **cursor) {
+static void resolve_desig(LibcpContext *ctx, LibcpInitTree *init, LibcpInitDesig *d, LibcpInitializer *rec, LibcpInitItem **cursor) {
   if (!d) {
     resolve_value(ctx, rec, init, cursor);
     return;
@@ -1260,7 +1259,7 @@ static void resolve_desig(LibcpContext *ctx, InitTree *init, InitDesig *d, Initi
   }
 
   if (init->ty->kind == TY_STRUCT) {
-    Member *mem = find_init_member(ctx, init->ty, d->name);
+    LibcpMember *mem = find_init_member(ctx, init->ty, d->name);
     if (!mem->name) {
       // Anonymous struct member: re-apply the designator to its subtree.
       resolve_desig(ctx, init->children[mem->idx], d, rec, cursor);
@@ -1273,7 +1272,7 @@ static void resolve_desig(LibcpContext *ctx, InitTree *init, InitDesig *d, Initi
   }
 
   if (init->ty->kind == TY_UNION) {
-    Member *mem = find_init_member(ctx, init->ty, d->name);
+    LibcpMember *mem = find_init_member(ctx, init->ty, d->name);
     init->mem = mem;
     if (!mem->name) {
       resolve_desig(ctx, init->children[mem->idx], d, rec, cursor);
@@ -1289,7 +1288,7 @@ static void resolve_desig(LibcpContext *ctx, InitTree *init, InitDesig *d, Initi
 // Fill array elements from sibling items (brace-elision continuation
 // or post-designator continuation), stopping at a designated item or
 // when the items run out.
-static void resolve_array_cont(LibcpContext *ctx, InitTree *init, int i, InitItem **cursor) {
+static void resolve_array_cont(LibcpContext *ctx, LibcpInitTree *init, int i, LibcpInitItem **cursor) {
   for (; i < init->ty->array_len && *cursor && !(*cursor)->desigs; i++)
     resolve_item(ctx, cursor, init->children[i]);
 }
@@ -1297,12 +1296,12 @@ static void resolve_array_cont(LibcpContext *ctx, InitTree *init, int i, InitIte
 // Resolve a braced array initializer, designated items included.
 // Elements past the end of the array have no target; each one is
 // diagnosed and dropped (C11 6.7.9 constrains the excess).
-static void resolve_array1(LibcpContext *ctx, Initializer *rec, InitTree *init) {
+static void resolve_array1(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init) {
   int i = 0;
-  InitItem *cursor = rec->items;
+  LibcpInitItem *cursor = rec->items;
 
   while (cursor) {
-    InitItem *it = cursor;
+    LibcpInitItem *it = cursor;
 
     if (it->desigs && !it->desigs->name) {
       int begin, end;
@@ -1326,7 +1325,7 @@ static void resolve_array1(LibcpContext *ctx, Initializer *rec, InitTree *init) 
 
 // Fill struct members from sibling items, stopping at a designated
 // item or when the items run out.
-static void resolve_struct_cont(LibcpContext *ctx, InitTree *init, Member *mem, InitItem **cursor) {
+static void resolve_struct_cont(LibcpContext *ctx, LibcpInitTree *init, LibcpMember *mem, LibcpInitItem **cursor) {
   for (; mem && *cursor && !(*cursor)->desigs; mem = mem->next)
     resolve_item(ctx, cursor, init->children[mem->idx]);
 }
@@ -1334,7 +1333,7 @@ static void resolve_struct_cont(LibcpContext *ctx, InitTree *init, Member *mem, 
 // Brace-elision entry for structs: the expression a struct was
 // "initialized" with becomes the first member's initializer and the
 // siblings continue with the following members.
-static void resolve_struct_first(LibcpContext *ctx, InitTree *init, Member *mem, Initializer *rec, InitItem **cursor) {
+static void resolve_struct_first(LibcpContext *ctx, LibcpInitTree *init, LibcpMember *mem, LibcpInitializer *rec, LibcpInitItem **cursor) {
   if (mem) {
     resolve_value(ctx, rec, init->children[mem->idx], cursor);
     mem = mem->next;
@@ -1343,15 +1342,15 @@ static void resolve_struct_first(LibcpContext *ctx, InitTree *init, Member *mem,
 }
 
 // Resolve a braced struct initializer.
-static void resolve_struct1(LibcpContext *ctx, Initializer *rec, InitTree *init) {
-  Member *mem = init->ty->members;
-  InitItem *cursor = rec->items;
+static void resolve_struct1(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init) {
+  LibcpMember *mem = init->ty->members;
+  LibcpInitItem *cursor = rec->items;
 
   while (cursor) {
-    InitItem *it = cursor;
+    LibcpInitItem *it = cursor;
 
     if (it->desigs && it->desigs->name) {
-      Member *m = find_init_member(ctx, init->ty, it->desigs->name);
+      LibcpMember *m = find_init_member(ctx, init->ty, it->desigs->name);
       cursor = it->next;
       if (m->name)
         resolve_desig(ctx, init->children[m->idx], it->desigs->next, it->init, &cursor);
@@ -1374,14 +1373,14 @@ static void resolve_struct1(LibcpContext *ctx, Initializer *rec, InitTree *init)
 // take only one initializer, and that initializes the first union
 // member by default. You can initialize another member using a
 // designated initializer.
-static void resolve_union(LibcpContext *ctx, Initializer *rec, InitTree *init, InitItem **cursor) {
+static void resolve_union(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init, LibcpInitItem **cursor) {
   if (rec->kind == INIT_LIST) {
-    InitItem *it = rec->items;
+    LibcpInitItem *it = rec->items;
 
     if (it && it->desigs && it->desigs->name) {
-      Member *mem = find_init_member(ctx, init->ty, it->desigs->name);
+      LibcpMember *mem = find_init_member(ctx, init->ty, it->desigs->name);
       init->mem = mem;
-      InitItem *next = it->next;
+      LibcpInitItem *next = it->next;
       if (mem->name)
         resolve_desig(ctx, init->children[mem->idx], it->desigs->next, it->init, &next);
       else
@@ -1400,7 +1399,7 @@ static void resolve_union(LibcpContext *ctx, Initializer *rec, InitTree *init, I
       return;
     }
 
-    InitItem *next = it->next;
+    LibcpInitItem *next = it->next;
     resolve_desig(ctx, init->children[0], it->desigs, it->init, &next);
     if (next)
       libcp_error_tok(ctx, next->desigs ? next->desigs->tok : next->init->tok, "expected '}'");
@@ -1416,13 +1415,13 @@ static void resolve_union(LibcpContext *ctx, Initializer *rec, InitTree *init, I
 // resolved against a throwaway tree, exactly like the old parser's
 // counting pass; designator bounds are not checked here (the build
 // pass checks them against the completed length).
-static int count_flex_list(LibcpContext *ctx, InitItem *items, Type *ty) {
-  InitTree *dummy = new_resolved_init(ctx, ty->base, true);
+static int count_flex_list(LibcpContext *ctx, LibcpInitItem *items, LibcpType *ty) {
+  LibcpInitTree *dummy = new_resolved_init(ctx, ty->base, true);
   int i = 0, max = 0;
-  InitItem *cursor = items;
+  LibcpInitItem *cursor = items;
 
   while (cursor) {
-    InitItem *it = cursor;
+    LibcpInitItem *it = cursor;
     if (it->desigs && !it->desigs->name) {
       i = eval_desig_index(ctx, it->desigs->begin);
       if (it->desigs->end)
@@ -1440,8 +1439,8 @@ static int count_flex_list(LibcpContext *ctx, InitItem *items, Type *ty) {
 
 // The brace-elision form of count_flex_list: the first value is the
 // record itself and the siblings follow it.
-static int count_flex(LibcpContext *ctx, Initializer *rec, InitItem **cursor, Type *ty) {
-  InitTree *dummy = new_resolved_init(ctx, ty->base, true);
+static int count_flex(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitItem **cursor, LibcpType *ty) {
+  LibcpInitTree *dummy = new_resolved_init(ctx, ty->base, true);
   int i = 0, max = 0;
 
   resolve_value(ctx, rec, dummy, cursor);
@@ -1449,7 +1448,7 @@ static int count_flex(LibcpContext *ctx, Initializer *rec, InitItem **cursor, Ty
   max = MAX(max, i);
 
   while (*cursor) {
-    InitItem *it = *cursor;
+    LibcpInitItem *it = *cursor;
     if (it->desigs && !it->desigs->name) {
       i = eval_desig_index(ctx, it->desigs->begin);
       if (it->desigs->end)
@@ -1466,8 +1465,8 @@ static int count_flex(LibcpContext *ctx, Initializer *rec, InitItem **cursor, Ty
 }
 
 // Resolve one initializer record against its target slot.
-static void resolve_value(LibcpContext *ctx, Initializer *rec, InitTree *init, InitItem **cursor) {
-  Type *ty = init->ty;
+static void resolve_value(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init, LibcpInitItem **cursor) {
+  LibcpType *ty = init->ty;
 
   if (ty->kind == TY_ARRAY && rec->kind == INIT_STR) {
     if (init->is_flexible)
@@ -1480,7 +1479,7 @@ static void resolve_value(LibcpContext *ctx, Initializer *rec, InitTree *init, I
     if (init->is_flexible) {
       // The counting pass walks the siblings without consuming them;
       // the build pass below resolves them for real.
-      InitItem *save = *cursor;
+      LibcpInitItem *save = *cursor;
       int len = (rec->kind == INIT_LIST) ? count_flex_list(ctx, rec->items, ty)
                                          : count_flex(ctx, rec, cursor, ty);
       *cursor = save;
@@ -1505,7 +1504,7 @@ static void resolve_value(LibcpContext *ctx, Initializer *rec, InitTree *init, I
     // A struct can be initialized with another struct. E.g.
     // `struct T x = y;` where y is a variable of type `struct T`.
     // Handle that case first.
-    Node *expr = (rec->kind == INIT_STR) ? materialize_str(ctx, rec) : rec->expr;
+    LibcpNode *expr = (rec->kind == INIT_STR) ? materialize_str(ctx, rec) : rec->expr;
     libcp_add_type(ctx, expr);
     if (expr->ty->kind == TY_STRUCT) {
       init->expr = expr;
@@ -1525,12 +1524,12 @@ static void resolve_value(LibcpContext *ctx, Initializer *rec, InitTree *init, I
     // An initializer for a scalar variable can be surrounded by
     // braces. E.g. `int x = {3};`. Handle that case: exactly one
     // element, no designators.
-    InitItem *it = rec->items;
+    LibcpInitItem *it = rec->items;
     if (!it)
       libcp_error_tok(ctx, rec->tok->next, "expected an expression");
     if (it->desigs)
       libcp_error_tok(ctx, it->desigs->tok, "expected an expression");
-    InitItem *next = it->next;
+    LibcpInitItem *next = it->next;
     resolve_value(ctx, it->init, init, &next);
     if (next)
       libcp_error_tok(ctx, next->comma_tok, "expected '}'");
@@ -1545,15 +1544,15 @@ static void resolve_value(LibcpContext *ctx, Initializer *rec, InitTree *init, I
 // flexible arrays and complete flexible struct/union members. *new_ty
 // receives the completed type (it may differ from ty for flexible
 // arrays and flexible members).
-static InitTree *resolve_initializer(LibcpContext *ctx, Initializer *rec, Type *ty, Type **new_ty) {
-  InitItem *cursor = NULL;
-  InitTree *init = new_resolved_init(ctx, ty, true);
+static LibcpInitTree *resolve_initializer(LibcpContext *ctx, LibcpInitializer *rec, LibcpType *ty, LibcpType **new_ty) {
+  LibcpInitItem *cursor = NULL;
+  LibcpInitTree *init = new_resolved_init(ctx, ty, true);
   resolve_value(ctx, rec, init, &cursor);
 
   if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && ty->is_flexible) {
     ty = copy_struct_type(ctx, ty);
 
-    Member *mem = ty->members;
+    LibcpMember *mem = ty->members;
     while (mem->next)
       mem = mem->next;
     mem->ty = init->children[mem->idx]->ty;
@@ -1607,8 +1606,8 @@ static void write_buf(LibcpContext *ctx, char *buf, uint64_t val, int sz) {
     unreachable();
 }
 
-static Relocation *
-write_gvar_data(LibcpContext *ctx, Relocation *cur, InitTree *init, Type *ty, char *buf, int offset) {
+static LibcpRelocation *
+write_gvar_data(LibcpContext *ctx, LibcpRelocation *cur, LibcpInitTree *init, LibcpType *ty, char *buf, int offset) {
   if (ty->kind == TY_ARRAY) {
     int sz = ty->base->size;
     for (int i = 0; i < ty->array_len; i++)
@@ -1617,9 +1616,9 @@ write_gvar_data(LibcpContext *ctx, Relocation *cur, InitTree *init, Type *ty, ch
   }
 
   if (ty->kind == TY_STRUCT) {
-    for (Member *mem = ty->members; mem; mem = mem->next) {
+    for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
       if (mem->is_bitfield) {
-        Node *expr = init->children[mem->idx]->expr;
+        LibcpNode *expr = init->children[mem->idx]->expr;
         if (!expr)
           break;
 
@@ -1658,7 +1657,7 @@ write_gvar_data(LibcpContext *ctx, Relocation *cur, InitTree *init, Type *ty, ch
     return cur;
   }
 
-  LabelRef label = {};
+  LibcpLabelRef label = {};
   uint64_t val = eval2(ctx, init->expr, &label);
 
   if (!label.name && !label.node) {
@@ -1666,7 +1665,7 @@ write_gvar_data(LibcpContext *ctx, Relocation *cur, InitTree *init, Type *ty, ch
     return cur;
   }
 
-  Relocation *rel = libcp_arena_calloc(ctx, 1, sizeof(Relocation));
+  LibcpRelocation *rel = libcp_arena_calloc(ctx, 1, sizeof(LibcpRelocation));
   rel->offset = offset;
   rel->label = label.name;
   rel->label_node = label.node;
@@ -1677,8 +1676,8 @@ write_gvar_data(LibcpContext *ctx, Relocation *cur, InitTree *init, Type *ty, ch
 
 // Serialize a resolved initializer tree into the .data image of a
 // global variable.
-static void gvar_init_data(LibcpContext *ctx, Obj *var, InitTree *init) {
-  Relocation head = {};
+static void gvar_init_data(LibcpContext *ctx, LibcpObj *var, LibcpInitTree *init) {
+  LibcpRelocation head = {};
   char *buf = libcp_arena_calloc(ctx, 1, var->ty->size);
   write_gvar_data(ctx, &head, init, var->ty, buf, 0);
   var->init_data = buf;
@@ -1689,7 +1688,7 @@ static void gvar_init_data(LibcpContext *ctx, Obj *var, InitTree *init) {
 // serialize it into the variable's .data image. Initializers for
 // global variables are evaluated at compile-time; it is a compile
 // error if an initializer list contains a non-constant expression.
-static void serialize_gvar(LibcpContext *ctx, Node *node) {
+static void serialize_gvar(LibcpContext *ctx, LibcpNode *node) {
   if (!node->decl_init)
     return;
 
@@ -1698,7 +1697,7 @@ static void serialize_gvar(LibcpContext *ctx, Node *node) {
   node->init_resolved = NULL;
 }
 
-Type *libcp_get_common_type(LibcpContext *ctx, Type *ty1, Type *ty2) {
+LibcpType *libcp_get_common_type(LibcpContext *ctx, LibcpType *ty1, LibcpType *ty2) {
   if (ty1->base)
     return libcp_pointer_to(ctx, ty1->base);
 
@@ -1734,15 +1733,15 @@ Type *libcp_get_common_type(LibcpContext *ctx, Type *ty1, Type *ty2) {
 // be promoted to match with the other.
 //
 // This operation is called the "usual arithmetic conversion".
-void libcp_usual_arith_conv(LibcpContext *ctx, Node **lhs, Node **rhs) {
-  Type *ty = libcp_get_common_type(ctx, (*lhs)->ty, (*rhs)->ty);
+void libcp_usual_arith_conv(LibcpContext *ctx, LibcpNode **lhs, LibcpNode **rhs) {
+  LibcpType *ty = libcp_get_common_type(ctx, (*lhs)->ty, (*rhs)->ty);
   *lhs = libcp_new_cast(ctx, *lhs, ty);
   *rhs = libcp_new_cast(ctx, *rhs, ty);
 }
 
 // Find a struct member by name, descending into anonymous members.
-static Member *get_struct_member(Type *ty, Token *tok) {
-  for (Member *mem = ty->members; mem; mem = mem->next) {
+static LibcpMember *get_struct_member(LibcpType *ty, LibcpToken *tok) {
+  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
     // Anonymous struct member
     if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) &&
         !mem->name) {
@@ -1771,10 +1770,10 @@ static Member *get_struct_member(Type *ty, Token *tok) {
 // its own between the operand and the named member.
 //
 // `node` is rewritten in place because its parent points at it.
-static void resolve_member(LibcpContext *ctx, Node *node) {
-  Node *operand = node->lhs;
-  Type *ty = operand->ty;
-  Token *arrow = node->arrow_tok;
+static void resolve_member(LibcpContext *ctx, LibcpNode *node) {
+  LibcpNode *operand = node->lhs;
+  LibcpType *ty = operand->ty;
+  LibcpToken *arrow = node->arrow_tok;
 
   // `x->y` is `(*x).y`; these are the checks the dereference would
   // make, anchored at the arrow.
@@ -1796,13 +1795,13 @@ static void resolve_member(LibcpContext *ctx, Node *node) {
   resolve_type(ctx, ty);
 
   bool flattened = false;
-  Node *cur = operand;
+  LibcpNode *cur = operand;
   for (;;) {
-    Member *mem = get_struct_member(ty, node->tok);
+    LibcpMember *mem = get_struct_member(ty, node->tok);
     if (!mem)
       libcp_error_tok(ctx, node->tok, "no such member");
 
-    Node *link = libcp_new_unary(ctx, ND_MEMBER, cur, node->tok);
+    LibcpNode *link = libcp_new_unary(ctx, ND_MEMBER, cur, node->tok);
     link->member = mem;
     if (arrow) {
       // The dereference belongs to the innermost link. The marker
@@ -1842,17 +1841,17 @@ static void resolve_member(LibcpContext *ctx, Node *node) {
 // the node afresh. The other associations are typed for their checks
 // only - they are expressions in the source, and a real compiler reports
 // their errors too.
-static void select_generic(LibcpContext *ctx, Node *node) {
+static void select_generic(LibcpContext *ctx, LibcpNode *node) {
   libcp_add_type(ctx, node->cond);
 
-  Type *ty = node->cond->ty;
+  LibcpType *ty = node->cond->ty;
   if (ty->kind == TY_FUNC)
     ty = libcp_pointer_to(ctx, ty);
   else if (ty->kind == TY_ARRAY)
     ty = libcp_pointer_to(ctx, ty->base);
 
-  Node *sel = NULL;
-  for (Node *assoc = node->args; assoc; assoc = assoc->next) {
+  LibcpNode *sel = NULL;
+  for (LibcpNode *assoc = node->args; assoc; assoc = assoc->next) {
     if (!assoc->ty_op) {
       if (!sel)
         sel = assoc->lhs;
@@ -1867,7 +1866,7 @@ static void select_generic(LibcpContext *ctx, Node *node) {
     libcp_error_tok(ctx, node->tok, "controlling expression type not compatible with"
               " any generic association type");
 
-  for (Node *assoc = node->args; assoc; assoc = assoc->next)
+  for (LibcpNode *assoc = node->args; assoc; assoc = assoc->next)
     if (assoc->lhs != sel)
       libcp_add_type(ctx, assoc->lhs);
 
@@ -1891,8 +1890,8 @@ static void select_generic(LibcpContext *ctx, Node *node) {
 // serialized global data keeps its position in the emission (contract
 // 4), and a [GNU] nested function definition's body is analyzed at
 // this position of the enclosing body, as the parser used to.
-static void type_chain(LibcpContext *ctx, Node *head) {
-  for (Node *n = head; n; n = n->next) {
+static void type_chain(LibcpContext *ctx, LibcpNode *head) {
+  for (LibcpNode *n = head; n; n = n->next) {
     switch (n->kind) {
     case ND_TYPEDEF:
     case ND_ENUM_CONST:
@@ -1918,7 +1917,7 @@ static void type_chain(LibcpContext *ctx, Node *head) {
 // expansion that used to type them is the consumer's now, so the
 // annotation is explicit here, in the same position the old
 // expansion ran.
-static void annotate_init_exprs(LibcpContext *ctx, InitTree *init) {
+static void annotate_init_exprs(LibcpContext *ctx, LibcpInitTree *init) {
   if (!init)
     return;
 
@@ -1936,7 +1935,7 @@ static void annotate_init_exprs(LibcpContext *ctx, InitTree *init) {
     return;
   }
 
-  for (Member *mem = init->ty->members; mem; mem = mem->next)
+  for (LibcpMember *mem = init->ty->members; mem; mem = mem->next)
     annotate_init_exprs(ctx, init->children[mem->idx]);
 }
 
@@ -1952,7 +1951,7 @@ static void annotate_init_exprs(LibcpContext *ctx, InitTree *init) {
 // once - which is also why a consumer must not run its own shaping over a
 // subtree twice: this guard stops a second *annotation*, not a second
 // *lowering* (PLAN contract 3(d)).
-void libcp_add_type(LibcpContext *ctx, Node *node) {
+void libcp_add_type(LibcpContext *ctx, LibcpNode *node) {
   if (!node || node->ty)
     return;
 
@@ -1976,7 +1975,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
   // Without such a last statement the construct has type void, which
   // gcc accepts (C5 audit); a void expression is usable wherever no
   // value is needed.
-  Node *stmt_expr_value = NULL;
+  LibcpNode *stmt_expr_value = NULL;
   if (node->kind == ND_STMT_EXPR) {
     stmt_expr_value = node->body;
     while (stmt_expr_value && stmt_expr_value->next)
@@ -1994,7 +1993,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
   libcp_add_type(ctx, node->inc);
   type_chain(ctx, node->body);
 
-  for (Node *n = node->args; n; n = n->next)
+  for (LibcpNode *n = node->args; n; n = n->next)
     libcp_add_type(ctx, n);
 
   switch (node->kind) {
@@ -2010,8 +2009,8 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
     // check when they rebuild - and the result type. No conversion
     // casts: the rebuilding libcp_new_arith runs the same usual_arith_conv
     // it always did, and doubling it would stack cast nodes.
-    Type *lt = node->lhs->ty;
-    Type *rt = node->rhs->ty;
+    LibcpType *lt = node->lhs->ty;
+    LibcpType *rt = node->rhs->ty;
     if (node->kind == ND_ADD) {
       if (lt->base && rt->base)
         libcp_error_tok(ctx, node->tok, "invalid operands");
@@ -2039,7 +2038,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
     node->ty = node->lhs->ty;
     return;
   case ND_NEG: {
-    Type *ty = libcp_get_common_type(ctx, libcp_ty_int, node->lhs->ty);
+    LibcpType *ty = libcp_get_common_type(ctx, libcp_ty_int, node->lhs->ty);
     node->lhs = libcp_new_cast(ctx, node->lhs, ty);
     node->ty = ty;
     return;
@@ -2102,7 +2101,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
     // operands, so a narrow left operand makes the result `int`. The
     // result type is a conclusion consumers read (`sizeof`, `_Generic`),
     // not just an instruction-selection hint.
-    Type *ty = libcp_get_common_type(ctx, libcp_ty_int, node->lhs->ty);
+    LibcpType *ty = libcp_get_common_type(ctx, libcp_ty_int, node->lhs->ty);
     node->ty = ty;
     return;
   }
@@ -2111,7 +2110,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
     // the literal is typed (PLAN contract 4). The node keeps its kind
     // and points at the object: the consumers - the evaluator and
     // codegen's address generation - read `node->var`.
-    Obj *var = new_string_literal(ctx, node->tok->str, node->tok->ty);
+    LibcpObj *var = new_string_literal(ctx, node->tok->str, node->tok->ty);
     node->var = var;
     node->ty = var->ty;
     return;
@@ -2137,7 +2136,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
     // and reads the size variable (PLAN A9.1; the builder itself is
     // still sema's until A7.1). The operand stays on the node for
     // that case - it is what identifies the type.
-    Type *ty = node->ty_op;
+    LibcpType *ty = node->ty_op;
     if (!ty) {
       libcp_add_type(ctx, node->lhs);
       ty = node->lhs->ty;
@@ -2168,7 +2167,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
     // `__builtin_reg_class(T)`: integer or pointer, floating-point,
     // or anything else, as a 0/1/2 conclusion in `val`.
     resolve_type(ctx, node->ty_op);
-    Type *ty = node->ty_op;
+    LibcpType *ty = node->ty_op;
     int64_t val = 2;
     if (libcp_is_integer(ty) || ty->kind == TY_PTR)
       val = 0;
@@ -2189,7 +2188,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
       // have - the common type of the operand and the else arm, or
       // void when either is, exactly as the inner conditional of the
       // lowered form concludes it.
-      Type *ty = node->cond->ty;
+      LibcpType *ty = node->cond->ty;
       if (ty->kind == TY_VOID || node->els->ty->kind == TY_VOID)
         node->ty = libcp_ty_void;
       else
@@ -2218,7 +2217,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
     if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield)
       libcp_error_tok(ctx, node->tok, "cannot take address of bitfield");
 
-    Type *ty = node->lhs->ty;
+    LibcpType *ty = node->lhs->ty;
     if (ty->kind == TY_ARRAY)
       node->ty = libcp_pointer_to(ctx, ty->base);
     else
@@ -2232,15 +2231,15 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
     // or one side carrying a base while the other carries none - and
     // the pointee then passes the checks the dereference made. The
     // `*(x+y)` rewrite with its scaling is codegen's (A3.1).
-    Type *lt = node->lhs->ty;
-    Type *rt = node->rhs->ty;
+    LibcpType *lt = node->lhs->ty;
+    LibcpType *rt = node->rhs->ty;
 
     if (!(libcp_is_numeric(lt) && libcp_is_numeric(rt)) && !lt->base && !rt->base)
       libcp_error_tok(ctx, node->tok, "invalid operands");
     if (lt->base && rt->base)
       libcp_error_tok(ctx, node->tok, "invalid operands");
 
-    Type *base = lt->base ? lt->base : rt->base;
+    LibcpType *base = lt->base ? lt->base : rt->base;
     if (!base)
       libcp_error_tok(ctx, node->tok, "invalid pointer dereference");
     if (base->kind == TY_VOID)
@@ -2316,7 +2315,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
     // The implicit conversion to the return type. Struct and union
     // returns are passed through as the parser left them.
     if (node->lhs) {
-      Type *ty = sema_fn->ty->return_ty;
+      LibcpType *ty = sema_fn->ty->return_ty;
       if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
         node->lhs = libcp_new_cast(ctx, node->lhs, ty);
     }
@@ -2330,8 +2329,8 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
     // type them is the consumer's now (contract 5). The consumer's
     // shaping pass expands what remains into 0..n statements and
     // removes the record from the chain when there are none.
-    Obj *var = node->var;
-    Token *tok = node->tok;
+    LibcpObj *var = node->var;
+    LibcpToken *tok = node->tok;
 
     if (node->attr.is_static) {
       if (node->decl_init) {
@@ -2369,7 +2368,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
     // block scope the consumer builds the initializer comma and the
     // reference (PLAN A8.1). The initializer expressions are
     // annotated here either way - nothing else reaches them.
-    Obj *var = node->var;
+    LibcpObj *var = node->var;
 
     annotate_init_exprs(ctx, node->init_resolved);
 
@@ -2384,7 +2383,7 @@ void libcp_add_type(LibcpContext *ctx, Node *node) {
   }
 }
 
-static int64_t eval(LibcpContext *ctx, Node *node) {
+static int64_t eval(LibcpContext *ctx, LibcpNode *node) {
   return eval2(ctx, node, NULL);
 }
 
@@ -2404,7 +2403,7 @@ static int64_t eval(LibcpContext *ctx, Node *node) {
 // (A6.1 onwards), the entry call stays - it still types the tree -
 // but the switch starts seeing faithful kinds, which the cases below
 // recognize alongside the lowered ones.
-static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
+static int64_t eval2(LibcpContext *ctx, LibcpNode *node, LibcpLabelRef *label) {
   libcp_add_type(ctx, node);
 
   if (libcp_is_flonum(node->ty))
@@ -2422,8 +2421,8 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
     // size is a runtime value, not a constant. `ptr + ptr` is rejected
     // by the annotation pass before the evaluator runs; the mirror
     // here is for the same guarantee.
-    Type *lt = node->lhs->ty;
-    Type *rt = node->rhs->ty;
+    LibcpType *lt = node->lhs->ty;
+    LibcpType *rt = node->rhs->ty;
     if (lt->base && rt->base)
       libcp_error_tok(ctx, node->tok, "invalid operands");
     if (lt->base && !rt->base) {
@@ -2450,8 +2449,8 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
     // asks both sides as plain numbers (label == NULL), exactly the
     // question the lowered DIV asked: the difference of two addresses
     // is not a constant expression.
-    Type *lt = node->lhs->ty;
-    Type *rt = node->rhs->ty;
+    LibcpType *lt = node->lhs->ty;
+    LibcpType *rt = node->rhs->ty;
     if (lt->base && rt->base) {
       int64_t lhs = eval2(ctx, node->lhs, NULL);
       int64_t rhs = eval2(ctx, node->rhs, NULL);
@@ -2601,7 +2600,7 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
     // The conclusion the annotation pass records in `val` - the same
     // slot a literal uses. A sizeof of a VLA is a runtime value, so
     // that one is not a constant; an alignment always is.
-    Type *ty = node->ty_op ? node->ty_op : node->lhs->ty;
+    LibcpType *ty = node->ty_op ? node->ty_op : node->lhs->ty;
     if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
       libcp_error_tok(ctx, node->tok, "not a compile-time constant");
     return node->val;
@@ -2621,7 +2620,7 @@ static int64_t eval2(LibcpContext *ctx, Node *node, LabelRef *label) {
   libcp_error_tok(ctx, node->tok, "not a compile-time constant");
 }
 
-static int64_t eval_rval(LibcpContext *ctx, Node *node, LabelRef *label) {
+static int64_t eval_rval(LibcpContext *ctx, LibcpNode *node, LibcpLabelRef *label) {
   switch (node->kind) {
   case ND_VAR:
     if (node->var->is_local)
@@ -2646,7 +2645,7 @@ static int64_t eval_rval(LibcpContext *ctx, Node *node, LabelRef *label) {
     // scaled by the element size. A VLA element size is a runtime
     // value; an unscaled sum (both operands numbers) mirrors what
     // the lowered `*(x+y)` evaluated to for that shape.
-    Type *base = node->lhs->ty->base;
+    LibcpType *base = node->lhs->ty->base;
     if (base && base->kind == TY_VLA)
       libcp_error_tok(ctx, node->tok, "not a compile-time constant");
     if (!base)
@@ -2674,7 +2673,7 @@ static int64_t eval_rval(LibcpContext *ctx, Node *node, LabelRef *label) {
 // sizeof case below has to answer false for a VLA operand by its own
 // kind, not because the fold hid it - otherwise a VLA silently
 // becomes a fixed array.
-static bool is_const_expr(LibcpContext *ctx, Node *node) {
+static bool is_const_expr(LibcpContext *ctx, LibcpNode *node) {
   libcp_add_type(ctx, node);
 
   switch (node->kind) {
@@ -2714,7 +2713,7 @@ static bool is_const_expr(LibcpContext *ctx, Node *node) {
   case ND_SIZEOF:
   case ND_ALIGNOF: {
     // The alignment of a VLA is a constant; its size is not.
-    Type *ty = node->ty_op ? node->ty_op : node->lhs->ty;
+    LibcpType *ty = node->ty_op ? node->ty_op : node->lhs->ty;
     return node->kind == ND_ALIGNOF || ty->kind != TY_VLA;
   }
   case ND_TYPES_COMPATIBLE:
@@ -2729,15 +2728,15 @@ static bool is_const_expr(LibcpContext *ctx, Node *node) {
   return false;
 }
 
-int64_t libcp_const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
-  Node *node = libcp_conditional(ctx, rest, tok);
+int64_t libcp_const_expr(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok) {
+  LibcpNode *node = libcp_conditional(ctx, rest, tok);
   return eval(ctx, node);
 }
 
 // Annotates first, like eval2 (see there): the shapes this switch
 // sees are whatever the annotation pass currently produces, and the
 // faithful cases below take over as the lowerings leave it.
-static double eval_double(LibcpContext *ctx, Node *node) {
+static double eval_double(LibcpContext *ctx, LibcpNode *node) {
   libcp_add_type(ctx, node);
 
   if (libcp_is_integer(node->ty)) {
@@ -2796,15 +2795,15 @@ static double eval_double(LibcpContext *ctx, Node *node) {
 // Walks a faithful initializer record and resolves the expressions it
 // carries (values and designator bounds); resolution and lowering of
 // the record happen later, against the declared type.
-static void resolve_init_record(LibcpContext *ctx, Initializer *rec) {
+static void resolve_init_record(LibcpContext *ctx, LibcpInitializer *rec) {
   if (!rec)
     return;
 
   if (rec->kind == INIT_EXPR)
     resolve_node(ctx, rec->expr);
 
-  for (InitItem *it = rec->items; it; it = it->next) {
-    for (InitDesig *d = it->desigs; d; d = d->next) {
+  for (LibcpInitItem *it = rec->items; it; it = it->next) {
+    for (LibcpInitDesig *d = it->desigs; d; d = d->next) {
       resolve_node(ctx, d->begin);
       resolve_node(ctx, d->end);
     }
@@ -2812,7 +2811,7 @@ static void resolve_init_record(LibcpContext *ctx, Initializer *rec) {
   }
 }
 
-static void resolve_children(LibcpContext *ctx, Node *node) {
+static void resolve_children(LibcpContext *ctx, LibcpNode *node) {
   resolve_node(ctx, node->lhs);
   resolve_node(ctx, node->rhs);
   resolve_node(ctx, node->cond);
@@ -2827,7 +2826,7 @@ static void resolve_children(LibcpContext *ctx, Node *node) {
   resolve_node(ctx, node->cas_new);
 }
 
-static void resolve_node(LibcpContext *ctx, Node *node) {
+static void resolve_node(LibcpContext *ctx, LibcpNode *node) {
   if (!node)
     return;
 
@@ -2880,7 +2879,7 @@ static void resolve_node(LibcpContext *ctx, Node *node) {
       // other local. The void check is anchored where the old
       // declaration site reported it: at the `=` if there is an
       // initializer, at the declaration position otherwise.
-      Token *anchor = node->decl_init ? node->decl_init->eq_tok : node->tok;
+      LibcpToken *anchor = node->decl_init ? node->decl_init->eq_tok : node->tok;
       check_declared_void(ctx, anchor, node->ty_op);
       node->var = new_anon_gvar(ctx, node->ty_op);
       push_scope(ctx, libcp_get_ident(ctx, node->name_tok))->var = node->var;
@@ -2901,7 +2900,7 @@ static void resolve_node(LibcpContext *ctx, Node *node) {
     // initializer, a flexible member), and later references in the
     // resolve order have to see the completed type.
     if (node->decl_init) {
-      Type *new_ty;
+      LibcpType *new_ty;
       node->init_resolved =
         resolve_initializer(ctx, node->decl_init, node->var->ty, &new_ty);
       node->var->ty = new_ty;
@@ -2912,7 +2911,7 @@ static void resolve_node(LibcpContext *ctx, Node *node) {
     resolve_type_exprs(ctx, node->ty_op);
     resolve_type(ctx, node->ty_op);
 
-    Obj *var = new_gvar(ctx, libcp_get_ident(ctx, node->name_tok),
+    LibcpObj *var = new_gvar(ctx, libcp_get_ident(ctx, node->name_tok),
                         named_type(ctx, node->ty_op, node->name_tok));
     var->is_definition = !node->attr.is_extern;
     var->is_static = node->attr.is_static;
@@ -2926,7 +2925,7 @@ static void resolve_node(LibcpContext *ctx, Node *node) {
 
     resolve_init_record(ctx, node->decl_init);
     if (node->decl_init) {
-      Type *new_ty;
+      LibcpType *new_ty;
       node->init_resolved = resolve_initializer(ctx, node->decl_init, var->ty, &new_ty);
       var->ty = new_ty;
     }
@@ -2945,7 +2944,7 @@ static void resolve_node(LibcpContext *ctx, Node *node) {
                                : new_anon_gvar(ctx, node->ty_op);
     resolve_init_record(ctx, node->decl_init);
     if (node->decl_init) {
-      Type *new_ty;
+      LibcpType *new_ty;
       node->init_resolved =
         resolve_initializer(ctx, node->decl_init, node->var->ty, &new_ty);
       node->var->ty = new_ty;
@@ -2955,7 +2954,7 @@ static void resolve_node(LibcpContext *ctx, Node *node) {
     // The literal becomes a reference to its anonymous global here, at
     // its source position, so the globals keep the declaration order
     // the single-pass parser produced.
-    Obj *var = new_string_literal(ctx, node->tok->str, node->tok->ty);
+    LibcpObj *var = new_string_literal(ctx, node->tok->str, node->tok->ty);
     node->kind = ND_VAR;
     node->var = var;
     node->ty = var->ty;
@@ -3017,7 +3016,7 @@ static void resolve_node(LibcpContext *ctx, Node *node) {
   resolve_children(ctx, node);
 }
 
-static void resolve_chain(LibcpContext *ctx, Node *node) {
+static void resolve_chain(LibcpContext *ctx, LibcpNode *node) {
   for (; node; node = node->next)
     resolve_node(ctx, node);
 }
@@ -3027,12 +3026,12 @@ static void resolve_chain(LibcpContext *ctx, Node *node) {
 // first, then the statements, with the scope stack the block structure
 // gives. The variable list is captured before the annotation pass adds
 // its temporaries; analyze_function splices those in afterwards.
-static void resolve_function(LibcpContext *ctx, Node *node) {
-  Type *ty = node->ty_op;
+static void resolve_function(LibcpContext *ctx, LibcpNode *node) {
+  LibcpType *ty = node->ty_op;
   resolve_type_exprs(ctx, ty);
   resolve_type(ctx, ty);
 
-  Obj *fn = declare_function(ctx, libcp_get_ident(ctx, node->name_tok),
+  LibcpObj *fn = declare_function(ctx, libcp_get_ident(ctx, node->name_tok),
                              named_type(ctx, ty, node->name_tok), &node->attr,
                              node->tok, node->body != NULL);
   node->var = fn;
@@ -3048,8 +3047,8 @@ static void resolve_function(LibcpContext *ctx, Node *node) {
   // and restored around it, here and in the annotation pass
   // (analyze_function), which reads sema_fn for the return
   // conversions. The flag is saved for the same reach reason.
-  Obj *save_locals = locals;
-  Obj *save_fn = sema_fn;
+  LibcpObj *save_locals = locals;
+  LibcpObj *save_fn = sema_fn;
   bool save_body = resolving_body;
 
   sema_fn = fn;
@@ -3071,10 +3070,10 @@ static void resolve_function(LibcpContext *ctx, Node *node) {
 // collected on a fresh variable list and spliced in front of the ones
 // the resolve pass captured, so that the function's frame is complete
 // and no other function's list is polluted.
-static void splice_locals(LibcpContext *ctx, Obj *fn) {
-  Obj *pass2 = locals;
+static void splice_locals(LibcpContext *ctx, LibcpObj *fn) {
+  LibcpObj *pass2 = locals;
   if (pass2) {
-    Obj *tail = pass2;
+    LibcpObj *tail = pass2;
     while (tail->next)
       tail = tail->next;
     tail->next = obj_locals(fn);
@@ -3084,30 +3083,30 @@ static void splice_locals(LibcpContext *ctx, Obj *fn) {
 
 // The goto and label-value references collected for one function are
 // parked in the context (PLAN L3.1b): they are a sema -> codegen
-// handoff, not a layer-3/4 field of Obj. The parameter is not named
+// handoff, not a layer-3/4 field of LibcpObj. The parameter is not named
 // `gotos` because sema.c aliases that name to the context slot.
-void libcp_sema_store_label_gotos(LibcpContext *ctx, Obj *fn, NodeArray refs) {
-  LabelGotoList *l = libcp_arena_calloc(ctx, 1, sizeof(LabelGotoList));
+void libcp_sema_store_label_gotos(LibcpContext *ctx, LibcpObj *fn, LibcpNodeArray refs) {
+  LibcpLabelGotoList *l = libcp_arena_calloc(ctx, 1, sizeof(LibcpLabelGotoList));
   l->fn = fn;
   l->refs = refs;
   l->next = ctx->label_gotos;
   ctx->label_gotos = l;
 }
 
-NodeArray *libcp_sema_label_gotos(LibcpContext *ctx, Obj *fn) {
-  for (LabelGotoList *l = ctx->label_gotos; l; l = l->next)
+LibcpNodeArray *libcp_sema_label_gotos(LibcpContext *ctx, LibcpObj *fn) {
+  for (LibcpLabelGotoList *l = ctx->label_gotos; l; l = l->next)
     if (l->fn == fn)
       return &l->refs;
   return NULL;
 }
 
-static void analyze_function(LibcpContext *ctx, Obj *fn) {
+static void analyze_function(LibcpContext *ctx, LibcpObj *fn) {
   // The return conversions read the function being annotated, and a
   // nested definition's analysis runs from inside its host's, so the
   // context is saved and restored like the local list.
-  Obj *save_fn = sema_fn;
+  LibcpObj *save_fn = sema_fn;
   sema_fn = fn;
-  Obj *save = locals;
+  LibcpObj *save = locals;
   locals = NULL;
   libcp_add_type(ctx, fn->body);
   check_control_flow(ctx, fn->body);
@@ -3118,7 +3117,7 @@ static void analyze_function(LibcpContext *ctx, Obj *fn) {
   // static initializers) make this the only chain that reaches them
   // all.
   libcp_sema_store_label_gotos(ctx, fn, gotos);
-  gotos = labels = (NodeArray){};
+  gotos = labels = (LibcpNodeArray){};
 
   splice_locals(ctx, fn);
   locals = save;
@@ -3130,12 +3129,12 @@ static void analyze_function(LibcpContext *ctx, Obj *fn) {
 // codegen. A function record is resolved first, so that later records
 // see its name, and its body is annotated and descended right after -
 // the order the parser used to interleave declaration and analysis.
-Obj *libcp_sema(LibcpContext *ctx, Node *toplevel) {
+LibcpObj *libcp_sema(LibcpContext *ctx, LibcpNode *toplevel) {
   ENTER_RET(ctx, NULL);
   sema_init(ctx);
   declare_builtin_functions(ctx);
 
-  for (Node *n = toplevel; n; n = n->next) {
+  for (LibcpNode *n = toplevel; n; n = n->next) {
     switch (n->kind) {
     case ND_TYPEDEF:
     case ND_ENUM_CONST:

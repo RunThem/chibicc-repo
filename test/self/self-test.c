@@ -29,7 +29,7 @@ static void arena_test(LibcpContext *ctx) {
 }
 
 static void hashmap_test(LibcpContext *ctx) {
-  HashMap *map = libcp_arena_calloc(ctx, 1, sizeof(HashMap));
+  LibcpHashMap *map = libcp_arena_calloc(ctx, 1, sizeof(LibcpHashMap));
 
   for (int i = 0; i < 5000; i++)
     libcp_hashmap_put(ctx, map, libcp_format(ctx, "key %d", i), (void *)(size_t)i);
@@ -59,7 +59,7 @@ static void hashmap_test(LibcpContext *ctx) {
 
   // Delete-heavy traffic must not leave tombstones behind: once they
   // outnumber the live entries the table rehashes (C8).
-  HashMap *tomb = libcp_arena_calloc(ctx, 1, sizeof(HashMap));
+  LibcpHashMap *tomb = libcp_arena_calloc(ctx, 1, sizeof(LibcpHashMap));
   for (int i = 0; i < 1000; i++)
     libcp_hashmap_put(ctx, tomb, libcp_format(ctx, "t %d", i), (void *)(size_t)i);
   for (int i = 0; i < 900; i++)
@@ -101,7 +101,7 @@ static bool sema_state_test(void) {
     }
 
     int n = 0;
-    for (LabelGotoList *l = ctx->label_gotos; l; l = l->next)
+    for (LibcpLabelGotoList *l = ctx->label_gotos; l; l = l->next)
       n++;
 
     if (round == 0) {

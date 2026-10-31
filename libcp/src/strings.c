@@ -1,6 +1,6 @@
 #include "libcp.h"
 
-void libcp_strarray_push(LibcpContext *ctx, StringArray *arr, char *s) {
+void libcp_strarray_push(LibcpContext *ctx, LibcpStringArray *arr, char *s) {
   if (!arr->data) {
     arr->data = libcp_arena_calloc(ctx, 8, sizeof(char *));
     arr->capacity = 8;
@@ -16,16 +16,16 @@ void libcp_strarray_push(LibcpContext *ctx, StringArray *arr, char *s) {
   arr->data[arr->len++] = s;
 }
 
-void libcp_nodearray_push(LibcpContext *ctx, NodeArray *arr, Node *node) {
+void libcp_nodearray_push(LibcpContext *ctx, LibcpNodeArray *arr, LibcpNode *node) {
   if (!arr->data) {
-    arr->data = libcp_arena_calloc(ctx, 8, sizeof(Node *));
+    arr->data = libcp_arena_calloc(ctx, 8, sizeof(LibcpNode *));
     arr->capacity = 8;
   }
 
   if (arr->capacity == arr->len) {
     int oldcap = arr->capacity;
-    arr->data = libcp_arena_realloc(ctx, arr->data, sizeof(Node *) * oldcap,
-                                      sizeof(Node *) * oldcap * 2);
+    arr->data = libcp_arena_realloc(ctx, arr->data, sizeof(LibcpNode *) * oldcap,
+                                      sizeof(LibcpNode *) * oldcap * 2);
     arr->capacity = oldcap * 2;
   }
 

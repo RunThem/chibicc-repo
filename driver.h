@@ -8,7 +8,7 @@
 
 #include "libcp.h"
 
-void codegen(LibcpContext *ctx, Obj *prog, FILE *out);
+void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out);
 
 extern bool opt_fpic;
 extern bool opt_fcommon;

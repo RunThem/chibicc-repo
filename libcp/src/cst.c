@@ -43,42 +43,42 @@
 // unparsed group; every token stays, so reconstruction remains lossless.
 #define MAX_CST_DEPTH 512
 
-static CstNode *new_cst_node(LibcpContext *ctx, CstKind kind) {
-  CstNode *node = libcp_arena_calloc(ctx, 1, sizeof(CstNode));
+static LibcpCstNode *new_cst_node(LibcpContext *ctx, LibcpCstKind kind) {
+  LibcpCstNode *node = libcp_arena_calloc(ctx, 1, sizeof(LibcpCstNode));
   node->kind = kind;
   return node;
 }
 
-static void cst_add_child(LibcpContext *ctx, CstNode *node, CstNode *child) {
+static void cst_add_child(LibcpContext *ctx, LibcpCstNode *node, LibcpCstNode *child) {
   // The capacity lives in a size_t header just before `children`; the
   // public node exposes only child_count and the live entries.
   size_t cap = node->children ? ((size_t *)node->children)[-1] : 0;
   if ((size_t)node->child_count == cap) {
     cap = cap ? cap * 2 : 8;
-    size_t bytes = sizeof(size_t) + cap * sizeof(CstNode *);
+    size_t bytes = sizeof(size_t) + cap * sizeof(LibcpCstNode *);
     char *p = libcp_arena_alloc(ctx, bytes, 8);
     *(size_t *)p = cap;
-    CstNode **children = (CstNode **)(p + sizeof(size_t));
+    LibcpCstNode **children = (LibcpCstNode **)(p + sizeof(size_t));
     if (node->children)
       memcpy(children, node->children,
-             (size_t)node->child_count * sizeof(CstNode *));
+             (size_t)node->child_count * sizeof(LibcpCstNode *));
     node->children = children;
   }
   node->children[node->child_count++] = child;
 }
 
-static CstNode *cst_add_leaf(LibcpContext *ctx, CstNode *parent, Token *tok) {
-  CstNode *leaf = new_cst_node(ctx, tok->kind == TK_EOF ? CST_EOF : CST_TOKEN);
+static LibcpCstNode *cst_add_leaf(LibcpContext *ctx, LibcpCstNode *parent, LibcpToken *tok) {
+  LibcpCstNode *leaf = new_cst_node(ctx, tok->kind == TK_EOF ? CST_EOF : CST_TOKEN);
   leaf->tok = tok;
   cst_add_child(ctx, parent, leaf);
   return leaf;
 }
 
-static bool cst_is_open(Token *tok) {
+static bool cst_is_open(LibcpToken *tok) {
   return libcp_equal(tok, "(") || libcp_equal(tok, "[") || libcp_equal(tok, "{");
 }
 
-static bool cst_is_close(Token *tok) {
+static bool cst_is_close(LibcpToken *tok) {
   return libcp_equal(tok, ")") || libcp_equal(tok, "]") || libcp_equal(tok, "}");
 }
 
@@ -86,25 +86,25 @@ static bool cst_is_close(Token *tok) {
 // recursion depth (F5b). A depth overrun turns the current span into raw,
 // unparsed children; no token is dropped.
 typedef struct {
-  StringArray typedefs;
+  LibcpStringArray typedefs;
   int depth;
-} CstContext;
+} LibcpCstContext;
 
 // Parse one delimited group starting at `tok` (one of '(' '[' '{'), in
 // raw mode: the interior is not split into statements or expressions,
 // only nested delimiters are grouped. On a missing closer or a depth
 // overrun the node becomes CST_UNPARSED but keeps the opener and
 // everything it consumed.
-static CstNode *cst_parse_group(LibcpContext *ctx, CstContext *cst, Token **rest, Token *tok) {
+static LibcpCstNode *cst_parse_group(LibcpContext *ctx, LibcpCstContext *cst, LibcpToken **rest, LibcpToken *tok) {
   char *closer = libcp_equal(tok, "(") ? ")" : libcp_equal(tok, "[") ? "]" : "}";
-  CstKind kind = libcp_equal(tok, "(") ? CST_GROUP_PAREN
+  LibcpCstKind kind = libcp_equal(tok, "(") ? CST_GROUP_PAREN
                : libcp_equal(tok, "[") ? CST_GROUP_BRACKET
                : CST_GROUP_BRACE;
 
-  CstNode *group = new_cst_node(ctx, kind);
+  LibcpCstNode *group = new_cst_node(ctx, kind);
   cst_add_leaf(ctx, group, tok);
 
-  Token *p = tok->next;
+  LibcpToken *p = tok->next;
   if (++cst->depth > MAX_CST_DEPTH) {
     // Depth fallback: keep the rest of the group as flat leaves. The
     // group is an unparsed span; the token order (and so the
@@ -154,20 +154,20 @@ static CstNode *cst_parse_group(LibcpContext *ctx, CstContext *cst, Token **rest
 //
 
 typedef struct {
-  Token *tok;
+  LibcpToken *tok;
   bool ok;
-  CstContext *cst;
-} CstParser;
+  LibcpCstContext *cst;
+} LibcpCstParser;
 
-static void cst_fail(CstParser *p) {
+static void cst_fail(LibcpCstParser *p) {
   p->ok = false;
 }
 
-static bool cst_at(CstParser *p, char *op) {
+static bool cst_at(LibcpCstParser *p, char *op) {
   return p->tok && p->tok->kind != TK_EOF && libcp_equal(p->tok, op);
 }
 
-static bool cst_in_list(Token *tok, char **list) {
+static bool cst_in_list(LibcpToken *tok, char **list) {
   for (int i = 0; list[i]; i++)
     if (libcp_equal(tok, list[i]))
       return true;
@@ -177,7 +177,7 @@ static bool cst_in_list(Token *tok, char **list) {
 // Words that cannot begin an expression operand: C11 keywords, the
 // operator-like keywords, and the common GNU spellings. In the raw
 // stream keywords are still TK_IDENT, so this is a spelling test.
-static bool cst_is_keyword(Token *tok) {
+static bool cst_is_keyword(LibcpToken *tok) {
   char *kw[] = {
     "auto", "break", "case", "char", "const", "continue", "default", "do",
     "double", "else", "enum", "extern", "float", "for", "goto", "if",
@@ -193,7 +193,7 @@ static bool cst_is_keyword(Token *tok) {
   return cst_in_list(tok, kw);
 }
 
-static bool cst_is_typedef_name(CstContext *cst, Token *tok) {
+static bool cst_is_typedef_name(LibcpCstContext *cst, LibcpToken *tok) {
   if (!tok || tok->kind != TK_IDENT)
     return false;
   for (int i = 0; i < cst->typedefs.len; i++)
@@ -204,7 +204,7 @@ static bool cst_is_typedef_name(CstContext *cst, Token *tok) {
 
 // True if `tok` can start a type name in a cast or sizeof: a type
 // specifier / qualifier keyword, or a file-local typedef name.
-static bool cst_is_type_start(Token *tok, CstContext *cst) {
+static bool cst_is_type_start(LibcpToken *tok, LibcpCstContext *cst) {
   char *kw[] = {
     "void", "_Bool", "char", "short", "int", "long", "float", "double",
     "signed", "unsigned", "_Complex", "_Imaginary", "const", "volatile",
@@ -218,7 +218,7 @@ static bool cst_is_type_start(Token *tok, CstContext *cst) {
 
 // True if `tok` can start a declaration. Storage classes and the
 // declaration-only keywords are included; statement keywords are not.
-static bool cst_is_decl_start(Token *tok, CstContext *cst) {
+static bool cst_is_decl_start(LibcpToken *tok, LibcpCstContext *cst) {
   char *kw[] = {
     "typedef", "static", "extern", "auto", "register", "inline",
     "_Thread_local", "__thread", "_Noreturn", "_Alignas", "const",
@@ -232,7 +232,7 @@ static bool cst_is_decl_start(Token *tok, CstContext *cst) {
   return cst_in_list(tok, kw) || cst_is_typedef_name(cst, tok);
 }
 
-static void cst_add_typedef(LibcpContext *ctx, CstContext *cst, Token *tok) {
+static void cst_add_typedef(LibcpContext *ctx, LibcpCstContext *cst, LibcpToken *tok) {
   libcp_strarray_push(ctx, &cst->typedefs, libcp_arena_strndup(ctx, tok->loc, tok->len));
 }
 
@@ -242,8 +242,8 @@ static void cst_add_typedef(LibcpContext *ctx, CstContext *cst, Token *tok) {
 // are collected; parameter names and struct tags are not. This is the
 // cast / declaration oracle the plan allows - an include-provided name
 // stays unknown and is not guessed.
-static void cst_collect_typedefs(LibcpContext *ctx, CstContext *cst, Token *tok) {
-  Token *p = tok;
+static void cst_collect_typedefs(LibcpContext *ctx, LibcpCstContext *cst, LibcpToken *tok) {
+  LibcpToken *p = tok;
 
   while (p && p->kind != TK_EOF) {
     if (p->kind != TK_IDENT || !libcp_equal(p, "typedef")) {
@@ -252,8 +252,8 @@ static void cst_collect_typedefs(LibcpContext *ctx, CstContext *cst, Token *tok)
     }
 
     int depth = 0;
-    Token *prev = p;
-    Token *q = p->next;
+    LibcpToken *prev = p;
+    LibcpToken *q = p->next;
 
     for (; q && q->kind != TK_EOF; prev = q, q = q->next) {
       if (libcp_equal(q, "(") || libcp_equal(q, "[") || libcp_equal(q, "{")) {
@@ -280,34 +280,34 @@ static void cst_collect_typedefs(LibcpContext *ctx, CstContext *cst, Token *tok)
   }
 }
 
-static CstNode *cst_parse_comma(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_assign(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_conditional(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_unary(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_postfix(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_postfix_tail(LibcpContext *ctx, CstParser *p, CstNode *node);
-static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_arg_list(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_init_list(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_type_name(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_type_name_core(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_declarator(LibcpContext *ctx, CstParser *p, bool allow_abstract);
-static CstNode *cst_parse_decl(LibcpContext *ctx, CstParser *p);
-static void cst_parse_compound(LibcpContext *ctx, CstParser *p, CstNode *block);
+static LibcpCstNode *cst_parse_comma(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_assign(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_conditional(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_unary(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_postfix(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_postfix_tail(LibcpContext *ctx, LibcpCstParser *p, LibcpCstNode *node);
+static LibcpCstNode *cst_parse_primary(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_arg_list(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_init_list(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_type_name(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_type_name_core(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_declarator(LibcpContext *ctx, LibcpCstParser *p, bool allow_abstract);
+static LibcpCstNode *cst_parse_decl(LibcpContext *ctx, LibcpCstParser *p);
+static void cst_parse_compound(LibcpContext *ctx, LibcpCstParser *p, LibcpCstNode *block);
 // The body behind each depth-guarded expression/declarator entry.
-static CstNode *cst_parse_comma1(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_assign1(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_conditional1(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_unary1(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_init_list1(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_declarator1(LibcpContext *ctx, CstParser *p, bool allow_abstract);
+static LibcpCstNode *cst_parse_comma1(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_assign1(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_conditional1(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_unary1(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_init_list1(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_declarator1(LibcpContext *ctx, LibcpCstParser *p, bool allow_abstract);
 
 // Consume one balanced group in raw mode, for a type name in a cast or
 // sizeof. An unclosed group fails the expression: the statement falls
 // back to the skeleton, where the span becomes UNPARSED.
-static CstNode *cst_parse_raw_group(LibcpContext *ctx, CstParser *p) {
-  Token *rest = NULL;
-  CstNode *group = cst_parse_group(ctx, p->cst, &rest, p->tok);
+static LibcpCstNode *cst_parse_raw_group(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpToken *rest = NULL;
+  LibcpCstNode *group = cst_parse_group(ctx, p->cst, &rest, p->tok);
 
   if (group->kind == CST_UNPARSED) {
     cst_fail(p);
@@ -318,11 +318,11 @@ static CstNode *cst_parse_raw_group(LibcpContext *ctx, CstParser *p) {
 }
 
 // primary = ident | number | char | string+ | "(" expr ")"
-static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_primary(LibcpContext *ctx, LibcpCstParser *p) {
   if (!p->ok)
     return NULL;
 
-  Token *tok = p->tok;
+  LibcpToken *tok = p->tok;
   if (!tok || tok->kind == TK_EOF) {
     cst_fail(p);
     return NULL;
@@ -333,11 +333,11 @@ static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p) {
     // the brace, so the items inside keep the full statement grammar
     // (PLAN-l5 W1: this span used to fall back to CST_UNPARSED).
     if (libcp_equal(tok->next, "{")) {
-      CstNode *node = new_cst_node(ctx, CST_STMT_EXPR);
+      LibcpCstNode *node = new_cst_node(ctx, CST_STMT_EXPR);
       cst_add_leaf(ctx, node, tok);
       p->tok = tok->next;
 
-      CstNode *block = new_cst_node(ctx, CST_BLOCK);
+      LibcpCstNode *block = new_cst_node(ctx, CST_BLOCK);
       cst_parse_compound(ctx, p, block);
       if (!p->ok)
         return NULL;
@@ -352,11 +352,11 @@ static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p) {
       return node;
     }
 
-    CstNode *node = new_cst_node(ctx, CST_PAREN);
+    LibcpCstNode *node = new_cst_node(ctx, CST_PAREN);
     cst_add_leaf(ctx, node, tok);
 
     p->tok = tok->next;
-    CstNode *inner = cst_parse_comma(ctx, p);
+    LibcpCstNode *inner = cst_parse_comma(ctx, p);
     if (!p->ok || !cst_at(p, ")")) {
       cst_fail(p);
       return NULL;
@@ -372,7 +372,7 @@ static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p) {
   // call-shaped, so it becomes a PRIMARY leaf and the postfix tail's
   // arg-list takes over (the arms parse as associations, cst_parse_arg).
   if (libcp_equal(tok, "_Generic") && libcp_equal(tok->next, "(")) {
-    CstNode *node = new_cst_node(ctx, CST_PRIMARY);
+    LibcpCstNode *node = new_cst_node(ctx, CST_PRIMARY);
     cst_add_leaf(ctx, node, tok);
     p->tok = tok->next;
     return node;
@@ -386,7 +386,7 @@ static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p) {
   // Identifiers (keywords are still identifiers here), numbers, char and
   // string literals. Adjacent string literals are one primary; each stays
   // an explicit leaf.
-  CstNode *node = new_cst_node(ctx, CST_PRIMARY);
+  LibcpCstNode *node = new_cst_node(ctx, CST_PRIMARY);
   cst_add_leaf(ctx, node, tok);
   p->tok = tok->next;
 
@@ -407,17 +407,17 @@ static CstNode *cst_parse_primary(LibcpContext *ctx, CstParser *p) {
 // The assignment attempt runs first; its failure backtracks only this
 // argument, and the failed attempt's nodes are unreachable, which is
 // allowed (PLAN-l5 W1).
-static CstNode *cst_parse_arg(LibcpContext *ctx, CstParser *p) {
-  Token *start = p->tok;
+static LibcpCstNode *cst_parse_arg(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpToken *start = p->tok;
 
-  CstNode *arg = cst_parse_assign(ctx, p);
+  LibcpCstNode *arg = cst_parse_assign(ctx, p);
   if (p->ok)
     return arg;
 
   p->ok = true;
   p->tok = start;
 
-  CstNode *ty;
+  LibcpCstNode *ty;
   if (libcp_equal(p->tok, "default")) {
     // The _Generic default arm is a keyword here, not a type name.
     ty = new_cst_node(ctx, CST_PRIMARY);
@@ -432,7 +432,7 @@ static CstNode *cst_parse_arg(LibcpContext *ctx, CstParser *p) {
   if (!cst_at(p, ":"))
     return ty;
 
-  CstNode *assoc = new_cst_node(ctx, CST_GENERIC_ASSOC);
+  LibcpCstNode *assoc = new_cst_node(ctx, CST_GENERIC_ASSOC);
   cst_add_child(ctx, assoc, ty);
   cst_add_leaf(ctx, assoc, p->tok); // ':'
   p->tok = p->tok->next;
@@ -441,14 +441,14 @@ static CstNode *cst_parse_arg(LibcpContext *ctx, CstParser *p) {
 }
 
 // arg-list = "(" (arg ("," arg)*)? ")"
-static CstNode *cst_parse_arg_list(LibcpContext *ctx, CstParser *p) {
-  CstNode *args = new_cst_node(ctx, CST_ARG_LIST);
+static LibcpCstNode *cst_parse_arg_list(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *args = new_cst_node(ctx, CST_ARG_LIST);
   cst_add_leaf(ctx, args, p->tok); // '('
   p->tok = p->tok->next;
 
   if (!cst_at(p, ")")) {
     for (;;) {
-      CstNode *arg = cst_parse_arg(ctx, p);
+      LibcpCstNode *arg = cst_parse_arg(ctx, p);
       if (!p->ok)
         return NULL;
       cst_add_child(ctx, args, arg);
@@ -470,14 +470,14 @@ static CstNode *cst_parse_arg_list(LibcpContext *ctx, CstParser *p) {
 }
 
 // designator = "[" conditional ("..." conditional)? "]" | "." ident
-static CstNode *cst_parse_designator(LibcpContext *ctx, CstParser *p) {
-  CstNode *desig = new_cst_node(ctx, CST_DESIGNATOR);
+static LibcpCstNode *cst_parse_designator(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *desig = new_cst_node(ctx, CST_DESIGNATOR);
 
   if (cst_at(p, "[")) {
     cst_add_leaf(ctx, desig, p->tok); // '['
     p->tok = p->tok->next;
 
-    CstNode *begin = cst_parse_conditional(ctx, p);
+    LibcpCstNode *begin = cst_parse_conditional(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, desig, begin);
@@ -485,7 +485,7 @@ static CstNode *cst_parse_designator(LibcpContext *ctx, CstParser *p) {
     if (cst_at(p, "...")) {
       cst_add_leaf(ctx, desig, p->tok);
       p->tok = p->tok->next;
-      CstNode *end = cst_parse_conditional(ctx, p);
+      LibcpCstNode *end = cst_parse_conditional(ctx, p);
       if (!p->ok)
         return NULL;
       cst_add_child(ctx, desig, end);
@@ -501,7 +501,7 @@ static CstNode *cst_parse_designator(LibcpContext *ctx, CstParser *p) {
   }
 
   if (cst_at(p, ".")) {
-    Token *name = p->tok->next;
+    LibcpToken *name = p->tok->next;
     if (!name || name->kind != TK_IDENT) {
       cst_fail(p);
       return NULL;
@@ -517,12 +517,12 @@ static CstNode *cst_parse_designator(LibcpContext *ctx, CstParser *p) {
 }
 
 // initializer = brace-list | string+ | assign
-static CstNode *cst_parse_initializer(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_initializer(LibcpContext *ctx, LibcpCstParser *p) {
   if (cst_at(p, "{"))
     return cst_parse_init_list(ctx, p);
 
   if (p->tok && p->tok->kind == TK_STR) {
-    CstNode *node = new_cst_node(ctx, CST_PRIMARY);
+    LibcpCstNode *node = new_cst_node(ctx, CST_PRIMARY);
     while (p->tok && p->tok->kind == TK_STR) {
       cst_add_leaf(ctx, node, p->tok);
       p->tok = p->tok->next;
@@ -539,19 +539,19 @@ static CstNode *cst_parse_initializer(LibcpContext *ctx, CstParser *p) {
 // The written shape is kept: designators are explicit nodes, a braced
 // sublist is a nested CST_INIT_LIST, and no target-type decision is made
 // here (brace elision belongs to a later consumer).
-static CstNode *cst_parse_init_list(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_init_list(LibcpContext *ctx, LibcpCstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_init_list1(ctx, p);
+  LibcpCstNode *node = cst_parse_init_list1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_init_list1(LibcpContext *ctx, CstParser *p) {
-  CstNode *list = new_cst_node(ctx, CST_INIT_LIST);
+static LibcpCstNode *cst_parse_init_list1(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *list = new_cst_node(ctx, CST_INIT_LIST);
   cst_add_leaf(ctx, list, p->tok); // '{'
   p->tok = p->tok->next;
 
@@ -562,10 +562,10 @@ static CstNode *cst_parse_init_list1(LibcpContext *ctx, CstParser *p) {
   }
 
   for (;;) {
-    CstNode *item = new_cst_node(ctx, CST_INITIALIZER);
+    LibcpCstNode *item = new_cst_node(ctx, CST_INITIALIZER);
 
     while (cst_at(p, "[") || cst_at(p, ".")) {
-      CstNode *desig = cst_parse_designator(ctx, p);
+      LibcpCstNode *desig = cst_parse_designator(ctx, p);
       if (!p->ok)
         return NULL;
       cst_add_child(ctx, item, desig);
@@ -576,7 +576,7 @@ static CstNode *cst_parse_init_list1(LibcpContext *ctx, CstParser *p) {
       p->tok = p->tok->next;
     }
 
-    CstNode *value = cst_parse_initializer(ctx, p);
+    LibcpCstNode *value = cst_parse_initializer(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, item, value);
@@ -601,16 +601,16 @@ static CstNode *cst_parse_init_list1(LibcpContext *ctx, CstParser *p) {
 
 // postfix-tail = ("(" arg-list | "[" expr "]" | "." ident | "->" ident
 //                | "++" | "--")*
-static CstNode *cst_parse_postfix_tail(LibcpContext *ctx, CstParser *p, CstNode *node) {
+static LibcpCstNode *cst_parse_postfix_tail(LibcpContext *ctx, LibcpCstParser *p, LibcpCstNode *node) {
   for (;;) {
     if (!p->ok)
       return NULL;
 
     if (cst_at(p, "(")) {
-      CstNode *args = cst_parse_arg_list(ctx, p);
+      LibcpCstNode *args = cst_parse_arg_list(ctx, p);
       if (!p->ok)
         return NULL;
-      CstNode *call = new_cst_node(ctx, CST_POSTFIX);
+      LibcpCstNode *call = new_cst_node(ctx, CST_POSTFIX);
       cst_add_child(ctx, call, node);
       cst_add_child(ctx, call, args);
       node = call;
@@ -618,15 +618,15 @@ static CstNode *cst_parse_postfix_tail(LibcpContext *ctx, CstParser *p, CstNode 
     }
 
     if (cst_at(p, "[")) {
-      Token *open = p->tok;
+      LibcpToken *open = p->tok;
       p->tok = open->next;
-      CstNode *idx = cst_parse_comma(ctx, p);
+      LibcpCstNode *idx = cst_parse_comma(ctx, p);
       if (!p->ok || !cst_at(p, "]")) {
         cst_fail(p);
         return NULL;
       }
 
-      CstNode *sub = new_cst_node(ctx, CST_POSTFIX);
+      LibcpCstNode *sub = new_cst_node(ctx, CST_POSTFIX);
       cst_add_child(ctx, sub, node);
       cst_add_leaf(ctx, sub, open);
       cst_add_child(ctx, sub, idx);
@@ -637,14 +637,14 @@ static CstNode *cst_parse_postfix_tail(LibcpContext *ctx, CstParser *p, CstNode 
     }
 
     if (cst_at(p, ".") || cst_at(p, "->")) {
-      Token *op = p->tok;
-      Token *name = op->next;
+      LibcpToken *op = p->tok;
+      LibcpToken *name = op->next;
       if (!name || name->kind != TK_IDENT) {
         cst_fail(p);
         return NULL;
       }
 
-      CstNode *member = new_cst_node(ctx, CST_POSTFIX);
+      LibcpCstNode *member = new_cst_node(ctx, CST_POSTFIX);
       cst_add_child(ctx, member, node);
       cst_add_leaf(ctx, member, op);
       cst_add_leaf(ctx, member, name);
@@ -654,7 +654,7 @@ static CstNode *cst_parse_postfix_tail(LibcpContext *ctx, CstParser *p, CstNode 
     }
 
     if (cst_at(p, "++") || cst_at(p, "--")) {
-      CstNode *inc = new_cst_node(ctx, CST_POSTFIX);
+      LibcpCstNode *inc = new_cst_node(ctx, CST_POSTFIX);
       cst_add_child(ctx, inc, node);
       cst_add_leaf(ctx, inc, p->tok);
       p->tok = p->tok->next;
@@ -667,8 +667,8 @@ static CstNode *cst_parse_postfix_tail(LibcpContext *ctx, CstParser *p, CstNode 
 }
 
 // postfix = primary postfix-tail
-static CstNode *cst_parse_postfix(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_primary(ctx, p);
+static LibcpCstNode *cst_parse_postfix(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_primary(ctx, p);
   if (!p->ok)
     return NULL;
   return cst_parse_postfix_tail(ctx, p, node);
@@ -679,35 +679,35 @@ static CstNode *cst_parse_postfix(LibcpContext *ctx, CstParser *p) {
 //       | "(" type-name ")" unary                    // cast
 //       | "(" type-name ")" "{" init-list "}"        // compound literal
 //       | postfix
-static CstNode *cst_parse_unary(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_unary(LibcpContext *ctx, LibcpCstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_unary1(ctx, p);
+  LibcpCstNode *node = cst_parse_unary1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_unary1(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_unary1(LibcpContext *ctx, LibcpCstParser *p) {
   if (!p->ok)
     return NULL;
 
   if (cst_at(p, "sizeof") || cst_at(p, "_Alignof") || cst_at(p, "alignof") ||
       cst_at(p, "__alignof__") || cst_at(p, "__alignof") ||
       cst_at(p, "typeof") || cst_at(p, "__typeof__") || cst_at(p, "__typeof")) {
-    Token *op = p->tok;
+    LibcpToken *op = p->tok;
     p->tok = op->next;
 
-    CstNode *operand = (cst_at(p, "(") && p->tok->next &&
+    LibcpCstNode *operand = (cst_at(p, "(") && p->tok->next &&
                         cst_is_type_start(p->tok->next, p->cst))
                          ? cst_parse_type_name(ctx, p)
                          : cst_parse_unary(ctx, p);
     if (!p->ok)
       return NULL;
 
-    CstNode *node = new_cst_node(ctx, CST_UNARY);
+    LibcpCstNode *node = new_cst_node(ctx, CST_UNARY);
     cst_add_leaf(ctx, node, op);
     cst_add_child(ctx, node, operand);
     return node;
@@ -716,14 +716,14 @@ static CstNode *cst_parse_unary1(LibcpContext *ctx, CstParser *p) {
   if (cst_at(p, "+") || cst_at(p, "-") || cst_at(p, "!") || cst_at(p, "~") ||
       cst_at(p, "*") || cst_at(p, "&") || cst_at(p, "&&") ||
       cst_at(p, "++") || cst_at(p, "--")) {
-    Token *op = p->tok;
+    LibcpToken *op = p->tok;
     p->tok = op->next;
 
-    CstNode *operand = cst_parse_unary(ctx, p);
+    LibcpCstNode *operand = cst_parse_unary(ctx, p);
     if (!p->ok)
       return NULL;
 
-    CstNode *node = new_cst_node(ctx, CST_UNARY);
+    LibcpCstNode *node = new_cst_node(ctx, CST_UNARY);
     cst_add_leaf(ctx, node, op);
     cst_add_child(ctx, node, operand);
     return node;
@@ -731,25 +731,25 @@ static CstNode *cst_parse_unary1(LibcpContext *ctx, CstParser *p) {
 
   if (cst_at(p, "(") && p->tok->next &&
       cst_is_type_start(p->tok->next, p->cst)) {
-    CstNode *type = cst_parse_type_name(ctx, p);
+    LibcpCstNode *type = cst_parse_type_name(ctx, p);
     if (!p->ok)
       return NULL;
 
     if (cst_at(p, "{")) {
-      CstNode *init = cst_parse_init_list(ctx, p);
+      LibcpCstNode *init = cst_parse_init_list(ctx, p);
       if (!p->ok)
         return NULL;
-      CstNode *lit = new_cst_node(ctx, CST_COMPOUND_LITERAL);
+      LibcpCstNode *lit = new_cst_node(ctx, CST_COMPOUND_LITERAL);
       cst_add_child(ctx, lit, type);
       cst_add_child(ctx, lit, init);
       return cst_parse_postfix_tail(ctx, p, lit);
     }
 
-    CstNode *operand = cst_parse_unary(ctx, p);
+    LibcpCstNode *operand = cst_parse_unary(ctx, p);
     if (!p->ok)
       return NULL;
 
-    CstNode *cast = new_cst_node(ctx, CST_CAST);
+    LibcpCstNode *cast = new_cst_node(ctx, CST_CAST);
     cst_add_child(ctx, cast, type);
     cst_add_child(ctx, cast, operand);
     return cast;
@@ -761,15 +761,15 @@ static CstNode *cst_parse_unary1(LibcpContext *ctx, CstParser *p) {
 // binary-level <name> = <operand-level> (op <operand-level>)*, left
 // associative. Each level keeps the operator as an explicit leaf.
 
-static CstNode *cst_parse_mul(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_unary(ctx, p);
+static LibcpCstNode *cst_parse_mul(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_unary(ctx, p);
   while (p->ok && (cst_at(p, "*") || cst_at(p, "/") || cst_at(p, "%"))) {
-    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    LibcpCstNode *bin = new_cst_node(ctx, CST_BINARY);
     cst_add_child(ctx, bin, node);
     cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_unary(ctx, p);
+    LibcpCstNode *rhs = cst_parse_unary(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, bin, rhs);
@@ -778,15 +778,15 @@ static CstNode *cst_parse_mul(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_add(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_mul(ctx, p);
+static LibcpCstNode *cst_parse_add(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_mul(ctx, p);
   while (p->ok && (cst_at(p, "+") || cst_at(p, "-"))) {
-    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    LibcpCstNode *bin = new_cst_node(ctx, CST_BINARY);
     cst_add_child(ctx, bin, node);
     cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_mul(ctx, p);
+    LibcpCstNode *rhs = cst_parse_mul(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, bin, rhs);
@@ -795,15 +795,15 @@ static CstNode *cst_parse_add(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_shift(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_add(ctx, p);
+static LibcpCstNode *cst_parse_shift(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_add(ctx, p);
   while (p->ok && (cst_at(p, "<<") || cst_at(p, ">>"))) {
-    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    LibcpCstNode *bin = new_cst_node(ctx, CST_BINARY);
     cst_add_child(ctx, bin, node);
     cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_add(ctx, p);
+    LibcpCstNode *rhs = cst_parse_add(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, bin, rhs);
@@ -812,16 +812,16 @@ static CstNode *cst_parse_shift(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_relational(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_shift(ctx, p);
+static LibcpCstNode *cst_parse_relational(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_shift(ctx, p);
   while (p->ok && (cst_at(p, "<") || cst_at(p, "<=") ||
                    cst_at(p, ">") || cst_at(p, ">="))) {
-    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    LibcpCstNode *bin = new_cst_node(ctx, CST_BINARY);
     cst_add_child(ctx, bin, node);
     cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_shift(ctx, p);
+    LibcpCstNode *rhs = cst_parse_shift(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, bin, rhs);
@@ -830,15 +830,15 @@ static CstNode *cst_parse_relational(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_equality(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_relational(ctx, p);
+static LibcpCstNode *cst_parse_equality(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_relational(ctx, p);
   while (p->ok && (cst_at(p, "==") || cst_at(p, "!="))) {
-    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    LibcpCstNode *bin = new_cst_node(ctx, CST_BINARY);
     cst_add_child(ctx, bin, node);
     cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_relational(ctx, p);
+    LibcpCstNode *rhs = cst_parse_relational(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, bin, rhs);
@@ -847,15 +847,15 @@ static CstNode *cst_parse_equality(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_bitand(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_equality(ctx, p);
+static LibcpCstNode *cst_parse_bitand(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_equality(ctx, p);
   while (p->ok && cst_at(p, "&")) {
-    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    LibcpCstNode *bin = new_cst_node(ctx, CST_BINARY);
     cst_add_child(ctx, bin, node);
     cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_equality(ctx, p);
+    LibcpCstNode *rhs = cst_parse_equality(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, bin, rhs);
@@ -864,15 +864,15 @@ static CstNode *cst_parse_bitand(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_bitxor(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_bitand(ctx, p);
+static LibcpCstNode *cst_parse_bitxor(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_bitand(ctx, p);
   while (p->ok && cst_at(p, "^")) {
-    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    LibcpCstNode *bin = new_cst_node(ctx, CST_BINARY);
     cst_add_child(ctx, bin, node);
     cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_bitand(ctx, p);
+    LibcpCstNode *rhs = cst_parse_bitand(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, bin, rhs);
@@ -881,15 +881,15 @@ static CstNode *cst_parse_bitxor(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_bitor(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_bitxor(ctx, p);
+static LibcpCstNode *cst_parse_bitor(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_bitxor(ctx, p);
   while (p->ok && cst_at(p, "|")) {
-    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    LibcpCstNode *bin = new_cst_node(ctx, CST_BINARY);
     cst_add_child(ctx, bin, node);
     cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_bitxor(ctx, p);
+    LibcpCstNode *rhs = cst_parse_bitxor(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, bin, rhs);
@@ -898,15 +898,15 @@ static CstNode *cst_parse_bitor(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_logand(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_bitor(ctx, p);
+static LibcpCstNode *cst_parse_logand(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_bitor(ctx, p);
   while (p->ok && cst_at(p, "&&")) {
-    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    LibcpCstNode *bin = new_cst_node(ctx, CST_BINARY);
     cst_add_child(ctx, bin, node);
     cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_bitor(ctx, p);
+    LibcpCstNode *rhs = cst_parse_bitor(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, bin, rhs);
@@ -915,15 +915,15 @@ static CstNode *cst_parse_logand(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_logor(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_logand(ctx, p);
+static LibcpCstNode *cst_parse_logor(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_logand(ctx, p);
   while (p->ok && cst_at(p, "||")) {
-    CstNode *bin = new_cst_node(ctx, CST_BINARY);
+    LibcpCstNode *bin = new_cst_node(ctx, CST_BINARY);
     cst_add_child(ctx, bin, node);
     cst_add_leaf(ctx, bin, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_logand(ctx, p);
+    LibcpCstNode *rhs = cst_parse_logand(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, bin, rhs);
@@ -933,23 +933,23 @@ static CstNode *cst_parse_logor(LibcpContext *ctx, CstParser *p) {
 }
 
 // conditional = logor ("?" expr ":" conditional | "?" ":" conditional)?
-static CstNode *cst_parse_conditional(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_conditional(LibcpContext *ctx, LibcpCstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_conditional1(ctx, p);
+  LibcpCstNode *node = cst_parse_conditional1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_conditional1(LibcpContext *ctx, CstParser *p) {
-  CstNode *cond = cst_parse_logor(ctx, p);
+static LibcpCstNode *cst_parse_conditional1(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *cond = cst_parse_logor(ctx, p);
   if (!p->ok || !cst_at(p, "?"))
     return cond;
 
-  CstNode *node = new_cst_node(ctx, CST_COND);
+  LibcpCstNode *node = new_cst_node(ctx, CST_COND);
   cst_add_child(ctx, node, cond);
   cst_add_leaf(ctx, node, p->tok); // '?'
   p->tok = p->tok->next;
@@ -958,14 +958,14 @@ static CstNode *cst_parse_conditional1(LibcpContext *ctx, CstParser *p) {
   if (cst_at(p, ":")) {
     cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
-    CstNode *els = cst_parse_conditional(ctx, p);
+    LibcpCstNode *els = cst_parse_conditional(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, node, els);
     return node;
   }
 
-  CstNode *then = cst_parse_comma(ctx, p);
+  LibcpCstNode *then = cst_parse_comma(ctx, p);
   if (!p->ok || !cst_at(p, ":")) {
     cst_fail(p);
     return NULL;
@@ -974,14 +974,14 @@ static CstNode *cst_parse_conditional1(LibcpContext *ctx, CstParser *p) {
   cst_add_leaf(ctx, node, p->tok); // ':'
   p->tok = p->tok->next;
 
-  CstNode *els = cst_parse_conditional(ctx, p);
+  LibcpCstNode *els = cst_parse_conditional(ctx, p);
   if (!p->ok)
     return NULL;
   cst_add_child(ctx, node, els);
   return node;
 }
 
-static bool cst_at_assign_op(CstParser *p) {
+static bool cst_at_assign_op(LibcpCstParser *p) {
   char *ops[] = {
     "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=",
     NULL,
@@ -990,28 +990,28 @@ static bool cst_at_assign_op(CstParser *p) {
 }
 
 // assign = libcp_conditional (assign-op assign)?
-static CstNode *cst_parse_assign(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_assign(LibcpContext *ctx, LibcpCstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_assign1(ctx, p);
+  LibcpCstNode *node = cst_parse_assign1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_assign1(LibcpContext *ctx, CstParser *p) {
-  CstNode *lhs = cst_parse_conditional(ctx, p);
+static LibcpCstNode *cst_parse_assign1(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *lhs = cst_parse_conditional(ctx, p);
   if (!p->ok || !cst_at_assign_op(p))
     return lhs;
 
-  CstNode *node = new_cst_node(ctx, CST_ASSIGN);
+  LibcpCstNode *node = new_cst_node(ctx, CST_ASSIGN);
   cst_add_child(ctx, node, lhs);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *rhs = cst_parse_assign(ctx, p);
+  LibcpCstNode *rhs = cst_parse_assign(ctx, p);
   if (!p->ok)
     return NULL;
   cst_add_child(ctx, node, rhs);
@@ -1019,26 +1019,26 @@ static CstNode *cst_parse_assign1(LibcpContext *ctx, CstParser *p) {
 }
 
 // comma = assign ("," assign)*
-static CstNode *cst_parse_comma(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_comma(LibcpContext *ctx, LibcpCstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_comma1(ctx, p);
+  LibcpCstNode *node = cst_parse_comma1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_comma1(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = cst_parse_assign(ctx, p);
+static LibcpCstNode *cst_parse_comma1(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = cst_parse_assign(ctx, p);
   while (p->ok && cst_at(p, ",")) {
-    CstNode *comma = new_cst_node(ctx, CST_COMMA);
+    LibcpCstNode *comma = new_cst_node(ctx, CST_COMMA);
     cst_add_child(ctx, comma, node);
     cst_add_leaf(ctx, comma, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *rhs = cst_parse_assign(ctx, p);
+    LibcpCstNode *rhs = cst_parse_assign(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, comma, rhs);
@@ -1051,19 +1051,19 @@ static CstNode *cst_parse_comma1(LibcpContext *ctx, CstParser *p) {
 // Declaration layer (C2.2)
 //
 
-static void cst_parse_compound(LibcpContext *ctx, CstParser *p, CstNode *block);
-static CstNode *cst_parse_param_list(LibcpContext *ctx, CstParser *p);
+static void cst_parse_compound(LibcpContext *ctx, LibcpCstParser *p, LibcpCstNode *block);
+static LibcpCstNode *cst_parse_param_list(LibcpContext *ctx, LibcpCstParser *p);
 
 // Consume one balanced group in raw mode from `start`, resetting the
 // parser on failure. Used where a structured attempt did not fit and the
 // tokens must still stay in the tree (K&R parameter lists, array
 // dimensions, attributes).
-static CstNode *cst_parse_raw_group_at(LibcpContext *ctx, CstParser *p, Token *start) {
+static LibcpCstNode *cst_parse_raw_group_at(LibcpContext *ctx, LibcpCstParser *p, LibcpToken *start) {
   p->tok = start;
   p->ok = true;
 
-  Token *rest = NULL;
-  CstNode *group = cst_parse_group(ctx, p->cst, &rest, start);
+  LibcpToken *rest = NULL;
+  LibcpCstNode *group = cst_parse_group(ctx, p->cst, &rest, start);
   if (group->kind == CST_UNPARSED) {
     cst_fail(p);
     return NULL;
@@ -1078,12 +1078,12 @@ static CstNode *cst_parse_raw_group_at(LibcpContext *ctx, CstParser *p, Token *s
 // _Atomic / _Alignas arguments and attributes stay raw groups. A
 // user-defined type name is a specifier only while no other specifier
 // has been seen, so `T T;` leaves the second T to the declarator.
-static CstNode *cst_parse_decl_specs(LibcpContext *ctx, CstParser *p) {
-  CstNode *specs = new_cst_node(ctx, CST_DECL_SPECS);
+static LibcpCstNode *cst_parse_decl_specs(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *specs = new_cst_node(ctx, CST_DECL_SPECS);
   bool has_type = false;
 
   for (;;) {
-    Token *tok = p->tok;
+    LibcpToken *tok = p->tok;
     if (!p->ok || !tok || tok->kind == TK_EOF)
       break;
 
@@ -1122,8 +1122,8 @@ static CstNode *cst_parse_decl_specs(LibcpContext *ctx, CstParser *p) {
         p->tok = p->tok->next;
       }
       if (cst_at(p, "{")) {
-        Token *rest = NULL;
-        CstNode *body = cst_parse_group(ctx, p->cst, &rest, p->tok);
+        LibcpToken *rest = NULL;
+        LibcpCstNode *body = cst_parse_group(ctx, p->cst, &rest, p->tok);
         if (body->kind == CST_UNPARSED) {
           cst_fail(p);
           return NULL;
@@ -1145,8 +1145,8 @@ static CstNode *cst_parse_decl_specs(LibcpContext *ctx, CstParser *p) {
         p->tok = p->tok->next;
       }
       if (cst_at(p, "{")) {
-        Token *rest = NULL;
-        CstNode *body = cst_parse_group(ctx, p->cst, &rest, p->tok);
+        LibcpToken *rest = NULL;
+        LibcpCstNode *body = cst_parse_group(ctx, p->cst, &rest, p->tok);
         if (body->kind == CST_UNPARSED) {
           cst_fail(p);
           return NULL;
@@ -1165,7 +1165,7 @@ static CstNode *cst_parse_decl_specs(LibcpContext *ctx, CstParser *p) {
       cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       if (cst_at(p, "(")) {
-        CstNode *operand = cst_parse_raw_group(ctx, p);
+        LibcpCstNode *operand = cst_parse_raw_group(ctx, p);
         if (!p->ok)
           return NULL;
         cst_add_child(ctx, specs, operand);
@@ -1178,7 +1178,7 @@ static CstNode *cst_parse_decl_specs(LibcpContext *ctx, CstParser *p) {
       cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       if (cst_at(p, "(")) {
-        CstNode *operand = cst_parse_raw_group(ctx, p);
+        LibcpCstNode *operand = cst_parse_raw_group(ctx, p);
         if (!p->ok)
           return NULL;
         cst_add_child(ctx, specs, operand);
@@ -1191,7 +1191,7 @@ static CstNode *cst_parse_decl_specs(LibcpContext *ctx, CstParser *p) {
       cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       if (cst_at(p, "(")) {
-        CstNode *operand = cst_parse_raw_group(ctx, p);
+        LibcpCstNode *operand = cst_parse_raw_group(ctx, p);
         if (!p->ok)
           return NULL;
         cst_add_child(ctx, specs, operand);
@@ -1204,7 +1204,7 @@ static CstNode *cst_parse_decl_specs(LibcpContext *ctx, CstParser *p) {
       cst_add_leaf(ctx, specs, tok);
       p->tok = tok->next;
       if (attr && cst_at(p, "(")) {
-        CstNode *group = cst_parse_raw_group(ctx, p);
+        LibcpCstNode *group = cst_parse_raw_group(ctx, p);
         if (!p->ok)
           return NULL;
         cst_add_child(ctx, specs, group);
@@ -1233,12 +1233,12 @@ static CstNode *cst_parse_decl_specs(LibcpContext *ctx, CstParser *p) {
 
 // Consume `__attribute__((...))` pairs after a declarator, keeping them
 // on the declarator node.
-static bool cst_parse_attributes(LibcpContext *ctx, CstParser *p, CstNode *node) {
+static bool cst_parse_attributes(LibcpContext *ctx, LibcpCstParser *p, LibcpCstNode *node) {
   while (cst_at(p, "__attribute__")) {
     cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
     if (cst_at(p, "(")) {
-      CstNode *group = cst_parse_raw_group(ctx, p);
+      LibcpCstNode *group = cst_parse_raw_group(ctx, p);
       if (!p->ok)
         return false;
       cst_add_child(ctx, node, group);
@@ -1250,9 +1250,9 @@ static bool cst_parse_attributes(LibcpContext *ctx, CstParser *p, CstNode *node)
 // array-dimension = "[" ("static" | "restrict" | "*")* expr? "]"
 // The expression is parsed when it fits; otherwise the bracket keeps its
 // raw tokens.
-static CstNode *cst_parse_dimension(LibcpContext *ctx, CstParser *p) {
-  Token *start = p->tok;
-  CstNode *bracket = new_cst_node(ctx, CST_GROUP_BRACKET);
+static LibcpCstNode *cst_parse_dimension(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpToken *start = p->tok;
+  LibcpCstNode *bracket = new_cst_node(ctx, CST_GROUP_BRACKET);
   cst_add_leaf(ctx, bracket, p->tok); // '['
   p->tok = p->tok->next;
 
@@ -1272,7 +1272,7 @@ static CstNode *cst_parse_dimension(LibcpContext *ctx, CstParser *p) {
     cst_add_leaf(ctx, bracket, p->tok);
     p->tok = p->tok->next;
   } else {
-    CstNode *expr = cst_parse_assign(ctx, p);
+    LibcpCstNode *expr = cst_parse_assign(ctx, p);
     if (!p->ok)
       return cst_parse_raw_group_at(ctx, p, start);
     cst_add_child(ctx, bracket, expr);
@@ -1290,19 +1290,19 @@ static CstNode *cst_parse_dimension(LibcpContext *ctx, CstParser *p) {
 // The written grouping is kept: pointer stars, an inner declarator in a
 // GROUP_PAREN, the name, and the suffixes in source order. No type is
 // built and no name is bound.
-static CstNode *cst_parse_declarator(LibcpContext *ctx, CstParser *p, bool allow_abstract) {
+static LibcpCstNode *cst_parse_declarator(LibcpContext *ctx, LibcpCstParser *p, bool allow_abstract) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_declarator1(ctx, p, allow_abstract);
+  LibcpCstNode *node = cst_parse_declarator1(ctx, p, allow_abstract);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_declarator1(LibcpContext *ctx, CstParser *p, bool allow_abstract) {
-  CstNode *decl = new_cst_node(ctx, CST_DECLARATOR);
+static LibcpCstNode *cst_parse_declarator1(LibcpContext *ctx, LibcpCstParser *p, bool allow_abstract) {
+  LibcpCstNode *decl = new_cst_node(ctx, CST_DECLARATOR);
 
   while (cst_at(p, "*")) {
     cst_add_leaf(ctx, decl, p->tok);
@@ -1316,16 +1316,16 @@ static CstNode *cst_parse_declarator1(LibcpContext *ctx, CstParser *p, bool allo
   }
 
   if (cst_at(p, "(")) {
-    Token *open = p->tok;
+    LibcpToken *open = p->tok;
     p->tok = open->next;
 
-    CstNode *inner = cst_parse_declarator(ctx, p, allow_abstract);
+    LibcpCstNode *inner = cst_parse_declarator(ctx, p, allow_abstract);
     if (!p->ok || !cst_at(p, ")")) {
       cst_fail(p);
       return NULL;
     }
 
-    CstNode *group = new_cst_node(ctx, CST_GROUP_PAREN);
+    LibcpCstNode *group = new_cst_node(ctx, CST_GROUP_PAREN);
     cst_add_leaf(ctx, group, open);
     cst_add_child(ctx, group, inner);
     cst_add_leaf(ctx, group, p->tok);
@@ -1341,14 +1341,14 @@ static CstNode *cst_parse_declarator1(LibcpContext *ctx, CstParser *p, bool allo
 
   for (;;) {
     if (cst_at(p, "(")) {
-      CstNode *params = cst_parse_param_list(ctx, p);
+      LibcpCstNode *params = cst_parse_param_list(ctx, p);
       if (!p->ok)
         return NULL;
       cst_add_child(ctx, decl, params);
       continue;
     }
     if (cst_at(p, "[")) {
-      CstNode *dim = cst_parse_dimension(ctx, p);
+      LibcpCstNode *dim = cst_parse_dimension(ctx, p);
       if (!p->ok)
         return NULL;
       cst_add_child(ctx, decl, dim);
@@ -1363,16 +1363,16 @@ static CstNode *cst_parse_declarator1(LibcpContext *ctx, CstParser *p, bool allo
 }
 
 // parameter = decl-specs declarator?
-static CstNode *cst_parse_param(LibcpContext *ctx, CstParser *p) {
-  CstNode *specs = cst_parse_decl_specs(ctx, p);
+static LibcpCstNode *cst_parse_param(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *specs = cst_parse_decl_specs(ctx, p);
   if (!p->ok)
     return NULL;
 
-  CstNode *decl = cst_parse_declarator(ctx, p, true);
+  LibcpCstNode *decl = cst_parse_declarator(ctx, p, true);
   if (!p->ok)
     return NULL;
 
-  CstNode *param = new_cst_node(ctx, CST_PARAM);
+  LibcpCstNode *param = new_cst_node(ctx, CST_PARAM);
   cst_add_child(ctx, param, specs);
   if (decl->child_count)
     cst_add_child(ctx, param, decl);
@@ -1382,9 +1382,9 @@ static CstNode *cst_parse_param(LibcpContext *ctx, CstParser *p) {
 // param-list = "(" (param ("," param)* | "..." | raw)? ")"
 // A parameter list the declaration grammar cannot explain keeps its raw
 // tokens in a GROUP_PAREN (K&R identifier lists are the common case).
-static CstNode *cst_parse_param_list(LibcpContext *ctx, CstParser *p) {
-  Token *start = p->tok;
-  CstNode *list = new_cst_node(ctx, CST_PARAM_LIST);
+static LibcpCstNode *cst_parse_param_list(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpToken *start = p->tok;
+  LibcpCstNode *list = new_cst_node(ctx, CST_PARAM_LIST);
   cst_add_leaf(ctx, list, p->tok); // '('
   p->tok = p->tok->next;
 
@@ -1399,7 +1399,7 @@ static CstNode *cst_parse_param_list(LibcpContext *ctx, CstParser *p) {
     p->tok = p->tok->next;
   } else {
     for (;;) {
-      CstNode *param = cst_parse_param(ctx, p);
+      LibcpCstNode *param = cst_parse_param(ctx, p);
       if (!param)
         return cst_parse_raw_group_at(ctx, p, start);
       cst_add_child(ctx, list, param);
@@ -1419,18 +1419,18 @@ static CstNode *cst_parse_param_list(LibcpContext *ctx, CstParser *p) {
 }
 
 // type-name = "(" decl-specs abstract-declarator? ")"
-static CstNode *cst_parse_type_name(LibcpContext *ctx, CstParser *p) {
-  Token *open = p->tok;
-  CstNode *node = new_cst_node(ctx, CST_TYPE_NAME);
+static LibcpCstNode *cst_parse_type_name(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpToken *open = p->tok;
+  LibcpCstNode *node = new_cst_node(ctx, CST_TYPE_NAME);
   cst_add_leaf(ctx, node, open); // '('
   p->tok = open->next;
 
-  CstNode *specs = cst_parse_decl_specs(ctx, p);
+  LibcpCstNode *specs = cst_parse_decl_specs(ctx, p);
   if (!p->ok)
     return NULL;
   cst_add_child(ctx, node, specs);
 
-  CstNode *decl = cst_parse_declarator(ctx, p, true);
+  LibcpCstNode *decl = cst_parse_declarator(ctx, p, true);
   if (!p->ok)
     return NULL;
   if (decl->child_count)
@@ -1449,15 +1449,15 @@ static CstNode *cst_parse_type_name(LibcpContext *ctx, CstParser *p) {
 // abstract declarator. Same children as cst_parse_type_name, without
 // the wrapping parentheses; used where a bare type name appears (a call
 // argument, PLAN-l5 W1).
-static CstNode *cst_parse_type_name_core(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_TYPE_NAME);
+static LibcpCstNode *cst_parse_type_name_core(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_TYPE_NAME);
 
-  CstNode *specs = cst_parse_decl_specs(ctx, p);
+  LibcpCstNode *specs = cst_parse_decl_specs(ctx, p);
   if (!p->ok)
     return NULL;
   cst_add_child(ctx, node, specs);
 
-  CstNode *decl = cst_parse_declarator(ctx, p, true);
+  LibcpCstNode *decl = cst_parse_declarator(ctx, p, true);
   if (!p->ok)
     return NULL;
   if (decl->child_count)
@@ -1469,50 +1469,50 @@ static CstNode *cst_parse_type_name_core(LibcpContext *ctx, CstParser *p) {
 // declaration = decl-specs init-declarator ("," init-declarator)* ";"
 //             | decl-specs ";"
 // function-definition = decl-specs declarator compound-stmt
-static CstNode *cst_parse_decl(LibcpContext *ctx, CstParser *p) {
-  CstNode *specs = cst_parse_decl_specs(ctx, p);
+static LibcpCstNode *cst_parse_decl(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *specs = cst_parse_decl_specs(ctx, p);
   if (!p->ok)
     return NULL;
 
   // A tag or specifier with no declarator: `struct S {...};`, `int;`.
   if (cst_at(p, ";")) {
-    CstNode *decl = new_cst_node(ctx, CST_DECL);
+    LibcpCstNode *decl = new_cst_node(ctx, CST_DECL);
     cst_add_child(ctx, decl, specs);
     cst_add_leaf(ctx, decl, p->tok);
     p->tok = p->tok->next;
     return decl;
   }
 
-  CstNode *declr = cst_parse_declarator(ctx, p, false);
+  LibcpCstNode *declr = cst_parse_declarator(ctx, p, false);
   if (!p->ok)
     return NULL;
 
   // `declarator {` is a function definition. GNU nested functions are
   // allowed too; nothing here checks the scope.
   if (cst_at(p, "{")) {
-    CstNode *body = new_cst_node(ctx, CST_BLOCK);
+    LibcpCstNode *body = new_cst_node(ctx, CST_BLOCK);
     cst_parse_compound(ctx, p, body);
     if (!p->ok)
       return NULL;
 
-    CstNode *fn = new_cst_node(ctx, CST_FUNC_DEF);
+    LibcpCstNode *fn = new_cst_node(ctx, CST_FUNC_DEF);
     cst_add_child(ctx, fn, specs);
     cst_add_child(ctx, fn, declr);
     cst_add_child(ctx, fn, body);
     return fn;
   }
 
-  CstNode *decl = new_cst_node(ctx, CST_DECL);
+  LibcpCstNode *decl = new_cst_node(ctx, CST_DECL);
   cst_add_child(ctx, decl, specs);
 
   for (;;) {
     if (cst_at(p, "=")) {
-      CstNode *init_decl = new_cst_node(ctx, CST_INIT_DECLARATOR);
+      LibcpCstNode *init_decl = new_cst_node(ctx, CST_INIT_DECLARATOR);
       cst_add_child(ctx, init_decl, declr);
       cst_add_leaf(ctx, init_decl, p->tok); // '='
       p->tok = p->tok->next;
 
-      CstNode *init = cst_parse_initializer(ctx, p);
+      LibcpCstNode *init = cst_parse_initializer(ctx, p);
       if (!p->ok)
         return NULL;
       cst_add_child(ctx, init_decl, init);
@@ -1544,12 +1544,12 @@ static CstNode *cst_parse_decl(LibcpContext *ctx, CstParser *p) {
 // Statement layer
 //
 
-static bool cst_is_directive(Token *tok);
-static bool cst_is_pp_terminator(Token *tok);
-static CstNode *cst_parse_directive_line(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_pp_if(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_item(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_item1(LibcpContext *ctx, CstParser *p);
+static bool cst_is_directive(LibcpToken *tok);
+static bool cst_is_pp_terminator(LibcpToken *tok);
+static LibcpCstNode *cst_parse_directive_line(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_pp_if(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_item(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_item1(LibcpContext *ctx, LibcpCstParser *p);
 
 // Parse one statement into the fallback shape: tokens up to and
 // including a ';' at this level, a raw group per delimiter, and stop
@@ -1558,11 +1558,11 @@ static CstNode *cst_parse_item1(LibcpContext *ctx, CstParser *p);
 // where it should have ended. The node is CST_UNPARSED: the expression
 // grammar did not explain the span (a declaration is one such span until
 // C2.2), and the children are exactly the raw pieces, not a guess.
-static CstNode *cst_parse_fallback_statement(LibcpContext *ctx, CstContext *cst, Token **rest,
-                                             Token *tok) {
-  CstNode *stmt = new_cst_node(ctx, CST_UNPARSED);
+static LibcpCstNode *cst_parse_fallback_statement(LibcpContext *ctx, LibcpCstContext *cst, LibcpToken **rest,
+                                             LibcpToken *tok) {
+  LibcpCstNode *stmt = new_cst_node(ctx, CST_UNPARSED);
 
-  Token *p = tok;
+  LibcpToken *p = tok;
   while (p && p->kind != TK_EOF) {
     // A directive at the start of a line begins the next item; a
     // malformed span must not swallow it. The span's own first token is
@@ -1590,22 +1590,22 @@ static CstNode *cst_parse_fallback_statement(LibcpContext *ctx, CstContext *cst,
 // A statement whose whole span is an expression followed by ';' becomes
 // CST_EXPR_STMT. On any failure the caller uses the raw skeleton instead;
 // the failed attempt's nodes are unreachable, which is allowed.
-static CstNode *cst_try_expr_stmt(LibcpContext *ctx, Token **rest, Token *tok, CstContext *cst) {
-  CstParser p = {tok, true, cst};
+static LibcpCstNode *cst_try_expr_stmt(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok, LibcpCstContext *cst) {
+  LibcpCstParser p = {tok, true, cst};
 
-  CstNode *expr = cst_parse_comma(ctx, &p);
+  LibcpCstNode *expr = cst_parse_comma(ctx, &p);
   if (!p.ok || !libcp_equal(p.tok, ";"))
     return NULL;
 
-  CstNode *stmt = new_cst_node(ctx, CST_EXPR_STMT);
+  LibcpCstNode *stmt = new_cst_node(ctx, CST_EXPR_STMT);
   cst_add_child(ctx, stmt, expr);
   cst_add_leaf(ctx, stmt, p.tok);
   *rest = p.tok->next;
   return stmt;
 }
 
-static CstNode *cst_parse_statement(LibcpContext *ctx, CstParser *p);
-static CstNode *cst_parse_statement1(LibcpContext *ctx, CstParser *p);
+static LibcpCstNode *cst_parse_statement(LibcpContext *ctx, LibcpCstParser *p);
+static LibcpCstNode *cst_parse_statement1(LibcpContext *ctx, LibcpCstParser *p);
 
 // statement = "return" expr? ";"
 //           | "if" "(" expr ")" statement ("else" statement)?
@@ -1620,8 +1620,8 @@ static CstNode *cst_parse_statement1(LibcpContext *ctx, CstParser *p);
 //           | "asm" qualifiers* "(" raw ")" ";"
 //           | ident ":" statement
 //           | compound-stmt | declaration | expr-stmt
-static CstNode *cst_parse_simple_stmt(LibcpContext *ctx, CstParser *p, CstKind kind) {
-  CstNode *node = new_cst_node(ctx, kind);
+static LibcpCstNode *cst_parse_simple_stmt(LibcpContext *ctx, LibcpCstParser *p, LibcpCstKind kind) {
+  LibcpCstNode *node = new_cst_node(ctx, kind);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
@@ -1634,13 +1634,13 @@ static CstNode *cst_parse_simple_stmt(LibcpContext *ctx, CstParser *p, CstKind k
   return node;
 }
 
-static CstNode *cst_parse_return(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_RETURN);
+static LibcpCstNode *cst_parse_return(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_RETURN);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   if (!cst_at(p, ";")) {
-    CstNode *expr = cst_parse_comma(ctx, p);
+    LibcpCstNode *expr = cst_parse_comma(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, node, expr);
@@ -1655,8 +1655,8 @@ static CstNode *cst_parse_return(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_if(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_IF);
+static LibcpCstNode *cst_parse_if(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_IF);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
@@ -1667,7 +1667,7 @@ static CstNode *cst_parse_if(LibcpContext *ctx, CstParser *p) {
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *cond = cst_parse_comma(ctx, p);
+  LibcpCstNode *cond = cst_parse_comma(ctx, p);
   if (!p->ok || !cst_at(p, ")")) {
     cst_fail(p);
     return NULL;
@@ -1676,7 +1676,7 @@ static CstNode *cst_parse_if(LibcpContext *ctx, CstParser *p) {
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *then = cst_parse_statement(ctx, p);
+  LibcpCstNode *then = cst_parse_statement(ctx, p);
   if (!then)
     return NULL;
   cst_add_child(ctx, node, then);
@@ -1685,7 +1685,7 @@ static CstNode *cst_parse_if(LibcpContext *ctx, CstParser *p) {
     cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *els = cst_parse_statement(ctx, p);
+    LibcpCstNode *els = cst_parse_statement(ctx, p);
     if (!els)
       return NULL;
     cst_add_child(ctx, node, els);
@@ -1693,8 +1693,8 @@ static CstNode *cst_parse_if(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_switch(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_SWITCH);
+static LibcpCstNode *cst_parse_switch(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_SWITCH);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
@@ -1705,7 +1705,7 @@ static CstNode *cst_parse_switch(LibcpContext *ctx, CstParser *p) {
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *cond = cst_parse_comma(ctx, p);
+  LibcpCstNode *cond = cst_parse_comma(ctx, p);
   if (!p->ok || !cst_at(p, ")")) {
     cst_fail(p);
     return NULL;
@@ -1714,15 +1714,15 @@ static CstNode *cst_parse_switch(LibcpContext *ctx, CstParser *p) {
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(ctx, p);
+  LibcpCstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
   cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_while(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_WHILE);
+static LibcpCstNode *cst_parse_while(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_WHILE);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
@@ -1733,7 +1733,7 @@ static CstNode *cst_parse_while(LibcpContext *ctx, CstParser *p) {
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *cond = cst_parse_comma(ctx, p);
+  LibcpCstNode *cond = cst_parse_comma(ctx, p);
   if (!p->ok || !cst_at(p, ")")) {
     cst_fail(p);
     return NULL;
@@ -1742,19 +1742,19 @@ static CstNode *cst_parse_while(LibcpContext *ctx, CstParser *p) {
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(ctx, p);
+  LibcpCstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
   cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_do(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_DO);
+static LibcpCstNode *cst_parse_do(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_DO);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(ctx, p);
+  LibcpCstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
   cst_add_child(ctx, node, body);
@@ -1773,7 +1773,7 @@ static CstNode *cst_parse_do(LibcpContext *ctx, CstParser *p) {
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *cond = cst_parse_comma(ctx, p);
+  LibcpCstNode *cond = cst_parse_comma(ctx, p);
   if (!p->ok || !cst_at(p, ")")) {
     cst_fail(p);
     return NULL;
@@ -1791,8 +1791,8 @@ static CstNode *cst_parse_do(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_for(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_FOR);
+static LibcpCstNode *cst_parse_for(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_FOR);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
@@ -1808,12 +1808,12 @@ static CstNode *cst_parse_for(LibcpContext *ctx, CstParser *p) {
     cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
   } else if (cst_is_decl_start(p->tok, p->cst)) {
-    CstNode *decl = cst_parse_decl(ctx, p);
+    LibcpCstNode *decl = cst_parse_decl(ctx, p);
     if (!decl)
       return NULL;
     cst_add_child(ctx, node, decl);
   } else {
-    CstNode *init = cst_parse_comma(ctx, p);
+    LibcpCstNode *init = cst_parse_comma(ctx, p);
     if (!p->ok || !cst_at(p, ";")) {
       cst_fail(p);
       return NULL;
@@ -1824,7 +1824,7 @@ static CstNode *cst_parse_for(LibcpContext *ctx, CstParser *p) {
   }
 
   if (!cst_at(p, ";")) {
-    CstNode *cond = cst_parse_comma(ctx, p);
+    LibcpCstNode *cond = cst_parse_comma(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, node, cond);
@@ -1837,7 +1837,7 @@ static CstNode *cst_parse_for(LibcpContext *ctx, CstParser *p) {
   p->tok = p->tok->next;
 
   if (!cst_at(p, ")")) {
-    CstNode *inc = cst_parse_comma(ctx, p);
+    LibcpCstNode *inc = cst_parse_comma(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, node, inc);
@@ -1849,19 +1849,19 @@ static CstNode *cst_parse_for(LibcpContext *ctx, CstParser *p) {
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(ctx, p);
+  LibcpCstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
   cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_case(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_CASE);
+static LibcpCstNode *cst_parse_case(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_CASE);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *begin = cst_parse_conditional(ctx, p);
+  LibcpCstNode *begin = cst_parse_conditional(ctx, p);
   if (!p->ok)
     return NULL;
   cst_add_child(ctx, node, begin);
@@ -1870,7 +1870,7 @@ static CstNode *cst_parse_case(LibcpContext *ctx, CstParser *p) {
     cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *end = cst_parse_conditional(ctx, p);
+    LibcpCstNode *end = cst_parse_conditional(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, node, end);
@@ -1883,15 +1883,15 @@ static CstNode *cst_parse_case(LibcpContext *ctx, CstParser *p) {
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(ctx, p);
+  LibcpCstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
   cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_default(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_DEFAULT);
+static LibcpCstNode *cst_parse_default(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_DEFAULT);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
@@ -1902,30 +1902,30 @@ static CstNode *cst_parse_default(LibcpContext *ctx, CstParser *p) {
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(ctx, p);
+  LibcpCstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
   cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_label(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_LABEL);
+static LibcpCstNode *cst_parse_label(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_LABEL);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
   cst_add_leaf(ctx, node, p->tok); // ':'
   p->tok = p->tok->next;
 
-  CstNode *body = cst_parse_statement(ctx, p);
+  LibcpCstNode *body = cst_parse_statement(ctx, p);
   if (!body)
     return NULL;
   cst_add_child(ctx, node, body);
   return node;
 }
 
-static CstNode *cst_parse_goto(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_GOTO);
+static LibcpCstNode *cst_parse_goto(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_GOTO);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
@@ -1933,7 +1933,7 @@ static CstNode *cst_parse_goto(LibcpContext *ctx, CstParser *p) {
     cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
 
-    CstNode *expr = cst_parse_comma(ctx, p);
+    LibcpCstNode *expr = cst_parse_comma(ctx, p);
     if (!p->ok)
       return NULL;
     cst_add_child(ctx, node, expr);
@@ -1955,8 +1955,8 @@ static CstNode *cst_parse_goto(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_asm(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_ASM);
+static LibcpCstNode *cst_parse_asm(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_ASM);
   cst_add_leaf(ctx, node, p->tok);
   p->tok = p->tok->next;
 
@@ -1969,7 +1969,7 @@ static CstNode *cst_parse_asm(LibcpContext *ctx, CstParser *p) {
     cst_fail(p);
     return NULL;
   }
-  CstNode *operand = cst_parse_raw_group(ctx, p);
+  LibcpCstNode *operand = cst_parse_raw_group(ctx, p);
   if (!p->ok)
     return NULL;
   cst_add_child(ctx, node, operand);
@@ -1983,22 +1983,22 @@ static CstNode *cst_parse_asm(LibcpContext *ctx, CstParser *p) {
   return node;
 }
 
-static CstNode *cst_parse_statement(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_statement(LibcpContext *ctx, LibcpCstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
     cst_fail(p);
     return NULL;
   }
-  CstNode *node = cst_parse_statement1(ctx, p);
+  LibcpCstNode *node = cst_parse_statement1(ctx, p);
   p->cst->depth--;
   return node;
 }
 
-static CstNode *cst_parse_statement1(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_statement1(LibcpContext *ctx, LibcpCstParser *p) {
   if (!p->ok || !p->tok || p->tok->kind == TK_EOF)
     return NULL;
 
-  Token *tok = p->tok;
+  LibcpToken *tok = p->tok;
 
   if (libcp_equal(tok, "return"))
     return cst_parse_return(ctx, p);
@@ -2029,13 +2029,13 @@ static CstNode *cst_parse_statement1(LibcpContext *ctx, CstParser *p) {
     return cst_parse_label(ctx, p);
 
   if (libcp_equal(tok, "{")) {
-    CstNode *block = new_cst_node(ctx, CST_BLOCK);
+    LibcpCstNode *block = new_cst_node(ctx, CST_BLOCK);
     cst_parse_compound(ctx, p, block);
     return p->ok ? block : NULL;
   }
 
   if (libcp_equal(tok, ";")) {
-    CstNode *null = new_cst_node(ctx, CST_NULL_STMT);
+    LibcpCstNode *null = new_cst_node(ctx, CST_NULL_STMT);
     cst_add_leaf(ctx, null, tok);
     p->tok = tok->next;
     return null;
@@ -2045,15 +2045,15 @@ static CstNode *cst_parse_statement1(LibcpContext *ctx, CstParser *p) {
   // unknown type (`size_t x;`) therefore fails the expression path and
   // becomes UNPARSED instead of being guessed.
   if (cst_is_decl_start(tok, p->cst)) {
-    CstNode *decl = cst_parse_decl(ctx, p);
+    LibcpCstNode *decl = cst_parse_decl(ctx, p);
     if (decl)
       return decl;
     cst_fail(p);
     return NULL;
   }
 
-  Token *next = NULL;
-  CstNode *stmt = cst_try_expr_stmt(ctx, &next, tok, p->cst);
+  LibcpToken *next = NULL;
+  LibcpCstNode *stmt = cst_try_expr_stmt(ctx, &next, tok, p->cst);
   if (stmt) {
     p->tok = next;
     return stmt;
@@ -2075,14 +2075,14 @@ static CstNode *cst_parse_statement1(LibcpContext *ctx, CstParser *p) {
 // not evaluated, macros are not expanded and no file is looked up.
 //
 
-static bool cst_is_directive(Token *tok) {
+static bool cst_is_directive(LibcpToken *tok) {
   return tok && tok->kind != TK_EOF && tok->at_bol && libcp_equal(tok, "#");
 }
 
 // The directive word after '#'. NULL means an empty directive (`#` alone
 // on its logical line).
-static Token *cst_directive_name(Token *tok) {
-  Token *name = tok->next;
+static LibcpToken *cst_directive_name(LibcpToken *tok) {
+  LibcpToken *name = tok->next;
   if (!name || name->kind == TK_EOF || name->at_bol)
     return NULL;
   return name;
@@ -2090,26 +2090,26 @@ static Token *cst_directive_name(Token *tok) {
 
 // #elif / #else / #endif close a branch body; they belong to the
 // enclosing CST_PP_IF rather than to the body's items.
-static bool cst_is_pp_terminator(Token *tok) {
+static bool cst_is_pp_terminator(LibcpToken *tok) {
   if (!cst_is_directive(tok))
     return false;
-  Token *name = cst_directive_name(tok);
+  LibcpToken *name = cst_directive_name(tok);
   return name && (libcp_equal(name, "elif") || libcp_equal(name, "else") ||
                   libcp_equal(name, "endif"));
 }
 
-static bool cst_is_pp_if(Token *tok) {
+static bool cst_is_pp_if(LibcpToken *tok) {
   if (!cst_is_directive(tok))
     return false;
-  Token *name = cst_directive_name(tok);
+  LibcpToken *name = cst_directive_name(tok);
   return name && (libcp_equal(name, "if") || libcp_equal(name, "ifdef") ||
                   libcp_equal(name, "ifndef"));
 }
 
 // The first token after this directive line: the next token with at_bol,
 // or EOF. Never NULL on libcp_tokenize_file_impl()'s output.
-static Token *cst_directive_end(Token *tok) {
-  Token *p = tok->next;
+static LibcpToken *cst_directive_end(LibcpToken *tok) {
+  LibcpToken *p = tok->next;
   while (p && p->kind != TK_EOF && !p->at_bol)
     p = p->next;
   return p;
@@ -2119,8 +2119,8 @@ static Token *cst_directive_end(Token *tok) {
 // marker (`# 123 "file"`); an unrecognized word stays CST_PP_DIRECTIVE
 // and an empty line is CST_PP_NULL. #if / #elif / #else / #endif never
 // reach this function as part of a well-formed conditional.
-static CstKind cst_pp_kind(Token *tok) {
-  Token *name = cst_directive_name(tok);
+static LibcpCstKind cst_pp_kind(LibcpToken *tok) {
+  LibcpToken *name = cst_directive_name(tok);
   if (!name)
     return CST_PP_NULL;
   if (name->kind == TK_PP_NUM)
@@ -2144,12 +2144,12 @@ static CstKind cst_pp_kind(Token *tok) {
 // not past the end of the line. Parameters do not nest in valid input,
 // so the group is flat; a missing ')' stops at the line's end and turns
 // the group into UNPARSED.
-static CstNode *cst_parse_pp_params(LibcpContext *ctx, Token **rest, Token *tok, Token *end) {
-  CstNode *group = new_cst_node(ctx, CST_GROUP_PAREN);
+static LibcpCstNode *cst_parse_pp_params(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok, LibcpToken *end) {
+  LibcpCstNode *group = new_cst_node(ctx, CST_GROUP_PAREN);
   cst_add_leaf(ctx, group, tok);
 
   int depth = 1;
-  Token *p = tok->next;
+  LibcpToken *p = tok->next;
   while (p != end) {
     if (libcp_equal(p, "(")) {
       depth++;
@@ -2176,13 +2176,13 @@ static CstNode *cst_parse_pp_params(LibcpContext *ctx, Token **rest, Token *tok,
 // the directive node. For #define the macro name is followed by a
 // GROUP_PAREN only when '(' comes with no space - the object / function
 // macro boundary of preprocess.c - so the dump records the distinction.
-static CstNode *cst_parse_directive_line(LibcpContext *ctx, CstParser *p) {
-  Token *hash = p->tok;
-  Token *end = cst_directive_end(hash);
-  CstNode *node = new_cst_node(ctx, cst_pp_kind(hash));
+static LibcpCstNode *cst_parse_directive_line(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpToken *hash = p->tok;
+  LibcpToken *end = cst_directive_end(hash);
+  LibcpCstNode *node = new_cst_node(ctx, cst_pp_kind(hash));
   cst_add_leaf(ctx, node, hash);
 
-  Token *tok = hash->next;
+  LibcpToken *tok = hash->next;
   if (node->kind == CST_PP_DEFINE && tok != end && tok->kind == TK_IDENT) {
     cst_add_leaf(ctx, node, tok); // "define"
     tok = tok->next;
@@ -2192,7 +2192,7 @@ static CstNode *cst_parse_directive_line(LibcpContext *ctx, CstParser *p) {
       tok = tok->next;
 
       if (tok != end && libcp_equal(tok, "(") && !tok->has_space) {
-        Token *rest = NULL;
+        LibcpToken *rest = NULL;
         cst_add_child(ctx, node, cst_parse_pp_params(ctx, &rest, tok, end));
         tok = rest;
       }
@@ -2214,9 +2214,9 @@ static CstNode *cst_parse_directive_line(LibcpContext *ctx, CstParser *p) {
 // nesting recurses through cst_parse_item and every branch keeps its
 // tokens. An unterminated group ends at EOF or at an enclosing closer;
 // an orphan #elif / #else / #endif is an ordinary directive line.
-static CstNode *cst_parse_pp_if(LibcpContext *ctx, CstParser *p) {
-  CstNode *node = new_cst_node(ctx, CST_PP_IF);
-  CstNode *branch = new_cst_node(ctx, CST_PP_BRANCH);
+static LibcpCstNode *cst_parse_pp_if(LibcpContext *ctx, LibcpCstParser *p) {
+  LibcpCstNode *node = new_cst_node(ctx, CST_PP_IF);
+  LibcpCstNode *branch = new_cst_node(ctx, CST_PP_BRANCH);
   cst_add_child(ctx, branch, cst_parse_directive_line(ctx, p));
   cst_add_child(ctx, node, branch);
 
@@ -2234,7 +2234,7 @@ static CstNode *cst_parse_pp_if(LibcpContext *ctx, CstParser *p) {
         !cst_is_directive(p->tok))
       return node;
 
-    Token *name = cst_directive_name(p->tok);
+    LibcpToken *name = cst_directive_name(p->tok);
     if (libcp_equal(name, "endif")) {
       cst_add_child(ctx, node, cst_parse_directive_line(ctx, p));
       return node;
@@ -2249,36 +2249,36 @@ static CstNode *cst_parse_pp_if(LibcpContext *ctx, CstParser *p) {
 // One item at statement level: a directive line (conditionals recurse),
 // or a statement / declaration with the raw fallback. Every path
 // consumes at least one token when one is available.
-static CstNode *cst_parse_item(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_item(LibcpContext *ctx, LibcpCstParser *p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
-    Token *start = p->tok;
+    LibcpToken *start = p->tok;
     p->ok = true;
-    Token *next = NULL;
-    CstNode *item = cst_parse_fallback_statement(ctx, p->cst, &next, start);
+    LibcpToken *next = NULL;
+    LibcpCstNode *item = cst_parse_fallback_statement(ctx, p->cst, &next, start);
     p->tok = next;
     return item;
   }
-  CstNode *item = cst_parse_item1(ctx, p);
+  LibcpCstNode *item = cst_parse_item1(ctx, p);
   p->cst->depth--;
   return item;
 }
 
-static CstNode *cst_parse_item1(LibcpContext *ctx, CstParser *p) {
+static LibcpCstNode *cst_parse_item1(LibcpContext *ctx, LibcpCstParser *p) {
   if (cst_is_directive(p->tok)) {
     if (cst_is_pp_if(p->tok))
       return cst_parse_pp_if(ctx, p);
     return cst_parse_directive_line(ctx, p);
   }
 
-  Token *start = p->tok;
-  CstNode *item = cst_parse_statement(ctx, p);
+  LibcpToken *start = p->tok;
+  LibcpCstNode *item = cst_parse_statement(ctx, p);
   if (item)
     return item;
 
   p->tok = start;
   p->ok = true;
-  Token *next = NULL;
+  LibcpToken *next = NULL;
   item = cst_parse_fallback_statement(ctx, p->cst, &next, start);
   p->tok = next;
   return item;
@@ -2289,13 +2289,13 @@ static CstNode *cst_parse_item1(LibcpContext *ctx, CstParser *p) {
 // A failed item is rebuilt from its first token with the raw fallback, so
 // one malformed construct does not cost the rest of the block. A missing
 // '}' turns the block itself into UNPARSED; parsing continues at EOF.
-static void cst_parse_compound(LibcpContext *ctx, CstParser *p, CstNode *block) {
+static void cst_parse_compound(LibcpContext *ctx, LibcpCstParser *p, LibcpCstNode *block) {
   cst_add_leaf(ctx, block, p->tok); // '{'
   p->tok = p->tok->next;
 
   while (p->ok && p->tok && p->tok->kind != TK_EOF && !libcp_equal(p->tok, "}")) {
     if (cst_is_close(p->tok)) {
-      CstNode *unparsed = new_cst_node(ctx, CST_UNPARSED);
+      LibcpCstNode *unparsed = new_cst_node(ctx, CST_UNPARSED);
       cst_add_leaf(ctx, unparsed, p->tok);
       cst_add_child(ctx, block, unparsed);
       p->tok = p->tok->next;
@@ -2315,10 +2315,10 @@ static void cst_parse_compound(LibcpContext *ctx, CstParser *p, CstNode *block) 
 
 // Split the top level into items. The EOF token is left for cst_parse so
 // that it stays the tree's last leaf whatever the items do.
-static void cst_parse_items(LibcpContext *ctx, CstNode *parent, CstParser *p) {
+static void cst_parse_items(LibcpContext *ctx, LibcpCstNode *parent, LibcpCstParser *p) {
   while (p->ok && p->tok && p->tok->kind != TK_EOF) {
     if (cst_is_close(p->tok)) {
-      CstNode *unparsed = new_cst_node(ctx, CST_UNPARSED);
+      LibcpCstNode *unparsed = new_cst_node(ctx, CST_UNPARSED);
       cst_add_leaf(ctx, unparsed, p->tok);
       cst_add_child(ctx, parent, unparsed);
       p->tok = p->tok->next;
@@ -2331,9 +2331,9 @@ static void cst_parse_items(LibcpContext *ctx, CstNode *parent, CstParser *p) {
 
 // Build the CST for libcp_tokenize_file_impl()'s output. The EOF marker has its own
 // kind because it carries the file's trailing trivia and no spelling.
-CstNode *libcp_cst_parse(LibcpContext *ctx, Token *tok) {
+LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok) {
   ENTER_RET(ctx, NULL);
-  CstContext cst = {};
+  LibcpCstContext cst = {};
 
   // Seeded names first: they participate in every declaration decision
   // alongside the file-local scan (PLAN-l5 W2).
@@ -2342,8 +2342,8 @@ CstNode *libcp_cst_parse(LibcpContext *ctx, Token *tok) {
                         libcp_arena_strdup(ctx, ctx->cst_seeds[i]));
   cst_collect_typedefs(ctx, &cst, tok);
 
-  CstParser p = {tok, true, &cst};
-  CstNode *root = new_cst_node(ctx, CST_TRANSLATION_UNIT);
+  LibcpCstParser p = {tok, true, &cst};
+  LibcpCstNode *root = new_cst_node(ctx, CST_TRANSLATION_UNIT);
   cst_parse_items(ctx, root, &p);
 
   if (p.tok && p.tok->kind == TK_EOF)
@@ -2352,7 +2352,7 @@ CstNode *libcp_cst_parse(LibcpContext *ctx, Token *tok) {
   return root;
 }
 
-static void cst_reconstruct_node(CstNode *node, FILE *out) {
+static void cst_reconstruct_node(LibcpCstNode *node, FILE *out) {
   if (node->tok) {
     fwrite(node->tok->trivia, 1, node->tok->trivia_len, out);
     fwrite(node->tok->raw_loc, 1, node->tok->raw_len, out);
@@ -2366,13 +2366,13 @@ static void cst_reconstruct_node(CstNode *node, FILE *out) {
 // Write the raw bytes of the tree's leaves in order (trivia then spelling
 // for every token). On libcp_tokenize_file_impl()'s direct output this equals the
 // input file's raw text.
-void libcp_cst_reconstruct(LibcpContext *ctx, CstNode *root, FILE *out) {
+void libcp_cst_reconstruct(LibcpContext *ctx, LibcpCstNode *root, FILE *out) {
   ENTER_VOID(ctx);
   cst_reconstruct_node(root, out);
   LEAVE(ctx);
 }
 
-static char *cst_kind_name(LibcpContext *ctx, CstKind kind) {
+static char *cst_kind_name(LibcpContext *ctx, LibcpCstKind kind) {
   switch (kind) {
   case CST_TRANSLATION_UNIT: return "TU";
   case CST_TOKEN:            return "TOKEN";
@@ -2458,7 +2458,7 @@ static void cst_print_escaped(FILE *out, char *p, int len) {
   }
 }
 
-static void cst_dump_node(LibcpContext *ctx, CstNode *node, FILE *out, int depth) {
+static void cst_dump_node(LibcpContext *ctx, LibcpCstNode *node, FILE *out, int depth) {
   for (int i = 0; i < depth; i++)
     fputs("  ", out);
 
@@ -2477,13 +2477,13 @@ static void cst_dump_node(LibcpContext *ctx, CstNode *node, FILE *out, int depth
 // Print the tree shape, two spaces per level. Leaf text is the token's
 // raw spelling (not its trivia); the dump locks the tree, the round-trip
 // locks the bytes.
-void libcp_cst_dump(LibcpContext *ctx, CstNode *root, FILE *out) {
+void libcp_cst_dump(LibcpContext *ctx, LibcpCstNode *root, FILE *out) {
   ENTER_VOID(ctx);
   cst_dump_node(ctx, root, out, 0);
   LEAVE(ctx);
 }
 
-static bool cst_verify_node(CstNode *node, Token **cur) {
+static bool cst_verify_node(LibcpCstNode *node, LibcpToken **cur) {
   if (node->tok) {
     if (node->child_count || *cur != node->tok)
       return false;
@@ -2500,9 +2500,9 @@ static bool cst_verify_node(CstNode *node, Token **cur) {
 // I1 / I3: the leaves in order are exactly the tokens of `tok`, each once
 // (pointer equality), and every leaf holds a token while every inner node
 // holds none. Returns the result; the caller reports it.
-bool libcp_cst_verify(LibcpContext *ctx, CstNode *root, Token *tok) {
+bool libcp_cst_verify(LibcpContext *ctx, LibcpCstNode *root, LibcpToken *tok) {
   ENTER_RET(ctx, false);
-  Token *cur = tok;
+  LibcpToken *cur = tok;
   bool r = cst_verify_node(root, &cur) && !cur;
   LEAVE(ctx);
   return r;

@@ -27,7 +27,7 @@ static void *arena_alloc(LibcpContext *ctx, size_t size, size_t align) {
   if (size == 0)
     size = 1;
 
-  ArenaBlock *b = LIBCP_CALLOC(1, sizeof(ArenaBlock));
+  LibcpArenaBlock *b = LIBCP_CALLOC(1, sizeof(LibcpArenaBlock));
   if (!b)
     return NULL;
   b->data = LIBCP_MALLOC(size);
@@ -49,7 +49,7 @@ static void *arena_alloc(LibcpContext *ctx, size_t size, size_t align) {
   if (align < 8)
     align = 8;
 
-  ArenaBlock *b = ctx->arena;
+  LibcpArenaBlock *b = ctx->arena;
   size_t start = b ? (b->used + align - 1) / align * align : 0;
   // Overflow-safe form of start + size > b->cap. start may round past
   // cap (used can sit on cap with a custom-sized block), and cap - start
@@ -58,7 +58,7 @@ static void *arena_alloc(LibcpContext *ctx, size_t size, size_t align) {
     size_t cap = ARENA_BLOCK_SIZE;
     if (size > SIZE_MAX - align || cap < size + align)
       cap = size + align;
-    ArenaBlock *nb = LIBCP_CALLOC(1, sizeof(ArenaBlock));
+    LibcpArenaBlock *nb = LIBCP_CALLOC(1, sizeof(LibcpArenaBlock));
     nb->data = LIBCP_MALLOC(cap);
     nb->cap = cap;
     nb->next = b;
@@ -83,7 +83,7 @@ void *libcp_arena_calloc(LibcpContext *ctx, size_t count, size_t size) {
   if (size && count > SIZE_MAX / size)
     return NULL;
   size_t n = count * size;
-  // 16, not 8: Token and Node embed a long double, which needs 16-byte
+  // 16, not 8: LibcpToken and LibcpNode embed a long double, which needs 16-byte
   // alignment on x86-64 (UBSan found this in L3.4c).
   void *p = arena_alloc(ctx, n, 16);
   memset(p, 0, n);
@@ -192,7 +192,7 @@ void libcp_context_define(LibcpContext *ctx, char *name, char *buf) {
   // out, and the op is applied before it is recorded because
   // apply_macro_op leaves its '=' NULed when it raises - a half-applied
   // op must not reach the reset replay.
-  JmpFrame jf;
+  LibcpJmpFrame jf;
   jf.prev = ctx->jmp_top;
   ctx->jmp_top = &jf;
   if (setjmp(jf.buf)) {
@@ -232,8 +232,8 @@ bool libcp_context_failed(LibcpContext *ctx) {
 }
 
 static void free_arena(LibcpContext *ctx) {
-  for (ArenaBlock *b = ctx->arena; b;) {
-    ArenaBlock *next = b->next;
+  for (LibcpArenaBlock *b = ctx->arena; b;) {
+    LibcpArenaBlock *next = b->next;
     LIBCP_FREE(b->data);
     LIBCP_FREE(b);
     b = next;
@@ -252,15 +252,15 @@ static void clear_state(LibcpContext *ctx) {
   ctx->stdin_len = 0;
   ctx->at_bol = false;
   ctx->has_space = false;
-  ctx->macros = (HashMap){};
+  ctx->macros = (LibcpHashMap){};
   ctx->predefined = NULL;
   ctx->predefined_len = 0;
   ctx->cond_incl = NULL;
-  ctx->pragma_once = (HashMap){};
-  ctx->search_cache = (HashMap){};
-  ctx->include_guards = (HashMap){};
-  ctx->keyword_map = (HashMap){};
-  ctx->typename_map = (HashMap){};
+  ctx->pragma_once = (LibcpHashMap){};
+  ctx->search_cache = (LibcpHashMap){};
+  ctx->include_guards = (LibcpHashMap){};
+  ctx->keyword_map = (LibcpHashMap){};
+  ctx->typename_map = (LibcpHashMap){};
   ctx->counter = 0;
   ctx->include_next_idx = 0;
   ctx->include_count = 0;
@@ -302,11 +302,11 @@ void libcp_context_free(LibcpContext *ctx) {
   LIBCP_FREE(ctx);
 }
 
-Token *libcp_tokenize_file(LibcpContext *ctx, char *path) {
+LibcpToken *libcp_tokenize_file(LibcpContext *ctx, char *path) {
   ENTER_RET(ctx, NULL);
   if (!ctx->base_file)
     ctx->base_file = libcp_arena_strdup(ctx, path);
-  Token *tok = libcp_tokenize_file_impl(ctx, path);
+  LibcpToken *tok = libcp_tokenize_file_impl(ctx, path);
   // libcp_tokenize_file_impl returns NULL only when the file cannot be opened; the
   // facades report it, so a library consumer never sees a silent NULL
   // (PLAN D4/L3.4b).
@@ -316,7 +316,7 @@ Token *libcp_tokenize_file(LibcpContext *ctx, char *path) {
   return tok;
 }
 
-Token *libcp_tokenize_buffer_len(LibcpContext *ctx, char *name,
+LibcpToken *libcp_tokenize_buffer_len(LibcpContext *ctx, char *name,
                                    char *contents, int len) {
   ENTER_RET(ctx, NULL);
   if (len < 0)
@@ -328,23 +328,23 @@ Token *libcp_tokenize_buffer_len(LibcpContext *ctx, char *name,
   memcpy(copy, contents, len);
   copy[len] = '\0';
 
-  File *file = libcp_new_file_len(ctx, libcp_arena_strdup(ctx, name), 0, copy, len);
+  LibcpFile *file = libcp_new_file_len(ctx, libcp_arena_strdup(ctx, name), 0, copy, len);
   char *nul = memchr(copy, 0, len);
   if (nul) {
     ctx->current_file = file;
     libcp_error_at(ctx, nul, "NUL byte in source file");
   }
 
-  Token *tok = libcp_tokenize(ctx, file);
+  LibcpToken *tok = libcp_tokenize(ctx, file);
   LEAVE(ctx);
   return tok;
 }
 
-Token *libcp_tokenize_buffer(LibcpContext *ctx, char *name, char *contents) {
+LibcpToken *libcp_tokenize_buffer(LibcpContext *ctx, char *name, char *contents) {
   return libcp_tokenize_buffer_len(ctx, name, contents, (int)strlen(contents));
 }
 
-void libcp_reconstruct(LibcpContext *ctx, Token *tok, FILE *out) {
+void libcp_reconstruct(LibcpContext *ctx, LibcpToken *tok, FILE *out) {
   ENTER_VOID(ctx);
   for (; tok; tok = tok->next) {
     fwrite(tok->trivia, 1, tok->trivia_len, out);

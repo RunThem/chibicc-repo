@@ -8,7 +8,7 @@ bool opt_fcommon = true;
 bool opt_fpic;
 
 static FileType opt_x;
-static StringArray opt_include;
+static LibcpStringArray opt_include;
 static bool opt_E;
 static bool opt_M;
 static bool opt_MD;
@@ -32,15 +32,15 @@ static char *opt_MF;
 static char *opt_MT;
 static char *opt_o;
 
-static StringArray ld_extra_args;
-static StringArray std_include_paths;
+static LibcpStringArray ld_extra_args;
+static LibcpStringArray std_include_paths;
 
 char *base_file;
 static char *output_file;
 static LibcpContext *ctx;
 
-static StringArray input_paths;
-static StringArray tmpfiles;
+static LibcpStringArray input_paths;
+static LibcpStringArray tmpfiles;
 
 static void usage(int status) {
   fprintf(stderr, "chibicc [ -o <path> ] <file>\n");
@@ -129,7 +129,7 @@ static void parse_args(int argc, char **argv) {
       if (!argv[++i])
         usage(1);
 
-  StringArray idirafter = {};
+  LibcpStringArray idirafter = {};
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-###")) {
@@ -487,7 +487,7 @@ static void run_cc1(int argc, char **argv, char *input, char *output) {
 }
 
 // Print tokens to stdout. Used for -E.
-static void print_tokens(Token *tok) {
+static void print_tokens(LibcpToken *tok) {
   FILE *out = open_file(opt_o ? opt_o : "-");
 
   int line = 1;
@@ -532,7 +532,7 @@ static char *skip_conts(char *p, char *end) {
 // (ws), a backslash-continuation (cont) or the leading BOM (bom). All of
 // a token's pieces come before its "T" line. Both are in raw
 // coordinates, so the dumped bytes tile the file. Used by test/trivia.sh.
-static void print_token_dump(Token *tok) {
+static void print_token_dump(LibcpToken *tok) {
   FILE *out = open_file(opt_o ? opt_o : "-");
 
   for (; tok; tok = tok->next) {
@@ -630,7 +630,7 @@ static void print_dependencies(void) {
   else
     fprintf(out, "%s:", quote_makefile(replace_extn(base_file, ".o")));
 
-  File **files = libcp_get_input_files(ctx);
+  LibcpFile **files = libcp_get_input_files(ctx);
 
   for (int i = 0; files[i]; i++) {
     if (opt_MMD && in_std_include_path(files[i]->name))
@@ -649,15 +649,15 @@ static void print_dependencies(void) {
   }
 }
 
-static Token *must_tokenize_file(char *path) {
+static LibcpToken *must_tokenize_file(char *path) {
   return libcp_tokenize_file(ctx, path);
 }
 
-static Token *append_tokens(Token *tok1, Token *tok2) {
+static LibcpToken *append_tokens(LibcpToken *tok1, LibcpToken *tok2) {
   if (!tok1 || tok1->kind == TK_EOF)
     return tok2;
 
-  Token *t = tok1;
+  LibcpToken *t = tok1;
   while (t->next->kind != TK_EOF)
     t = t->next;
   t->next = tok2;
@@ -675,7 +675,7 @@ static Token *append_tokens(Token *tok1, Token *tok2) {
 // synthesized buffer, not the source position of the expression.
 //
 
-static char *ast_node_kind_name(NodeKind kind) {
+static char *ast_node_kind_name(LibcpNodeKind kind) {
   switch (kind) {
   case ND_NULL_EXPR:       return "ND_NULL_EXPR";
   case ND_ADD:             return "ND_ADD";
@@ -750,7 +750,7 @@ static char *ast_node_kind_name(NodeKind kind) {
   return "ND_UNKNOWN";
 }
 
-static char *ast_type_kind_name(TypeKind kind) {
+static char *ast_type_kind_name(LibcpTypeKind kind) {
   switch (kind) {
   case TY_VOID:    return "void";
   case TY_BOOL:    return "bool";
@@ -776,7 +776,7 @@ static char *ast_type_kind_name(TypeKind kind) {
 // The source-written part of a type: its kind, the base/return chain and,
 // for an array, the declared length. Sizes, offsets and addresses are
 // sema/codegen conclusions and are deliberately not printed.
-static void ast_type_sig(FILE *out, Type *ty) {
+static void ast_type_sig(FILE *out, LibcpType *ty) {
   if (!ty) {
     fputc('-', out);
     return;
@@ -835,7 +835,7 @@ static void ast_quoted(FILE *out, char *p, int len) {
   fputc('"', out);
 }
 
-static void ast_span(FILE *out, Token *tok) {
+static void ast_span(FILE *out, LibcpToken *tok) {
   if (!tok) {
     fputs("@-", out);
     return;
@@ -853,7 +853,7 @@ static void ast_span(FILE *out, Token *tok) {
           (int)(tok->loc - line) + 1);
 }
 
-static void ast_token(FILE *out, Token *tok) {
+static void ast_token(FILE *out, LibcpToken *tok) {
   if (!tok) {
     fputs("@- \"\"", out);
     return;
@@ -868,7 +868,7 @@ static void ast_indent(FILE *out, int depth) {
     fputs("  ", out);
 }
 
-static void ast_fields(FILE *out, Node *node) {
+static void ast_fields(FILE *out, LibcpNode *node) {
   switch (node->kind) {
   case ND_ASSIGN:
     if (node->op)
@@ -984,15 +984,15 @@ static char *ast_init_kind_name(int kind) {
   return "?";
 }
 
-static void ast_node(FILE *out, Node *node, int depth);
-static void ast_initializer(FILE *out, Initializer *init, int depth);
+static void ast_node(FILE *out, LibcpNode *node, int depth);
+static void ast_initializer(FILE *out, LibcpInitializer *init, int depth);
 
-static void ast_chain(FILE *out, Node *node, int depth) {
+static void ast_chain(FILE *out, LibcpNode *node, int depth) {
   for (; node; node = node->next)
     ast_node(out, node, depth);
 }
 
-static void ast_initializer(FILE *out, Initializer *init, int depth) {
+static void ast_initializer(FILE *out, LibcpInitializer *init, int depth) {
   if (!init)
     return;
 
@@ -1019,7 +1019,7 @@ static void ast_initializer(FILE *out, Initializer *init, int depth) {
     return;
   }
 
-  for (InitItem *item = init->items; item; item = item->next) {
+  for (LibcpInitItem *item = init->items; item; item = item->next) {
     ast_indent(out, depth + 1);
     fputs("ITEM", out);
     if (item->comma_tok) {
@@ -1028,7 +1028,7 @@ static void ast_initializer(FILE *out, Initializer *init, int depth) {
     }
     fputc('\n', out);
 
-    for (InitDesig *d = item->desigs; d; d = d->next) {
+    for (LibcpInitDesig *d = item->desigs; d; d = d->next) {
       ast_indent(out, depth + 2);
       fputs("DESIG", out);
       if (d->name) {
@@ -1051,7 +1051,7 @@ static void ast_initializer(FILE *out, Initializer *init, int depth) {
   }
 }
 
-static void ast_node(FILE *out, Node *node, int depth) {
+static void ast_node(FILE *out, LibcpNode *node, int depth) {
   if (!node)
     return;
 
@@ -1098,7 +1098,7 @@ static void ast_node(FILE *out, Node *node, int depth) {
     ast_node(out, node->attr.align_expr, depth + 1);
 }
 
-static void print_ast_dump(Node *node) {
+static void print_ast_dump(LibcpNode *node) {
   ast_chain(open_file(opt_o ? opt_o : "-"), node, 0);
 }
 
@@ -1108,7 +1108,7 @@ static int cc1(void) {
   // libcp_tokenize()'s direct output, before preprocessing (plans/PLAN.md 判据 3).
   if (opt_dump_tokens || opt_reconstruct ||
       opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
-    Token *tok = must_tokenize_file(base_file);
+    LibcpToken *tok = must_tokenize_file(base_file);
     if (!tok)
       return 1;
     if (opt_dump_tokens)
@@ -1116,7 +1116,7 @@ static int cc1(void) {
     if (opt_reconstruct)
       libcp_reconstruct(ctx, tok, open_file(opt_o ? opt_o : "-"));
     if (opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
-      CstNode *root = libcp_cst_parse(ctx, tok);
+      LibcpCstNode *root = libcp_cst_parse(ctx, tok);
       if (!root)
         return 1;
       if (opt_dump_cst)
@@ -1129,7 +1129,7 @@ static int cc1(void) {
     return 0;
   }
 
-  Token *tok = NULL;
+  LibcpToken *tok = NULL;
 
   // Process -include option
   for (int i = 0; i < opt_include.len; i++) {
@@ -1144,14 +1144,14 @@ static int cc1(void) {
         libcp_error(ctx, "-include: %s: %s", incl, strerror(errno));
     }
 
-    Token *tok2 = must_tokenize_file(path);
+    LibcpToken *tok2 = must_tokenize_file(path);
     if (!tok2)
       return 1;
     tok = append_tokens(tok, tok2);
   }
 
   // Tokenize and parse.
-  Token *tok2 = must_tokenize_file(base_file);
+  LibcpToken *tok2 = must_tokenize_file(base_file);
   if (!tok2)
     return 1;
   tok = append_tokens(tok, tok2);
@@ -1182,7 +1182,7 @@ static int cc1(void) {
     return 0;
   }
 
-  Node *ast = libcp_parse(ctx, tok);
+  LibcpNode *ast = libcp_parse(ctx, tok);
   if (ctx->failed)
     return 1;
 
@@ -1193,7 +1193,7 @@ static int cc1(void) {
     return 0;
   }
 
-  Obj *prog = libcp_sema(ctx, ast);
+  LibcpObj *prog = libcp_sema(ctx, ast);
   if (ctx->failed)
     return 1;
 
@@ -1252,8 +1252,8 @@ static char *find_gcc_libpath(void) {
   libcp_error(ctx, "gcc library path is not found");
 }
 
-static void run_linker(StringArray *inputs, char *output) {
-  StringArray arr = {};
+static void run_linker(LibcpStringArray *inputs, char *output) {
+  LibcpStringArray arr = {};
 
   libcp_strarray_push(ctx, &arr, "ld");
   libcp_strarray_push(ctx, &arr, "-o");
@@ -1356,7 +1356,7 @@ int main(int argc, char **argv) {
   if (input_paths.len > 1 && opt_o && (opt_c || opt_S || opt_E))
     libcp_error(ctx, "cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
 
-  StringArray ld_args = {};
+  LibcpStringArray ld_args = {};
 
   for (int i = 0; i < input_paths.len; i++) {
     char *input = input_paths.data[i];

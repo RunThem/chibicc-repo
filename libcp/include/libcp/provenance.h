@@ -3,8 +3,8 @@
 // LibcpMacroProv nodes, one per expansion layer, innermost first; a token
 // read from the source carries NULL. The records a chain points to are
 // built once per expansion, immutable afterwards, and live as long as
-// the tokens (arena allocation, never freed). Macro, MacroArg and
-// MacroParam stay private to preprocess.c; these accessors are their
+// the tokens (arena allocation, never freed). LibcpMacro, LibcpMacroArg and
+// LibcpMacroParam stay private to preprocess.c; these accessors are their
 // public face.
 
 #ifndef LIBCP_PROVENANCE_H

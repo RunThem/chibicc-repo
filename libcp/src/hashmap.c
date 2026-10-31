@@ -25,7 +25,7 @@ static uint64_t fnv_hash(char *s, int len) {
 
 // Make room for new entires in a given hashmap by removing
 // tombstones and possibly extending the bucket size.
-static void rehash(LibcpContext *ctx, HashMap *map) {
+static void rehash(LibcpContext *ctx, LibcpHashMap *map) {
   // Compute the size of the new hashmap.
   int nkeys = 0;
   for (int i = 0; i < map->capacity; i++)
@@ -38,12 +38,12 @@ static void rehash(LibcpContext *ctx, HashMap *map) {
   assert(cap > 0);
 
   // Create a new hashmap and copy all key-values.
-  HashMap map2 = {};
-  map2.buckets = libcp_arena_calloc(ctx, cap, sizeof(HashEntry));
+  LibcpHashMap map2 = {};
+  map2.buckets = libcp_arena_calloc(ctx, cap, sizeof(LibcpHashEntry));
   map2.capacity = cap;
 
   for (int i = 0; i < map->capacity; i++) {
-    HashEntry *ent = &map->buckets[i];
+    LibcpHashEntry *ent = &map->buckets[i];
     if (ent->key && ent->key != TOMBSTONE)
       libcp_hashmap_put2(ctx, &map2, ent->key, ent->keylen, ent->val);
   }
@@ -52,19 +52,19 @@ static void rehash(LibcpContext *ctx, HashMap *map) {
   *map = map2;
 }
 
-static bool match(HashEntry *ent, char *key, int keylen) {
+static bool match(LibcpHashEntry *ent, char *key, int keylen) {
   return ent->key && ent->key != TOMBSTONE &&
          ent->keylen == keylen && memcmp(ent->key, key, keylen) == 0;
 }
 
-static HashEntry *get_entry(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
+static LibcpHashEntry *get_entry(LibcpContext *ctx, LibcpHashMap *map, char *key, int keylen) {
   if (!map->buckets)
     return NULL;
 
   uint64_t hash = fnv_hash(key, keylen);
 
   for (int i = 0; i < map->capacity; i++) {
-    HashEntry *ent = &map->buckets[(hash + i) % map->capacity];
+    LibcpHashEntry *ent = &map->buckets[(hash + i) % map->capacity];
     if (match(ent, key, keylen))
       return ent;
     if (ent->key == NULL)
@@ -73,9 +73,9 @@ static HashEntry *get_entry(LibcpContext *ctx, HashMap *map, char *key, int keyl
   unreachable();
 }
 
-static HashEntry *get_or_insert_entry(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
+static LibcpHashEntry *get_or_insert_entry(LibcpContext *ctx, LibcpHashMap *map, char *key, int keylen) {
   if (!map->buckets) {
-    map->buckets = libcp_arena_calloc(ctx, INIT_SIZE, sizeof(HashEntry));
+    map->buckets = libcp_arena_calloc(ctx, INIT_SIZE, sizeof(LibcpHashEntry));
     map->capacity = INIT_SIZE;
   } else if ((map->used * 100) / map->capacity >= HIGH_WATERMARK) {
     rehash(ctx, map);
@@ -84,7 +84,7 @@ static HashEntry *get_or_insert_entry(LibcpContext *ctx, HashMap *map, char *key
   uint64_t hash = fnv_hash(key, keylen);
 
   for (int i = 0; i < map->capacity; i++) {
-    HashEntry *ent = &map->buckets[(hash + i) % map->capacity];
+    LibcpHashEntry *ent = &map->buckets[(hash + i) % map->capacity];
 
     if (match(ent, key, keylen))
       return ent;
@@ -106,30 +106,30 @@ static HashEntry *get_or_insert_entry(LibcpContext *ctx, HashMap *map, char *key
   unreachable();
 }
 
-void *libcp_hashmap_get(LibcpContext *ctx, HashMap *map, char *key) {
+void *libcp_hashmap_get(LibcpContext *ctx, LibcpHashMap *map, char *key) {
   return libcp_hashmap_get2(ctx, map, key, strlen(key));
 }
 
-void *libcp_hashmap_get2(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
-  HashEntry *ent = get_entry(ctx, map, key, keylen);
+void *libcp_hashmap_get2(LibcpContext *ctx, LibcpHashMap *map, char *key, int keylen) {
+  LibcpHashEntry *ent = get_entry(ctx, map, key, keylen);
   return ent ? ent->val : NULL;
 }
 
-void libcp_hashmap_put(LibcpContext *ctx, HashMap *map, char *key, void *val) {
+void libcp_hashmap_put(LibcpContext *ctx, LibcpHashMap *map, char *key, void *val) {
    libcp_hashmap_put2(ctx, map, key, strlen(key), val);
 }
 
-void libcp_hashmap_put2(LibcpContext *ctx, HashMap *map, char *key, int keylen, void *val) {
-  HashEntry *ent = get_or_insert_entry(ctx, map, key, keylen);
+void libcp_hashmap_put2(LibcpContext *ctx, LibcpHashMap *map, char *key, int keylen, void *val) {
+  LibcpHashEntry *ent = get_or_insert_entry(ctx, map, key, keylen);
   ent->val = val;
 }
 
-void libcp_hashmap_delete(LibcpContext *ctx, HashMap *map, char *key) {
+void libcp_hashmap_delete(LibcpContext *ctx, LibcpHashMap *map, char *key) {
   libcp_hashmap_delete2(ctx, map, key, strlen(key));
 }
 
-void libcp_hashmap_delete2(LibcpContext *ctx, HashMap *map, char *key, int keylen) {
-  HashEntry *ent = get_entry(ctx, map, key, keylen);
+void libcp_hashmap_delete2(LibcpContext *ctx, LibcpHashMap *map, char *key, int keylen) {
+  LibcpHashEntry *ent = get_entry(ctx, map, key, keylen);
   if (!ent)
     return;
 

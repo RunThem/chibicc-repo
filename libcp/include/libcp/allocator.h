@@ -23,7 +23,7 @@
 //
 // A replacement must behave like the C library function it replaces:
 //  - LIBCP_MALLOC / LIBCP_CALLOC return memory aligned for any
-//    object type. Token and Node embed `long double`, so x86-64 needs
+//    object type. LibcpToken and LibcpNode embed `long double`, so x86-64 needs
 //    16-byte alignment.
 //  - LIBCP_CALLOC zero-fills the block; the library relies on that.
 //  - LIBCP_REALLOC follows realloc: a NULL pointer allocates, and on

@@ -31,7 +31,7 @@
 // operand - from a faithful one.
 //
 // The pass also owns the label namespace and the temporary slots
-// (Obj.ret_buffer, Type::vla_size and friends); the fields it writes
+// (LibcpObj.ret_buffer, LibcpType::vla_size and friends); the fields it writes
 // are marked as such in libcp.h. Everything below is the emitter:
 // no optimization passes, by design.
 
@@ -46,9 +46,9 @@ static char *argreg8[] = {"%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"};
 static char *argreg16[] = {"%di", "%si", "%dx", "%cx", "%r8w", "%r9w"};
 static char *argreg32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
 static char *argreg64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
-static Obj *current_fn;
+static LibcpObj *current_fn;
 
-// Codegen-owned state that used to live on the public Node/Type/Obj
+// Codegen-owned state that used to live on the public LibcpNode/LibcpType/LibcpObj
 // structs (PLAN L1). The library-facing shape keeps only what the
 // source and sema put there; the labels, the lowering marker, the call
 // slots and the VLA size slots are keyed by pointer here. Entries are
@@ -56,28 +56,28 @@ static Obj *current_fn;
 // allocation of this consumer.
 typedef struct CgNode CgNode;
 struct CgNode {
-  Node *node;
+  LibcpNode *node;
   CgNode *next;
   char *brk_label;
   char *cont_label;
   char *unique_label;
-  Obj *ret_buffer;
-  Node *case_next;
-  Node *default_case;
+  LibcpObj *ret_buffer;
+  LibcpNode *case_next;
+  LibcpNode *default_case;
   bool pass_by_stack;
   bool is_lowered;
 };
 
 typedef struct CgType CgType;
 struct CgType {
-  Type *ty;
+  LibcpType *ty;
   CgType *next;
-  Obj *vla_size;
+  LibcpObj *vla_size;
 };
 
 typedef struct CgObj CgObj;
 struct CgObj {
-  Obj *obj;
+  LibcpObj *obj;
   CgObj *next;
   int offset;
   int stack_size;
@@ -96,7 +96,7 @@ static unsigned cg_hash(void *p) {
   return x % CG_BUCKETS;
 }
 
-static CgNode *cg(Node *node) {
+static CgNode *cg(LibcpNode *node) {
   unsigned h = cg_hash(node);
   for (CgNode *p = cg_nodes[h]; p; p = p->next)
     if (p->node == node)
@@ -109,7 +109,7 @@ static CgNode *cg(Node *node) {
   return p;
 }
 
-static CgType *cg_type(Type *ty) {
+static CgType *cg_type(LibcpType *ty) {
   unsigned h = cg_hash(ty);
   for (CgType *p = cg_types[h]; p; p = p->next)
     if (p->ty == ty)
@@ -122,7 +122,7 @@ static CgType *cg_type(Type *ty) {
   return p;
 }
 
-static CgObj *cg_obj(Obj *obj) {
+static CgObj *cg_obj(LibcpObj *obj) {
   unsigned h = cg_hash(obj);
   for (CgObj *p = cg_objs[h]; p; p = p->next)
     if (p->obj == obj)
@@ -135,11 +135,11 @@ static CgObj *cg_obj(Obj *obj) {
   return p;
 }
 
-static int obj_offset(Obj *obj) {
+static int obj_offset(LibcpObj *obj) {
   return cg_obj(obj)->offset;
 }
 
-static int obj_stack_size(Obj *obj) {
+static int obj_stack_size(LibcpObj *obj) {
   return cg_obj(obj)->stack_size;
 }
 
@@ -158,11 +158,11 @@ static unsigned long bitfield_mask(int width) {
 static char *cur_brk_label;
 static char *cur_cont_label;
 
-static void gen_expr(LibcpContext *ctx, Node *node);
-static void gen_stmt(LibcpContext *ctx, Node *node);
-static Node *new_add(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok);
-static Node *new_sub(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok);
-static Node *lvar_init_comma(LibcpContext *ctx, Obj *var, InitTree *init, Token *tok);
+static void gen_expr(LibcpContext *ctx, LibcpNode *node);
+static void gen_stmt(LibcpContext *ctx, LibcpNode *node);
+static LibcpNode *new_add(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok);
+static LibcpNode *new_sub(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok);
+static LibcpNode *lvar_init_comma(LibcpContext *ctx, LibcpObj *var, LibcpInitTree *init, LibcpToken *tok);
 
 __attribute__((format(printf, 1, 2)))
 static void println(char *fmt, ...) {
@@ -225,7 +225,7 @@ static char *reg_ax(LibcpContext *ctx, int sz) {
 
 // Compute the absolute address of a given node.
 // It's an error if a given node does not reside in memory.
-static void gen_addr(LibcpContext *ctx, Node *node) {
+static void gen_addr(LibcpContext *ctx, LibcpNode *node) {
   switch (node->kind) {
   case ND_STRING:
     // The literal's anonymous global (PLAN A9.1: the node keeps its
@@ -317,7 +317,7 @@ static void gen_addr(LibcpContext *ctx, Node *node) {
     // ones the old `*(x+y)` form produced. It carries the lowered
     // mark, so the emitter's own additive lowering (PLAN B2) leaves
     // it alone.
-    Node *add = new_add(ctx, node->lhs, node->rhs, node->tok);
+    LibcpNode *add = new_add(ctx, node->lhs, node->rhs, node->tok);
     gen_expr(ctx, add);
     return;
   }
@@ -361,7 +361,7 @@ static void gen_addr(LibcpContext *ctx, Node *node) {
 }
 
 // Load a value from where %rax is pointing to.
-static void load(Type *ty) {
+static void load(LibcpType *ty) {
   switch (ty->kind) {
   case TY_ARRAY:
   case TY_STRUCT:
@@ -404,7 +404,7 @@ static void load(Type *ty) {
 }
 
 // Store %rax to an address that the stack top is pointing to.
-static void store(Type *ty) {
+static void store(LibcpType *ty) {
   pop("%rdi");
 
   switch (ty->kind) {
@@ -436,7 +436,7 @@ static void store(Type *ty) {
     println("  mov %%rax, (%%rdi)");
 }
 
-static void cmp_zero(Type *ty) {
+static void cmp_zero(LibcpType *ty) {
   switch (ty->kind) {
   case TY_FLOAT:
     println("  xorps %%xmm1, %%xmm1");
@@ -461,7 +461,7 @@ static void cmp_zero(Type *ty) {
 
 enum { I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, F80 };
 
-static int getTypeId(Type *ty) {
+static int getTypeId(LibcpType *ty) {
   switch (ty->kind) {
   case TY_CHAR:
     return ty->is_unsigned ? U8 : I8;
@@ -565,7 +565,7 @@ static char *cast_table[][11] = {
   {f80i8, f80i16, f80i32, f80i64, f80u8, f80u16, f80u32, f80u64, f80f32, f80f64, NULL},   // f80
 };
 
-static void cast(Type *from, Type *to) {
+static void cast(LibcpType *from, LibcpType *to) {
   if (to->kind == TY_VOID)
     return;
 
@@ -594,9 +594,9 @@ static void cast(Type *from, Type *to) {
 //
 // This function returns true if `ty` has only floating-point
 // members in its byte range [lo, hi).
-static bool has_flonum(Type *ty, int lo, int hi, int offset) {
+static bool has_flonum(LibcpType *ty, int lo, int hi, int offset) {
   if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
-    for (Member *mem = ty->members; mem; mem = mem->next)
+    for (LibcpMember *mem = ty->members; mem; mem = mem->next)
       if (!has_flonum(mem->ty, lo, hi, offset + mem->offset))
         return false;
     return true;
@@ -612,15 +612,15 @@ static bool has_flonum(Type *ty, int lo, int hi, int offset) {
   return offset < lo || hi <= offset || ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE;
 }
 
-static bool has_flonum1(Type *ty) {
+static bool has_flonum1(LibcpType *ty) {
   return has_flonum(ty, 0, 8, 0);
 }
 
-static bool has_flonum2(Type *ty) {
+static bool has_flonum2(LibcpType *ty) {
   return has_flonum(ty, 8, 16, 0);
 }
 
-static void push_struct(Type *ty) {
+static void push_struct(LibcpType *ty) {
   int sz = libcp_align_to(ty->size, 8);
   println("  sub $%d, %%rsp", sz);
   depth += sz / 8;
@@ -631,7 +631,7 @@ static void push_struct(Type *ty) {
   }
 }
 
-static void push_args2(LibcpContext *ctx, Node *args, bool first_pass) {
+static void push_args2(LibcpContext *ctx, LibcpNode *args, bool first_pass) {
   if (!args)
     return;
   push_args2(ctx, args->next, first_pass);
@@ -680,7 +680,7 @@ static void push_args2(LibcpContext *ctx, Node *args, bool first_pass) {
 //
 // - If a function is variadic, set the number of floating-point type
 //   arguments to RAX.
-static int push_args(LibcpContext *ctx, Node *node) {
+static int push_args(LibcpContext *ctx, LibcpNode *node) {
   int stack = 0, gp = 0, fp = 0;
 
   // If the return type is a large struct/union, the caller passes
@@ -689,8 +689,8 @@ static int push_args(LibcpContext *ctx, Node *node) {
     gp++;
 
   // Load as many arguments to the registers as possible.
-  for (Node *arg = node->args; arg; arg = arg->next) {
-    Type *ty = arg->ty;
+  for (LibcpNode *arg = node->args; arg; arg = arg->next) {
+    LibcpType *ty = arg->ty;
 
     switch (ty->kind) {
     case TY_STRUCT:
@@ -749,8 +749,8 @@ static int push_args(LibcpContext *ctx, Node *node) {
   return stack;
 }
 
-static void copy_ret_buffer(Obj *var) {
-  Type *ty = var->ty;
+static void copy_ret_buffer(LibcpObj *var) {
+  LibcpType *ty = var->ty;
   int gp = 0, fp = 0;
 
   if (has_flonum1(ty)) {
@@ -787,7 +787,7 @@ static void copy_ret_buffer(Obj *var) {
 }
 
 static void copy_struct_reg(void) {
-  Type *ty = current_fn->ty->return_ty;
+  LibcpType *ty = current_fn->ty->return_ty;
   int gp = 0, fp = 0;
 
   println("  mov %%rax, %%rdi");
@@ -828,8 +828,8 @@ static void copy_struct_reg(void) {
 }
 
 static void copy_struct_mem(void) {
-  Type *ty = current_fn->ty->return_ty;
-  Obj *var = current_fn->params;
+  LibcpType *ty = current_fn->ty->return_ty;
+  LibcpObj *var = current_fn->params;
 
   println("  mov %d(%%rbp), %%rdi", obj_offset(var));
 
@@ -868,7 +868,7 @@ static void builtin_alloca(void) {
 }
 
 // Generate code for a given node.
-static void gen_expr(LibcpContext *ctx, Node *node) {
+static void gen_expr(LibcpContext *ctx, LibcpNode *node) {
   // A faithful `+`/`-` still carries its source shape (PLAN B2): the
   // element-size scaling, the `num + ptr` canonicalization and the
   // conversions libcp_new_arith applies are made here, at emission, by the
@@ -970,7 +970,7 @@ static void gen_expr(LibcpContext *ctx, Node *node) {
     gen_addr(ctx, node);
     load(node->ty);
 
-    Member *mem = node->member;
+    LibcpMember *mem = node->member;
     if (mem->is_bitfield) {
       println("  shl $%d, %%rax", 64 - mem->bit_width - mem->bit_offset);
       if (mem->ty->is_unsigned)
@@ -1004,7 +1004,7 @@ static void gen_expr(LibcpContext *ctx, Node *node) {
 
       // If the lhs is a bitfield, we need to read the current value
       // from memory and merge it with a new value.
-      Member *mem = node->lhs->member;
+      LibcpMember *mem = node->lhs->member;
       println("  mov %%rax, %%rdi");
 
       // `and` takes a sign-extended 32-bit immediate. A mask wider than
@@ -1035,7 +1035,7 @@ static void gen_expr(LibcpContext *ctx, Node *node) {
     store(node->ty);
     return;
   case ND_STMT_EXPR:
-    for (Node *n = node->body; n; n = n->next)
+    for (LibcpNode *n = node->body; n; n = n->next)
       gen_stmt(ctx, n);
     return;
   case ND_COMMA:
@@ -1155,8 +1155,8 @@ static void gen_expr(LibcpContext *ctx, Node *node) {
     if (cg(node)->ret_buffer && node->ty->size > 16)
       pop(argreg64[gp++]);
 
-    for (Node *arg = node->args; arg; arg = arg->next) {
-      Type *ty = arg->ty;
+    for (LibcpNode *arg = node->args; arg; arg = arg->next) {
+      LibcpType *ty = arg->ty;
 
       switch (ty->kind) {
       case TY_STRUCT:
@@ -1276,7 +1276,7 @@ static void gen_expr(LibcpContext *ctx, Node *node) {
   // is the one of the operand the swap moves to the left, which is
   // also how the evaluator reads the faithful pair.
   if (node->kind == ND_GT || node->kind == ND_GE) {
-    Node *swapped = libcp_new_binary(ctx, node->kind == ND_GT ? ND_LT : ND_LE,
+    LibcpNode *swapped = libcp_new_binary(ctx, node->kind == ND_GT ? ND_LT : ND_LE,
                                node->rhs, node->lhs, node->tok);
     swapped->ty = node->ty;
     gen_expr(ctx, swapped);
@@ -1466,7 +1466,7 @@ static void gen_expr(LibcpContext *ctx, Node *node) {
   libcp_error_tok(ctx, node->tok, "invalid expression");
 }
 
-static void gen_stmt(LibcpContext *ctx, Node *node) {
+static void gen_stmt(LibcpContext *ctx, LibcpNode *node) {
   println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
 
   switch (node->kind) {
@@ -1561,7 +1561,7 @@ static void gen_stmt(LibcpContext *ctx, Node *node) {
 
     gen_expr(ctx, node->cond);
 
-    for (Node *n = cg(node)->case_next; n; n = cg(n)->case_next) {
+    for (LibcpNode *n = cg(node)->case_next; n; n = cg(n)->case_next) {
       char *ax = (node->cond->ty->size == 8) ? "%rax" : "%eax";
       char *di = (node->cond->ty->size == 8) ? "%rdi" : "%edi";
 
@@ -1593,7 +1593,7 @@ static void gen_stmt(LibcpContext *ctx, Node *node) {
     gen_stmt(ctx, node->lhs);
     return;
   case ND_BLOCK:
-    for (Node *n = node->body; n; n = n->next)
+    for (LibcpNode *n = node->body; n; n = n->next)
       gen_stmt(ctx, n);
     return;
   case ND_DECL: {
@@ -1606,7 +1606,7 @@ static void gen_stmt(LibcpContext *ctx, Node *node) {
     if (node->attr.is_static || !node->init_resolved)
       return;
 
-    Node *chain = lvar_init_comma(ctx, node->var, node->init_resolved,
+    LibcpNode *chain = lvar_init_comma(ctx, node->var, node->init_resolved,
                                   node->decl_init->tok);
     node->decl_init = NULL;
     node->init_resolved = NULL;
@@ -1637,7 +1637,7 @@ static void gen_stmt(LibcpContext *ctx, Node *node) {
   case ND_RETURN:
     if (node->lhs) {
       gen_expr(ctx, node->lhs);
-      Type *ty = node->lhs->ty;
+      LibcpType *ty = node->lhs->ty;
 
       switch (ty->kind) {
       case TY_STRUCT:
@@ -1691,24 +1691,24 @@ static void gen_stmt(LibcpContext *ctx, Node *node) {
 static int label_base;  // the counter's stopping point, taken once
 static int label_seq;   // labels handed out since then
 
-static Node *current_switch;
-static NodeArray cg_labels;  // the labels of the function being shaped
+static LibcpNode *current_switch;
+static LibcpNodeArray cg_labels;  // the labels of the function being shaped
 
 static char *new_label(LibcpContext *ctx) {
   return libcp_format(ctx, ".L..%d", label_base + label_seq++);
 }
 
-static void shape_node(LibcpContext *ctx, Node *node);
-static bool expand_decl(LibcpContext *ctx, Node *node);
-static void shape_init_exprs(LibcpContext *ctx, InitTree *init);
+static void shape_node(LibcpContext *ctx, LibcpNode *node);
+static bool expand_decl(LibcpContext *ctx, LibcpNode *node);
+static void shape_init_exprs(LibcpContext *ctx, LibcpInitTree *init);
 
 // Whether a declaration's type involves a VLA anywhere: its runtime
 // size slot has to exist before assign_lvar_offsets runs, so such a
 // record is still expanded in the pass. Every other declaration keeps
 // its place and reaches the emitter, which builds its initializer
 // chain at emission time (PLAN B1.2b).
-static bool decl_needs_vla_size(Node *node) {
-  for (Type *t = node->var->ty; t; t = t->base)
+static bool decl_needs_vla_size(LibcpNode *node) {
+  for (LibcpType *t = node->var->ty; t; t = t->base)
     if (t->kind == TY_VLA)
       return true;
   return false;
@@ -1722,9 +1722,9 @@ static bool decl_needs_vla_size(Node *node) {
 // unhooked here (PLAN A8.2). A nested function's body is not entered
 // from here: the program list is its home and this pass walks it from
 // there exactly once (contract 3(e)).
-static void shape_chain(LibcpContext *ctx, Node **head) {
-  for (Node **pp = head; *pp;) {
-    Node *n = *pp;
+static void shape_chain(LibcpContext *ctx, LibcpNode **head) {
+  for (LibcpNode **pp = head; *pp;) {
+    LibcpNode *n = *pp;
 
     switch (n->kind) {
     case ND_TYPEDEF:
@@ -1756,7 +1756,7 @@ static void shape_chain(LibcpContext *ctx, Node **head) {
 // Descends every subtree a node owns, statements and expressions
 // alike: a break can sit in a statement expression, which is an
 // expression node holding a statement chain.
-static void shape_children(LibcpContext *ctx, Node *node) {
+static void shape_children(LibcpContext *ctx, LibcpNode *node) {
   shape_node(ctx, node->lhs);
   shape_node(ctx, node->rhs);
   shape_node(ctx, node->cond);
@@ -1774,8 +1774,8 @@ static void shape_children(LibcpContext *ctx, Node *node) {
 // The temporaries a compound-assignment rewrite introduces are slots
 // of the consumer: they are created here so that they land in the
 // frame layout before assign_lvar_offsets runs (PLAN contract 3).
-static Obj *new_lvar(char *name, Type *ty) {
-  Obj *var = calloc(1, sizeof(Obj));
+static LibcpObj *new_lvar(char *name, LibcpType *ty) {
+  LibcpObj *var = calloc(1, sizeof(LibcpObj));
   var->name = name;
   var->ty = ty;
   var->align = ty->align;
@@ -1788,7 +1788,7 @@ static Obj *new_lvar(char *name, Type *ty) {
 // The scaled operand of an additive operator on a pointer: `p + n`
 // advances by sizeof(*p) * n rather than by n, and when the pointee is
 // a VLA, by its runtime size rather than a compile-time one.
-static Node *scale_rhs(LibcpContext *ctx, Type *ptr_ty, Node *rhs, Token *tok) {
+static LibcpNode *scale_rhs(LibcpContext *ctx, LibcpType *ptr_ty, LibcpNode *rhs, LibcpToken *tok) {
   if (ptr_ty->base->kind == TY_VLA)
     return libcp_new_binary(ctx, ND_MUL, rhs, libcp_new_var_node(ctx, cg_type(ptr_ty->base)->vla_size, tok), tok);
   return libcp_new_binary(ctx, ND_MUL, rhs, libcp_new_long(ctx, ptr_ty->base->size, tok), tok);
@@ -1799,7 +1799,7 @@ static Node *scale_rhs(LibcpContext *ctx, Type *ptr_ty, Node *rhs, Token *tok) {
 // element count the `ptr - ptr` division scales down), so the emitter
 // must emit it as plain machine arithmetic - gen_expr lower a faithful
 // `+`/`-` itself and would scale this one a second time (PLAN B2).
-static Node *mark_lowered(Node *node) {
+static LibcpNode *mark_lowered(LibcpNode *node) {
   cg(node)->is_lowered = true;
   return node;
 }
@@ -1813,7 +1813,7 @@ static Node *mark_lowered(Node *node) {
 // It is both the helper codegen's own builders call and the definition
 // of the faithful lowering the emitter runs at emission (PLAN B2); its
 // product carries the mark either way.
-static Node *new_add(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
+static LibcpNode *new_add(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok) {
   libcp_add_type(ctx, lhs);
   libcp_add_type(ctx, rhs);
 
@@ -1826,7 +1826,7 @@ static Node *new_add(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
 
   // Canonicalize `num + ptr` to `ptr + num`.
   if (!lhs->ty->base && rhs->ty->base) {
-    Node *tmp = lhs;
+    LibcpNode *tmp = lhs;
     lhs = rhs;
     rhs = tmp;
   }
@@ -1836,7 +1836,7 @@ static Node *new_add(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
 }
 
 // Like `+`, `-` is overloaded for the pointer type.
-static Node *new_sub(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
+static LibcpNode *new_sub(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok) {
   libcp_add_type(ctx, lhs);
   libcp_add_type(ctx, rhs);
 
@@ -1859,7 +1859,7 @@ static Node *new_sub(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
   // through the emitter under the `DIV` just like a built `ptr + num`
   // does.
   if (lhs->ty->base && rhs->ty->base) {
-    Node *node = mark_lowered(libcp_new_binary(ctx, ND_SUB, lhs, rhs, tok));
+    LibcpNode *node = mark_lowered(libcp_new_binary(ctx, ND_SUB, lhs, rhs, tok));
     node->ty = libcp_ty_long;
     return libcp_new_arith(ctx, ND_DIV, node, libcp_new_num(ctx, lhs->ty->base->size, tok), tok);
   }
@@ -1873,20 +1873,20 @@ static Node *new_sub(LibcpContext *ctx, Node *lhs, Node *rhs, Token *tok) {
 // from sema at A7.1 (it was the mirror of this function for one step):
 // the size variables are slots of this consumer, which is also why the
 // builder cannot live in the library any more.
-static Node *compute_vla_size(LibcpContext *ctx, Type *ty, Token *tok) {
-  Node *node = ty->base ? compute_vla_size(ctx, ty->base, tok) : NULL;
+static LibcpNode *compute_vla_size(LibcpContext *ctx, LibcpType *ty, LibcpToken *tok) {
+  LibcpNode *node = ty->base ? compute_vla_size(ctx, ty->base, tok) : NULL;
 
   if (ty->kind != TY_VLA)
     return node;
 
-  Node *base_sz;
+  LibcpNode *base_sz;
   if (ty->base->kind == TY_VLA)
     base_sz = libcp_new_var_node(ctx, cg_type(ty->base)->vla_size, tok);
   else
     base_sz = libcp_new_num(ctx, ty->base->size, tok);
 
   cg_type(ty)->vla_size = new_lvar("", libcp_ty_ulong);
-  Node *expr = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok),
+  LibcpNode *expr = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok),
                           libcp_new_binary(ctx, ND_MUL, ty->vla_len, base_sz, tok),
                           tok);
   return node ? libcp_new_binary(ctx, ND_COMMA, node, expr, tok) : expr;
@@ -1895,10 +1895,10 @@ static Node *compute_vla_size(LibcpContext *ctx, Type *ty, Token *tok) {
 // `sizeof` of a VLA type: a reference to its runtime size variable,
 // computed first if this type has not had its size computed yet
 // (e.g. `sizeof(int[n])` with a fresh type).
-static Node *vla_size_expr(LibcpContext *ctx, Type *ty, Token *tok) {
+static LibcpNode *vla_size_expr(LibcpContext *ctx, LibcpType *ty, LibcpToken *tok) {
   if (cg_type(ty)->vla_size)
     return libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok);
-  Node *lhs = compute_vla_size(ctx, ty, tok);
+  LibcpNode *lhs = compute_vla_size(ctx, ty, tok);
   return libcp_new_binary(ctx, ND_COMMA, lhs, libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok), tok);
 }
 
@@ -1908,19 +1908,19 @@ static Node *vla_size_expr(LibcpContext *ctx, Type *ty, Token *tok) {
 // dereference of the scaled addition - the shape the faithful
 // subscript would lower to - so no intermediate node needs a second
 // walk (contract 3(d)).
-static Node *init_desg_expr(LibcpContext *ctx, InitPath *desg, Token *tok) {
+static LibcpNode *init_desg_expr(LibcpContext *ctx, LibcpInitPath *desg, LibcpToken *tok) {
   if (desg->var)
     return libcp_new_var_node(ctx, desg->var, tok);
 
   if (desg->member) {
-    Node *node = libcp_new_unary(ctx, ND_MEMBER, init_desg_expr(ctx, desg->next, tok), tok);
+    LibcpNode *node = libcp_new_unary(ctx, ND_MEMBER, init_desg_expr(ctx, desg->next, tok), tok);
     node->member = desg->member;
     return node;
   }
 
-  Node *lhs = init_desg_expr(ctx, desg->next, tok);
-  Node *add = new_add(ctx, lhs, libcp_new_num(ctx, desg->idx, tok), tok);
-  Node *node = libcp_new_unary(ctx, ND_DEREF, add, tok);
+  LibcpNode *lhs = init_desg_expr(ctx, desg->next, tok);
+  LibcpNode *add = new_add(ctx, lhs, libcp_new_num(ctx, desg->idx, tok), tok);
+  LibcpNode *node = libcp_new_unary(ctx, ND_DEREF, add, tok);
   node->ty = add->ty->base;
   return node;
 }
@@ -1929,38 +1929,38 @@ static Node *init_desg_expr(LibcpContext *ctx, InitPath *desg, Token *tok) {
 // resolved tree (moved from sema at A8.1). Aggregates recurse into
 // their children; a union walks only the member the record selected;
 // a partial list is preceded by the MEMZERO in lvar_init_comma below.
-static Node *create_lvar_init(LibcpContext *ctx, InitTree *init, Type *ty, InitPath *desg, Token *tok) {
+static LibcpNode *create_lvar_init(LibcpContext *ctx, LibcpInitTree *init, LibcpType *ty, LibcpInitPath *desg, LibcpToken *tok) {
   if (ty->kind == TY_ARRAY) {
-    Node *node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
+    LibcpNode *node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
     for (int i = 0; i < ty->array_len; i++) {
-      InitPath desg2 = {desg, i};
-      Node *rhs = create_lvar_init(ctx, init->children[i], ty->base, &desg2, tok);
+      LibcpInitPath desg2 = {desg, i};
+      LibcpNode *rhs = create_lvar_init(ctx, init->children[i], ty->base, &desg2, tok);
       node = libcp_new_binary(ctx, ND_COMMA, node, rhs, tok);
     }
     return node;
   }
 
   if (ty->kind == TY_STRUCT && !init->expr) {
-    Node *node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
+    LibcpNode *node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
 
-    for (Member *mem = ty->members; mem; mem = mem->next) {
-      InitPath desg2 = {desg, 0, mem};
-      Node *rhs = create_lvar_init(ctx, init->children[mem->idx], mem->ty, &desg2, tok);
+    for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
+      LibcpInitPath desg2 = {desg, 0, mem};
+      LibcpNode *rhs = create_lvar_init(ctx, init->children[mem->idx], mem->ty, &desg2, tok);
       node = libcp_new_binary(ctx, ND_COMMA, node, rhs, tok);
     }
     return node;
   }
 
   if (ty->kind == TY_UNION) {
-    Member *mem = init->mem ? init->mem : ty->members;
-    InitPath desg2 = {desg, 0, mem};
+    LibcpMember *mem = init->mem ? init->mem : ty->members;
+    LibcpInitPath desg2 = {desg, 0, mem};
     return create_lvar_init(ctx, init->children[mem->idx], mem->ty, &desg2, tok);
   }
 
   if (!init->expr)
     return libcp_new_node(ctx, ND_NULL_EXPR, tok);
 
-  Node *lhs = init_desg_expr(ctx, desg, tok);
+  LibcpNode *lhs = init_desg_expr(ctx, desg, tok);
   return libcp_new_binary(ctx, ND_ASSIGN, lhs, init->expr, tok);
 }
 
@@ -1971,28 +1971,28 @@ static Node *create_lvar_init(LibcpContext *ctx, InitTree *init, Type *ty, InitP
 // - but the initializer expressions are old nodes nothing else in the
 // tree references, and an expression shared by several records (a
 // range designator) is shaped exactly once here.
-static void shape_init_exprs(LibcpContext *ctx, InitTree *init);
+static void shape_init_exprs(LibcpContext *ctx, LibcpInitTree *init);
 
 // Build the MEMZERO + assignment comma chain that initializes a local
 // variable from its resolved initializer tree. `tok` anchors the
 // synthesized nodes; the record's first token is where the parser used
 // to anchor them. Moved from sema at A8.1 with the declaration
 // expansion; sema itself no longer builds it.
-static Node *lvar_init_comma(LibcpContext *ctx, Obj *var, InitTree *init, Token *tok) {
-  InitPath desg = {NULL, 0, NULL, var};
+static LibcpNode *lvar_init_comma(LibcpContext *ctx, LibcpObj *var, LibcpInitTree *init, LibcpToken *tok) {
+  LibcpInitPath desg = {NULL, 0, NULL, var};
 
   // If a partial initializer list is given, the standard requires
   // that unspecified elements are set to 0. Here, we simply
   // zero-initialize the entire memory region of a variable before
   // initializing it with user-supplied values.
-  Node *lhs = libcp_new_node(ctx, ND_MEMZERO, tok);
+  LibcpNode *lhs = libcp_new_node(ctx, ND_MEMZERO, tok);
   lhs->var = var;
 
-  Node *rhs = create_lvar_init(ctx, init, var->ty, &desg, tok);
+  LibcpNode *rhs = create_lvar_init(ctx, init, var->ty, &desg, tok);
   return libcp_new_binary(ctx, ND_COMMA, lhs, rhs, tok);
 }
 
-static void shape_init_exprs(LibcpContext *ctx, InitTree *init) {
+static void shape_init_exprs(LibcpContext *ctx, LibcpInitTree *init) {
   if (!init)
     return;
 
@@ -2010,7 +2010,7 @@ static void shape_init_exprs(LibcpContext *ctx, InitTree *init) {
     return;
   }
 
-  for (Member *mem = init->ty->members; mem; mem = mem->next)
+  for (LibcpMember *mem = init->ty->members; mem; mem = mem->next)
     shape_init_exprs(ctx, init->children[mem->idx]);
 }
 
@@ -2024,17 +2024,17 @@ static void shape_init_exprs(LibcpContext *ctx, InitTree *init) {
 // initializer record resolved, and the block-scope static's data
 // image is already in .data. Moved from sema at A8.1; the VLA half
 // came over at A7.1, when the size slots did.
-static bool expand_decl(LibcpContext *ctx, Node *node) {
-  Obj *var = node->var;
-  Token *tok = node->tok;
+static bool expand_decl(LibcpContext *ctx, LibcpNode *node) {
+  LibcpObj *var = node->var;
+  LibcpToken *tok = node->tok;
 
   // A block-scope static produces no statement: its data image was
   // serialized by the annotation pass.
   if (node->attr.is_static)
     return false;
 
-  Node *vla_size = NULL;
-  for (Type *t = var->ty; t; t = t->base) {
+  LibcpNode *vla_size = NULL;
+  for (LibcpType *t = var->ty; t; t = t->base) {
     if (t->kind == TY_VLA) {
       // The dimensions the size computation embeds have never been
       // through this pass - the type is their only reference. Shape
@@ -2049,7 +2049,7 @@ static bool expand_decl(LibcpContext *ctx, Node *node) {
     }
   }
 
-  Node *lowered = NULL;
+  LibcpNode *lowered = NULL;
 
   if (var->ty->kind == TY_VLA) {
     // `var = alloca(<size>)`: the size chain computed just above.
@@ -2087,29 +2087,29 @@ static bool expand_decl(LibcpContext *ctx, Node *node) {
 // which is the shape `+`/`-` produce; the others are handed to libcp_add_type,
 // which converts the multiplicative and bitwise ones and leaves the
 // shifts alone.
-static Node *combine(LibcpContext *ctx, NodeKind op, Node *lhs, Node *rhs, Token *tok) {
+static LibcpNode *combine(LibcpContext *ctx, LibcpNodeKind op, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok) {
   // The additive case takes operands that already went through
   // new_add/new_sub (this combines a read-modify-write value with its
   // scaled operand), so it is a plain machine arithmetic node too.
   if (op == ND_ADD || op == ND_SUB)
     return mark_lowered(libcp_new_arith(ctx, op, lhs, rhs, tok));
 
-  Node *node = libcp_new_binary(ctx, op, lhs, rhs, tok);
+  LibcpNode *node = libcp_new_binary(ctx, op, lhs, rhs, tok);
   libcp_add_type(ctx, node);
   return node;
 }
 
 // Build the `lhs op rhs` operand expression for a compound assignment
 // driven by node->op.
-static Node *compound_op(LibcpContext *ctx, Node *node, Node *lhs, Token *tok) {
-  Node *rhs = node->rhs;
+static LibcpNode *compound_op(LibcpContext *ctx, LibcpNode *node, LibcpNode *lhs, LibcpToken *tok) {
+  LibcpNode *rhs = node->rhs;
 
   // `+=`/`-=` are routed through new_add/new_sub so that the operand
   // checks run and the pointer arithmetic is scaled exactly as for
   // plain `+`/`-`; the operand they settle on is the one the rebuilt
   // expression combines with `lhs`.
   if (node->op == ND_ADD || node->op == ND_SUB) {
-    Node *scaled = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok)
+    LibcpNode *scaled = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok)
                                       : new_sub(ctx, node->lhs, node->rhs, tok);
     rhs = scaled->rhs;
   }
@@ -2125,10 +2125,10 @@ static Node *compound_op(LibcpContext *ctx, Node *node, Node *lhs, Token *tok) {
 // However, if a given expression is of form `A.x op= C`, the input is
 // converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
 // to bitfields.
-static Node *to_assign(LibcpContext *ctx, Node *node) {
+static LibcpNode *to_assign(LibcpContext *ctx, LibcpNode *node) {
   libcp_add_type(ctx, node->lhs);
   libcp_add_type(ctx, node->rhs);
-  Token *tok = node->tok;
+  LibcpToken *tok = node->tok;
 
   // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
   // The member keeps its marker now (PLAN B1.1b), so the address of
@@ -2141,25 +2141,25 @@ static Node *to_assign(LibcpContext *ctx, Node *node) {
   // the member on it; the slot and the built shapes are the ones the
   // pre-B lowering produced.
   if (node->lhs->kind == ND_MEMBER) {
-    Node *operand = node->lhs->lhs;
+    LibcpNode *operand = node->lhs->lhs;
     bool arrow = node->lhs->arrow_tok;
-    Obj *var = new_lvar("", libcp_pointer_to(ctx, arrow ? operand->ty->base : operand->ty));
-    Node *addr = arrow ? operand : libcp_new_unary(ctx, ND_ADDR, operand, tok);
+    LibcpObj *var = new_lvar("", libcp_pointer_to(ctx, arrow ? operand->ty->base : operand->ty));
+    LibcpNode *addr = arrow ? operand : libcp_new_unary(ctx, ND_ADDR, operand, tok);
 
-    Node *expr1 = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, var, tok),
+    LibcpNode *expr1 = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, var, tok),
                              addr, tok);
 
-    Node *expr2 = libcp_new_unary(ctx, ND_MEMBER,
+    LibcpNode *expr2 = libcp_new_unary(ctx, ND_MEMBER,
                             libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
                             tok);
     expr2->member = node->lhs->member;
 
-    Node *expr3 = libcp_new_unary(ctx, ND_MEMBER,
+    LibcpNode *expr3 = libcp_new_unary(ctx, ND_MEMBER,
                             libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
                             tok);
     expr3->member = node->lhs->member;
 
-    Node *expr4 = libcp_new_binary(ctx, ND_ASSIGN, expr2,
+    LibcpNode *expr4 = libcp_new_binary(ctx, ND_ASSIGN, expr2,
                              compound_op(ctx, node, expr3, tok),
                              tok);
 
@@ -2179,21 +2179,21 @@ static Node *to_assign(LibcpContext *ctx, Node *node) {
     // The `val` temporary holds the operand as `op` would have it, so
     // for `+=`/`-=` the scaling is computed eagerly here - through
     // new_add/new_sub, which is also what runs the operand checks.
-    Node *rhs = node->rhs;
+    LibcpNode *rhs = node->rhs;
     if (node->op == ND_ADD || node->op == ND_SUB) {
-      Node *operand = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok)
+      LibcpNode *operand = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok)
                                          : new_sub(ctx, node->lhs, node->rhs, tok);
       rhs = operand->rhs;
     }
     libcp_add_type(ctx, rhs);
 
-    Node head = {};
-    Node *cur = &head;
+    LibcpNode head = {};
+    LibcpNode *cur = &head;
 
-    Obj *addr = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
-    Obj *val = new_lvar("", rhs->ty);
-    Obj *old = new_lvar("", node->lhs->ty);
-    Obj *new = new_lvar("", node->lhs->ty);
+    LibcpObj *addr = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
+    LibcpObj *val = new_lvar("", rhs->ty);
+    LibcpObj *old = new_lvar("", node->lhs->ty);
+    LibcpObj *new = new_lvar("", node->lhs->ty);
 
     cur = cur->next =
       libcp_new_unary(ctx, ND_EXPR_STMT,
@@ -2212,7 +2212,7 @@ static Node *to_assign(LibcpContext *ctx, Node *node) {
                            libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, addr, tok), tok), tok),
                 tok);
 
-    Node *loop = libcp_new_node(ctx, ND_DO, tok);
+    LibcpNode *loop = libcp_new_node(ctx, ND_DO, tok);
 
     // The retry loop takes its labels here rather than through a
     // shape_node descent: its interior is codegen-built lowered form
@@ -2229,7 +2229,7 @@ static Node *to_assign(LibcpContext *ctx, Node *node) {
     // `val` already holds the operand as `op` would have it - scaled
     // for an additive operator on a pointer - so the retry loop
     // combines it with the old value without scaling again.
-    Node *body = libcp_new_binary(ctx, ND_ASSIGN,
+    LibcpNode *body = libcp_new_binary(ctx, ND_ASSIGN,
                             libcp_new_var_node(ctx, new, tok),
                             combine(ctx, node->op, libcp_new_var_node(ctx, old, tok),
                                     libcp_new_var_node(ctx, val, tok), tok),
@@ -2238,7 +2238,7 @@ static Node *to_assign(LibcpContext *ctx, Node *node) {
     loop->then = libcp_new_node(ctx, ND_BLOCK, tok);
     loop->then->body = libcp_new_unary(ctx, ND_EXPR_STMT, body, tok);
 
-    Node *cas = libcp_new_node(ctx, ND_CAS, tok);
+    LibcpNode *cas = libcp_new_node(ctx, ND_CAS, tok);
     cas->cas_addr = libcp_new_var_node(ctx, addr, tok);
     cas->cas_old = libcp_new_unary(ctx, ND_ADDR, libcp_new_var_node(ctx, old, tok), tok);
     cas->cas_new = libcp_new_var_node(ctx, new, tok);
@@ -2247,18 +2247,18 @@ static Node *to_assign(LibcpContext *ctx, Node *node) {
     cur = cur->next = loop;
     cur = cur->next = libcp_new_unary(ctx, ND_EXPR_STMT, libcp_new_var_node(ctx, new, tok), tok);
 
-    Node *stmt_expr = libcp_new_node(ctx, ND_STMT_EXPR, tok);
+    LibcpNode *stmt_expr = libcp_new_node(ctx, ND_STMT_EXPR, tok);
     stmt_expr->body = head.next;
     return stmt_expr;
   }
 
   // Convert `A op= B` to ``tmp = &A, *tmp = *tmp op B`.
-  Obj *var = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
+  LibcpObj *var = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
 
-  Node *expr1 = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, var, tok),
+  LibcpNode *expr1 = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, var, tok),
                            libcp_new_unary(ctx, ND_ADDR, node->lhs, tok), tok);
 
-  Node *expr2 =
+  LibcpNode *expr2 =
     libcp_new_binary(ctx, ND_ASSIGN,
                libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
                compound_op(ctx, node, libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok), tok),
@@ -2268,11 +2268,11 @@ static Node *to_assign(LibcpContext *ctx, Node *node) {
 }
 
 // Convert A++ to `(typeof A)((A += 1) - 1)`. Moved from parse.c.
-static Node *new_inc_dec(LibcpContext *ctx, Node *node, Token *tok, int addend) {
+static LibcpNode *new_inc_dec(LibcpContext *ctx, LibcpNode *node, LibcpToken *tok, int addend) {
   libcp_add_type(ctx, node);
-  Node *expr = libcp_new_binary(ctx, ND_ASSIGN, node, libcp_new_num(ctx, addend, tok), tok);
+  LibcpNode *expr = libcp_new_binary(ctx, ND_ASSIGN, node, libcp_new_num(ctx, addend, tok), tok);
   expr->op = ND_ADD;
-  Node *sub = new_add(ctx, to_assign(ctx, expr), libcp_new_num(ctx, -addend, tok), tok);
+  LibcpNode *sub = new_add(ctx, to_assign(ctx, expr), libcp_new_num(ctx, -addend, tok), tok);
   return libcp_new_cast(ctx, sub, node->ty);
 }
 
@@ -2281,7 +2281,7 @@ static Node *new_inc_dec(LibcpContext *ctx, Node *node, Token *tok, int addend) 
 // emitter resolves a break or a continue against the innermost one at
 // emission time (PLAN B1.2a); the descent here only makes sure every
 // loop has them.
-static void shape_node(LibcpContext *ctx, Node *node) {
+static void shape_node(LibcpContext *ctx, LibcpNode *node) {
   if (!node)
     return;
 
@@ -2301,7 +2301,7 @@ static void shape_node(LibcpContext *ctx, Node *node) {
       if (!node->init) {
         // nothing to do
       } else if (node->init->next) {
-        Node *blk = libcp_new_node(ctx, ND_BLOCK, node->init->tok);
+        LibcpNode *blk = libcp_new_node(ctx, ND_BLOCK, node->init->tok);
         blk->body = node->init;
         node->init = blk;
       }
@@ -2311,7 +2311,7 @@ static void shape_node(LibcpContext *ctx, Node *node) {
   case ND_SWITCH: {
     cg(node)->brk_label = new_label(ctx);
 
-    Node *sw = current_switch;
+    LibcpNode *sw = current_switch;
     current_switch = node;
     shape_children(ctx, node);
     current_switch = sw;
@@ -2335,7 +2335,7 @@ static void shape_node(LibcpContext *ctx, Node *node) {
   case ND_GOTO:
     // Resolved with the function's collected references below, not
     // here: sema stashed the goto and label-value population on the
-    // Obj, because a label value can sit outside the statement tree.
+    // LibcpObj, because a label value can sit outside the statement tree.
     return;
   case ND_LABEL:
     cg(node)->unique_label = new_label(ctx);
@@ -2350,8 +2350,8 @@ static void shape_node(LibcpContext *ctx, Node *node) {
       // cases), then type the result afresh. The rewrite takes the
       // whole node, because the atomic form becomes a statement
       // expression, which carries its body outside lhs/rhs.
-      Node *result = to_assign(ctx, node);
-      Node *nxt = node->next;
+      LibcpNode *result = to_assign(ctx, node);
+      LibcpNode *nxt = node->next;
       *node = *result;
       node->next = nxt;
       libcp_add_type(ctx, node);
@@ -2361,14 +2361,14 @@ static void shape_node(LibcpContext *ctx, Node *node) {
     // Lower `++i`/`i--` to the compound-assignment form, rewriting
     // the node in place.
     shape_children(ctx, node);
-    Node *operand = node->lhs;
-    Token *tok = node->tok;
+    LibcpNode *operand = node->lhs;
+    LibcpToken *tok = node->tok;
 
     if (node->is_post) {
       // The result is the implicit cast restoring the operand's type
       // around `(A += 1) - 1`, so its marking has to travel with the
       // shape it contributes.
-      Node *result = new_inc_dec(ctx, operand, tok, node->addend);
+      LibcpNode *result = new_inc_dec(ctx, operand, tok, node->addend);
       node->kind = result->kind;
       node->lhs = result->lhs;
       node->ty = result->ty;
@@ -2376,10 +2376,10 @@ static void shape_node(LibcpContext *ctx, Node *node) {
       return;
     }
 
-    Node *expr = libcp_new_binary(ctx, ND_ASSIGN, operand, libcp_new_num(ctx, 1, tok), tok);
+    LibcpNode *expr = libcp_new_binary(ctx, ND_ASSIGN, operand, libcp_new_num(ctx, 1, tok), tok);
     expr->op = node->addend < 0 ? ND_SUB : ND_ADD;
-    Node *result = to_assign(ctx, expr);
-    Node *nxt = node->next;
+    LibcpNode *result = to_assign(ctx, expr);
+    LibcpNode *nxt = node->next;
     *node = *result;
     node->next = nxt;
     libcp_add_type(ctx, node);
@@ -2407,7 +2407,7 @@ static void shape_node(LibcpContext *ctx, Node *node) {
     // variable. Every other sizeof arrives concluded in `val`, and no
     // form evaluates its operand, so there is nothing below to shape
     // either way.
-    Type *ty = node->ty_op ? node->ty_op : node->lhs->ty;
+    LibcpType *ty = node->ty_op ? node->ty_op : node->lhs->ty;
     if (ty->kind == TY_VLA) {
       // A type-name operand carries a fresh type, and the dimension
       // expressions the chain is about to embed have never been
@@ -2418,13 +2418,13 @@ static void shape_node(LibcpContext *ctx, Node *node) {
       // reaches them there (the declaration annotation set vla_size
       // on exactly those types, which is how the two cases differ).
       if (!cg_type(ty)->vla_size)
-        for (Type *t = ty; t; t = t->base)
+        for (LibcpType *t = ty; t; t = t->base)
           if (t->kind == TY_VLA)
             shape_node(ctx, t->vla_len);
 
-      Node *expr = vla_size_expr(ctx, ty, node->tok);
+      LibcpNode *expr = vla_size_expr(ctx, ty, node->tok);
       libcp_add_type(ctx, expr);
-      Node *nxt = node->next;
+      LibcpNode *nxt = node->next;
       *node = *expr;
       node->next = nxt;
     }
@@ -2443,15 +2443,15 @@ static void shape_node(LibcpContext *ctx, Node *node) {
     // exists). The file-scope case becomes a plain reference in sema,
     // whose serializer owns the data.
     {
-      Obj *var = node->var;
+      LibcpObj *var = node->var;
 
       shape_init_exprs(ctx, node->init_resolved);
-      Node *lowered = lvar_init_comma(ctx, var, node->init_resolved,
+      LibcpNode *lowered = lvar_init_comma(ctx, var, node->init_resolved,
                                       node->decl_init->tok);
-      Node *comma = libcp_new_binary(ctx, ND_COMMA, lowered,
+      LibcpNode *comma = libcp_new_binary(ctx, ND_COMMA, lowered,
                                libcp_new_var_node(ctx, var, node->tok), node->tok);
       libcp_add_type(ctx, comma);
-      Node *nxt = node->next;
+      LibcpNode *nxt = node->next;
       *node = *comma;
       node->next = nxt;
     }
@@ -2466,14 +2466,14 @@ static void shape_node(LibcpContext *ctx, Node *node) {
 // them in the context) with the labels the descent above allocated,
 // writing the name each one jumps to. The undeclared-label check
 // already ran in sema, so every reference here matched there.
-static void resolve_label_refs(LibcpContext *ctx, Obj *fn) {
-  NodeArray *refs = libcp_sema_label_gotos(ctx, fn);
+static void resolve_label_refs(LibcpContext *ctx, LibcpObj *fn) {
+  LibcpNodeArray *refs = libcp_sema_label_gotos(ctx, fn);
   if (!refs)
     return;
   for (int i = 0; i < refs->len; i++) {
-    Node *x = refs->data[i];
+    LibcpNode *x = refs->data[i];
     for (int j = 0; j < cg_labels.len; j++) {
-      Node *y = cg_labels.data[j];
+      LibcpNode *y = cg_labels.data[j];
       if (!strcmp(x->label, y->label)) {
         cg(x)->unique_label = cg(y)->unique_label;
         break;
@@ -2487,8 +2487,8 @@ static void resolve_label_refs(LibcpContext *ctx, Obj *fn) {
 // [GNU] nested function's body - which also hangs inside its host's
 // body before sema's type_chain takes the record off the chain - is
 // visited exactly once, through its own entry here.
-static void shape(LibcpContext *ctx, Obj *prog) {
-  for (Obj *fn = prog; fn; fn = fn->next) {
+static void shape(LibcpContext *ctx, LibcpObj *prog) {
+  for (LibcpObj *fn = prog; fn; fn = fn->next) {
     if (!fn->is_function || !fn->is_definition)
       continue;
     // The rewrite temporaries created below enter this function's
@@ -2500,8 +2500,8 @@ static void shape(LibcpContext *ctx, Obj *prog) {
 }
 
 // Assign offsets to local variables.
-static void assign_lvar_offsets(Obj *prog) {
-  for (Obj *fn = prog; fn; fn = fn->next) {
+static void assign_lvar_offsets(LibcpObj *prog) {
+  for (LibcpObj *fn = prog; fn; fn = fn->next) {
     if (!fn->is_function)
       continue;
 
@@ -2514,8 +2514,8 @@ static void assign_lvar_offsets(Obj *prog) {
     int gp = 0, fp = 0;
 
     // Assign offsets to pass-by-stack parameters.
-    for (Obj *var = fn->params; var; var = var->next) {
-      Type *ty = var->ty;
+    for (LibcpObj *var = fn->params; var; var = var->next) {
+      LibcpType *ty = var->ty;
 
       switch (ty->kind) {
       case TY_STRUCT:
@@ -2548,7 +2548,7 @@ static void assign_lvar_offsets(Obj *prog) {
     }
 
     // Assign offsets to pass-by-register parameters and local variables.
-    for (Obj *var = fn->locals; var; var = var->next) {
+    for (LibcpObj *var = fn->locals; var; var = var->next) {
       if (obj_offset(var))
         continue;
 
@@ -2568,8 +2568,8 @@ static void assign_lvar_offsets(Obj *prog) {
   }
 }
 
-static void emit_data(Obj *prog) {
-  for (Obj *var = prog; var; var = var->next) {
+static void emit_data(LibcpObj *prog) {
+  for (LibcpObj *var = prog; var; var = var->next) {
     if (var->is_function || !var->is_definition)
       continue;
 
@@ -2599,7 +2599,7 @@ static void emit_data(Obj *prog) {
       println("  .align %d", align);
       println("%s:", var->name);
 
-      Relocation *rel = var->rel;
+      LibcpRelocation *rel = var->rel;
       int pos = 0;
       while (pos < var->ty->size) {
         if (rel && rel->offset == pos) {
@@ -2686,8 +2686,8 @@ static void store_gp(int r, int offset, int sz) {
   }
 }
 
-static void emit_text(LibcpContext *ctx, Obj *prog) {
-  for (Obj *fn = prog; fn; fn = fn->next) {
+static void emit_text(LibcpContext *ctx, LibcpObj *prog) {
+  for (LibcpObj *fn = prog; fn; fn = fn->next) {
     if (!fn->is_function || !fn->is_definition)
       continue;
 
@@ -2715,7 +2715,7 @@ static void emit_text(LibcpContext *ctx, Obj *prog) {
     // Save arg registers if function is variadic
     if (fn->va_area) {
       int gp = 0, fp = 0;
-      for (Obj *var = fn->params; var; var = var->next) {
+      for (LibcpObj *var = fn->params; var; var = var->next) {
         if (libcp_is_flonum(var->ty))
           fp++;
         else
@@ -2751,11 +2751,11 @@ static void emit_text(LibcpContext *ctx, Obj *prog) {
 
     // Save passed-by-register arguments to the stack
     int gp = 0, fp = 0;
-    for (Obj *var = fn->params; var; var = var->next) {
+    for (LibcpObj *var = fn->params; var; var = var->next) {
       if (obj_offset(var) > 0)
         continue;
 
-      Type *ty = var->ty;
+      LibcpType *ty = var->ty;
 
       switch (ty->kind) {
       case TY_STRUCT:
@@ -2801,10 +2801,10 @@ static void emit_text(LibcpContext *ctx, Obj *prog) {
   }
 }
 
-void codegen(LibcpContext *ctx, Obj *prog, FILE *out) {
+void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
   output_file = out;
 
-  File **files = libcp_get_input_files(ctx);
+  LibcpFile **files = libcp_get_input_files(ctx);
   for (int i = 0; files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
 

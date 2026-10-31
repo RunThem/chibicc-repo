@@ -1,4 +1,4 @@
-// Node source ranges (PLAN-l5 W5): the anchor-token extremes of a
+// LibcpNode source ranges (PLAN-l5 W5): the anchor-token extremes of a
 // subtree. Every node carries a representative token; this walk collects
 // the smallest and largest anchors by (file, offset), so a consumer can
 // map a subtree back to a source span without rewalking the tokens.
@@ -6,7 +6,7 @@
 // Scope notes, deliberate for the MVP:
 // - `next` chains are siblings, not children: the range covers the
 //   subtree rooted at the argument only.
-// - Initializer trees (LibcpInitializer) are not descended; a
+// - LibcpInitializer trees are not descended; a
 //   declaration's range covers its node anchors.
 // - Tokens from synthetic buffers (macro bodies, pastes) compare by
 //   file pointer first, which is stable but arbitrary across buffers.
@@ -14,21 +14,21 @@
 #include "libcp.h"
 
 typedef struct {
-  File *file;
+  LibcpFile *file;
   long off;
-} Pos;
+} LibcpPos;
 
-static Pos pos_of(Token *tok) {
-  return (Pos){tok->file, tok->loc - tok->file->contents};
+static LibcpPos pos_of(LibcpToken *tok) {
+  return (LibcpPos){tok->file, tok->loc - tok->file->contents};
 }
 
-static int pos_lt(Pos a, Pos b) {
+static int pos_lt(LibcpPos a, LibcpPos b) {
   if (a.file != b.file)
     return a.file < b.file;
   return a.off < b.off;
 }
 
-static void consider(Token *tok, Token **start, Token **end) {
+static void consider(LibcpToken *tok, LibcpToken **start, LibcpToken **end) {
   if (!tok)
     return;
   if (!*start || pos_lt(pos_of(tok), pos_of(*start)))
@@ -37,7 +37,7 @@ static void consider(Token *tok, Token **start, Token **end) {
     *end = tok;
 }
 
-static void walk(const Node *node, Token **start, Token **end) {
+static void walk(const LibcpNode *node, LibcpToken **start, LibcpToken **end) {
   if (!node)
     return;
 

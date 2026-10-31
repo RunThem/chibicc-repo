@@ -14,7 +14,7 @@
 //
 // To achieve the above behavior, we attach for each token a set of
 // macro names from which the token is expanded. The set is called
-// "hideset". Hideset is initially empty, and every time we expand a
+// "hideset". LibcpHideset is initially empty, and every time we expand a
 // macro, the macro name is added to the resulting tokens' hidesets.
 //
 // The above macro expansion algorithm is explained in this document
@@ -24,65 +24,64 @@
 
 #include "libcp.h"
 
-typedef struct MacroParam MacroParam;
-struct MacroParam {
-  MacroParam *next;
+typedef struct libcp_macro_param LibcpMacroParam;
+struct libcp_macro_param {
+  LibcpMacroParam *next;
   char *name;
 };
 
-typedef struct MacroArg MacroArg;
-struct MacroArg {
-  MacroArg *next;
+typedef struct libcp_macro_arg LibcpMacroArg;
+struct libcp_macro_arg {
+  LibcpMacroArg *next;
   char *name;
   bool is_va_args;
   int index;      // 0-based position in the actual argument list
-  Token *tok;
+  LibcpToken *tok;
 };
 
-typedef Token *macro_handler_fn(LibcpContext *ctx, Token *);
+typedef LibcpToken *LibcpMacroHandlerFn(LibcpContext *ctx, LibcpToken *);
 
-typedef struct Macro Macro;
-struct Macro {
+typedef struct libcp_macro LibcpMacro;
+struct libcp_macro {
   char *name;
   bool is_objlike; // Object-like or function-like
-  MacroParam *params;
+  LibcpMacroParam *params;
   char *va_args_name;
-  Token *body;
-  Token *def;      // the name token of the #define; NULL for -D and builtins
-  macro_handler_fn *handler;
+  LibcpToken *body;
+  LibcpToken *def;      // the name token of the #define; NULL for -D and builtins
+  LibcpMacroHandlerFn *handler;
 };
 
-// Provenance records (plans/PLAN.md): one MacroExpansion per expansion, built
+// Provenance records (plans/PLAN.md): one LibcpMacroExpansion per expansion, built
 // once and shared read-only by every token that expansion produced; one
-// MacroProv per token and layer, prepended so a chain reads innermost
+// LibcpMacroProv per token and layer, prepended so a chain reads innermost
 // first. Both are arena objects that live as long as the tokens. The
 // types are private; libcp.h exposes accessors over them.
 struct libcp_macro_expansion {
-  Token *name;      // macro name token at the call site
-  Token *rparen;    // ')' of a function-like call; NULL otherwise
-  Macro *macro;     // definition in force at expansion time
-  MacroArg *args;   // actual arguments; NULL for object-like and builtins
+  LibcpToken *name;      // macro name token at the call site
+  LibcpToken *rparen;    // ')' of a function-like call; NULL otherwise
+  LibcpMacro *macro;     // definition in force at expansion time
+  LibcpMacroArg *args;   // actual arguments; NULL for object-like and builtins
   int arg_count;
   bool is_builtin;  // produced by a handler (__LINE__ and friends)
 };
 
 struct libcp_macro_prov {
-  MacroExpansion *exp;
+  LibcpMacroExpansion *exp;
   int arg_index;    // -1: macro body; >= 0: index of the argument
-  MacroProv *next;  // the context the invocation itself appeared in
+  LibcpMacroProv *next;  // the context the invocation itself appeared in
 };
 
 // `#if` can be nested, so we use a stack to manage nested `#if`s.
-typedef struct CondIncl CondIncl;
-struct CondIncl {
-  CondIncl *next;
+struct libcp_cond_incl {
+  LibcpCondIncl *next;
   enum { IN_THEN, IN_ELIF, IN_ELSE } ctx;
-  Token *tok;
+  LibcpToken *tok;
   bool included;
 };
 
 struct libcp_hideset {
-  Hideset *next;
+  LibcpHideset *next;
   char *name;
 };
 
@@ -93,16 +92,16 @@ struct libcp_hideset {
 #define cond_incl (ctx->cond_incl)
 #define pragma_once (ctx->pragma_once)
 
-static Token *preprocess2(LibcpContext *ctx, Token *tok);
-static Macro *find_macro(LibcpContext *ctx, Token *tok);
+static LibcpToken *preprocess2(LibcpContext *ctx, LibcpToken *tok);
+static LibcpMacro *find_macro(LibcpContext *ctx, LibcpToken *tok);
 
-static bool is_hash(Token *tok) {
+static bool is_hash(LibcpToken *tok) {
   return tok->at_bol && libcp_equal(tok, "#");
 }
 
 // Some preprocessor directives such as #include allow extraneous
 // tokens before newline. This function skips such tokens.
-static Token *skip_line(LibcpContext *ctx, Token *tok) {
+static LibcpToken *skip_line(LibcpContext *ctx, LibcpToken *tok) {
   if (tok->at_bol)
     return tok;
   libcp_warn_tok(ctx, tok, "extra token");
@@ -111,15 +110,15 @@ static Token *skip_line(LibcpContext *ctx, Token *tok) {
   return tok;
 }
 
-static Token *copy_token(LibcpContext *ctx, Token *tok) {
-  Token *t = libcp_arena_calloc(ctx, 1, sizeof(Token));
+static LibcpToken *copy_token(LibcpContext *ctx, LibcpToken *tok) {
+  LibcpToken *t = libcp_arena_calloc(ctx, 1, sizeof(LibcpToken));
   *t = *tok;
   t->next = NULL;
   return t;
 }
 
-static Token *new_eof(LibcpContext *ctx, Token *tok) {
-  Token *t = copy_token(ctx, tok);
+static LibcpToken *new_eof(LibcpContext *ctx, LibcpToken *tok) {
+  LibcpToken *t = copy_token(ctx, tok);
   t->kind = TK_EOF;
   t->len = 0;
   t->prov = NULL;
@@ -129,8 +128,8 @@ static Token *new_eof(LibcpContext *ctx, Token *tok) {
 // Prepend one provenance layer. The tail is the chain the invocation's
 // own text already carried, so chains are built by prepending only and
 // shared tails are never mutated (plans/PLAN.md, "挂接规则").
-static MacroProv *new_prov(LibcpContext *ctx, MacroExpansion *exp, int arg_index, MacroProv *next) {
-  MacroProv *p = libcp_arena_calloc(ctx, 1, sizeof(MacroProv));
+static LibcpMacroProv *new_prov(LibcpContext *ctx, LibcpMacroExpansion *exp, int arg_index, LibcpMacroProv *next) {
+  LibcpMacroProv *p = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacroProv));
   p->exp = exp;
   p->arg_index = arg_index;
   p->next = next;
@@ -139,10 +138,10 @@ static MacroProv *new_prov(LibcpContext *ctx, MacroExpansion *exp, int arg_index
 
 // Build the record of one expansion. It is immutable once returned; every
 // token the expansion produces shares it.
-static MacroExpansion *
-new_expansion(LibcpContext *ctx, Token *name, Token *rparen, Macro *macro, MacroArg *args,
+static LibcpMacroExpansion *
+new_expansion(LibcpContext *ctx, LibcpToken *name, LibcpToken *rparen, LibcpMacro *macro, LibcpMacroArg *args,
               int arg_count, bool is_builtin) {
-  MacroExpansion *e = libcp_arena_calloc(ctx, 1, sizeof(MacroExpansion));
+  LibcpMacroExpansion *e = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacroExpansion));
   e->name = name;
   e->rparen = rparen;
   e->macro = macro;
@@ -152,22 +151,22 @@ new_expansion(LibcpContext *ctx, Token *name, Token *rparen, Macro *macro, Macro
   return e;
 }
 
-static int count_macro_args(MacroArg *args) {
+static int count_macro_args(LibcpMacroArg *args) {
   int n = 0;
   for (; args; args = args->next)
     n++;
   return n;
 }
 
-static Hideset *new_hideset(LibcpContext *ctx, char *name) {
-  Hideset *hs = libcp_arena_calloc(ctx, 1, sizeof(Hideset));
+static LibcpHideset *new_hideset(LibcpContext *ctx, char *name) {
+  LibcpHideset *hs = libcp_arena_calloc(ctx, 1, sizeof(LibcpHideset));
   hs->name = name;
   return hs;
 }
 
-static Hideset *hideset_union(LibcpContext *ctx, Hideset *hs1, Hideset *hs2) {
-  Hideset head = {};
-  Hideset *cur = &head;
+static LibcpHideset *hideset_union(LibcpContext *ctx, LibcpHideset *hs1, LibcpHideset *hs2) {
+  LibcpHideset head = {};
+  LibcpHideset *cur = &head;
 
   for (; hs1; hs1 = hs1->next)
     cur = cur->next = new_hideset(ctx, hs1->name);
@@ -175,16 +174,16 @@ static Hideset *hideset_union(LibcpContext *ctx, Hideset *hs1, Hideset *hs2) {
   return head.next;
 }
 
-static bool hideset_contains(Hideset *hs, char *s, int len) {
+static bool hideset_contains(LibcpHideset *hs, char *s, int len) {
   for (; hs; hs = hs->next)
     if (strlen(hs->name) == len && !strncmp(hs->name, s, len))
       return true;
   return false;
 }
 
-static Hideset *hideset_intersection(LibcpContext *ctx, Hideset *hs1, Hideset *hs2) {
-  Hideset head = {};
-  Hideset *cur = &head;
+static LibcpHideset *hideset_intersection(LibcpContext *ctx, LibcpHideset *hs1, LibcpHideset *hs2) {
+  LibcpHideset head = {};
+  LibcpHideset *cur = &head;
 
   for (; hs1; hs1 = hs1->next)
     if (hideset_contains(hs2, hs1->name, strlen(hs1->name)))
@@ -192,12 +191,12 @@ static Hideset *hideset_intersection(LibcpContext *ctx, Hideset *hs1, Hideset *h
   return head.next;
 }
 
-static Token *add_hideset(LibcpContext *ctx, Token *tok, Hideset *hs) {
-  Token head = {};
-  Token *cur = &head;
+static LibcpToken *add_hideset(LibcpContext *ctx, LibcpToken *tok, LibcpHideset *hs) {
+  LibcpToken head = {};
+  LibcpToken *cur = &head;
 
   for (; tok; tok = tok->next) {
-    Token *t = copy_token(ctx, tok);
+    LibcpToken *t = copy_token(ctx, tok);
     t->hideset = hideset_union(ctx, t->hideset, hs);
     cur = cur->next = t;
   }
@@ -205,12 +204,12 @@ static Token *add_hideset(LibcpContext *ctx, Token *tok, Hideset *hs) {
 }
 
 // Append tok2 to the end of tok1.
-static Token *append(LibcpContext *ctx, Token *tok1, Token *tok2) {
+static LibcpToken *append(LibcpContext *ctx, LibcpToken *tok1, LibcpToken *tok2) {
   if (tok1->kind == TK_EOF)
     return tok2;
 
-  Token head = {};
-  Token *cur = &head;
+  LibcpToken head = {};
+  LibcpToken *cur = &head;
 
   for (; tok1->kind != TK_EOF; tok1 = tok1->next)
     cur = cur->next = copy_token(ctx, tok1);
@@ -218,7 +217,7 @@ static Token *append(LibcpContext *ctx, Token *tok1, Token *tok2) {
   return head.next;
 }
 
-static Token *skip_cond_incl2(Token *tok) {
+static LibcpToken *skip_cond_incl2(LibcpToken *tok) {
   while (tok->kind != TK_EOF) {
     if (is_hash(tok) &&
         (libcp_equal(tok->next, "if") || libcp_equal(tok->next, "ifdef") ||
@@ -235,7 +234,7 @@ static Token *skip_cond_incl2(Token *tok) {
 
 // Skip until next `#else`, `#elif` or `#endif`.
 // Nested `#if` and `#endif` are skipped.
-static Token *skip_cond_incl(Token *tok) {
+static LibcpToken *skip_cond_incl(LibcpToken *tok) {
   while (tok->kind != TK_EOF) {
     if (is_hash(tok) &&
         (libcp_equal(tok->next, "if") || libcp_equal(tok->next, "ifdef") ||
@@ -278,21 +277,21 @@ static char *quote_string(LibcpContext *ctx, char *str) {
 // libcp_tokenize() leaves current_file pointing at the nested file. Restore
 // the caller's file so libcp_error_at's implicit current_file still matches
 // the loc it is given.
-static Token *tokenize_nested(LibcpContext *ctx, File *file) {
-  File *save = ctx->current_file;
-  Token *tok = libcp_tokenize(ctx, file);
+static LibcpToken *tokenize_nested(LibcpContext *ctx, LibcpFile *file) {
+  LibcpFile *save = ctx->current_file;
+  LibcpToken *tok = libcp_tokenize(ctx, file);
   ctx->current_file = save;
   return tok;
 }
 
-static Token *tokenize_file_nested(LibcpContext *ctx, char *path) {
-  File *save = ctx->current_file;
-  Token *tok = libcp_tokenize_file_impl(ctx, path);
+static LibcpToken *tokenize_file_nested(LibcpContext *ctx, char *path) {
+  LibcpFile *save = ctx->current_file;
+  LibcpToken *tok = libcp_tokenize_file_impl(ctx, path);
   ctx->current_file = save;
   return tok;
 }
 
-static Token *new_str_token(LibcpContext *ctx, char *str, Token *tmpl) {
+static LibcpToken *new_str_token(LibcpContext *ctx, char *str, LibcpToken *tmpl) {
   char *buf = quote_string(ctx, str);
   return tokenize_nested(ctx, libcp_new_file(ctx, tmpl->file->name, tmpl->file->file_no, buf));
 }
@@ -300,9 +299,9 @@ static Token *new_str_token(LibcpContext *ctx, char *str, Token *tmpl) {
 // Copy all tokens until the next newline, terminate them with
 // an EOF token and then returns them. This function is used to
 // create a new list of tokens for `#if` arguments.
-static Token *copy_line(LibcpContext *ctx, Token **rest, Token *tok) {
-  Token head = {};
-  Token *cur = &head;
+static LibcpToken *copy_line(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok) {
+  LibcpToken head = {};
+  LibcpToken *cur = &head;
 
   for (; !tok->at_bol; tok = tok->next)
     cur = cur->next = copy_token(ctx, tok);
@@ -312,7 +311,7 @@ static Token *copy_line(LibcpContext *ctx, Token **rest, Token *tok) {
   return head.next;
 }
 
-static Token *new_num_token(LibcpContext *ctx, int val, Token *tmpl) {
+static LibcpToken *new_num_token(LibcpContext *ctx, int val, LibcpToken *tmpl) {
   char *buf = libcp_format(ctx, "%d\n", val);
   return tokenize_nested(ctx, libcp_new_file(ctx, tmpl->file->name, tmpl->file->file_no, buf));
 }
@@ -320,30 +319,30 @@ static Token *new_num_token(LibcpContext *ctx, int val, Token *tmpl) {
 #ifdef LIBCP_TEST_BUILTINS
 // A B8 regression hook: a builtin that produces two tokens. Only
 // test/library.sh's ASan round builds it.
-static Token *multi_macro(LibcpContext *ctx, Token *tmpl) {
-  Token *t1 = new_num_token(ctx, 1, tmpl);
-  Token *t2 = new_num_token(ctx, 2, tmpl);
+static LibcpToken *multi_macro(LibcpContext *ctx, LibcpToken *tmpl) {
+  LibcpToken *t1 = new_num_token(ctx, 1, tmpl);
+  LibcpToken *t2 = new_num_token(ctx, 2, tmpl);
   t1->next = t2;
   return t1;
 }
 #endif
 
-static Token *read_const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
+static LibcpToken *read_const_expr(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok) {
   tok = copy_line(ctx, rest, tok);
 
-  Token head = {};
-  Token *cur = &head;
+  LibcpToken head = {};
+  LibcpToken *cur = &head;
 
   while (tok->kind != TK_EOF) {
     // "defined(foo)" or "defined foo" becomes "1" if macro "foo"
     // is defined. Otherwise "0".
     if (libcp_equal(tok, "defined")) {
-      Token *start = tok;
+      LibcpToken *start = tok;
       bool has_paren = libcp_consume(&tok, tok->next, "(");
 
       if (tok->kind != TK_IDENT)
         libcp_error_tok(ctx, start, "macro name must be an identifier");
-      Macro *m = find_macro(ctx, tok);
+      LibcpMacro *m = find_macro(ctx, tok);
       tok = tok->next;
 
       if (has_paren)
@@ -362,9 +361,9 @@ static Token *read_const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
 }
 
 // Read and evaluate a constant expression.
-static long eval_const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
-  Token *start = tok;
-  Token *expr = read_const_expr(ctx, rest, tok->next);
+static long eval_const_expr(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok) {
+  LibcpToken *start = tok;
+  LibcpToken *expr = read_const_expr(ctx, rest, tok->next);
   expr = preprocess2(ctx, expr);
 
   if (expr->kind == TK_EOF)
@@ -374,9 +373,9 @@ static long eval_const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
   // we replace remaining non-macro identifiers with "0" before
   // evaluating a constant expression. For example, `#if foo` is
   // equivalent to `#if 0` if foo is not defined.
-  for (Token *t = expr; t->kind != TK_EOF; t = t->next) {
+  for (LibcpToken *t = expr; t->kind != TK_EOF; t = t->next) {
     if (t->kind == TK_IDENT) {
-      Token *next = t->next;
+      LibcpToken *next = t->next;
       *t = *new_num_token(ctx, 0, t);
       t->next = next;
     }
@@ -385,15 +384,15 @@ static long eval_const_expr(LibcpContext *ctx, Token **rest, Token *tok) {
   // Convert pp-numbers to regular numbers
   libcp_convert_pp_tokens(ctx, expr);
 
-  Token *rest2;
+  LibcpToken *rest2;
   long val = libcp_const_expr(ctx, &rest2, expr);
   if (rest2->kind != TK_EOF)
     libcp_error_tok(ctx, rest2, "extra token");
   return val;
 }
 
-static CondIncl *push_cond_incl(LibcpContext *ctx, Token *tok, bool included) {
-  CondIncl *ci = libcp_arena_calloc(ctx, 1, sizeof(CondIncl));
+static LibcpCondIncl *push_cond_incl(LibcpContext *ctx, LibcpToken *tok, bool included) {
+  LibcpCondIncl *ci = libcp_arena_calloc(ctx, 1, sizeof(LibcpCondIncl));
   ci->next = cond_incl;
   ci->ctx = IN_THEN;
   ci->tok = tok;
@@ -402,14 +401,14 @@ static CondIncl *push_cond_incl(LibcpContext *ctx, Token *tok, bool included) {
   return ci;
 }
 
-static Macro *find_macro(LibcpContext *ctx, Token *tok) {
+static LibcpMacro *find_macro(LibcpContext *ctx, LibcpToken *tok) {
   if (tok->kind != TK_IDENT)
     return NULL;
   return libcp_hashmap_get2(ctx, &macros, tok->loc, tok->len);
 }
 
-static Macro *add_macro(LibcpContext *ctx, char *name, bool is_objlike, Token *body) {
-  Macro *m = libcp_arena_calloc(ctx, 1, sizeof(Macro));
+static LibcpMacro *add_macro(LibcpContext *ctx, char *name, bool is_objlike, LibcpToken *body) {
+  LibcpMacro *m = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacro));
   m->name = name;
   m->is_objlike = is_objlike;
   m->body = body;
@@ -417,9 +416,9 @@ static Macro *add_macro(LibcpContext *ctx, char *name, bool is_objlike, Token *b
   return m;
 }
 
-static MacroParam *read_macro_params(LibcpContext *ctx, Token **rest, Token *tok, char **va_args_name) {
-  MacroParam head = {};
-  MacroParam *cur = &head;
+static LibcpMacroParam *read_macro_params(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok, char **va_args_name) {
+  LibcpMacroParam head = {};
+  LibcpMacroParam *cur = &head;
 
   while (!libcp_equal(tok, ")")) {
     if (cur != &head)
@@ -440,7 +439,7 @@ static MacroParam *read_macro_params(LibcpContext *ctx, Token **rest, Token *tok
       return head.next;
     }
 
-    MacroParam *m = libcp_arena_calloc(ctx, 1, sizeof(MacroParam));
+    LibcpMacroParam *m = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacroParam));
     m->name = libcp_arena_strndup(ctx, tok->loc, tok->len);
     cur = cur->next = m;
     tok = tok->next;
@@ -450,32 +449,32 @@ static MacroParam *read_macro_params(LibcpContext *ctx, Token **rest, Token *tok
   return head.next;
 }
 
-static void read_macro_definition(LibcpContext *ctx, Token **rest, Token *tok) {
+static void read_macro_definition(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok) {
   if (tok->kind != TK_IDENT)
     libcp_error_tok(ctx, tok, "macro name must be an identifier");
-  Token *name_tok = tok;
+  LibcpToken *name_tok = tok;
   char *name = libcp_arena_strndup(ctx, tok->loc, tok->len);
   tok = tok->next;
 
   if (!tok->has_space && libcp_equal(tok, "(")) {
     // Function-like macro
     char *va_args_name = NULL;
-    MacroParam *params = read_macro_params(ctx, &tok, tok->next, &va_args_name);
+    LibcpMacroParam *params = read_macro_params(ctx, &tok, tok->next, &va_args_name);
 
-    Macro *m = add_macro(ctx, name, false, copy_line(ctx, rest, tok));
+    LibcpMacro *m = add_macro(ctx, name, false, copy_line(ctx, rest, tok));
     m->params = params;
     m->va_args_name = va_args_name;
     m->def = name_tok;
   } else {
     // Object-like macro
-    Macro *m = add_macro(ctx, name, true, copy_line(ctx, rest, tok));
+    LibcpMacro *m = add_macro(ctx, name, true, copy_line(ctx, rest, tok));
     m->def = name_tok;
   }
 }
 
-static MacroArg *read_macro_arg_one(LibcpContext *ctx, Token **rest, Token *tok, bool read_rest) {
-  Token head = {};
-  Token *cur = &head;
+static LibcpMacroArg *read_macro_arg_one(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok, bool read_rest) {
+  LibcpToken head = {};
+  LibcpToken *cur = &head;
   int level = 0;
 
   for (;;) {
@@ -498,21 +497,21 @@ static MacroArg *read_macro_arg_one(LibcpContext *ctx, Token **rest, Token *tok,
 
   cur->next = new_eof(ctx, tok);
 
-  MacroArg *arg = libcp_arena_calloc(ctx, 1, sizeof(MacroArg));
+  LibcpMacroArg *arg = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacroArg));
   arg->tok = head.next;
   *rest = tok;
   return arg;
 }
 
-static MacroArg *
-read_macro_args(LibcpContext *ctx, Token **rest, Token *tok, MacroParam *params, char *va_args_name) {
-  Token *start = tok;
+static LibcpMacroArg *
+read_macro_args(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok, LibcpMacroParam *params, char *va_args_name) {
+  LibcpToken *start = tok;
   tok = tok->next->next;
 
-  MacroArg head = {};
-  MacroArg *cur = &head;
+  LibcpMacroArg head = {};
+  LibcpMacroArg *cur = &head;
 
-  MacroParam *pp = params;
+  LibcpMacroParam *pp = params;
   int index = 0;
   for (; pp; pp = pp->next) {
     if (cur != &head)
@@ -523,9 +522,9 @@ read_macro_args(LibcpContext *ctx, Token **rest, Token *tok, MacroParam *params,
   }
 
   if (va_args_name) {
-    MacroArg *arg;
+    LibcpMacroArg *arg;
     if (libcp_equal(tok, ")")) {
-      arg = libcp_arena_calloc(ctx, 1, sizeof(MacroArg));
+      arg = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacroArg));
       arg->tok = new_eof(ctx, tok);
     } else {
       if (pp != params)
@@ -545,18 +544,18 @@ read_macro_args(LibcpContext *ctx, Token **rest, Token *tok, MacroParam *params,
   return head.next;
 }
 
-static MacroArg *find_arg(MacroArg *args, Token *tok) {
-  for (MacroArg *ap = args; ap; ap = ap->next)
+static LibcpMacroArg *find_arg(LibcpMacroArg *args, LibcpToken *tok) {
+  for (LibcpMacroArg *ap = args; ap; ap = ap->next)
     if (tok->len == strlen(ap->name) && !strncmp(tok->loc, ap->name, tok->len))
       return ap;
   return NULL;
 }
 
 // Concatenates all tokens in `tok` and returns a new string.
-static char *join_tokens(LibcpContext *ctx, Token *tok, Token *end) {
+static char *join_tokens(LibcpContext *ctx, LibcpToken *tok, LibcpToken *end) {
   // Compute the length of the resulting token.
   int len = 1;
-  for (Token *t = tok; t != end && t->kind != TK_EOF; t = t->next) {
+  for (LibcpToken *t = tok; t != end && t->kind != TK_EOF; t = t->next) {
     if (t != tok && t->has_space)
       len++;
     len += t->len;
@@ -566,7 +565,7 @@ static char *join_tokens(LibcpContext *ctx, Token *tok, Token *end) {
 
   // Copy token texts.
   int pos = 0;
-  for (Token *t = tok; t != end && t->kind != TK_EOF; t = t->next) {
+  for (LibcpToken *t = tok; t != end && t->kind != TK_EOF; t = t->next) {
     if (t != tok && t->has_space)
       buf[pos++] = ' ';
     strncpy(buf + pos, t->loc, t->len);
@@ -578,7 +577,7 @@ static char *join_tokens(LibcpContext *ctx, Token *tok, Token *end) {
 
 // Concatenates all tokens in `arg` and returns a new string token.
 // This function is used for the stringizing operator (#).
-static Token *stringize(LibcpContext *ctx, Token *hash, Token *arg) {
+static LibcpToken *stringize(LibcpContext *ctx, LibcpToken *hash, LibcpToken *arg) {
   // Create a new string token. We need to set some value to its
   // source location for error reporting function, so we use a macro
   // name token as a template.
@@ -587,19 +586,19 @@ static Token *stringize(LibcpContext *ctx, Token *hash, Token *arg) {
 }
 
 // Concatenate two tokens to create a new token.
-static Token *paste(LibcpContext *ctx, Token *lhs, Token *rhs) {
+static LibcpToken *paste(LibcpContext *ctx, LibcpToken *lhs, LibcpToken *rhs) {
   // Paste the two tokens.
   char *buf = libcp_format(ctx, "%.*s%.*s", lhs->len, lhs->loc, rhs->len, rhs->loc);
 
   // Tokenize the resulting string.
-  Token *tok = tokenize_nested(ctx, libcp_new_file(ctx, lhs->file->name, lhs->file->file_no, buf));
+  LibcpToken *tok = tokenize_nested(ctx, libcp_new_file(ctx, lhs->file->name, lhs->file->file_no, buf));
   if (tok->next->kind != TK_EOF)
     libcp_error_tok(ctx, lhs, "pasting forms '%s', an invalid token", buf);
   return tok;
 }
 
-static bool has_varargs(MacroArg *args) {
-  for (MacroArg *ap = args; ap; ap = ap->next)
+static bool has_varargs(LibcpMacroArg *args) {
+  for (LibcpMacroArg *ap = args; ap; ap = ap->next)
     if (!strcmp(ap->name, "__VA_ARGS__"))
       return ap->tok->kind != TK_EOF;
   return false;
@@ -613,15 +612,15 @@ static bool has_varargs(MacroArg *args) {
 // call site's own chain; ordinary arguments arrive pre-expanded, so the
 // layer this function prepends sits in front of the chain of the token
 // the expansion produced.
-static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansion *e) {
-  Token head = {};
-  Token *cur = &head;
-  MacroProv *body_base = e->name->prov;
+static LibcpToken *subst(LibcpContext *ctx, LibcpToken *tok, LibcpMacroArg *args, LibcpMacroExpansion *e) {
+  LibcpToken head = {};
+  LibcpToken *cur = &head;
+  LibcpMacroProv *body_base = e->name->prov;
 
   while (tok->kind != TK_EOF) {
     // "#" followed by a parameter is replaced with stringized actuals.
     if (libcp_equal(tok, "#")) {
-      MacroArg *arg = find_arg(args, tok->next);
+      LibcpMacroArg *arg = find_arg(args, tok->next);
       if (!arg)
         libcp_error_tok(ctx, tok->next, "'#' is not followed by a macro parameter");
       cur = cur->next = stringize(ctx, tok, arg->tok);
@@ -634,7 +633,7 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
     // to the empty token list. Otherwise, its expaned to `,` and
     // __VA_ARGS__.
     if (libcp_equal(tok, ",") && libcp_equal(tok->next, "##")) {
-      MacroArg *arg = find_arg(args, tok->next->next);
+      LibcpMacroArg *arg = find_arg(args, tok->next->next);
       if (arg && arg->is_va_args) {
         if (arg->tok->kind == TK_EOF) {
           tok = tok->next->next->next;
@@ -654,12 +653,12 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
       if (tok->next->kind == TK_EOF)
         libcp_error_tok(ctx, tok, "'##' cannot appear at end of macro expansion");
 
-      MacroArg *arg = find_arg(args, tok->next);
+      LibcpMacroArg *arg = find_arg(args, tok->next);
       if (arg) {
         if (arg->tok->kind != TK_EOF) {
           *cur = *paste(ctx, cur, arg->tok);
           cur->prov = new_prov(ctx, e, -1, body_base);
-          for (Token *t = arg->tok->next; t->kind != TK_EOF; t = t->next) {
+          for (LibcpToken *t = arg->tok->next; t->kind != TK_EOF; t = t->next) {
             cur = cur->next = copy_token(ctx, t);
             cur->prov = new_prov(ctx, e, arg->index, t->prov);
           }
@@ -674,15 +673,15 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
       continue;
     }
 
-    MacroArg *arg = find_arg(args, tok);
+    LibcpMacroArg *arg = find_arg(args, tok);
 
     if (arg && libcp_equal(tok->next, "##")) {
-      Token *rhs = tok->next->next;
+      LibcpToken *rhs = tok->next->next;
 
       if (arg->tok->kind == TK_EOF) {
-        MacroArg *arg2 = find_arg(args, rhs);
+        LibcpMacroArg *arg2 = find_arg(args, rhs);
         if (arg2) {
-          for (Token *t = arg2->tok; t->kind != TK_EOF; t = t->next) {
+          for (LibcpToken *t = arg2->tok; t->kind != TK_EOF; t = t->next) {
             cur = cur->next = copy_token(ctx, t);
             cur->prov = new_prov(ctx, e, arg2->index, t->prov);
           }
@@ -694,7 +693,7 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
         continue;
       }
 
-      for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next) {
+      for (LibcpToken *t = arg->tok; t->kind != TK_EOF; t = t->next) {
         cur = cur->next = copy_token(ctx, t);
         cur->prov = new_prov(ctx, e, arg->index, t->prov);
       }
@@ -705,9 +704,9 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
     // If __VA_ARG__ is empty, __VA_OPT__(x) is expanded to the
     // empty token list. Otherwise, __VA_OPT__(x) is expanded to x.
     if (libcp_equal(tok, "__VA_OPT__") && libcp_equal(tok->next, "(")) {
-      MacroArg *arg = read_macro_arg_one(ctx, &tok, tok->next->next, true);
+      LibcpMacroArg *arg = read_macro_arg_one(ctx, &tok, tok->next->next, true);
       if (has_varargs(args))
-        for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next) {
+        for (LibcpToken *t = arg->tok; t->kind != TK_EOF; t = t->next) {
           cur = cur->next = t;
           cur->prov = new_prov(ctx, e, -1, body_base);
         }
@@ -718,7 +717,7 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
     // Handle a macro token. Macro arguments are completely macro-expanded
     // before they are substituted into a macro body.
     if (arg) {
-      Token *t = preprocess2(ctx, arg->tok);
+      LibcpToken *t = preprocess2(ctx, arg->tok);
       t->at_bol = tok->at_bol;
       t->has_space = tok->has_space;
       for (; t->kind != TK_EOF; t = t->next) {
@@ -742,19 +741,19 @@ static Token *subst(LibcpContext *ctx, Token *tok, MacroArg *args, MacroExpansio
 
 // If tok is a macro, expand it and return true.
 // Otherwise, do nothing and return false.
-static bool expand_macro(LibcpContext *ctx, Token **rest, Token *tok) {
+static bool expand_macro(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok) {
   if (hideset_contains(tok->hideset, tok->loc, tok->len))
     return false;
 
-  Macro *m = find_macro(ctx, tok);
+  LibcpMacro *m = find_macro(ctx, tok);
   if (!m)
     return false;
 
   // Built-in dynamic macro application such as __LINE__
   if (m->handler) {
-    MacroExpansion *e = new_expansion(ctx, tok, NULL, m, NULL, 0, true);
-    Token *body = m->handler(ctx, tok);
-    for (Token *t = body; t->kind != TK_EOF; t = t->next)
+    LibcpMacroExpansion *e = new_expansion(ctx, tok, NULL, m, NULL, 0, true);
+    LibcpToken *body = m->handler(ctx, tok);
+    for (LibcpToken *t = body; t->kind != TK_EOF; t = t->next)
       t->prov = new_prov(ctx, e, -1, tok->prov);
 
     // A handler may produce more than one token; splice after the last
@@ -765,7 +764,7 @@ static bool expand_macro(LibcpContext *ctx, Token **rest, Token *tok) {
       return true;
     }
 
-    Token *tail = body;
+    LibcpToken *tail = body;
     while (tail->next->kind != TK_EOF)
       tail = tail->next;
     tail->next = tok->next;
@@ -775,10 +774,10 @@ static bool expand_macro(LibcpContext *ctx, Token **rest, Token *tok) {
 
   // Object-like macro application
   if (m->is_objlike) {
-    MacroExpansion *e = new_expansion(ctx, tok, NULL, m, NULL, 0, false);
-    Hideset *hs = hideset_union(ctx, tok->hideset, new_hideset(ctx, m->name));
-    Token *body = add_hideset(ctx, m->body, hs);
-    for (Token *t = body; t->kind != TK_EOF; t = t->next) {
+    LibcpMacroExpansion *e = new_expansion(ctx, tok, NULL, m, NULL, 0, false);
+    LibcpHideset *hs = hideset_union(ctx, tok->hideset, new_hideset(ctx, m->name));
+    LibcpToken *body = add_hideset(ctx, m->body, hs);
+    for (LibcpToken *t = body; t->kind != TK_EOF; t = t->next) {
       t->origin = tok;
       t->prov = new_prov(ctx, e, -1, tok->prov);
     }
@@ -794,10 +793,10 @@ static bool expand_macro(LibcpContext *ctx, Token **rest, Token *tok) {
     return false;
 
   // Function-like macro application
-  Token *macro_token = tok;
-  MacroArg *args = read_macro_args(ctx, &tok, tok, m->params, m->va_args_name);
-  Token *rparen = tok;
-  MacroExpansion *e = new_expansion(ctx, macro_token, rparen, m, args,
+  LibcpToken *macro_token = tok;
+  LibcpMacroArg *args = read_macro_args(ctx, &tok, tok, m->params, m->va_args_name);
+  LibcpToken *rparen = tok;
+  LibcpMacroExpansion *e = new_expansion(ctx, macro_token, rparen, m, args,
                                     count_macro_args(args), false);
 
   // Tokens that consist a func-like macro invocation may have different
@@ -805,12 +804,12 @@ static bool expand_macro(LibcpContext *ctx, Token **rest, Token *tok) {
   // for the new tokens should be. We take the interesection of the
   // macro token and the closing parenthesis and use it as a new hideset
   // as explained in the Dave Prossor's algorithm.
-  Hideset *hs = hideset_intersection(ctx, macro_token->hideset, rparen->hideset);
+  LibcpHideset *hs = hideset_intersection(ctx, macro_token->hideset, rparen->hideset);
   hs = hideset_union(ctx, hs, new_hideset(ctx, m->name));
 
-  Token *body = subst(ctx, m->body, args, e);
+  LibcpToken *body = subst(ctx, m->body, args, e);
   body = add_hideset(ctx, body, hs);
-  for (Token *t = body; t->kind != TK_EOF; t = t->next)
+  for (LibcpToken *t = body; t->kind != TK_EOF; t = t->next)
     t->origin = macro_token;
   *rest = append(ctx, body, tok->next);
   (*rest)->at_bol = macro_token->at_bol;
@@ -850,7 +849,7 @@ static char *search_include_next(LibcpContext *ctx, char *filename) {
 }
 
 // Read an #include argument.
-static char *read_include_filename(LibcpContext *ctx, Token **rest, Token *tok, bool *is_dquote) {
+static char *read_include_filename(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok, bool *is_dquote) {
   // Pattern 1: #include "foo.h"
   if (tok->kind == TK_STR) {
     // A double-quoted filename for #include is a special kind of
@@ -867,7 +866,7 @@ static char *read_include_filename(LibcpContext *ctx, Token **rest, Token *tok, 
   if (libcp_equal(tok, "<")) {
     // Reconstruct a filename from a sequence of tokens between
     // "<" and ">".
-    Token *start = tok;
+    LibcpToken *start = tok;
 
     // Find closing ">".
     for (; !libcp_equal(tok, ">"); tok = tok->next)
@@ -883,7 +882,7 @@ static char *read_include_filename(LibcpContext *ctx, Token **rest, Token *tok, 
   // In this case FOO must be macro-expanded to either
   // a single string token or a sequence of "<" ... ">".
   if (tok->kind == TK_IDENT) {
-    Token *tok2 = preprocess2(ctx, copy_line(ctx, rest, tok));
+    LibcpToken *tok2 = preprocess2(ctx, copy_line(ctx, rest, tok));
     return read_include_filename(ctx, &tok2, tok2, is_dquote);
   }
 
@@ -896,7 +895,7 @@ static char *read_include_filename(LibcpContext *ctx, Token **rest, Token *tok, 
 //   #define FOO_H
 //   ...
 //   #endif
-static char *detect_include_guard(LibcpContext *ctx, Token *tok) {
+static char *detect_include_guard(LibcpContext *ctx, LibcpToken *tok) {
   // Detect the first two lines.
   if (!is_hash(tok) || !libcp_equal(tok->next, "ifndef"))
     return NULL;
@@ -936,8 +935,8 @@ static char *detect_include_guard(LibcpContext *ctx, Token *tok) {
 #define MAX_INCLUDE_DEPTH 200
 #define MAX_INCLUDE_COUNT 10000
 
-static Token *include_file(LibcpContext *ctx, Token *tok, char *path, Token *filename_tok,
-                           File *parent) {
+static LibcpToken *include_file(LibcpContext *ctx, LibcpToken *tok, char *path, LibcpToken *filename_tok,
+                           LibcpFile *parent) {
   // Check for "#pragma once"
   if (libcp_hashmap_get(ctx, &pragma_once, path))
     return tok;
@@ -954,7 +953,7 @@ static Token *include_file(LibcpContext *ctx, Token *tok, char *path, Token *fil
   if (++ctx->include_count > MAX_INCLUDE_COUNT)
     libcp_error_tok(ctx, filename_tok, "too many includes");
 
-  Token *tok2 = tokenize_file_nested(ctx, path);
+  LibcpToken *tok2 = tokenize_file_nested(ctx, path);
   if (!tok2)
     libcp_error_tok(ctx, filename_tok, "%s: cannot open file: %s", path, strerror(errno));
   tok2->file->include_depth = parent->include_depth + 1;
@@ -967,8 +966,8 @@ static Token *include_file(LibcpContext *ctx, Token *tok, char *path, Token *fil
 }
 
 // Read #line arguments
-static void read_line_marker(LibcpContext *ctx, Token **rest, Token *tok) {
-  Token *start = tok;
+static void read_line_marker(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok) {
+  LibcpToken *start = tok;
   tok = libcp_preprocess(ctx, copy_line(ctx, rest, tok));
 
   if (tok->kind != TK_NUM || tok->ty->kind != TY_INT)
@@ -986,9 +985,9 @@ static void read_line_marker(LibcpContext *ctx, Token **rest, Token *tok) {
 
 // Visit all tokens in `tok` while evaluating preprocessing
 // macros and directives.
-static Token *preprocess2(LibcpContext *ctx, Token *tok) {
-  Token head = {};
-  Token *cur = &head;
+static LibcpToken *preprocess2(LibcpContext *ctx, LibcpToken *tok) {
+  LibcpToken head = {};
+  LibcpToken *cur = &head;
 
   while (tok->kind != TK_EOF) {
     // If it is a macro, expand it.
@@ -1004,7 +1003,7 @@ static Token *preprocess2(LibcpContext *ctx, Token *tok) {
       continue;
     }
 
-    Token *start = tok;
+    LibcpToken *start = tok;
     tok = tok->next;
 
     if (libcp_equal(tok, "include")) {
@@ -1143,7 +1142,7 @@ static Token *preprocess2(LibcpContext *ctx, Token *tok) {
 }
 
 void libcp_define_macro(LibcpContext *ctx, char *name, char *buf) {
-  Token *tok = tokenize_nested(ctx, libcp_new_file(ctx, "<built-in>", 1, buf));
+  LibcpToken *tok = tokenize_nested(ctx, libcp_new_file(ctx, "<built-in>", 1, buf));
   add_macro(ctx, name, true, tok);
 }
 
@@ -1151,19 +1150,19 @@ void libcp_undef_macro(LibcpContext *ctx, char *name) {
   libcp_hashmap_delete(ctx, &macros, name);
 }
 
-static Macro *add_builtin(LibcpContext *ctx, char *name, macro_handler_fn *fn) {
-  Macro *m = add_macro(ctx, name, true, NULL);
+static LibcpMacro *add_builtin(LibcpContext *ctx, char *name, LibcpMacroHandlerFn *fn) {
+  LibcpMacro *m = add_macro(ctx, name, true, NULL);
   m->handler = fn;
   return m;
 }
 
-static Token *file_macro(LibcpContext *ctx, Token *tmpl) {
+static LibcpToken *file_macro(LibcpContext *ctx, LibcpToken *tmpl) {
   while (tmpl->origin)
     tmpl = tmpl->origin;
   return new_str_token(ctx, tmpl->file->display_name, tmpl);
 }
 
-static Token *line_macro(LibcpContext *ctx, Token *tmpl) {
+static LibcpToken *line_macro(LibcpContext *ctx, LibcpToken *tmpl) {
   while (tmpl->origin)
     tmpl = tmpl->origin;
   int i = tmpl->line_no + tmpl->file->line_delta;
@@ -1171,14 +1170,14 @@ static Token *line_macro(LibcpContext *ctx, Token *tmpl) {
 }
 
 // __COUNTER__ is expanded to serial values starting from 0.
-static Token *counter_macro(LibcpContext *ctx, Token *tmpl) {
+static LibcpToken *counter_macro(LibcpContext *ctx, LibcpToken *tmpl) {
   return new_num_token(ctx, ctx->counter++, tmpl);
 }
 
 // __TIMESTAMP__ is expanded to a string describing the last
 // modification time of the current file. E.g.
 // "Fri Jul 24 01:32:50 2020"
-static Token *timestamp_macro(LibcpContext *ctx, Token *tmpl) {
+static LibcpToken *timestamp_macro(LibcpContext *ctx, LibcpToken *tmpl) {
   struct stat st;
   if (stat(tmpl->file->name, &st) != 0)
     return new_str_token(ctx, "??? ??? ?? ??:??:?? ????", tmpl);
@@ -1189,7 +1188,7 @@ static Token *timestamp_macro(LibcpContext *ctx, Token *tmpl) {
   return new_str_token(ctx, buf, tmpl);
 }
 
-static Token *base_file_macro(LibcpContext *ctx, Token *tmpl) {
+static LibcpToken *base_file_macro(LibcpContext *ctx, LibcpToken *tmpl) {
   char *file = ctx->base_file;
   return new_str_token(ctx, file ? file : "", tmpl);
 }
@@ -1221,24 +1220,24 @@ typedef enum {
   SZ_PTRDIFF,
   SZ_SHORT,
   SZ_SIZE,
-} SizeKind;
+} LibcpSizeKind;
 
 typedef enum {
   PREDEF_MACRO,
   PREDEF_SIZEOF,
   PREDEF_BUILTIN,
   PREDEF_DYNAMIC,
-} PredefKind;
+} LibcpPredefKind;
 
 typedef struct {
   char *name;
   char *value;
-  SizeKind size;
-  PredefKind kind;
-  macro_handler_fn *handler;
-} PredefinedDef;
+  LibcpSizeKind size;
+  LibcpPredefKind kind;
+  LibcpMacroHandlerFn *handler;
+} LibcpPredefinedDef;
 
-static int predefined_size(SizeKind size) {
+static int predefined_size(LibcpSizeKind size) {
   switch (size) {
   case SZ_DOUBLE: return libcp_ty_double->size;
   case SZ_FLOAT: return libcp_ty_float->size;
@@ -1258,7 +1257,7 @@ static int predefined_size(SizeKind size) {
 // The predefined set. `value` is the replacement text; the __SIZEOF_*
 // entries derive it from the built-in types, and the builtin/dynamic
 // entries have no replacement text of their own.
-static const PredefinedDef predefined_defs[] = {
+static const LibcpPredefinedDef predefined_defs[] = {
   {"_LP64", "1", SZ_NONE, PREDEF_MACRO, NULL},
   {"__C99_MACRO_WITH_VA_ARGS", "1", SZ_NONE, PREDEF_MACRO, NULL},
   {"__ELF__", "1", SZ_NONE, PREDEF_MACRO, NULL},
@@ -1317,7 +1316,7 @@ void libcp_init_macros(LibcpContext *ctx) {
   ctx->predefined = libcp_arena_calloc(ctx, n, sizeof(LibcpPredefinedMacro));
 
   for (int i = 0; i < n; i++) {
-    const PredefinedDef *d = &predefined_defs[i];
+    const LibcpPredefinedDef *d = &predefined_defs[i];
     LibcpPredefinedMacro *e = &ctx->predefined[i];
     e->name = d->name;
 
@@ -1359,9 +1358,9 @@ LibcpPredefinedMacro libcp_context_predefined_at(LibcpContext *ctx,
 
 typedef enum {
   STR_NONE, STR_UTF8, STR_UTF16, STR_UTF32, STR_WIDE,
-} StringKind;
+} LibcpStringKind;
 
-static StringKind getStringKind(LibcpContext *ctx, Token *tok) {
+static LibcpStringKind getStringKind(LibcpContext *ctx, LibcpToken *tok) {
   // `loc` is the first byte of the spelling, not a NUL-terminated
   // prefix: `u8"..."` continues with the quote, so a strcmp against
   // "u8" never matches. Check the three bytes that form the prefix.
@@ -1380,21 +1379,21 @@ static StringKind getStringKind(LibcpContext *ctx, Token *tok) {
 
 // Concatenate adjacent string literals into a single string literal
 // as per the C spec.
-static void join_adjacent_string_literals(LibcpContext *ctx, Token *tok) {
+static void join_adjacent_string_literals(LibcpContext *ctx, LibcpToken *tok) {
   // First pass: If regular string literals are adjacent to wide
   // string literals, regular string literals are converted to a wide
   // type before concatenation. In this pass, we do the conversion.
-  for (Token *tok1 = tok; tok1->kind != TK_EOF;) {
+  for (LibcpToken *tok1 = tok; tok1->kind != TK_EOF;) {
     if (tok1->kind != TK_STR || tok1->next->kind != TK_STR) {
       tok1 = tok1->next;
       continue;
     }
 
-    StringKind kind = getStringKind(ctx, tok1);
-    Type *basety = tok1->ty->base;
+    LibcpStringKind kind = getStringKind(ctx, tok1);
+    LibcpType *basety = tok1->ty->base;
 
-    for (Token *t = tok1->next; t->kind == TK_STR; t = t->next) {
-      StringKind k = getStringKind(ctx, t);
+    for (LibcpToken *t = tok1->next; t->kind == TK_STR; t = t->next) {
+      LibcpStringKind k = getStringKind(ctx, t);
       if (kind == STR_NONE) {
         kind = k;
         basety = t->ty->base;
@@ -1404,11 +1403,11 @@ static void join_adjacent_string_literals(LibcpContext *ctx, Token *tok) {
     }
 
     if (basety->size > 1)
-      for (Token *t = tok1; t->kind == TK_STR; t = t->next)
+      for (LibcpToken *t = tok1; t->kind == TK_STR; t = t->next)
         if (t->ty->base->size == 1) {
           // The re-scan replaces the whole token (and does not set
           // line_no); the provenance belongs to the source token.
-          MacroProv *prov = t->prov;
+          LibcpMacroProv *prov = t->prov;
           *t = *libcp_tokenize_string_literal(ctx, t, basety);
           t->prov = prov;
         }
@@ -1418,24 +1417,24 @@ static void join_adjacent_string_literals(LibcpContext *ctx, Token *tok) {
   }
 
   // Second pass: concatenate adjacent string literals.
-  for (Token *tok1 = tok; tok1->kind != TK_EOF;) {
+  for (LibcpToken *tok1 = tok; tok1->kind != TK_EOF;) {
     if (tok1->kind != TK_STR || tok1->next->kind != TK_STR) {
       tok1 = tok1->next;
       continue;
     }
 
-    Token *tok2 = tok1->next;
+    LibcpToken *tok2 = tok1->next;
     while (tok2->kind == TK_STR)
       tok2 = tok2->next;
 
     int len = tok1->ty->array_len;
-    for (Token *t = tok1->next; t != tok2; t = t->next)
+    for (LibcpToken *t = tok1->next; t != tok2; t = t->next)
       len = len + t->ty->array_len - 1;
 
     char *buf = libcp_arena_calloc(ctx, tok1->ty->base->size, len);
 
     int i = 0;
-    for (Token *t = tok1; t != tok2; t = t->next) {
+    for (LibcpToken *t = tok1; t != tok2; t = t->next) {
       memcpy(buf + i, t->str, t->ty->size);
       i = i + t->ty->size - t->ty->base->size;
     }
@@ -1449,7 +1448,7 @@ static void join_adjacent_string_literals(LibcpContext *ctx, Token *tok) {
 }
 
 // Entry point function of the preprocessor.
-Token *libcp_preprocess(LibcpContext *ctx, Token *tok) {
+LibcpToken *libcp_preprocess(LibcpContext *ctx, LibcpToken *tok) {
   ENTER_RET(ctx, NULL);
   tok = preprocess2(ctx, tok);
   if (cond_incl)
@@ -1457,7 +1456,7 @@ Token *libcp_preprocess(LibcpContext *ctx, Token *tok) {
   libcp_convert_pp_tokens(ctx, tok);
   join_adjacent_string_literals(ctx, tok);
 
-  for (Token *t = tok; t; t = t->next)
+  for (LibcpToken *t = tok; t; t = t->next)
     t->line_no += t->line_delta;
   LEAVE(ctx);
   return tok;
@@ -1467,52 +1466,52 @@ Token *libcp_preprocess(LibcpContext *ctx, Token *tok) {
 // layout is preprocess.c's business, and consumers (provenance.c
 // today, the library API later) see only these functions.
 
-MacroProv *libcp_token_provenance(Token *tok) {
+LibcpMacroProv *libcp_token_provenance(LibcpToken *tok) {
   return tok->prov;
 }
 
-MacroProv *libcp_macro_prov_next(MacroProv *p) {
+LibcpMacroProv *libcp_macro_prov_next(LibcpMacroProv *p) {
   return p->next;
 }
 
-MacroExpansion *libcp_macro_prov_expansion(MacroProv *p) {
+LibcpMacroExpansion *libcp_macro_prov_expansion(LibcpMacroProv *p) {
   return p->exp;
 }
 
-int libcp_macro_prov_arg_index(MacroProv *p) {
+int libcp_macro_prov_arg_index(LibcpMacroProv *p) {
   return p->arg_index;
 }
 
-Token *libcp_macro_expansion_name(MacroExpansion *e) {
+LibcpToken *libcp_macro_expansion_name(LibcpMacroExpansion *e) {
   return e->name;
 }
 
-Token *libcp_macro_expansion_end(MacroExpansion *e) {
+LibcpToken *libcp_macro_expansion_end(LibcpMacroExpansion *e) {
   return e->rparen ? e->rparen : e->name;
 }
 
-char *libcp_macro_expansion_macro(MacroExpansion *e) {
+char *libcp_macro_expansion_macro(LibcpMacroExpansion *e) {
   return e->macro->name;
 }
 
-Token *libcp_macro_expansion_def(MacroExpansion *e) {
+LibcpToken *libcp_macro_expansion_def(LibcpMacroExpansion *e) {
   return e->macro->def;
 }
 
-Token *libcp_macro_expansion_arg(MacroExpansion *e, int i) {
+LibcpToken *libcp_macro_expansion_arg(LibcpMacroExpansion *e, int i) {
   if (i < 0 || i >= e->arg_count)
     return NULL;
 
-  MacroArg *arg = e->args;
+  LibcpMacroArg *arg = e->args;
   for (; i > 0 && arg; i--)
     arg = arg->next;
   return arg ? arg->tok : NULL;
 }
 
-int libcp_macro_expansion_arg_count(MacroExpansion *e) {
+int libcp_macro_expansion_arg_count(LibcpMacroExpansion *e) {
   return e->arg_count;
 }
 
-bool libcp_macro_expansion_is_builtin(MacroExpansion *e) {
+bool libcp_macro_expansion_is_builtin(LibcpMacroExpansion *e) {
   return e->is_builtin;
 }

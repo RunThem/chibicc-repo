@@ -6,7 +6,7 @@
 //   T <file>:<phys-line|@synth> <kind> <spelling> <chain>
 //
 // <chain> is "-" for a token read from the source. Otherwise it lists the
-// token's MacroProv layers, innermost first, joined by ">"; a layer reads
+// token's LibcpMacroProv layers, innermost first, joined by ">"; a layer reads
 //
 //   <macro>@<call-file>:<call-line>:<body|argN>:<def-file>:<def-line>
 //
@@ -25,7 +25,7 @@
 
 // A synthetic buffer (paste, stringize, builtin values) is its own raw
 // text; a real file's raw text is a separate allocation.
-static bool is_synthetic(Token *tok) {
+static bool is_synthetic(LibcpToken *tok) {
   return tok->file->raw == tok->file->contents;
 }
 
@@ -33,14 +33,14 @@ static bool is_synthetic(Token *tok) {
 // position is not a line of a real file. phys-line = line_no -
 // line_delta, because libcp_preprocess() adds the #line offset to every
 // token's line number at the end.
-static void print_pos(FILE *out, Token *tok) {
+static void print_pos(FILE *out, LibcpToken *tok) {
   if (is_synthetic(tok))
     fprintf(out, "%s:@synth", tok->file->name);
   else
     fprintf(out, "%s:%d", tok->file->name, tok->line_no - tok->line_delta);
 }
 
-void libcp_expansion_dump(LibcpContext *ctx, Token *tok, FILE *out) {
+void libcp_expansion_dump(LibcpContext *ctx, LibcpToken *tok, FILE *out) {
   ENTER_VOID(ctx);
   for (; tok->kind != TK_EOF; tok = tok->next) {
     fputs("T ", out);
@@ -48,18 +48,18 @@ void libcp_expansion_dump(LibcpContext *ctx, Token *tok, FILE *out) {
     fprintf(out, " %s ", libcp_token_kind_name(ctx, tok->kind));
     libcp_print_escaped(out, tok->loc, tok->len);
 
-    MacroProv *prov = libcp_token_provenance(tok);
+    LibcpMacroProv *prov = libcp_token_provenance(tok);
     if (!prov) {
       fputs(" -\n", out);
       continue;
     }
 
     fputc(' ', out);
-    for (MacroProv *p = prov; p; p = libcp_macro_prov_next(p)) {
+    for (LibcpMacroProv *p = prov; p; p = libcp_macro_prov_next(p)) {
       if (p != prov)
         fputc('>', out);
 
-      MacroExpansion *e = libcp_macro_prov_expansion(p);
+      LibcpMacroExpansion *e = libcp_macro_prov_expansion(p);
       fprintf(out, "%s@", libcp_macro_expansion_macro(e));
       print_pos(out, libcp_macro_expansion_name(e));
 
@@ -69,7 +69,7 @@ void libcp_expansion_dump(LibcpContext *ctx, Token *tok, FILE *out) {
       else
         fprintf(out, ":arg%d:", arg_index + 1);
 
-      Token *def = libcp_macro_expansion_def(e);
+      LibcpToken *def = libcp_macro_expansion_def(e);
       if (def)
         print_pos(out, def);
       else
@@ -88,7 +88,7 @@ void libcp_expansion_dump(LibcpContext *ctx, Token *tok, FILE *out) {
 // An argument list runs from its first token to an EOF marker (an empty
 // argument is just the marker). Bounded so that a malformed list cannot
 // loop here.
-static bool verify_arg_list(Token *tok) {
+static bool verify_arg_list(LibcpToken *tok) {
   int n = 0;
   for (; tok; tok = tok->next) {
     if (tok->kind == TK_EOF)
@@ -99,7 +99,7 @@ static bool verify_arg_list(Token *tok) {
   return false;
 }
 
-static void report(Token *tok, char *what) {
+static void report(LibcpToken *tok, char *what) {
   fputs("chibicc: ", stderr);
   print_pos(stderr, tok);
   fprintf(stderr, ": invalid macro provenance: %s\n", what);
@@ -110,11 +110,11 @@ static void report(Token *tok, char *what) {
 // existing argument of a function-like, non-builtin expansion, and every
 // argument list is well-formed. I3: no node appears twice (chains are
 // prepend-only and share immutable tails).
-static bool verify_chain(Token *tok) {
-  MacroProv *head = libcp_token_provenance(tok);
+static bool verify_chain(LibcpToken *tok) {
+  LibcpMacroProv *head = libcp_token_provenance(tok);
   int depth = 0;
 
-  for (MacroProv *p = head; p; p = libcp_macro_prov_next(p)) {
+  for (LibcpMacroProv *p = head; p; p = libcp_macro_prov_next(p)) {
     if (++depth > MAX_PROV_DEPTH) {
       report(tok, "chain is too deep");
       return false;
@@ -122,7 +122,7 @@ static bool verify_chain(Token *tok) {
 
     int seen = 0;
     int steps = 0;
-    for (MacroProv *q = head; q; q = libcp_macro_prov_next(q)) {
+    for (LibcpMacroProv *q = head; q; q = libcp_macro_prov_next(q)) {
       if (q == p)
         seen++;
       if (++steps > MAX_PROV_DEPTH) {
@@ -135,13 +135,13 @@ static bool verify_chain(Token *tok) {
       return false;
     }
 
-    MacroExpansion *e = libcp_macro_prov_expansion(p);
+    LibcpMacroExpansion *e = libcp_macro_prov_expansion(p);
     if (!e) {
       report(tok, "layer without an expansion");
       return false;
     }
 
-    Token *name = libcp_macro_expansion_name(e);
+    LibcpToken *name = libcp_macro_expansion_name(e);
     char *macro = libcp_macro_expansion_macro(e);
     if (!name || !macro) {
       report(tok, "expansion without a name");
@@ -176,7 +176,7 @@ static bool verify_chain(Token *tok) {
   return true;
 }
 
-bool libcp_expansion_verify(LibcpContext *ctx, Token *tok) {
+bool libcp_expansion_verify(LibcpContext *ctx, LibcpToken *tok) {
   ENTER_RET(ctx, false);
   for (; tok->kind != TK_EOF; tok = tok->next)
     if (libcp_token_provenance(tok) && !verify_chain(tok)) {
