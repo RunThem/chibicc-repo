@@ -394,28 +394,34 @@ L3.5 全绿后才可重新勾选.
 ## 阶段 L5: 产品化验证(原阶段 6, 必选)
 
 L5 不属于阶段 5 的完成条件, 但它是库"可交付"的验收线. 用户 2026-10-19 拍板把它并入本计划,
-不单独建文件. L5 的输入是 L3.5 通过后的公共面.
+不单独建文件. L5 的输入是 L3.5 通过后的公共面. 执行时改由 `plans/PLAN-l5.md` 承担, 本节五项
+于 2026-10-25 全部完成, 记录见 `plans/RESULT-l5.md`; 实际落点: L5.1 `tools/fmt.c` /
+`test/fmt.sh`, L5.2 `test/cst-stats.sh` + `test/cst-stats.golden` / `libcp_cst_seed_typedef`,
+L5.3 `libcp_node_source_range` / `LibcpDiagnostic.tok` / `.prov`, L5.4 README 顶部库定位 +
+`docs/`(原计划的 `libchibicc/README.md` 由该文档集取代), L5.5 `make check-library` / fmt
+幂等与 `-S` 等价 / cst-stats golden 全绿(LSan 在 Apple clang 与 Rosetta 下不可靠, 泄漏闸门
+由 ASan 分配统计与 `test/allocator.sh` 承担).
 
-- [ ] **L5.1 CST formatter MVP**:
+- [x] **L5.1 CST formatter MVP**:
   新建 `tools/fmt.c`(或 `examples/`), 只消费第 1/2 层: tokenize_file -> cst_parse;
   对结构化节点输出规范化缩进与空白, 对 `CST_UNPARSED` 原样输出(保证仍是合法源码),
   注释与 trivia 保真. 验收: 对 `test/*.c` 与 `include/*.h` 做幂等
   (`format(format(x)) == format(x)`); 格式化前后 `-S` 快照等价; 注释数量不变;
   不调用预处理器.
-- [ ] **L5.2 CST 结构覆盖率与 typedef 供给**:
+- [x] **L5.2 CST 结构覆盖率与 typedef 供给**:
   新增 `-cst-stats` 或 `test/cst-stats.sh` 统计每个文件的 `UNPARSED` 数量并锁 golden;
   覆盖 GNU statement expression `({ ... })`; 为头文件 typedef(`va_list` / `pthread_t`)
   提供 caller seed 或明确的 fallback 口径. 验收: golden 稳定; 新增样本覆盖上述三类;
   `test/cst.sh` 的 round-trip 不回归.
-- [ ] **L5.3 source mapping 与诊断展开点**:
+- [x] **L5.3 source mapping 与诊断展开点**:
   给 AST 节点提供 source range 或到 `CstNode` 的映射(至少 `start` / `end` token);
   `ChibiccDiagnostic` 增加 token 或展开点字段(默认处理器忽略, 旧输出逐字节不变).
   验收: 一个改写示例能把 AST 子树映射回源码 span; 宏内错误的回调能拿到调用点.
-- [ ] **L5.4 文档与示例**:
+- [x] **L5.4 文档与示例**:
   README 顶部改为库定位; 新增 `libchibicc/README.md`, 写清 5 层能力, 生命周期(arena /
   reset / 指针失效), 错误模型, 线程模型, 宏保真限制, CST 的 `UNPARSED` 口径, 以及
   最小使用示例; 示例与 `test/library.sh` 保持同步.
-- [ ] **L5.5 L5 闸门**:
+- [x] **L5.5 L5 闸门**:
   `make check-library`, formatter 幂等/等价, `-cst-stats` golden, ASan/LSan 全绿;
   更新 AGENTS.md 的阶段 6 状态.
 
