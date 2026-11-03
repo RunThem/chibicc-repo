@@ -1,8 +1,9 @@
 # CI (CodeReview 2026-10-24 B1). The Linux runner is native x86-64, so
 # the full test set runs without Docker. The macOS job only builds the
 # compiler and exercises the host-runnable front-end channels: the
-# generated x86-64 code cannot be assembled there. The thirdparty
-# projects stay on the manual Docker gates.
+# generated x86-64 code cannot be assembled there. The thirdparty job
+# carries tinycc, libpng and sqlite; git and cpython (tens of minutes to
+# hours) stay on the manual Docker gates.
 name: test
 
 on:
@@ -32,3 +33,28 @@ jobs:
           test/cst.sh ./chibicc
           test/expand.sh ./chibicc
           test/ast.sh ./chibicc
+
+  # Real projects compiled by chibicc and run through their own test
+  # suites. The job waits for the unit gates first, so a broken tree does
+  # not spend half an hour inside sqlite. Clones are cached under
+  # thirdparty/ (the scripts pin their commits with git reset --hard);
+  # the SSH clone URLs need the same rewrite the Dockerfile installs.
+  thirdparty:
+    needs: linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zlib1g-dev tcl libtool
+      - name: Clone public repos over HTTPS
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+      - name: Restore the clone cache
+        uses: actions/cache@v4
+        with:
+          path: thirdparty
+          key: thirdparty-v1-${{ hashFiles('test/thirdparty/*.sh') }}
+      - name: tinycc, libpng and sqlite
+        run: make -j"$(nproc)" test-thirdparty THIRDPARTY="tinycc libpng sqlite"
