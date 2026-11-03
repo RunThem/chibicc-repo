@@ -48,7 +48,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends zlib1g-dev tcl libtool
+          sudo apt-get install -y --no-install-recommends zlib1g-dev tcl-dev libtool
       - name: Clone public repos over HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
       - name: Restore the clone cache

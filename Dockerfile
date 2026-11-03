@@ -14,13 +14,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # libcurl4-openssl-dev + libexpat1-dev: git 默认构建 http-push/remote-curl
 # gettext: git 的 msgfmt
 # perl: git 的测试套件(prove)
-# tcl: sqlite 的测试套件
+# tcl-dev: sqlite 的测试套件(tclsh 与 testfixture 需要的 tcl.h/tclConfig.sh)
 # libreadline-dev: sqlite shell/readline 交互支持
 # autoconf/automake/pkg-config/libffi-dev: cpython 的 autoreconf 与 configure
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential git ca-certificates file \
       zlib1g-dev libssl-dev libcurl4-openssl-dev libexpat1-dev \
-      gettext perl tcl libreadline-dev libtool \
+      gettext perl tcl-dev libreadline-dev libtool \
       autoconf automake pkg-config libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
