@@ -3,6 +3,10 @@
 // preprocessor directives are nodes, every conditional branch is kept,
 // every grammar token and punctuator is an explicit leaf, and the leaves
 // rebuild the input file byte for byte.
+//
+// 第 2 层: 无损具体语法树 (AGENTS.md 第 2 阶段). 它基于 tokenize_file()
+// 的直接输出, 在预处理之前构建: 预处理指令是节点, 每个条件分支都保留,
+// 每个语法 token 与标点都是显式叶子, 叶子可以逐字节重建输入文件.
 
 #ifndef LIBCP_CST_H
 #define LIBCP_CST_H
@@ -69,6 +73,9 @@ typedef enum {
   CST_PP_BRANCH,
   // GNU statement expression "({...})" and a _Generic association
   // argument "type: expr" / "default: expr" (added by PLAN-l5 W1).
+  //
+  // GNU 语句表达式 "({...})" 与 _Generic 关联参数
+  // "type: expr" / "default: expr" (由 PLAN-l5 W1 添加).
   CST_STMT_EXPR,
   CST_GENERIC_ASSOC,
 } LibcpCstKind;
@@ -77,9 +84,13 @@ typedef struct libcp_cst_node LibcpCstNode;
 struct libcp_cst_node {
   LibcpCstKind kind;
   LibcpToken *tok;          // Set on leaves (CST_TOKEN / CST_EOF)
+                            // 在叶子上设置 (CST_TOKEN / CST_EOF)
   // `children[0..child_count)` are the live children; the array's
   // capacity is private to cst.c.
+  //
+  // `children[0..child_count)` 是有效子节点; 数组容量是 cst.c 私有的.
   LibcpCstNode **children;  // Set on inner nodes
+                            // 在内部节点上设置
   int child_count;
 };
 
@@ -88,6 +99,10 @@ LIBCP_API LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok);
 // header: the CST is built before preprocessing, so its declaration
 // oracle cannot see such names and the consumer supplies them (e.g.
 // "va_list"). Configuration: survives reset.
+//
+// 预置一个 typedef 名, 这类名字在预处理后本会来自被包含的头文件:
+// CST 在预处理之前构建, 因此它的声明 oracle 看不到这些名字,
+// 由消费者提供 (例如 "va_list"). 属于配置: 跨 reset 保留.
 LIBCP_API void libcp_cst_seed_typedef(LibcpContext *ctx, char *name);
 LIBCP_API void libcp_cst_reconstruct(LibcpContext *ctx, LibcpCstNode *root, FILE *out);
 LIBCP_API void libcp_cst_dump(LibcpContext *ctx, LibcpCstNode *root, FILE *out);
