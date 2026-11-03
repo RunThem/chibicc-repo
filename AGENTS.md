@@ -44,6 +44,7 @@
 
 ## 构建与测试
 
+- 修改完代码后必须执行 `make format`(clang-format 20, 见下), 由它统一格式化, 不手工调格式.
 - `make` - 构建 `chibicc` 二进制(纯 C11, 无外部依赖; CFLAGS 定义在 Makefile 中).
 - `make check-context` - 隐式上下文审计(`test/context-audit.sh --strict`): 库层无访问器 / 无 TLS / `.a` 无访问器符号, `codegen.c` 无 `cg_ctx`; 由 `make test` 一并调用.
 - `make fmt-tool` - 构建 CST formatter(`tools/fmt.c`, 产物 `fmt`), 由 `make test` 调用后接 `test/fmt.sh`.

@@ -20,11 +20,30 @@
 // run over a broken stream without taking the process down. This is the
 // only consumer of the accessors besides the dump. Neither channel touches
 // the compilation path.
+//
+// 只读的宏展开 provenance 通道 (plans/PLAN.md, 判据 5): 打印与校验
+// preprocess.c 在宏展开时建立的来源链. 本文件不属于编译路径.
+//
+// -dump-expansions 为预处理后的 token 流中每个非 EOF token 打印一行.
+// <chain> 对从源码读入的 token 为 "-"; 否则按最内层在前的顺序列出该
+// token 的 LibcpMacroProv 各层, 用 ">" 连接, 每层给出宏名, 调用位置,
+// 宏体或从 1 开始计数的实参序号, 以及定义位置. 宏没有 #define token 时
+// (内建宏, -D 定义) 定义位置打印 "?:?". 由拼接产生的宏名使调用位置
+// 成为合成位置, 与其它合成 token 一样打印为 @synth.
+//
+// -verify-expansions 检查 plans/RESULT.md 中的链不变式 (I1-I3), 并在
+// stderr 上最多打印一条消息: 成功时退出码 0, 第一处违规时退出码 1.
+// 它从不调用 libcp_error() (判据 4), 因此该通道可以在损坏的流上运行,
+// 而不会拖垮进程. 除 dump 之外, 它是这些访问器的唯一消费者. 两个通道
+// 都不触碰编译路径.
 
 #include "libcp.h"
 
 // A synthetic buffer (paste, stringize, builtin values) is its own raw
 // text; a real file's raw text is a separate allocation.
+//
+// 合成缓冲区 (拼接, 字符串化, 内建值) 的 raw 就是它自身的文本;
+// 真实文件的 raw 则是另一块分配.
 static bool is_synthetic(LibcpToken* tok) {
   return tok->file->raw == tok->file->contents;
 }
@@ -33,6 +52,10 @@ static bool is_synthetic(LibcpToken* tok) {
 // position is not a line of a real file. phys-line = line_no -
 // line_delta, because libcp_preprocess() adds the #line offset to every
 // token's line number at the end.
+//
+// 把 token 位置打印为 <file>:<line>; 位置不是真实文件的行时打印
+// <file>:@synth. phys-line = line_no - line_delta, 因为
+// libcp_preprocess() 最后会把 #line 偏移加到每个 token 的行号上.
 static void print_pos(FILE* out, LibcpToken* tok) {
   if (is_synthetic(tok))
     fprintf(out, "%s:@synth", tok->file->name);
@@ -40,6 +63,7 @@ static void print_pos(FILE* out, LibcpToken* tok) {
     fprintf(out, "%s:%d", tok->file->name, tok->line_no - tok->line_delta);
 }
 
+// 按行打印展开流: 位置, 种类, 拼写与展开链 (无链时打印 "-").
 void libcp_expansion_dump(LibcpContext* ctx, LibcpToken* tok, FILE* out) {
   ENTER_VOID(ctx);
   for (; tok->kind != TK_EOF; tok = tok->next) {
@@ -83,11 +107,17 @@ void libcp_expansion_dump(LibcpContext* ctx, LibcpToken* tok, FILE* out) {
 // A chain deeper than this is treated as corruption rather than as a real
 // expansion: recursive expansion is bounded by hidesets, so real chains are
 // short, and the bound keeps a broken chain from looping.
+//
+// 比这个深度更长的链按损坏处理, 而不是当作真实展开: 递归展开受
+// hideset 约束, 真实链都很短, 这个上界防止损坏的链陷入死循环.
 #define MAX_PROV_DEPTH 1000
 
 // An argument list runs from its first token to an EOF marker (an empty
 // argument is just the marker). Bounded so that a malformed list cannot
 // loop here.
+//
+// 实参列表从它的第一个 token 一直到 EOF 标记 (空实参就只有该标记).
+// 这里加了上界, 使畸形的列表不会在此死循环.
 static bool verify_arg_list(LibcpToken* tok) {
   int n = 0;
   for (; tok; tok = tok->next) {
@@ -99,6 +129,7 @@ static bool verify_arg_list(LibcpToken* tok) {
   return false;
 }
 
+// 向 stderr 报告一处 provenance 违规, 前缀与驱动器诊断的 "chibicc: " 一致.
 static void report(LibcpToken* tok, char* what) {
   fputs("chibicc: ", stderr);
   print_pos(stderr, tok);
@@ -110,6 +141,11 @@ static void report(LibcpToken* tok, char* what) {
 // existing argument of a function-like, non-builtin expansion, and every
 // argument list is well-formed. I3: no node appears twice (chains are
 // prepend-only and share immutable tails).
+//
+// I1: 链头是产生该 token 的展开, 它的层要么是宏体, 要么是合法的实参
+// 下标. I2: 实参层必须指向一个类函数且非内建展开的已有实参, 并且每个
+// 实参列表都良构. I3: 同一节点不得出现两次 (链只在前端插入, 并共享
+// 不可变的尾部).
 static bool verify_chain(LibcpToken* tok) {
   LibcpMacroProv* head = libcp_token_provenance(tok);
   int depth            = 0;
@@ -175,6 +211,7 @@ static bool verify_chain(LibcpToken* tok) {
   return true;
 }
 
+// 校验流中每个携带 provenance 的 token 的展开链; 遇到第一处违规即返回 false.
 bool libcp_expansion_verify(LibcpContext* ctx, LibcpToken* tok) {
   ENTER_RET(ctx, false);
   for (; tok->kind != TK_EOF; tok = tok->next)

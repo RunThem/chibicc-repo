@@ -30,6 +30,12 @@
 // That feedback comes from the scope stack at the top of this file,
 // which is the parser's own and holds nothing else. sema keeps a
 // separate stack for the objects and enum constants it declares.
+//
+// 第 3 层: 语法 AST. 本文件是递归下降的 C 语法分析器, 从展开流下降,
+// 构建忠实于源码写法的 AST (无类型标注, 名字不绑定, 常量表达式不求值),
+// 声明以记录形式留给第 4 层 sema 声明与下降. 主要内容: 说明符与声明符
+// 的类型形态构建, 声明/语句/表达式 (Pratt 绑定力循环) 的解析, 以及
+// 解析器私有的作用域栈 - 它只为回答 typedef 名与 tag 的语法问题.
 
 #include "libcp.h"
 
@@ -44,6 +50,8 @@ static void leave_scope(LibcpContext* ctx);
 
 // Bound the parser's recursion: pathological nesting must fail with a
 // diagnostic, not a stack overflow.
+//
+// 限制解析器的递归深度: 病态嵌套必须以诊断失败, 而不能是栈溢出.
 #define MAX_PARSE_DEPTH 512
 
 static bool is_typename(LibcpContext* ctx, LibcpToken* tok);
@@ -67,9 +75,15 @@ static LibcpType* type_suffix(LibcpContext* ctx, LibcpToken** rest, LibcpToken* 
 // typedef type is shared by every declaration that names it. A
 // declarator therefore never writes its name into the type record: the
 // name travels in this per-declaration carrier instead (F1).
+//
+// 内建类型由所有 context 共享 (type.c), tag 与 typedef 类型由每个命名
+// 它的声明共享. 因此声明符从不把名字写进类型记录: 名字改由这个每次
+// 声明私有的载体携带 (F1).
 typedef struct {
-  LibcpToken* name;      // NULL when the declarator has none
+  LibcpToken* name;  // NULL when the declarator has none
+  // 声明符没有名字时为 NULL
   LibcpToken* name_pos;  // where the name would go, for "name omitted"
+  // 名字本应出现的位置, 供 "name omitted" 诊断使用
 } LibcpDeclName;
 
 static LibcpType* declarator(LibcpContext* ctx,
@@ -96,6 +110,9 @@ static LibcpNode* funcall(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
 static LibcpNode* unary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok);
 // The body behind each depth-guarded entry (the wrapper increments
 // parse_depth before calling it).
+//
+// 每个带深度守卫的入口背后的本体 (包装函数在调用它之前先递增
+// parse_depth).
 static LibcpType* declarator1(LibcpContext* ctx,
                               LibcpToken** rest,
                               LibcpToken* tok,
@@ -167,11 +184,22 @@ char* libcp_get_ident(LibcpContext* ctx, LibcpToken* tok) {
 // before. The parser therefore keeps its own block scope stack, and it
 // holds nothing else - no object, no enum constant, no type annotation.
 // sema derives its own scope stack from the tree when it resolves names.
+//
+// 解析器的作用域栈
+//
+// C 文法不是上下文无关的: `t * x;` 是声明指针还是两个变量相乘, 取决
+// 于 `t` 是否是 typedef 名; `struct T` 必须可解析, 才能知道该 tag 之前
+// 是否出现过. 因此解析器维护自己的块作用域栈, 且其中不放别的东西 -
+// 没有对象, 没有枚举常量, 没有类型标注. sema 在解析名字时从树中派生
+// 自己的作用域栈.
 
 // An identifier the parser has seen. `type_def` is non-NULL for a
 // typedef name; a plain declared name gets an empty entry, which is how
 // a variable shadows a typedef of the same spelling from its point of
 // declaration on.
+//
+// 解析器见过的标识符. typedef 名的 `type_def` 非 NULL; 普通已声明名字
+// 得到一条空记录, 这样变量从声明点起就遮蔽同拼写的 typedef.
 typedef struct {
   LibcpType* type_def;
 } LibcpNameEntry;
@@ -181,29 +209,39 @@ struct libcp_parse_scope {
 
   // C has two block scopes; one is for ordinary names and the other is
   // for struct/union/enum tags.
+  //
+  // C 有两个块作用域: 一个用于普通名字, 另一个用于 struct/union/enum tag.
   LibcpHashMap names;
   LibcpHashMap tags;
 };
 
+// 初始化解析器的块作用域栈, 每个翻译单位调用一次.
 void libcp_parse_init(LibcpContext* ctx) {
   ctx->scope = libcp_arena_calloc(ctx, 1, sizeof(LibcpParseScope));
 }
 
 // The parser's scope stack lives in LibcpContext (PLAN L2.4).
+//
+// 解析器的作用域栈存放在 LibcpContext 中 (PLAN L2.4).
 #define scope (ctx->scope)
 
+// 压入一个新的块作用域; 名字表与 tag 表都是空的 hashmap.
 static void enter_scope(LibcpContext* ctx) {
   LibcpParseScope* sc = libcp_arena_calloc(ctx, 1, sizeof(LibcpParseScope));
   sc->next            = scope;
   scope               = sc;
 }
 
+// 弹出当前块作用域, 回到外层.
 static void leave_scope(LibcpContext* ctx) {
   scope = scope->next;
 }
 
 // The parser's typedef-name oracle: the C grammar needs to know whether
 // an identifier names a type before it can parse a declaration.
+//
+// 解析器的 typedef 名判定器: C 文法在解析声明之前, 必须知道一个标识符
+// 是否是类型名.
 static LibcpType* find_typedef(LibcpContext* ctx, LibcpToken* tok) {
   if (tok->kind != TK_IDENT)
     return NULL;
@@ -220,6 +258,10 @@ static LibcpType* find_typedef(LibcpContext* ctx, LibcpToken* tok) {
 // visible immediately: the oracle has to classify the very next
 // identifier. sema completes the type when it reaches the ND_TYPEDEF
 // record this declaration also emits.
+//
+// 在当前作用域声明一个 typedef 名. 该名字必须立即可见: 判定器要能对
+// 下一个标识符分类. sema 走到这次声明同时发出的 ND_TYPEDEF 记录时,
+// 补全类型.
 static void add_typedef(LibcpContext* ctx, LibcpNode* node) {
   LibcpNameEntry* e = libcp_arena_calloc(ctx, 1, sizeof(LibcpNameEntry));
   e->type_def       = node->ty;
@@ -229,6 +271,9 @@ static void add_typedef(LibcpContext* ctx, LibcpNode* node) {
 // Records a name a declarator just declared (a variable, function,
 // parameter or enum constant), so that it shadows a typedef of the same
 // spelling for the rest of the parse.
+//
+// 记录声明符刚刚声明的名字 (变量, 函数, 参数或枚举常量), 使其在后续
+// 解析中遮蔽同拼写的 typedef.
 static void add_declared_name(LibcpContext* ctx, LibcpToken* tok) {
   libcp_hashmap_put(ctx,
                     &scope->names,
@@ -237,6 +282,8 @@ static void add_declared_name(LibcpContext* ctx, LibcpToken* tok) {
 }
 
 // Find a struct/union/enum tag by name, in any enclosing scope.
+//
+// 在所有外层作用域中按名字查找 struct/union/enum tag.
 static LibcpType* find_tag(LibcpContext* ctx, LibcpToken* tok) {
   for (LibcpParseScope* sc = scope; sc; sc = sc->next) {
     LibcpType* ty = libcp_hashmap_get2(ctx, &sc->tags, tok->loc, tok->len);
@@ -249,16 +296,22 @@ static LibcpType* find_tag(LibcpContext* ctx, LibcpToken* tok) {
 // Find a tag declared in the current scope only; used when a tag is
 // (re)defined, so that a previous forward declaration in the same scope
 // keeps its identity.
+//
+// 只在当前作用域查找 tag; 用于 tag 的 (重) 定义, 使同一作用域中先前的
+// 前向声明保持同一身份.
 static LibcpType* find_current_tag(LibcpContext* ctx, LibcpToken* tok) {
   return libcp_hashmap_get2(ctx, &scope->tags, tok->loc, tok->len);
 }
 
+// 在当前作用域登记一个 tag 类型.
 static void push_tag_scope(LibcpContext* ctx, LibcpToken* tok, LibcpType* ty) {
   libcp_hashmap_put2(ctx, &scope->tags, tok->loc, tok->len, ty);
 }
 
 // Appends a chain of nodes to the chain `cur` points into and returns
 // its new tail.
+//
+// 把节点链 `chain` 接到 `cur` 所指向的链尾, 并返回新的链尾.
 static LibcpNode* chain_append(LibcpNode* cur, LibcpNode* chain) {
   for (; chain; chain = chain->next)
     cur = cur->next = chain;
@@ -268,6 +321,9 @@ static LibcpNode* chain_append(LibcpNode* cur, LibcpNode* chain) {
 // Returns `specs` with `chain` appended after it (or `chain` if there
 // are no specs yet). Used where declaration records produced by a
 // declspec have to precede the records the declaration itself emits.
+//
+// 返回在 `specs` 之后接上 `chain` 的链 (若还没有 specs 则直接返回
+// `chain`). 用于 declspec 产生的声明记录必须先于声明本身发出的记录.
 static LibcpNode* specs_then(LibcpNode* specs, LibcpNode* chain) {
   if (!specs)
     return chain;
@@ -279,6 +335,8 @@ static LibcpNode* specs_then(LibcpNode* specs, LibcpNode* chain) {
 }
 
 // Appends one declaration record (an enum constant) to a spec list.
+//
+// 向 spec 列表追加一条声明记录 (一个枚举常量).
 static void add_spec(LibcpNode** specs, LibcpNode* node) {
   node->next = NULL;
   if (!*specs) {
@@ -315,6 +373,14 @@ static void add_spec(LibcpNode** specs, LibcpNode* node) {
 // Enum constants an enum-specifier defines along the way are declaration
 // records with no statement of their own; they are appended to `*specs`
 // for the caller to place at this position of its chain or node.
+//
+// 类型说明符中类型名的顺序无关紧要: 例如 `int long static` 与
+// `static long int` 相同; 指定 `long` 或 `short` 时可以省略 `int`, 但
+// 像 `char int` 这样的组合非法, 只接受有限的内建类型名组合.
+// 本函数在解析过程中为每种类型名计数, 同时维护"到此处为止"这些类型名
+// 所表示的当前类型对象; 遇到非类型名 token 时返回当前类型.
+// 途中 enum-specifier 定义的枚举常量是没有独立语句的声明记录, 它们被
+// 追加到 `*specs`, 由调用者放到其链或节点的这个位置上.
 static LibcpType* declspec(LibcpContext* ctx,
                            LibcpToken** rest,
                            LibcpToken* tok,
@@ -324,6 +390,9 @@ static LibcpType* declspec(LibcpContext* ctx,
   // For example, bits 0 and 1 represents how many times we saw the
   // keyword "void" so far. With this, we can use a switch statement
   // as you can see below.
+  //
+  // 用一个整数为所有类型名计数: 位 0 和 1 表示目前见到 "void" 的次数,
+  // 其余同理. 这样下面就能直接用 switch 判定类型.
   enum {
     VOID     = 1 << 0,
     BOOL     = 1 << 2,
@@ -345,12 +414,17 @@ static LibcpType* declspec(LibcpContext* ctx,
   while (is_typename(ctx, tok) || libcp_equal(tok, "__attribute__")) {
     // Declaration and function attributes are accepted in any specifier
     // position; the ones without a type meaning are ignored.
+    //
+    // 声明属性与函数属性可出现在任意说明符位置; 没有类型含义的属性
+    // 直接忽略.
     if (libcp_equal(tok, "__attribute__")) {
       tok = attribute_list(ctx, tok, NULL);
       continue;
     }
 
     // Handle storage class specifiers.
+    //
+    // 处理存储类说明符.
     if (libcp_equal(tok, "typedef") || libcp_equal(tok, "static") || libcp_equal(tok, "extern") ||
         libcp_equal(tok, "inline") || libcp_equal(tok, "_Thread_local") ||
         libcp_equal(tok, "__thread")) {
@@ -379,6 +453,8 @@ static LibcpType* declspec(LibcpContext* ctx,
     }
 
     // These keywords are recognized but ignored.
+    //
+    // 这些关键字识别后直接忽略.
     if (libcp_consume(&tok, tok, "const") || libcp_consume(&tok, tok, "volatile") ||
         libcp_consume(&tok, tok, "auto") || libcp_consume(&tok, tok, "register") ||
         libcp_consume(&tok, tok, "restrict") || libcp_consume(&tok, tok, "__restrict") ||
@@ -404,6 +480,10 @@ static LibcpType* declspec(LibcpContext* ctx,
       // may not be complete yet, and the `_Alignas(expr)` form is a
       // constant expression; both are recorded for sema to settle.
       // Whichever comes last is the one that counts, as before.
+      //
+      // `_Alignas(type)` 形式要求某个可能尚未完整的类型的属性,
+      // `_Alignas(expr)` 形式则是常量表达式; 两种都记录下来交给 sema
+      // 裁定. 与以前一样, 最后出现的那个生效.
       if (is_typename(ctx, tok)) {
         attr->align_ty   = typename(ctx, &tok, tok, specs);
         attr->align_expr = NULL;
@@ -416,6 +496,8 @@ static LibcpType* declspec(LibcpContext* ctx,
     }
 
     // Handle user-defined types.
+    //
+    // 处理用户定义的类型: struct/union/enum/typeof 与 typedef 名.
     LibcpType* ty2 = find_typedef(ctx, tok);
     if (libcp_equal(tok, "struct") || libcp_equal(tok, "union") || libcp_equal(tok, "enum") ||
         libcp_equal(tok, "typeof") || ty2) {
@@ -440,6 +522,8 @@ static LibcpType* declspec(LibcpContext* ctx,
     }
 
     // Handle built-in types.
+    //
+    // 处理内建类型: 只累加计数, 随后按计数组合选出类型.
     if (libcp_equal(tok, "void"))
       counter += VOID;
     else if (libcp_equal(tok, "_Bool"))
@@ -463,6 +547,7 @@ static LibcpType* declspec(LibcpContext* ctx,
     else
       unreachable();
 
+    // 计数器组合唯一确定内建类型; 未列出的组合都是非法类型.
     switch (counter) {
       case VOID: ty = libcp_ty_void; break;
       case BOOL: ty = libcp_ty_bool; break;
@@ -501,6 +586,7 @@ static LibcpType* declspec(LibcpContext* ctx,
     tok = tok->next;
   }
 
+  // _Atomic 只标记类型副本, 不改写共享的内建类型记录.
   if (is_atomic) {
     ty            = libcp_copy_type(ctx, ty);
     ty->is_atomic = true;
@@ -512,6 +598,9 @@ static LibcpType* declspec(LibcpContext* ctx,
 
 // func-params = ("void" | param ("," param)* ("," "...")?)? ")"
 // param       = declspec declarator
+//
+// 函数参数表: 单独的 `void` 表示没有参数; 每个参数由 declspec 加
+// 声明符组成, 末尾可以用 "..." 表示可变参数.
 static LibcpType*
     func_params(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpType* ty) {
   if (libcp_equal(tok, "void") && libcp_equal(tok->next, ")")) {
@@ -542,21 +631,30 @@ static LibcpType*
     if (ty2->kind == TY_ARRAY) {
       // "array of T" is converted to "pointer to T" only in the parameter
       // context. For example, *argv[] is converted to **argv by this.
+      //
+      // 只在参数上下文中把 "T 的数组" 转换为 "指向 T 的指针": 例如
+      // *argv[] 在这里被转换为 **argv.
       ty2 = libcp_pointer_to(ctx, ty2->base);
     } else if (ty2->kind == TY_FUNC) {
       // Likewise, a function is converted to a pointer to a function
       // only in the parameter context.
+      //
+      // 同理, 函数也只在参数上下文中转换为函数指针.
       ty2 = libcp_pointer_to(ctx, ty2);
     }
 
     // The parameter record is copied into the function type; its name
     // lives on that per-parameter copy, where sema reads it.
+    //
+    // 参数记录被复制进函数类型; 名字存放在这份每参数私有的副本上,
+    // 由 sema 读取.
     LibcpType* param = libcp_copy_type(ctx, ty2);
     param->name      = decl.name;
     param->name_pos  = decl.name_pos;
     cur = cur->next = param;
   }
 
+  // 空参数表 `()` 按可变参数处理, 与旧实现一致.
   if (cur == &head)
     is_variadic = true;
 
@@ -566,12 +664,18 @@ static LibcpType*
   // Enum constants a parameter's declspec defined (e.g.
   // `int f(enum E { A } x)`) ride on the function type; sema registers
   // them when it completes the type.
+  //
+  // 参数 declspec 定义的枚举常量 (例如 `int f(enum E { A } x)`) 挂在
+  // 函数类型上; sema 在补全该类型时登记它们.
   ty->spec_decls  = specs;
   *rest           = tok->next;
   return ty;
 }
 
 // array-dimensions = ("static" | "restrict")* const-expr? "]" type-suffix
+//
+// 数组维度: 可选的 `static` / `restrict` 限定, 可选的常量表达式长度,
+// 然后是 `]` 与后续的类型后缀.
 static LibcpType*
     array_dimensions(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpType* ty) {
   while (libcp_equal(tok, "static") || libcp_equal(tok, "restrict"))
@@ -590,12 +694,18 @@ static LibcpType*
   // on whether the length expression is a constant expression - a
   // semantic question. The expression is recorded here and sema decides
   // the type when it resolves the declarator (see resolve_type).
+  //
+  // 该维度表示定长数组还是 VLA, 取决于长度表达式是否是常量表达式 -
+  // 这是语义问题. 表达式在这里原样记录, 由 sema 在解析声明符时决定
+  // 类型 (见 resolve_type).
   return libcp_array_of_dim(ctx, ty, expr);
 }
 
 // type-suffix = "(" func-params
 //             | "[" array-dimensions
 //             | ε
+//
+// 类型后缀: 函数参数表, 数组维度, 或为空.
 static LibcpType*
     type_suffix(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpType* ty) {
   if (libcp_equal(tok, "("))
@@ -609,6 +719,9 @@ static LibcpType*
 }
 
 // pointers = ("*" ("const" | "volatile" | "restrict")*)*
+//
+// 指针层: 每个 `*` 加一层指针, 其后的 const/volatile/restrict 限定
+// 只被跳过, 不参与类型.
 static LibcpType* pointers(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpType* ty) {
   while (libcp_consume(&tok, tok, "*")) {
     ty = libcp_pointer_to(ctx, ty);
@@ -626,6 +739,9 @@ static LibcpType* pointers(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok
 // The declarator layer builds the type shape and leaves everything it
 // cannot decide syntactically (array dimensions, typeof operands) as
 // records for sema to complete.
+//
+// 声明符: 构造类型的形态, 并把无法在语法层决定的部分 (数组维度,
+// typeof 操作数) 留成记录, 交给 sema 补全.
 static LibcpType* declarator(LibcpContext* ctx,
                              LibcpToken** rest,
                              LibcpToken* tok,
@@ -648,6 +764,8 @@ static LibcpType* declarator1(LibcpContext* ctx,
   if (libcp_equal(tok, "(")) {
     LibcpToken* start = tok;
     LibcpType dummy   = {};
+    // 嵌套声明符: 先用占位类型空跑一遍, 定位到匹配的 `)` 并取到后续
+    // 类型后缀, 再用真实类型重走内层声明符.
     declarator(ctx, &tok, start->next, &dummy, NULL);
     tok = libcp_skip(ctx, tok, ")");
     ty  = type_suffix(ctx, rest, tok, ty);
@@ -666,6 +784,9 @@ static LibcpType* declarator1(LibcpContext* ctx,
   // A named declaration accepts trailing attributes here. The type
   // meaning is ignored for a named declaration, so a shared type record
   // is never mutated.
+  //
+  // 具名声明在这里可以接受尾随属性. 对具名声明忽略属性的类型含义,
+  // 因此共享的类型记录永远不会被改写.
   tok   = *rest;
   tok   = attribute_list(ctx, tok, NULL);
   *rest = tok;
@@ -677,6 +798,8 @@ static LibcpType* declarator1(LibcpContext* ctx,
 }
 
 // abstract-declarator = pointers ("(" abstract-declarator ")")? type-suffix
+//
+// 抽象声明符: 没有名字的声明符, 用于类型名 (sizeof, cast, 函数参数等).
 static LibcpType*
     abstract_declarator(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpType* ty) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
@@ -707,6 +830,8 @@ static LibcpType*
 }
 
 // type-name = declspec abstract-declarator
+//
+// 类型名: 说明符加抽象声明符.
 static LibcpType* typename(LibcpContext* ctx,
                            LibcpToken** rest,
                            LibcpToken* tok,
@@ -715,6 +840,8 @@ static LibcpType* typename(LibcpContext* ctx,
   return abstract_declarator(ctx, rest, tok, ty);
 }
 
+// 尝试消费 `}` 或 `,}`, 用于 brace 列表与 enum-list 的收尾; 返回是否
+// 已经消费.
 static bool consume_end(LibcpToken** rest, LibcpToken* tok) {
   if (libcp_equal(tok, "}")) {
     *rest = tok->next;
@@ -733,11 +860,16 @@ static bool consume_end(LibcpToken** rest, LibcpToken* tok) {
 //                | ident ("{" enum-list? "}")?
 //
 // enum-list      = ident ("=" num)? ("," ident ("=" num)?)* ","?
+//
+// 枚举说明符: 可选的 tag, 后接枚举列表 (可选); 或者只引用已有的枚举
+// tag. 枚举列表项可带显式常量值.
 static LibcpType*
     enum_specifier(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpNode** specs) {
   LibcpType* ty = libcp_enum_type(ctx);
 
   // Read a struct tag.
+  //
+  // 读 tag (在枚举说明符里实际是 enum tag).
   LibcpToken* tag = NULL;
   if (tok->kind == TK_IDENT) {
     tag = tok;
@@ -762,6 +894,9 @@ static LibcpType*
   // carrying the name, the optional explicit value expression and the
   // enum type; sema evaluates the values and registers the names at
   // this position of the enclosing chain.
+  //
+  // 读枚举列表: 每个成员成为一条声明记录节点, 携带名字, 可选的显式
+  // 值表达式与枚举类型; sema 对值求值, 并在所在链的这个位置登记名字.
   int i = 0;
   while (!consume_end(rest, tok)) {
     if (i++ > 0)
@@ -785,6 +920,8 @@ static LibcpType*
 }
 
 // typeof-specifier = "(" (expr | typename) ")"
+//
+// typeof 说明符: 圆括号内是一个表达式或一个类型名.
 static LibcpType*
     typeof_specifier(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpNode** specs) {
   tok = libcp_skip(ctx, tok, "(");
@@ -796,6 +933,9 @@ static LibcpType*
     // What type an expression has is not a syntax question, so the
     // operand is recorded in a placeholder the declarator builds on;
     // sema annotates the expression and fills the record in.
+    //
+    // 表达式具有什么类型不是语法问题, 因此操作数记录在一个占位记录里,
+    // 供声明符继续构建; sema 标注该表达式并填充这条记录.
     ty              = libcp_typeof_placeholder(ctx);
     ty->typeof_expr = expr(ctx, &tok, tok);
   }
@@ -815,6 +955,13 @@ static LibcpType*
 // resolves the record and lowers the node when it types it - including
 // the VLA-size sibling statement and the block-scope static's data
 // image, whose shapes it reproduces exactly.
+//
+// 声明: 每个声明符发出一个锚定在它所声明名字上的 ND_DECL 记录 - 名字
+// 来自声明符的局部记录, 存储类与对齐来自 `attr`, 初始化器保持忠实记录.
+// 这些记录直接进入所在语句链: 声明在源码中不是块, 因此承载它们的块
+// 就是源码写出的那个块. sema 在解析记录时声明对象, 在标注类型时下降
+// 节点, 包括 VLA 长度的兄弟语句与块作用域 static 的数据映像, 其形态
+// 被精确复现.
 static LibcpNode* declaration(LibcpContext* ctx,
                               LibcpToken** rest,
                               LibcpToken* tok,
@@ -836,6 +983,9 @@ static LibcpNode* declaration(LibcpContext* ctx,
     // The declared name shadows a typedef of the same name for the rest
     // of the parse - before the initializer is parsed, as the old
     // declaration site did.
+    //
+    // 被声明的名字在后续解析中遮蔽同名 typedef - 且在初始化器解析之前
+    // 就生效, 与旧的声明点一致.
     LibcpToken* name = decl_name.name;
     add_declared_name(ctx, name);
 
@@ -889,6 +1039,12 @@ static LibcpNode* declaration(LibcpContext* ctx,
 // Designators are recorded as written: index expressions stay
 // unevaluated and member names stay unbound; sema evaluates and
 // applies them against the target type.
+//
+// 指定初始化器 (designator): `[5]` 把初始化游标移到第 5 个元素, 之后
+// 按顺序继续; `[5][8]` 这样的嵌套是允许的; `.fieldname` 把游标移到
+// 结构体的成员. 未指明的元素初始化为零.
+// 指定符按源码原样记录: 下标表达式不求值, 成员名不绑定; sema 针对
+// 目标类型求值并施加它们.
 static LibcpInitDesig* designators(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   LibcpInitDesig head = {};
   LibcpInitDesig* cur = &head;
@@ -934,6 +1090,11 @@ static LibcpInitDesig* designators(LibcpContext* ctx, LibcpToken** rest, LibcpTo
 // sublist, string literal or expression) and no decision that needs
 // the target type is made here. Brace elision, string expansion,
 // designator application and flexible-array sizing all happen in sema.
+//
+// 初始化器记录: 花括号列表, 字符串字面量或赋值表达式.
+// 记录是忠实的: 元素保留源码写法 (带花括号的子列表, 字符串字面量或
+// 表达式), 这里不做任何需要目标类型的决定. 花括号省略, 字符串展开,
+// 指定符施加以及柔性数组成员定长, 全部在 sema 中完成.
 static LibcpInitializer* init_record(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     libcp_error_tok(ctx, tok, "nesting too deep");
@@ -977,6 +1138,10 @@ static LibcpInitializer* init_record1(LibcpContext* ctx, LibcpToken** rest, Libc
   // A string literal is a string initializer only when it is the whole
   // initializer. If an operator or a postfix follows, the literal starts
   // an ordinary expression (`"ab" + 1`, `"8.6" ? 0 : 1`, `"ab"[0]`).
+  //
+  // 字符串字面量只有作为整个初始化器时才是字符串初始化器. 若后面还跟
+  // 着运算符或后缀, 该字面量只是普通表达式的开头 (`"ab" + 1`,
+  // `"8.6" ? 0 : 1`, `"ab"[0]`).
   if (tok->kind == TK_STR && (libcp_equal(tok->next, ",") || libcp_equal(tok->next, "}") ||
                               libcp_equal(tok->next, ";") || tok->next->kind == TK_EOF)) {
     rec->kind    = INIT_STR;
@@ -991,9 +1156,13 @@ static LibcpInitializer* init_record1(LibcpContext* ctx, LibcpToken** rest, Libc
 }
 
 // Returns true if a given token represents a type.
+//
+// 判断给定 token 是否表示一个类型.
 static bool is_typename(LibcpContext* ctx, LibcpToken* tok) {
   LibcpHashMap* map = &ctx->typename_map;
 
+  // 类型关键字表惰性灌入 context 的 typename_map; 这里的 static 数组
+  // 只是只读常量, 不承载语义状态.
   if (map->capacity == 0) {
     static char* kw[] = {
         "void",     "_Bool",    "char",       "short",         "int",       "long",
@@ -1011,6 +1180,8 @@ static bool is_typename(LibcpContext* ctx, LibcpToken* tok) {
 }
 
 // asm-stmt = "asm" ("volatile" | "inline")* "(" string-literal ")"
+//
+// 内联汇编语句: 只接受一个字符串字面量, 可带 volatile / inline 限定.
 static LibcpNode* asm_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   LibcpNode* node = libcp_new_node(ctx, ND_ASM, tok);
   tok             = tok->next;
@@ -1041,10 +1212,15 @@ static LibcpNode* asm_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok
 //      | ident ":" stmt
 //      | "{" compound-stmt
 //      | expr-stmt
+//
+// 语句: 上述各形式按 token 分派, 每条语句构造一个对应的 AST 节点;
+// 需要类型信息的部分 (如 return 的隐式转换) 留给 sema.
 static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   if (libcp_equal(tok, "return")) {
     // The implicit conversion to the return type is sema's: the parser
     // does not know the enclosing function.
+    //
+    // 到返回类型的隐式转换属于 sema: 解析器不知道外层函数.
     LibcpNode* node = libcp_new_node(ctx, ND_RETURN, tok);
     if (libcp_consume(rest, tok->next, ";"))
       return node;
@@ -1080,11 +1256,16 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
     // they are recorded unevaluated; sema evaluates them into begin/end
     // when it resolves the node. `:` is where the range check is
     // anchored.
+    //
+    // case 标签代表的值是常量表达式, 因此不求值地记录; sema 在解析节点
+    // 时把它们求值到 begin/end. 范围检查的锚点是 `:`.
     LibcpNode* node  = libcp_new_node(ctx, ND_CASE, tok);
     node->begin_expr = libcp_conditional(ctx, &tok, tok->next);
 
     if (libcp_equal(tok, "...")) {
       // [GNU] Case ranges, e.g. "case 1 ... 5:"
+      //
+      // [GNU] case 范围, 例如 "case 1 ... 5:".
       node->end_expr = libcp_conditional(ctx, &tok, tok->next);
     }
 
@@ -1116,6 +1297,11 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
       // a chain of declaration records like any other declaration; sema
       // folds it into one statement once the records are lowered,
       // because codegen's `for` has a single-statement init slot.
+      //
+      // for-init 的 declspec 定义的枚举记录与 init 共享作用域, 因此挂在
+      // init 链头部. init 与其他声明一样是声明记录链; 记录下降后 sema
+      // 把它折叠成一条语句, 因为 codegen 的 `for` 只有一个单语句的 init
+      // 槽位.
       node->init        = specs_then(specs, declaration(ctx, &tok, tok, basety, NULL));
     } else {
       node->init = expr_stmt(ctx, &tok, tok);
@@ -1162,6 +1348,8 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   if (libcp_equal(tok, "goto")) {
     if (libcp_equal(tok->next, "*")) {
       // [GNU] `goto *ptr` jumps to the address specified by `ptr`.
+      //
+      // [GNU] `goto *ptr` 跳转到 `ptr` 指定的地址.
       LibcpNode* node = libcp_new_node(ctx, ND_GOTO_EXPR, tok);
       node->lhs       = expr(ctx, &tok, tok->next->next);
       *rest           = libcp_skip(ctx, tok, ";");
@@ -1203,6 +1391,10 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
 // enum constants, block-scope extern declarations and [GNU] nested
 // function definitions) enter the chain at their source position; sema
 // removes them again before codegen sees the chain.
+//
+// 复合语句: 不产生独立语句的声明记录 (typedef, 枚举常量, 块作用域的
+// extern 声明以及 [GNU] 嵌套函数定义) 在各自的源码位置进入链中; sema
+// 在 codegen 看到链之前会把它们移除.
 static LibcpNode* compound_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   LibcpNode* node      = libcp_new_node(ctx, ND_BLOCK, tok);
   node->is_scope_block = true;
@@ -1212,6 +1404,7 @@ static LibcpNode* compound_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken
   enter_scope(ctx);
 
   while (!libcp_equal(tok, "}")) {
+    // `ident:` 是标签语句而不是声明, 因此 typedef 形式的标签不按声明解析.
     if (is_typename(ctx, tok) && !libcp_equal(tok->next, ":")) {
       LibcpVarAttr attr = {};
       LibcpNode* specs  = NULL;
@@ -1247,6 +1440,8 @@ static LibcpNode* compound_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken
 }
 
 // expr-stmt = expr? ";"
+//
+// 表达式语句: 单个 `;` 产生一个空 ND_BLOCK 节点.
 static LibcpNode* expr_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   if (libcp_equal(tok, ";")) {
     *rest = tok->next;
@@ -1265,6 +1460,10 @@ static LibcpNode* expr_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* to
 // flexible-array-member conversion are sema's; the member list here is
 // the syntax shape, with `_Alignas` and bitfield widths recorded
 // unevaluated.
+//
+// 结构体成员: LibcpMember 的放置 (偏移, 大小, 对齐, 位域宽度) 与柔性
+// 数组成员的转换属于 sema; 这里的成员列表只是语法形态, `_Alignas` 与
+// 位域宽度都不求值地记录.
 static void struct_members(LibcpContext* ctx,
                            LibcpToken** rest,
                            LibcpToken* tok,
@@ -1284,6 +1483,9 @@ static void struct_members(LibcpContext* ctx,
     // A `typeof(expr)` base has not settled its kind yet, so the
     // placeholder counts as a candidate too; sema rejects a nameless
     // member that turns out not to be an aggregate.
+    //
+    // 匿名成员按基类型的种类识别. `typeof(expr)` 基类型尚未确定种类,
+    // 因此占位记录也算候选; 若最终不是聚合类型, sema 会拒绝无名成员.
     if ((basety->kind == TY_STRUCT || basety->kind == TY_UNION || basety->kind == TY_TYPEOF) &&
         libcp_consume(&tok, tok, ";")) {
       LibcpMember* mem = libcp_arena_calloc(ctx, 1, sizeof(LibcpMember));
@@ -1297,6 +1499,8 @@ static void struct_members(LibcpContext* ctx,
     }
 
     // Regular struct members
+    //
+    // 普通结构体成员: 逗号分隔的每个声明符产生一个成员记录.
     while (!libcp_consume(&tok, tok, ";")) {
       if (!first)
         tok = libcp_skip(ctx, tok, ",");
@@ -1316,6 +1520,8 @@ static void struct_members(LibcpContext* ctx,
         // The width is a constant expression; it is recorded
         // unevaluated and sema evaluates it when the aggregate is
         // laid out.
+        //
+        // 位域宽度是常量表达式; 这里不求值地记录, sema 在布局聚合时求值.
         mem->width_expr  = libcp_conditional(ctx, &tok, tok);
       }
 
@@ -1331,6 +1537,9 @@ static void struct_members(LibcpContext* ctx,
 //
 // `packed` and `aligned` are applied when a type record is given; the
 // known declaration/function attributes are recognized and ignored.
+//
+// 属性: 给定类型记录时 `packed` 与 `aligned` 会被施加; 已知的声明属性
+// 与函数属性只识别, 不施加.
 static LibcpToken* skip_attribute_args(LibcpContext* ctx, LibcpToken* tok) {
   if (!libcp_equal(tok, "("))
     return tok;
@@ -1348,6 +1557,7 @@ static LibcpToken* skip_attribute_args(LibcpContext* ctx, LibcpToken* tok) {
   return tok;
 }
 
+// 无类型含义的声明/函数属性名: 识别后连同参数一起跳过.
 static bool is_ignored_attribute(LibcpToken* tok) {
   static char* names[] = {
       "unused",
@@ -1416,6 +1626,9 @@ static LibcpToken* attribute_list(LibcpContext* ctx, LibcpToken* tok, LibcpType*
         // The alignment is a constant expression. It is applied only when
         // the attribute is attached to a type definition; declaration
         // positions pass NULL so the shared type records stay read-only.
+        //
+        // 对齐值是常量表达式. 只有属性挂在类型定义上时才施加; 声明位置
+        // 传 NULL, 使共享的类型记录保持只读.
         if (libcp_consume(&tok, tok, "(")) {
           if (ty)
             ty->align_expr = libcp_conditional(ctx, &tok, tok);
@@ -1426,6 +1639,7 @@ static LibcpToken* attribute_list(LibcpContext* ctx, LibcpToken* tok, LibcpType*
         continue;
       }
 
+      // cleanup 属性不在支持范围: 告警后跳过它的参数.
       if (libcp_equal(tok, "cleanup")) {
         libcp_warn_tok(ctx, tok, "cleanup attribute is ignored");
         tok = skip_attribute_args(ctx, tok->next);
@@ -1447,12 +1661,17 @@ static LibcpToken* attribute_list(LibcpContext* ctx, LibcpToken* tok, LibcpType*
 }
 
 // struct-union-decl = attribute? ident? ("{" struct-members)?
+//
+// struct/union 说明符: 可带属性与 tag; 带花括号时是定义, 否则是引用
+// 或前向声明.
 static LibcpType*
     struct_union_decl(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpNode** specs) {
   LibcpType* ty = libcp_struct_type(ctx);
   tok           = attribute_list(ctx, tok, ty);
 
   // Read a tag.
+  //
+  // 读 tag.
   LibcpToken* tag = NULL;
   if (tok->kind == TK_IDENT) {
     tag = tok;
@@ -1479,6 +1698,10 @@ static LibcpType*
   // members is sema's job, which it does when the type is completed -
   // at the definition for a bare one, or at the first declaration that
   // resolves a type referring to it.
+  //
+  // 构造 struct 对象. 成员列表只是语法; 放置成员是 sema 的工作, 在类型
+  // 补全时进行 - 裸定义就在定义处, 否则推迟到第一个解析出引用该类型的
+  // 声明.
   struct_members(ctx, &tok, tok, ty, specs);
   *rest              = attribute_list(ctx, tok, ty);
   ty->layout_pending = true;
@@ -1487,11 +1710,16 @@ static LibcpType*
   if (tag) {
     // If this is a redefinition, overwrite a previous type.
     // Otherwise, register the struct type.
+    //
+    // 若是重定义, 覆盖先前的类型; 否则登记新的 struct 类型.
     LibcpType* ty2 = find_current_tag(ctx, tag);
     if (ty2) {
       // A forward declaration (size -1) is completed here. A second
       // definition of the same tag in the same scope is a constraint
       // violation (C11 6.7.2.3p1), not a silent replacement.
+      //
+      // 前向声明 (size 为 -1) 在这里补全. 同一作用域内第二次定义同一
+      // tag 是约束违规 (C11 6.7.2.3p1), 不做静默替换.
       if (ty2->size >= 0)
         libcp_error_tok(ctx, tag, "redefinition of tag");
       *ty2 = *ty;
@@ -1505,6 +1733,8 @@ static LibcpType*
 }
 
 // struct-decl = struct-union-decl
+//
+// struct 说明符: 复用公共形态构建, 只把种类标为 TY_STRUCT.
 static LibcpType*
     struct_decl(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpNode** specs) {
   LibcpType* ty = struct_union_decl(ctx, rest, tok, specs);
@@ -1513,6 +1743,8 @@ static LibcpType*
 }
 
 // union-decl = struct-union-decl
+//
+// union 说明符: 与 struct 共用形态, 只把种类标为 TY_UNION.
 static LibcpType*
     union_decl(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpNode** specs) {
   LibcpType* ty = struct_union_decl(ctx, rest, tok, specs);
@@ -1537,6 +1769,13 @@ static LibcpType*
 // `->` token in `arrow_tok`. sema finds the member (flattening the
 // anonymous ones in between), checks the operand and re-inserts the
 // dereference.
+//
+// 创建表示结构体成员访问的节点, 例如 foo.bar (foo 是结构体, bar 是
+// 成员名). 匿名 struct 的成员属于外层结构体的成员命名空间, 因此示例中
+// 匿名 struct 的成员 "a" 可以用 "x.a" 访问.
+// 一个名字指代哪个成员不是语法问题, 因此节点保持未绑定: 它只携带成员名
+// token, 对于 `x->y` 还在 `arrow_tok` 中携带 `->` token. sema 查找成员
+// (沿途展开匿名成员), 检查操作数, 并重新插入解引用.
 static LibcpNode*
     struct_ref(LibcpContext* ctx, LibcpNode* node, LibcpToken* tok, LibcpToken* arrow) {
   LibcpNode* mem = libcp_new_unary(ctx, ND_MEMBER, node, tok);
@@ -1549,6 +1788,9 @@ static LibcpNode*
 // The callee check, the argument conversions and the struct-return
 // buffer are sema's; the node stays faithful, anchored at the closing
 // paren where the argument-count diagnostics point.
+//
+// 函数调用: 被调者检查, 实参转换与结构体返回缓冲区都属于 sema; 节点
+// 保持忠实, 锚定在右括号上, 实参个数诊断就指向这里.
 static LibcpNode* funcall(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpNode* fn) {
   LibcpNode head = {};
   LibcpNode* cur = &head;
@@ -1576,6 +1818,10 @@ static LibcpNode* funcall(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
 // syntax question, so the selection is left to sema: the node keeps the
 // controlling expression in `cond` and one ND_GENERIC_ASSOC per
 // association in `args`.
+//
+// 控制表达式的类型选中哪个关联不是语法问题, 因此选择留给 sema: 节点
+// 在 `cond` 中保存控制表达式, 在 `args` 中为每个关联保存一个
+// ND_GENERIC_ASSOC.
 static LibcpNode* generic_selection(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   LibcpNode* node = libcp_new_node(ctx, ND_GENERIC, tok);
 
@@ -1591,6 +1837,8 @@ static LibcpNode* generic_selection(LibcpContext* ctx, LibcpToken** rest, LibcpT
     LibcpNode* assoc = libcp_new_node(ctx, ND_GENERIC_ASSOC, tok);
 
     // A "default:" association is the one that carries no type name.
+    //
+    // "default:" 关联是唯一不携带类型名的关联.
     if (libcp_equal(tok, "default")) {
       tok = libcp_skip(ctx, tok->next, ":");
     } else {
@@ -1620,11 +1868,16 @@ static LibcpNode* generic_selection(LibcpContext* ctx, LibcpToken** rest, LibcpT
 //         | ident
 //         | str
 //         | num
+//
+// 基本表达式: 语句表达式, 加括号的表达式, sizeof/_Alignof 的两种形式,
+// _Generic, 两个内建查询, 以及标识符, 字符串字面量与数值字面量.
 static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   LibcpToken* start = tok;
 
   if (libcp_equal(tok, "(") && libcp_equal(tok->next, "{")) {
     // This is a GNU statement expresssion.
+    //
+    // 这是 GNU 语句表达式.
     LibcpNode* node = libcp_new_node(ctx, ND_STMT_EXPR, tok);
     node->body      = compound_stmt(ctx, &tok, tok->next->next)->body;
     *rest           = libcp_skip(ctx, tok, ")");
@@ -1644,6 +1897,8 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
     *rest            = libcp_skip(ctx, tok, ")");
 
     // Keep sizeof faithful; sema folds it to its value.
+    //
+    // sizeof 保持忠实, 由 sema 折叠成它的值.
     LibcpNode* node  = libcp_new_node(ctx, ND_SIZEOF, start);
     node->ty_op      = ty;
     node->spec_decls = specs;
@@ -1652,6 +1907,8 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
 
   if (libcp_equal(tok, "sizeof")) {
     // Keep sizeof faithful; sema folds it to its value.
+    //
+    // sizeof 保持忠实, 由 sema 折叠成它的值.
     LibcpNode* node = libcp_new_node(ctx, ND_SIZEOF, tok);
     node->lhs       = unary(ctx, rest, tok->next);
     return node;
@@ -1680,6 +1937,8 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
 
   if (libcp_equal(tok, "__builtin_types_compatible_p")) {
     // Both type operands are recorded; sema folds the node to 0 or 1.
+    //
+    // 两个类型操作数都被记录; sema 把该节点折叠成 0 或 1.
     LibcpNode* node  = libcp_new_node(ctx, ND_TYPES_COMPATIBLE, start);
     LibcpNode* specs = NULL;
     tok              = libcp_skip(ctx, tok->next, "(");
@@ -1693,6 +1952,8 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
 
   if (libcp_equal(tok, "__builtin_reg_class")) {
     // sema folds the node to the register class of its type operand.
+    //
+    // sema 把该节点折叠成其类型操作数的寄存器类别.
     LibcpNode* node  = libcp_new_node(ctx, ND_REG_CLASS, start);
     LibcpNode* specs = NULL;
     tok              = libcp_skip(ctx, tok->next, "(");
@@ -1729,6 +1990,9 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
     // one it denotes is not a syntax question, so the reference stays
     // faithful and sema's resolve pass binds it, using the scope stack
     // the tree structure gives it.
+    //
+    // 对变量, 函数或枚举常量的引用. 它指代哪一个不是语法问题, 因此引用
+    // 保持忠实, 由 sema 的解析 pass 利用树结构提供的作用域栈绑定.
     LibcpNode* node = libcp_new_node(ctx, ND_IDENT, tok);
     *rest           = tok->next;
     return node;
@@ -1737,11 +2001,15 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
   if (tok->kind == TK_STR) {
     // Keep the literal faithful; sema lowers it to a reference to an
     // anonymous global when it types the node.
+    //
+    // 字面量保持忠实; sema 在标注节点类型时把它下降为对一个匿名全局
+    // 对象的引用.
     LibcpNode* node = libcp_new_node(ctx, ND_STRING, tok);
     *rest           = tok->next;
     return node;
   }
 
+  // 数值字面量按是否浮点分成两条构造路径; 类型由 token 带下来.
   if (tok->kind == TK_NUM) {
     LibcpNode* node;
     if (libcp_is_flonum(tok->ty)) {
@@ -1769,6 +2037,13 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
 // entry points keep the old names and meanings: expr allows comma, assign
 // allows assignment, libcp_conditional allows neither. The prefix forms are in
 // expr_nud; the postfix forms are the led section of the loop below.
+//
+// Pratt 表达式解析器 (PLAN-pratt-parse): 用一个循环取代按优先级分层的
+// 级联调用. infix_bp() 把当前 token 转成运算符与绑定力, expr_bp() 在
+// 运算符结合得比 min_bp 更紧时持续消费 (左结合 rbp == lbp, 右结合
+// rbp == lbp - 1). 三个入口保持旧名字与旧含义: expr 允许逗号, assign
+// 允许赋值, libcp_conditional 两者都不允许. 前缀形式在 expr_nud 中,
+// 后缀形式是下面循环的 led 部分.
 enum {
   BP_COMMA      = 1,
   BP_ASSIGN     = 2,
@@ -1792,6 +2067,10 @@ enum {
 // (rbp == lbp - 1), and ?: has its own branch in expr_bp. A linear scan
 // is enough here; there are fewer than forty spellings and this is not a
 // hot loop.
+//
+// 绑定力表: 每个中缀拼写一行. 逗号行左结合 (rbp == lbp), 赋值行右结合
+// (rbp == lbp - 1), ?: 在 expr_bp 中有自己的分支. 这里线性扫描就够:
+// 拼写不到四十个, 而且不是热点循环.
 typedef struct {
   char* op;
   LibcpNodeKind kind;
@@ -1837,6 +2116,9 @@ static const LibcpInfixOp infix_ops[] = {
 // The infix operator at tok, if any: its node kind, the compound
 // assignment operator (ND_NULL_EXPR for a plain "=" or a non-assignment),
 // and its binding powers.
+//
+// 查 tok 处的中缀运算符 (若有): 返回节点种类, 复合赋值运算符 (普通 "="
+// 或非赋值运算符为 ND_NULL_EXPR) 以及左右绑定力.
 static bool
     infix_bp(LibcpToken* tok, LibcpNodeKind* kind, LibcpNodeKind* assign_op, int* lbp, int* rbp) {
   int n = sizeof(infix_ops) / sizeof(*infix_ops);
@@ -1859,6 +2141,10 @@ static LibcpNode* expr_bp(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
 // lookahead), the unary operators, labels-as-values, then the shared
 // primary parser for everything atomic. Unary `+` is transparent and
 // builds no node, exactly as the cascade did.
+//
+// 前缀 (nud) 形式: cast 或复合字面量 (通过 `(` 加类型名前瞻判定), 一元
+// 运算符, labels-as-values, 其余原子表达式交给共享的 primary. 一元 `+`
+// 是透明的, 不建节点, 与级联实现一致.
 static LibcpNode* expr_nud(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   if (libcp_equal(tok, "(") && is_typename(ctx, tok->next)) {
     LibcpToken* start = tok;
@@ -1868,6 +2154,9 @@ static LibcpNode* expr_nud(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok
 
     // A compound literal. Kept faithful, with the type and the
     // initializer record on the node; sema materializes the object.
+    //
+    // 复合字面量: 保持忠实, 类型与初始化器记录挂在节点上; sema 物化该
+    // 对象.
     if (libcp_equal(tok, "{")) {
       LibcpNode* node  = libcp_new_node(ctx, ND_COMPOUND_LITERAL, start);
       node->ty_op      = ty;
@@ -1879,6 +2168,9 @@ static LibcpNode* expr_nud(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok
     // A cast the source wrote: untyped, with the target type recorded
     // for sema. is_implicit stays false (libcp_new_cast sets it for the casts
     // sema inserts).
+    //
+    // 源码写出的 cast: 无类型, 目标类型记录下来交给 sema. is_implicit
+    // 保持 false (sema 插入的 cast 由 libcp_new_cast 置位).
     LibcpNode* node  = libcp_new_node(ctx, ND_CAST, start);
     node->lhs        = expr_bp(ctx, rest, tok, BP_CAST);
     node->ty_op      = ty;
@@ -1920,6 +2212,9 @@ static LibcpNode* expr_nud(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok
 
   // [GNU] labels-as-values. Checked before any infix interpretation, so
   // `&&label` is not a binary `&&`.
+  //
+  // [GNU] labels-as-values. 必须在任何中缀解释之前判断, 因此 `&&label`
+  // 不会被当作二元 `&&`.
   if (libcp_equal(tok, "&&")) {
     LibcpNode* node = libcp_new_node(ctx, ND_LABEL_VAL, tok);
     node->label     = libcp_get_ident(ctx, tok->next);
@@ -1932,6 +2227,8 @@ static LibcpNode* expr_nud(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok
 
 // The one expression loop. The depth gate counts here and only here; the
 // entry wrappers below do not add a frame.
+//
+// 唯一的表达式循环. 深度门只在这里计数; 下面的入口包装不再增加一层.
 static LibcpNode* expr_bp(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, int min_bp) {
   if (++ctx->parse_depth > MAX_PARSE_DEPTH)
     libcp_error_tok(ctx, tok, "nesting too deep");
@@ -1947,6 +2244,9 @@ static LibcpNode* expr_bp(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
 
     // The postfix (led) forms bind tighter than every infix operator:
     // call, subscript, member access and postfix increment/decrement.
+    //
+    // 后缀 (led) 形式结合得比所有中缀运算符都紧: 调用, 下标, 成员访问与
+    // 后缀自增/自减.
     if (min_bp < BP_POSTFIX) {
       if (libcp_equal(op, "(")) {
         node = funcall(ctx, rest, op->next, node);
@@ -2004,6 +2304,8 @@ static LibcpNode* expr_bp(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
 
       if (libcp_equal(op->next, ":")) {
         // [GNU] `a ?: b`: only cond and els, with is_elvis set.
+        //
+        // [GNU] `a ?: b`: 只有 cond 与 els, 并置上 is_elvis.
         cond->is_elvis = true;
         cond->cond     = node;
         cond->els      = expr_bp(ctx, rest, op->next->next, BP_COND - 1);
@@ -2037,6 +2339,9 @@ static LibcpNode* expr_bp(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
 
 // primary's `sizeof expr` and `_Alignof expr` forms parse their operand
 // through the `unary` name; here that is the cast layer.
+//
+// primary 的 `sizeof expr` 与 `_Alignof expr` 形式通过 `unary` 这个名字
+// 解析操作数; 在这里它就是 cast 层.
 static LibcpNode* unary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   return expr_bp(ctx, rest, tok, BP_CAST);
 }
@@ -2056,6 +2361,9 @@ LibcpNode* libcp_conditional(LibcpContext* ctx, LibcpToken** rest, LibcpToken* t
 // Parses typedef declarators into ND_TYPEDEF records. The name also
 // goes into the typedef-name oracle immediately: the grammar needs it
 // to classify the very next identifier.
+//
+// 把 typedef 声明符解析成 ND_TYPEDEF 记录. 名字同时立即进入 typedef 名
+// 判定器: 文法需要它来分类下一个标识符.
 static LibcpNode*
     parse_typedef(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpType* basety) {
   LibcpNode head = {};
@@ -2085,6 +2393,9 @@ static LibcpNode*
 // Parses a function declarator, and its body if one follows, into an
 // ND_FUNCDEF record. sema declares the function (checking it against a
 // previous declaration, anchored at `tok`) and analyzes the body.
+//
+// 把函数声明符及其后的函数体解析成 ND_FUNCDEF 记录. sema 声明该函数
+// (与先前的声明比对, 锚点为 `tok`) 并分析函数体.
 static LibcpNode* function_def(LibcpContext* ctx,
                                LibcpToken** rest,
                                LibcpToken* tok,
@@ -2101,6 +2412,7 @@ static LibcpNode* function_def(LibcpContext* ctx,
   node->attr      = *attr;
   add_declared_name(ctx, decl.name);
 
+  // 只有声明符而没有函数体: 原型声明, 发完记录直接返回.
   if (libcp_consume(&tok, tok, ";")) {
     *rest = tok;
     return node;
@@ -2109,6 +2421,9 @@ static LibcpNode* function_def(LibcpContext* ctx,
   // The parameters are visible in the whole body, so they shadow
   // typedefs of the same name from here on, one scope above the body's
   // own - where the old begin_function registered them.
+  //
+  // 参数在整个函数体内可见, 因此从这时起遮蔽同名 typedef; 作用域在函数体
+  // 自身作用域之上, 与旧的 begin_function 登记位置一致.
   enter_scope(ctx);
   for (LibcpType* p = ty->params; p; p = p->next)
     if (p->name)
@@ -2124,6 +2439,9 @@ static LibcpNode* function_def(LibcpContext* ctx,
 // Parses global-variable declarators (at file scope, or `extern` ones
 // inside a block) into ND_GVAR_DECL records; sema declares the objects
 // and serializes their initializers.
+//
+// 把全局变量声明符 (文件作用域, 或块内的 `extern` 声明) 解析成
+// ND_GVAR_DECL 记录; sema 声明这些对象并序列化它们的初始化器.
 static LibcpNode* global_variable(LibcpContext* ctx,
                                   LibcpToken** rest,
                                   LibcpToken* tok,
@@ -2161,6 +2479,8 @@ static LibcpNode* global_variable(LibcpContext* ctx,
 
 // Lookahead tokens and returns true if a given token is a start
 // of a function definition or declaration.
+//
+// 前瞻若干 token, 判断它们是否构成函数定义或函数声明.
 static bool is_function(LibcpContext* ctx, LibcpToken* tok) {
   if (libcp_equal(tok, ";"))
     return false;
@@ -2175,6 +2495,9 @@ static bool is_function(LibcpContext* ctx, LibcpToken* tok) {
 // The top-level declaration-record chain this returns is what sema
 // walks, in source order, to declare the objects and analyze the
 // function bodies.
+//
+// 顶层: 返回的声明记录链就是 sema 按源码顺序遍历的对象, 用来声明对象并
+// 分析函数体.
 LibcpNode* libcp_parse(LibcpContext* ctx, LibcpToken* tok) {
   ENTER_RET(ctx, NULL);
   libcp_parse_init(ctx);
@@ -2185,21 +2508,25 @@ LibcpNode* libcp_parse(LibcpContext* ctx, LibcpToken* tok) {
     LibcpVarAttr attr = {};
     LibcpNode* specs  = NULL;
     LibcpType* basety = declspec(ctx, &tok, tok, &attr, &specs);
+    // declspec 途中产生的枚举记录先入链, 保持在源码中的位置.
     cur               = chain_append(cur, specs);
 
     // Typedef
+    // typedef 声明
     if (attr.is_typedef) {
       cur = chain_append(cur, parse_typedef(ctx, &tok, tok, basety));
       continue;
     }
 
     // Function
+    // 函数定义或声明
     if (is_function(ctx, tok)) {
       cur = cur->next = function_def(ctx, &tok, tok, basety, &attr);
       continue;
     }
 
     // Global variable
+    // 全局变量
     cur = chain_append(cur, global_variable(ctx, &tok, tok, basety, &attr));
   }
 

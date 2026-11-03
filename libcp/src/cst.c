@@ -1,3 +1,7 @@
+// cst.c - 第 2 层: 无损 CST (lossless concrete syntax tree). 它建在预处理之前的
+// 原始文本上, 预处理指令与条件分支都是节点, trivia 挂靠, 叶子可逐字节还原源码.
+// 主要内容: 分隔符分组, 表达式优先级链, 声明与声明符, 语句, 预处理指令行,
+// 以及重建 / dump / 校验三个只读通道.
 #include "libcp.h"
 
 // Lossless concrete syntax tree over the raw token stream (plans/PLAN.md stage
@@ -38,9 +42,40 @@
 //
 // The lossless contract does not depend on the shape: the parser is
 // total, never reports a diagnostic and never exits (plans/RESULT.md I1-I6).
+//
+// 建在原始 token 流上的无损具体语法树 (plans/PLAN.md 阶段 C1/C2/C3). 输入的
+// 每个 token 依次成为一个叶子; 叶子的 trivia 与拼写可以逐字节还原输入文件.
+//
+// 这棵树负责分隔符分组, 切分语句并构建声明. 声明是 CST_DECL (specs + 各个
+// init-declarator + ';') 或 CST_FUNC_DEF (specs + declarator + 函数体块);
+// 参数是 CST_PARAM_LIST 内的 CST_PARAM; 类型名 (cast, sizeof, 复合字面量)
+// 是 CST_TYPE_NAME. 语句覆盖 C 的各种语句形式, 每个关键字, 括号, 方括号与
+// ';' 都是显式的. 表达式语句是 CST_EXPR_STMT.
+//
+// 文法无法覆盖的内容变成 CST_UNPARSED, 持有原始骨架子节点 (直到 ';' 的
+// token, 其中嵌套的分隔符已分组). 缺少闭合 token 的分组或块, 以及在本层
+// 找不到开括号的闭括号, 也都是 CST_UNPARSED; 它们已经持有的 token 仍留在树里.
+//
+// 预处理指令是独立节点 (CST_PP_*). 指令行从逻辑行首的 '#' 开始, 到下一个行首
+// token 之前结束; 其中的 token 保持为叶子. 条件分组保留每个分支: CST_PP_IF
+// 为 #if / #elif / #else 各持有一个 CST_PP_BRANCH, 再加收尾的 #endif; 分支体
+// 用与外围相同的 item 文法构建. 条件从不求值, 宏从不展开.
+//
+// 表达式文法是 C 的优先级链, 一直到并包括逗号运算符. 每个运算符, 括号与
+// 方括号都是显式叶子; 节点只做分组. 若 '(' 的第一个 token 能开始一个类型名
+// (类型关键字, struct/union/enum/typeof/_Atomic 之一, 或本文件中先前见过的
+// typedef 名), 它就是 cast 或复合字面量, 否则是带括号的表达式. 这里不做
+// 名字查找, 不做类型计算, 也不做常量折叠: 文件局部的 typedef 集合加上拼写
+// 就是全部的判定依据; 无法判定的解析退回骨架, 而不是猜测.
+//
+// 无损契约与树形无关: 解析器是全函数, 从不报诊断, 从不退出
+// (plans/RESULT.md I1-I6).
 
 // Bound the CST parser's recursion. A deeper span becomes a flat,
 // unparsed group; every token stays, so reconstruction remains lossless.
+//
+// 限制 CST 解析器的递归深度. 超过该深度的区间变成扁平的未解析分组;
+// 每个 token 都保留, 因此重建仍然无损.
 #define MAX_CST_DEPTH 512
 
 static LibcpCstNode* new_cst_node(LibcpContext* ctx, LibcpCstKind kind) {
@@ -52,6 +87,9 @@ static LibcpCstNode* new_cst_node(LibcpContext* ctx, LibcpCstKind kind) {
 static void cst_add_child(LibcpContext* ctx, LibcpCstNode* node, LibcpCstNode* child) {
   // The capacity lives in a size_t header just before `children`; the
   // public node exposes only child_count and the live entries.
+  //
+  // 容量存放在 `children` 之前的 size_t 头里; 公共节点只暴露 child_count
+  // 与有效条目.
   size_t cap = node->children ? ((size_t*)node->children)[-1] : 0;
   if ((size_t)node->child_count == cap) {
     cap                     = cap ? cap * 2 : 8;
@@ -66,6 +104,7 @@ static void cst_add_child(LibcpContext* ctx, LibcpCstNode* node, LibcpCstNode* c
   node->children[node->child_count++] = child;
 }
 
+// 在 parent 末尾追加一个叶子; EOF 标记用 CST_EOF, 其余 token 用 CST_TOKEN.
 static LibcpCstNode* cst_add_leaf(LibcpContext* ctx, LibcpCstNode* parent, LibcpToken* tok) {
   LibcpCstNode* leaf = new_cst_node(ctx, tok->kind == TK_EOF ? CST_EOF : CST_TOKEN);
   leaf->tok          = tok;
@@ -84,6 +123,9 @@ static bool cst_is_close(LibcpToken* tok) {
 // The parser's per-file state: the typedef-name oracle and the live
 // recursion depth (F5b). A depth overrun turns the current span into raw,
 // unparsed children; no token is dropped.
+//
+// 解析器的单文件状态: typedef 名 oracle 与实时递归深度 (F5b). 深度超限时
+// 当前区间变成原始的未解析子节点; 不丢弃任何 token.
 typedef struct {
   LibcpStringArray typedefs;
   int depth;
@@ -94,6 +136,10 @@ typedef struct {
 // only nested delimiters are grouped. On a missing closer or a depth
 // overrun the node becomes CST_UNPARSED but keeps the opener and
 // everything it consumed.
+//
+// 从 `tok` 开始 ( '(' '[' '{' 之一 ) 按 raw 模式消费一个带定界符的分组:
+// 内部不切分成语句或表达式, 只把嵌套的分隔符分组. 缺少闭合符或深度超限时,
+// 节点变成 CST_UNPARSED, 但仍保留开括号与已消费的全部内容.
 static LibcpCstNode*
     cst_parse_group(LibcpContext* ctx, LibcpCstContext* cst, LibcpToken** rest, LibcpToken* tok) {
   char* closer      = libcp_equal(tok, "(") ? ")" : libcp_equal(tok, "[") ? "]" : "}";
@@ -109,6 +155,9 @@ static LibcpCstNode*
     // Depth fallback: keep the rest of the group as flat leaves. The
     // group is an unparsed span; the token order (and so the
     // reconstruction) is unchanged.
+    //
+    // 深度回退: 把分组剩余部分保持为扁平叶子. 该分组是一个未解析区间;
+    // token 顺序 (因而重建结果) 不变.
     group->kind = CST_UNPARSED;
     while (p && p->kind != TK_EOF && !libcp_equal(p, closer)) {
       cst_add_leaf(ctx, group, p);
@@ -146,13 +195,20 @@ static LibcpCstNode*
 //
 // Expression parser (C2.1)
 //
+// 表达式解析 (C2.1)
+//
 // A backtracking recursive descent over the pre-preprocessing token
 // stream. `ok` turns false at the first failure and no caller looks at
 // `tok` again; the statement layer then rebuilds the span with the raw
 // skeleton, which is why a failed attempt may leave unreachable nodes in
 // the arena without duplicating a token in the tree.
 //
+// 在预处理之前的 token 流上做回溯递归下降. `ok` 在第一次失败时变为 false,
+// 之后的调用者不再查看 `tok`; 语句层随即用原始骨架重建该区间, 因此一次失败
+// 的尝试可能在 arena 里留下不可达的节点, 却不会在树里重复同一个 token.
+//
 
+// 表达式解析器的游标: 当前 token, 仍然成功的标志, 以及共享的单文件状态.
 typedef struct {
   LibcpToken* tok;
   bool ok;
@@ -177,6 +233,9 @@ static bool cst_in_list(LibcpToken* tok, char** list) {
 // Words that cannot begin an expression operand: C11 keywords, the
 // operator-like keywords, and the common GNU spellings. In the raw
 // stream keywords are still TK_IDENT, so this is a spelling test.
+//
+// 不能作为表达式操作数开头的词: C11 关键字, 类运算符关键字, 以及常见的
+// GNU 拼写. 在原始流里关键字仍然是 TK_IDENT, 所以这实际上是一次拼写测试.
 static bool cst_is_keyword(LibcpToken* tok) {
   char* kw[] = {
       "auto",
@@ -238,6 +297,7 @@ static bool cst_is_keyword(LibcpToken* tok) {
   return cst_in_list(tok, kw);
 }
 
+// tok 是否是已知的 typedef 名: 来自消费者种子或本文件内收集的集合.
 static bool cst_is_typedef_name(LibcpCstContext* cst, LibcpToken* tok) {
   if (!tok || tok->kind != TK_IDENT)
     return false;
@@ -249,6 +309,9 @@ static bool cst_is_typedef_name(LibcpCstContext* cst, LibcpToken* tok) {
 
 // True if `tok` can start a type name in a cast or sizeof: a type
 // specifier / qualifier keyword, or a file-local typedef name.
+//
+// tok 能否在 cast 或 sizeof 中开始一个类型名: 类型说明符 / 限定符关键字,
+// 或文件局部的 typedef 名.
 static bool cst_is_type_start(LibcpToken* tok, LibcpCstContext* cst) {
   char* kw[] = {
       "void",         "_Bool",      "char",         "short",    "int",        "long",
@@ -262,6 +325,9 @@ static bool cst_is_type_start(LibcpToken* tok, LibcpCstContext* cst) {
 
 // True if `tok` can start a declaration. Storage classes and the
 // declaration-only keywords are included; statement keywords are not.
+//
+// tok 能否开始一个声明. 包含存储类与只能出现在声明中的关键字; 不包含
+// 语句关键字.
 static bool cst_is_decl_start(LibcpToken* tok, LibcpCstContext* cst) {
   char* kw[] = {
       "typedef",       "static",        "extern",    "auto",         "register",
@@ -286,6 +352,12 @@ static void cst_add_typedef(LibcpContext* ctx, LibcpCstContext* cst, LibcpToken*
 // are collected; parameter names and struct tags are not. This is the
 // cast / declaration oracle the plan allows - an include-provided name
 // stays unknown and is not guessed.
+//
+// 对文件局部 typedef 名的保守预扫描. 收集由 `typedef int T;`,
+// `typedef int *T;`, `typedef int T[3];`, `typedef int A, B;`,
+// `typedef struct S T;` 与 `typedef int (*T)(int);` 引入的名字; 不收集
+// 参数名与 struct 标签. 这就是计划允许的 cast / 声明 oracle - 由 include
+// 提供的名字保持未知, 不做猜测.
 static void cst_collect_typedefs(LibcpContext* ctx, LibcpCstContext* cst, LibcpToken* tok) {
   LibcpToken* p = tok;
 
@@ -313,9 +385,11 @@ static void cst_collect_typedefs(LibcpContext* ctx, LibcpCstContext* cst, LibcpT
       if (q->kind != TK_IDENT)
         continue;
 
+      // 顶层形式: 名字后紧跟 ';' / ',' / '[' 的是被声明的类型名.
       if (depth == 0 &&
           (libcp_equal(q->next, ";") || libcp_equal(q->next, ",") || libcp_equal(q->next, "[")))
         cst_add_typedef(ctx, cst, q);
+      // 函数指针形式 "(*T)": 名字在深度 1, 前一个 token 是 '*' 且后面是 ')'.
       else if (depth == 1 && libcp_equal(prev, "*") && libcp_equal(q->next, ")"))
         cst_add_typedef(ctx, cst, q);
     }
@@ -341,6 +415,8 @@ static LibcpCstNode*
 static LibcpCstNode* cst_parse_decl(LibcpContext* ctx, LibcpCstParser* p);
 static void cst_parse_compound(LibcpContext* ctx, LibcpCstParser* p, LibcpCstNode* block);
 // The body behind each depth-guarded expression/declarator entry.
+//
+// 每个带深度保护的表达式 / 声明符入口背后真正的实现函数.
 static LibcpCstNode* cst_parse_comma1(LibcpContext* ctx, LibcpCstParser* p);
 static LibcpCstNode* cst_parse_assign1(LibcpContext* ctx, LibcpCstParser* p);
 static LibcpCstNode* cst_parse_conditional1(LibcpContext* ctx, LibcpCstParser* p);
@@ -352,6 +428,9 @@ static LibcpCstNode*
 // Consume one balanced group in raw mode, for a type name in a cast or
 // sizeof. An unclosed group fails the expression: the statement falls
 // back to the skeleton, where the span becomes UNPARSED.
+//
+// 为 cast 或 sizeof 中的类型名, 按 raw 模式消费一个配平的分组. 分组未闭合
+// 时整个表达式失败: 语句退回骨架, 该区间变成 UNPARSED.
 static LibcpCstNode* cst_parse_raw_group(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpToken* rest    = NULL;
   LibcpCstNode* group = cst_parse_group(ctx, p->cst, &rest, p->tok);
@@ -365,6 +444,7 @@ static LibcpCstNode* cst_parse_raw_group(LibcpContext* ctx, LibcpCstParser* p) {
 }
 
 // primary = ident | number | char | string+ | "(" expr ")"
+// 主表达式: 标识符 / 数字 / 字符 / 连续字符串字面量 / 括号表达式.
 static LibcpCstNode* cst_parse_primary(LibcpContext* ctx, LibcpCstParser* p) {
   if (!p->ok)
     return NULL;
@@ -379,6 +459,9 @@ static LibcpCstNode* cst_parse_primary(LibcpContext* ctx, LibcpCstParser* p) {
     // GNU statement expression: "(" block ")". The block parser runs at
     // the brace, so the items inside keep the full statement grammar
     // (PLAN-l5 W1: this span used to fall back to CST_UNPARSED).
+    //
+    // GNU 语句表达式: "(" block ")". 块解析器从花括号开始运行, 因此内部
+    // 条目保持完整的语句文法 (PLAN-l5 W1: 该区间以前会退回 CST_UNPARSED).
     if (libcp_equal(tok->next, "{")) {
       LibcpCstNode* node = new_cst_node(ctx, CST_STMT_EXPR);
       cst_add_leaf(ctx, node, tok);
@@ -418,6 +501,10 @@ static LibcpCstNode* cst_parse_primary(LibcpContext* ctx, LibcpCstParser* p) {
   // _Generic is a primary-expression in C11 but a keyword here; it is
   // call-shaped, so it becomes a PRIMARY leaf and the postfix tail's
   // arg-list takes over (the arms parse as associations, cst_parse_arg).
+  //
+  // _Generic 在 C11 里是主表达式, 但在这里是关键字; 它形如调用, 因此变成
+  // 一个 PRIMARY 叶子, 由后缀尾部的参数列表接手 (各个分支按关联参数解析,
+  // 见 cst_parse_arg).
   if (libcp_equal(tok, "_Generic") && libcp_equal(tok->next, "(")) {
     LibcpCstNode* node = new_cst_node(ctx, CST_PRIMARY);
     cst_add_leaf(ctx, node, tok);
@@ -433,6 +520,9 @@ static LibcpCstNode* cst_parse_primary(LibcpContext* ctx, LibcpCstParser* p) {
   // Identifiers (keywords are still identifiers here), numbers, char and
   // string literals. Adjacent string literals are one primary; each stays
   // an explicit leaf.
+  //
+  // 标识符 (关键字在这里仍是标识符), 数字, 字符与字符串字面量. 相邻的字符串
+  // 字面量合为一个 primary; 每个仍保持为独立的显式叶子.
   LibcpCstNode* node = new_cst_node(ctx, CST_PRIMARY);
   cst_add_leaf(ctx, node, tok);
   p->tok = tok->next;
@@ -454,6 +544,11 @@ static LibcpCstNode* cst_parse_primary(LibcpContext* ctx, LibcpCstParser* p) {
 // The assignment attempt runs first; its failure backtracks only this
 // argument, and the failed attempt's nodes are unreachable, which is
 // allowed (PLAN-l5 W1).
+//
+// 这些类型形式不是赋值表达式, 但 __builtin_types_compatible_p(int, int),
+// __builtin_offsetof(struct T, m) 与 _Generic(100.0, double: 1, default: 0)
+// 这类调用会把它们当作实参. 先尝试赋值表达式; 失败时只回退当前这一个实参,
+// 失败尝试留下的节点不可达, 这是允许的 (PLAN-l5 W1).
 static LibcpCstNode* cst_parse_arg(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpToken* start = p->tok;
 
@@ -467,6 +562,8 @@ static LibcpCstNode* cst_parse_arg(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpCstNode* ty;
   if (libcp_equal(p->tok, "default")) {
     // The _Generic default arm is a keyword here, not a type name.
+    //
+    // _Generic 的 default 分支在这里是关键字, 不是类型名.
     ty = new_cst_node(ctx, CST_PRIMARY);
     cst_add_leaf(ctx, ty, p->tok);
     p->tok = p->tok->next;
@@ -488,9 +585,11 @@ static LibcpCstNode* cst_parse_arg(LibcpContext* ctx, LibcpCstParser* p) {
 }
 
 // arg-list = "(" (arg ("," arg)*)? ")"
+// 实参列表: 可以为空, 实参之间用逗号分隔.
 static LibcpCstNode* cst_parse_arg_list(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpCstNode* args = new_cst_node(ctx, CST_ARG_LIST);
   cst_add_leaf(ctx, args, p->tok);  // '('
+  // 左括号
   p->tok = p->tok->next;
 
   if (!cst_at(p, ")")) {
@@ -517,11 +616,13 @@ static LibcpCstNode* cst_parse_arg_list(LibcpContext* ctx, LibcpCstParser* p) {
 }
 
 // designator = "[" conditional ("..." conditional)? "]" | "." ident
+// 指示符: 下标形式 (支持 GNU 的 "..." 范围) 或 "." 加成员名.
 static LibcpCstNode* cst_parse_designator(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpCstNode* desig = new_cst_node(ctx, CST_DESIGNATOR);
 
   if (cst_at(p, "[")) {
     cst_add_leaf(ctx, desig, p->tok);  // '['
+    // 左方括号
     p->tok = p->tok->next;
 
     LibcpCstNode* begin = cst_parse_conditional(ctx, p);
@@ -564,6 +665,7 @@ static LibcpCstNode* cst_parse_designator(LibcpContext* ctx, LibcpCstParser* p) 
 }
 
 // initializer = brace-list | string+ | assign
+// 初始化器: 花括号列表 / 连续字符串字面量 / 赋值表达式.
 static LibcpCstNode* cst_parse_initializer(LibcpContext* ctx, LibcpCstParser* p) {
   if (cst_at(p, "{"))
     return cst_parse_init_list(ctx, p);
@@ -586,6 +688,9 @@ static LibcpCstNode* cst_parse_initializer(LibcpContext* ctx, LibcpCstParser* p)
 // The written shape is kept: designators are explicit nodes, a braced
 // sublist is a nested CST_INIT_LIST, and no target-type decision is made
 // here (brace elision belongs to a later consumer).
+//
+// 保留书写形态: 指示符是显式节点, 带花括号的子列表是嵌套的 CST_INIT_LIST,
+// 这里不对目标类型做任何决定 (花括号省略属于后续消费者).
 static LibcpCstNode* cst_parse_init_list(LibcpContext* ctx, LibcpCstParser* p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
@@ -600,6 +705,7 @@ static LibcpCstNode* cst_parse_init_list(LibcpContext* ctx, LibcpCstParser* p) {
 static LibcpCstNode* cst_parse_init_list1(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpCstNode* list = new_cst_node(ctx, CST_INIT_LIST);
   cst_add_leaf(ctx, list, p->tok);  // '{'
+  // 左花括号
   p->tok = p->tok->next;
 
   if (cst_at(p, "}")) {
@@ -648,6 +754,7 @@ static LibcpCstNode* cst_parse_init_list1(LibcpContext* ctx, LibcpCstParser* p) 
 
 // postfix-tail = ("(" arg-list | "[" expr "]" | "." ident | "->" ident
 //                | "++" | "--")*
+// 后缀尾部: 调用 / 下标 / 成员访问 (. 与 ->) / 后置 ++ 与 --, 可连续出现.
 static LibcpCstNode*
     cst_parse_postfix_tail(LibcpContext* ctx, LibcpCstParser* p, LibcpCstNode* node) {
   for (;;) {
@@ -715,6 +822,7 @@ static LibcpCstNode*
 }
 
 // postfix = primary postfix-tail
+// 后缀表达式: 主表达式后接零个或多个后缀尾部.
 static LibcpCstNode* cst_parse_postfix(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpCstNode* node = cst_parse_primary(ctx, p);
   if (!p->ok)
@@ -727,6 +835,9 @@ static LibcpCstNode* cst_parse_postfix(LibcpContext* ctx, LibcpCstParser* p) {
 //       | "(" type-name ")" unary                    // cast
 //       | "(" type-name ")" "{" init-list "}"        // compound literal
 //       | postfix
+//
+// 一元表达式: 前缀运算符 / sizeof, _Alignof, typeof / cast / 复合字面量 /
+// 后缀表达式.
 static LibcpCstNode* cst_parse_unary(LibcpContext* ctx, LibcpCstParser* p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
@@ -806,6 +917,9 @@ static LibcpCstNode* cst_parse_unary1(LibcpContext* ctx, LibcpCstParser* p) {
 
 // binary-level <name> = <operand-level> (op <operand-level>)*, left
 // associative. Each level keeps the operator as an explicit leaf.
+//
+// 二元层级 <name> = <operand-level> (op <operand-level>)*, 左结合. 每一层都
+// 把运算符保持为显式叶子.
 
 static LibcpCstNode* cst_parse_mul(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpCstNode* node = cst_parse_unary(ctx, p);
@@ -978,6 +1092,7 @@ static LibcpCstNode* cst_parse_logor(LibcpContext* ctx, LibcpCstParser* p) {
 }
 
 // conditional = logor ("?" expr ":" conditional | "?" ":" conditional)?
+// 条件表达式: 逻辑或表达式, 后面可接 ? : 三元形式.
 static LibcpCstNode* cst_parse_conditional(LibcpContext* ctx, LibcpCstParser* p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
@@ -997,9 +1112,12 @@ static LibcpCstNode* cst_parse_conditional1(LibcpContext* ctx, LibcpCstParser* p
   LibcpCstNode* node = new_cst_node(ctx, CST_COND);
   cst_add_child(ctx, node, cond);
   cst_add_leaf(ctx, node, p->tok);  // '?'
+  // 问号
   p->tok = p->tok->next;
 
   // [GNU] `a ?: b` has no middle operand.
+  //
+  // [GNU] `a ?: b` 没有中间操作数.
   if (cst_at(p, ":")) {
     cst_add_leaf(ctx, node, p->tok);
     p->tok            = p->tok->next;
@@ -1017,6 +1135,7 @@ static LibcpCstNode* cst_parse_conditional1(LibcpContext* ctx, LibcpCstParser* p
   }
   cst_add_child(ctx, node, then);
   cst_add_leaf(ctx, node, p->tok);  // ':'
+  // 冒号 (三元表达式的分隔符)
   p->tok = p->tok->next;
 
   LibcpCstNode* els = cst_parse_conditional(ctx, p);
@@ -1026,6 +1145,7 @@ static LibcpCstNode* cst_parse_conditional1(LibcpContext* ctx, LibcpCstParser* p
   return node;
 }
 
+// 当前 token 是否是赋值运算符之一 (= += -= *= /= %= &= |= ^= <<= >>=).
 static bool cst_at_assign_op(LibcpCstParser* p) {
   char* ops[] = {
       "=",
@@ -1045,6 +1165,7 @@ static bool cst_at_assign_op(LibcpCstParser* p) {
 }
 
 // assign = libcp_conditional (assign-op assign)?
+// 赋值表达式: 条件表达式, 后面可接一个赋值运算符和右结合的赋值表达式.
 static LibcpCstNode* cst_parse_assign(LibcpContext* ctx, LibcpCstParser* p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
@@ -1074,6 +1195,7 @@ static LibcpCstNode* cst_parse_assign1(LibcpContext* ctx, LibcpCstParser* p) {
 }
 
 // comma = assign ("," assign)*
+// 逗号表达式: 赋值表达式, 后接零个或多个 "," assign, 左结合.
 static LibcpCstNode* cst_parse_comma(LibcpContext* ctx, LibcpCstParser* p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
@@ -1105,6 +1227,8 @@ static LibcpCstNode* cst_parse_comma1(LibcpContext* ctx, LibcpCstParser* p) {
 //
 // Declaration layer (C2.2)
 //
+// 声明层 (C2.2)
+//
 
 static void cst_parse_compound(LibcpContext* ctx, LibcpCstParser* p, LibcpCstNode* block);
 static LibcpCstNode* cst_parse_param_list(LibcpContext* ctx, LibcpCstParser* p);
@@ -1113,6 +1237,9 @@ static LibcpCstNode* cst_parse_param_list(LibcpContext* ctx, LibcpCstParser* p);
 // parser on failure. Used where a structured attempt did not fit and the
 // tokens must still stay in the tree (K&R parameter lists, array
 // dimensions, attributes).
+//
+// 从 `start` 起按 raw 模式消费一个配平的分组, 失败时重置解析器. 用于结构化
+// 尝试不适合, 但 token 仍必须留在树里的地方 (K&R 参数列表, 数组维度, 属性).
 static LibcpCstNode*
     cst_parse_raw_group_at(LibcpContext* ctx, LibcpCstParser* p, LibcpToken* start) {
   p->tok = start;
@@ -1134,6 +1261,12 @@ static LibcpCstNode*
 // _Atomic / _Alignas arguments and attributes stay raw groups. A
 // user-defined type name is a specifier only while no other specifier
 // has been seen, so `T T;` leaves the second T to the declarator.
+//
+// 声明说明符: (存储类 | 限定符 | 类型说明符 | ...)+
+//
+// 只看形态: `struct` / `union` / `enum` 的主体, typeof 操作数,
+// _Atomic / _Alignas 实参与属性都保持为 raw 分组. 用户定义的类型名只有在
+// 尚未见过其他说明符时才算说明符, 因此 `T T;` 把第二个 T 留给声明符.
 static LibcpCstNode* cst_parse_decl_specs(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpCstNode* specs = new_cst_node(ctx, CST_DECL_SPECS);
   bool has_type       = false;
@@ -1312,6 +1445,8 @@ static LibcpCstNode* cst_parse_decl_specs(LibcpContext* ctx, LibcpCstParser* p) 
 
 // Consume `__attribute__((...))` pairs after a declarator, keeping them
 // on the declarator node.
+//
+// 消费声明符之后的 `__attribute__((...))` 对, 把它们保留在声明符节点上.
 static bool cst_parse_attributes(LibcpContext* ctx, LibcpCstParser* p, LibcpCstNode* node) {
   while (cst_at(p, "__attribute__")) {
     cst_add_leaf(ctx, node, p->tok);
@@ -1329,10 +1464,14 @@ static bool cst_parse_attributes(LibcpContext* ctx, LibcpCstParser* p, LibcpCstN
 // array-dimension = "[" ("static" | "restrict" | "*")* expr? "]"
 // The expression is parsed when it fits; otherwise the bracket keeps its
 // raw tokens.
+//
+// 数组维度: "[" ("static" | "restrict" | "*")* expr? "]". 表达式能解析时
+// 按表达式解析; 否则方括号保留其原始 token.
 static LibcpCstNode* cst_parse_dimension(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpToken* start     = p->tok;
   LibcpCstNode* bracket = new_cst_node(ctx, CST_GROUP_BRACKET);
   cst_add_leaf(ctx, bracket, p->tok);  // '['
+  // 左方括号
   p->tok = p->tok->next;
 
   while (cst_at(p, "static") || cst_at(p, "restrict") || cst_at(p, "const") ||
@@ -1369,6 +1508,11 @@ static LibcpCstNode* cst_parse_dimension(LibcpContext* ctx, LibcpCstParser* p) {
 // The written grouping is kept: pointer stars, an inner declarator in a
 // GROUP_PAREN, the name, and the suffixes in source order. No type is
 // built and no name is bound.
+//
+// 声明符: "*"* ("(" declarator ")" | ident)? ("(" params ")" | "[" dim "]")*
+//
+// 保留书写时的分组: 指针的 '*', GROUP_PAREN 中的内层声明符, 名字, 以及按
+// 源码顺序排列的后缀. 不构建类型, 也不绑定名字.
 static LibcpCstNode*
     cst_parse_declarator(LibcpContext* ctx, LibcpCstParser* p, bool allow_abstract) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
@@ -1443,6 +1587,7 @@ static LibcpCstNode*
 }
 
 // parameter = decl-specs declarator?
+// 参数: 声明说明符加可选的声明符.
 static LibcpCstNode* cst_parse_param(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpCstNode* specs = cst_parse_decl_specs(ctx, p);
   if (!p->ok)
@@ -1462,10 +1607,15 @@ static LibcpCstNode* cst_parse_param(LibcpContext* ctx, LibcpCstParser* p) {
 // param-list = "(" (param ("," param)* | "..." | raw)? ")"
 // A parameter list the declaration grammar cannot explain keeps its raw
 // tokens in a GROUP_PAREN (K&R identifier lists are the common case).
+//
+// 参数列表: 带括号的参数序列, 支持省略号或无法结构化时的 raw 形式.
+// 声明文法解释不了的参数列表把原始 token 留在 GROUP_PAREN 里
+// (常见情形是 K&R 的标识符列表).
 static LibcpCstNode* cst_parse_param_list(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpToken* start  = p->tok;
   LibcpCstNode* list = new_cst_node(ctx, CST_PARAM_LIST);
   cst_add_leaf(ctx, list, p->tok);  // '('
+  // 左括号
   p->tok = p->tok->next;
 
   if (cst_at(p, ")")) {
@@ -1499,10 +1649,12 @@ static LibcpCstNode* cst_parse_param_list(LibcpContext* ctx, LibcpCstParser* p) 
 }
 
 // type-name = "(" decl-specs abstract-declarator? ")"
+// 类型名: 括号内的声明说明符加可选的抽象声明符.
 static LibcpCstNode* cst_parse_type_name(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpToken* open   = p->tok;
   LibcpCstNode* node = new_cst_node(ctx, CST_TYPE_NAME);
   cst_add_leaf(ctx, node, open);  // '('
+  // 左括号
   p->tok = open->next;
 
   LibcpCstNode* specs = cst_parse_decl_specs(ctx, p);
@@ -1529,6 +1681,10 @@ static LibcpCstNode* cst_parse_type_name(LibcpContext* ctx, LibcpCstParser* p) {
 // abstract declarator. Same children as cst_parse_type_name, without
 // the wrapping parentheses; used where a bare type name appears (a call
 // argument, PLAN-l5 W1).
+//
+// 类型名去掉括号的部分: 声明说明符加可选的抽象声明符. 子节点与
+// cst_parse_type_name 相同, 只是没有外层括号; 用于裸类型名出现的地方
+// (调用实参, PLAN-l5 W1).
 static LibcpCstNode* cst_parse_type_name_core(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpCstNode* node = new_cst_node(ctx, CST_TYPE_NAME);
 
@@ -1549,12 +1705,17 @@ static LibcpCstNode* cst_parse_type_name_core(LibcpContext* ctx, LibcpCstParser*
 // declaration = decl-specs init-declarator ("," init-declarator)* ";"
 //             | decl-specs ";"
 // function-definition = decl-specs declarator compound-stmt
+//
+// 声明: 声明说明符加一个或多个 init-declarator, 以 ";" 结尾; 或只有声明
+// 说明符加 ";". 函数定义: 声明说明符 + 声明符 + 复合语句.
 static LibcpCstNode* cst_parse_decl(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpCstNode* specs = cst_parse_decl_specs(ctx, p);
   if (!p->ok)
     return NULL;
 
   // A tag or specifier with no declarator: `struct S {...};`, `int;`.
+  //
+  // 没有声明符的标签或说明符: `struct S {...};`, `int;`.
   if (cst_at(p, ";")) {
     LibcpCstNode* decl = new_cst_node(ctx, CST_DECL);
     cst_add_child(ctx, decl, specs);
@@ -1569,6 +1730,8 @@ static LibcpCstNode* cst_parse_decl(LibcpContext* ctx, LibcpCstParser* p) {
 
   // `declarator {` is a function definition. GNU nested functions are
   // allowed too; nothing here checks the scope.
+  //
+  // `declarator {` 是函数定义. 也允许 GNU 嵌套函数; 这里不检查作用域.
   if (cst_at(p, "{")) {
     LibcpCstNode* body = new_cst_node(ctx, CST_BLOCK);
     cst_parse_compound(ctx, p, body);
@@ -1590,6 +1753,7 @@ static LibcpCstNode* cst_parse_decl(LibcpContext* ctx, LibcpCstParser* p) {
       LibcpCstNode* init_decl = new_cst_node(ctx, CST_INIT_DECLARATOR);
       cst_add_child(ctx, init_decl, declr);
       cst_add_leaf(ctx, init_decl, p->tok);  // '='
+      // 等号
       p->tok = p->tok->next;
 
       LibcpCstNode* init = cst_parse_initializer(ctx, p);
@@ -1623,6 +1787,8 @@ static LibcpCstNode* cst_parse_decl(LibcpContext* ctx, LibcpCstParser* p) {
 //
 // Statement layer
 //
+// 语句层
+//
 
 static bool cst_is_directive(LibcpToken* tok);
 static bool cst_is_pp_terminator(LibcpToken* tok);
@@ -1638,6 +1804,12 @@ static LibcpCstNode* cst_parse_item1(LibcpContext* ctx, LibcpCstParser* p);
 // where it should have ended. The node is CST_UNPARSED: the expression
 // grammar did not explain the span (a declaration is one such span until
 // C2.2), and the children are exactly the raw pieces, not a guess.
+//
+// 按回退形态解析一条语句: 直到并包括本层 ';' 的 token, 每个分隔符一个 raw
+// 分组, 遇到属于外层的闭括号就停止. 被闭括号 (或 EOF) 截断的区间保留已有
+// token; 骨架不猜测它本该在哪里结束. 节点是 CST_UNPARSED: 表达式文法没有
+// 解释该区间 (在 C2.2 之前, 声明也是这样的区间), 子节点正是原始片段,
+// 而不是猜测.
 static LibcpCstNode* cst_parse_fallback_statement(LibcpContext* ctx,
                                                   LibcpCstContext* cst,
                                                   LibcpToken** rest,
@@ -1649,6 +1821,9 @@ static LibcpCstNode* cst_parse_fallback_statement(LibcpContext* ctx,
     // A directive at the start of a line begins the next item; a
     // malformed span must not swallow it. The span's own first token is
     // never a directive (the item parser handles those).
+    //
+    // 行首的指令开启下一个 item; 畸形区间不能吞掉它. 区间自身的第一个
+    // token 从不是指令 (那些由 item 解析器处理).
     if (p != tok && cst_is_directive(p))
       break;
     if (libcp_equal(p, ";")) {
@@ -1672,6 +1847,9 @@ static LibcpCstNode* cst_parse_fallback_statement(LibcpContext* ctx,
 // A statement whose whole span is an expression followed by ';' becomes
 // CST_EXPR_STMT. On any failure the caller uses the raw skeleton instead;
 // the failed attempt's nodes are unreachable, which is allowed.
+//
+// 整段是"表达式 + ';'"的语句变成 CST_EXPR_STMT. 任何失败时调用者改用原始
+// 骨架; 失败尝试留下的节点不可达, 这是允许的.
 static LibcpCstNode*
     cst_try_expr_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpCstContext* cst) {
   LibcpCstParser p = {tok, true, cst};
@@ -1703,6 +1881,10 @@ static LibcpCstNode* cst_parse_statement1(LibcpContext* ctx, LibcpCstParser* p);
 //           | "asm" qualifiers* "(" raw ")" ";"
 //           | ident ":" statement
 //           | compound-stmt | declaration | expr-stmt
+//
+// 语句: return / if / switch / while / do-while / for / case / default /
+// goto / break / continue / asm / 标签语句 / 复合语句 / 声明 / 表达式语句.
+// 关键字, 括号与 ';' 都保持为显式叶子.
 static LibcpCstNode*
     cst_parse_simple_stmt(LibcpContext* ctx, LibcpCstParser* p, LibcpCstKind kind) {
   LibcpCstNode* node = new_cst_node(ctx, kind);
@@ -1888,6 +2070,8 @@ static LibcpCstNode* cst_parse_for(LibcpContext* ctx, LibcpCstParser* p) {
   p->tok = p->tok->next;
 
   // Init: a declaration owns its terminating ';', an expression does not.
+  //
+  // 初始化部分: 声明自带结尾的 ';', 表达式则不带.
   if (cst_at(p, ";")) {
     cst_add_leaf(ctx, node, p->tok);
     p->tok = p->tok->next;
@@ -1999,6 +2183,7 @@ static LibcpCstNode* cst_parse_label(LibcpContext* ctx, LibcpCstParser* p) {
   p->tok = p->tok->next;
 
   cst_add_leaf(ctx, node, p->tok);  // ':'
+  // 冒号
   p->tok = p->tok->next;
 
   LibcpCstNode* body = cst_parse_statement(ctx, p);
@@ -2128,6 +2313,9 @@ static LibcpCstNode* cst_parse_statement1(LibcpContext* ctx, LibcpCstParser* p) 
   // A declaration is tried only when the first token can start one; an
   // unknown type (`size_t x;`) therefore fails the expression path and
   // becomes UNPARSED instead of being guessed.
+  //
+  // 只有当第一个 token 能开始声明时才尝试声明; 因此未知类型 (`size_t x;`)
+  // 会在表达式路径上失败并变成 UNPARSED, 而不是被猜测.
   if (cst_is_decl_start(tok, p->cst)) {
     LibcpCstNode* decl = cst_parse_decl(ctx, p);
     if (decl)
@@ -2150,6 +2338,8 @@ static LibcpCstNode* cst_parse_statement1(LibcpContext* ctx, LibcpCstParser* p) 
 //
 // Preprocessor directive layer (C3.1)
 //
+// 预处理指令层 (C3.1)
+//
 // A directive line starts at a '#' with at_bol - the same test as
 // preprocess.c's is_hash - and ends before the next at_bol token. The
 // scan buffer has already removed continuations and a newline inside a
@@ -2158,6 +2348,12 @@ static LibcpCstNode* cst_parse_statement1(LibcpContext* ctx, LibcpCstParser* p) 
 // groups them by line and, for conditionals, by branch. Conditions are
 // not evaluated, macros are not expanded and no file is looked up.
 //
+// 指令行从 at_bol 的 '#' 开始 - 与 preprocess.c 的 is_hash 是同一判定 - 并在
+// 下一个 at_bol token 之前结束. 扫描缓冲区已经去掉了续行, 块注释内的换行
+// 不会置 at_bol, 所以多行指令在这里同样算一行. 指令的 token 保持为叶子;
+// 树只按行分组它们, 对条件指令再按分支分组. 条件不求值, 宏不展开,
+// 也不查找任何文件.
+//
 
 static bool cst_is_directive(LibcpToken* tok) {
   return tok && tok->kind != TK_EOF && tok->at_bol && libcp_equal(tok, "#");
@@ -2165,6 +2361,8 @@ static bool cst_is_directive(LibcpToken* tok) {
 
 // The directive word after '#'. NULL means an empty directive (`#` alone
 // on its logical line).
+//
+// '#' 之后的指令词. 返回 NULL 表示空指令 (逻辑行上只有一个 `#`).
 static LibcpToken* cst_directive_name(LibcpToken* tok) {
   LibcpToken* name = tok->next;
   if (!name || name->kind == TK_EOF || name->at_bol)
@@ -2174,6 +2372,9 @@ static LibcpToken* cst_directive_name(LibcpToken* tok) {
 
 // #elif / #else / #endif close a branch body; they belong to the
 // enclosing CST_PP_IF rather than to the body's items.
+//
+// #elif / #else / #endif 结束一个分支体; 它们属于外层的 CST_PP_IF,
+// 而不属于分支体的 item.
 static bool cst_is_pp_terminator(LibcpToken* tok) {
   if (!cst_is_directive(tok))
     return false;
@@ -2192,6 +2393,9 @@ static bool cst_is_pp_if(LibcpToken* tok) {
 
 // The first token after this directive line: the next token with at_bol,
 // or EOF. Never NULL on libcp_tokenize_file_impl()'s output.
+//
+// 本指令行之后的第一个 token: 下一个 at_bol token, 或者 EOF. 在
+// libcp_tokenize_file_impl() 的输出上从不为 NULL.
 static LibcpToken* cst_directive_end(LibcpToken* tok) {
   LibcpToken* p = tok->next;
   while (p && p->kind != TK_EOF && !p->at_bol)
@@ -2203,6 +2407,10 @@ static LibcpToken* cst_directive_end(LibcpToken* tok) {
 // marker (`# 123 "file"`); an unrecognized word stays CST_PP_DIRECTIVE
 // and an empty line is CST_PP_NULL. #if / #elif / #else / #endif never
 // reach this function as part of a well-formed conditional.
+//
+// 按拼写决定指令的 kind. '#' 之后的数字是 GNU 行标记 (`# 123 "file"`);
+// 无法识别的词保持 CST_PP_DIRECTIVE, 空行则是 CST_PP_NULL. 在良构的条件
+// 指令中, #if / #elif / #else / #endif 不会走到这个函数.
 static LibcpCstKind cst_pp_kind(LibcpToken* tok) {
   LibcpToken* name = cst_directive_name(tok);
   if (!name)
@@ -2228,6 +2436,10 @@ static LibcpCstKind cst_pp_kind(LibcpToken* tok) {
 // not past the end of the line. Parameters do not nest in valid input,
 // so the group is flat; a missing ')' stops at the line's end and turns
 // the group into UNPARSED.
+//
+// 函数式宏的参数列表: 从 '(' 到配对的 ')', 不越过行尾. 在合法输入里参数
+// 不会嵌套, 因此分组保持扁平; 缺少 ')' 时在行尾停止, 并把该分组变成
+// UNPARSED.
 static LibcpCstNode*
     cst_parse_pp_params(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpToken* end) {
   LibcpCstNode* group = new_cst_node(ctx, CST_GROUP_PAREN);
@@ -2261,6 +2473,10 @@ static LibcpCstNode*
 // the directive node. For #define the macro name is followed by a
 // GROUP_PAREN only when '(' comes with no space - the object / function
 // macro boundary of preprocess.c - so the dump records the distinction.
+//
+// 恰好消费一条指令行. 它的所有 token 都成为指令节点的叶子. 对 #define,
+// 只有当 '(' 前没有空格时, 宏名之后才跟一个 GROUP_PAREN - 这正是
+// preprocess.c 中对象式宏与函数式宏的分界 - 因此 dump 记录了这一区别.
 static LibcpCstNode* cst_parse_directive_line(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpToken* hash   = p->tok;
   LibcpToken* end    = cst_directive_end(hash);
@@ -2270,10 +2486,12 @@ static LibcpCstNode* cst_parse_directive_line(LibcpContext* ctx, LibcpCstParser*
   LibcpToken* tok = hash->next;
   if (node->kind == CST_PP_DEFINE && tok != end && tok->kind == TK_IDENT) {
     cst_add_leaf(ctx, node, tok);  // "define"
+    // 指令名 "define"
     tok = tok->next;
 
     if (tok != end && tok->kind == TK_IDENT) {
       cst_add_leaf(ctx, node, tok);  // macro name
+      // 宏名
       tok = tok->next;
 
       if (tok != end && libcp_equal(tok, "(") && !tok->has_space) {
@@ -2299,6 +2517,12 @@ static LibcpCstNode* cst_parse_directive_line(LibcpContext* ctx, LibcpCstParser*
 // nesting recurses through cst_parse_item and every branch keeps its
 // tokens. An unterminated group ends at EOF or at an enclosing closer;
 // an orphan #elif / #else / #endif is an ordinary directive line.
+//
+// #if / #ifdef / #ifndef 开启一个条件分组: 每个 #if / #elif / #else 一个
+// CST_PP_BRANCH, 收尾的 #endif 作为分组的最后一个子节点. 分支体用与外围
+// 相同的 item 文法, 嵌套通过 cst_parse_item 递归, 每个分支都保留其 token.
+// 未终止的分组在 EOF 或外层闭括号处结束; 孤立的 #elif / #else / #endif
+// 当作普通指令行.
 static LibcpCstNode* cst_parse_pp_if(LibcpContext* ctx, LibcpCstParser* p) {
   LibcpCstNode* node   = new_cst_node(ctx, CST_PP_IF);
   LibcpCstNode* branch = new_cst_node(ctx, CST_PP_BRANCH);
@@ -2309,6 +2533,8 @@ static LibcpCstNode* cst_parse_pp_if(LibcpContext* ctx, LibcpCstParser* p) {
     while (p->ok && p->tok && p->tok->kind != TK_EOF && !cst_is_pp_terminator(p->tok)) {
       // A closer belongs to the enclosing block; leave it there and let
       // the group end unterminated instead of swallowing it.
+      //
+      // 闭括号属于外层块; 把它留在那里, 让分组以未终止状态结束, 而不是吞掉它.
       if (cst_is_close(p->tok))
         return node;
       cst_add_child(ctx, branch, cst_parse_item(ctx, p));
@@ -2332,6 +2558,9 @@ static LibcpCstNode* cst_parse_pp_if(LibcpContext* ctx, LibcpCstParser* p) {
 // One item at statement level: a directive line (conditionals recurse),
 // or a statement / declaration with the raw fallback. Every path
 // consumes at least one token when one is available.
+//
+// 语句层的一个 item: 一条指令行 (条件指令递归), 或者带 raw 回退的语句 /
+// 声明. 只要有 token 可用, 每条路径都至少消费一个 token.
 static LibcpCstNode* cst_parse_item(LibcpContext* ctx, LibcpCstParser* p) {
   if (++p->cst->depth > MAX_CST_DEPTH) {
     p->cst->depth--;
@@ -2372,8 +2601,14 @@ static LibcpCstNode* cst_parse_item1(LibcpContext* ctx, LibcpCstParser* p) {
 // A failed item is rebuilt from its first token with the raw fallback, so
 // one malformed construct does not cost the rest of the block. A missing
 // '}' turns the block itself into UNPARSED; parsing continues at EOF.
+//
+// 复合语句: "{" (声明 | 语句)* "}".
+//
+// 失败的 item 会从它的第一个 token 起用 raw 回退重建, 因此一个畸形构造不会
+// 拖累块里其余内容. 缺少 '}' 时块本身变成 UNPARSED; 解析在 EOF 处结束.
 static void cst_parse_compound(LibcpContext* ctx, LibcpCstParser* p, LibcpCstNode* block) {
   cst_add_leaf(ctx, block, p->tok);  // '{'
+  // 左花括号
   p->tok = p->tok->next;
 
   while (p->ok && p->tok && p->tok->kind != TK_EOF && !libcp_equal(p->tok, "}")) {
@@ -2398,6 +2633,9 @@ static void cst_parse_compound(LibcpContext* ctx, LibcpCstParser* p, LibcpCstNod
 
 // Split the top level into items. The EOF token is left for cst_parse so
 // that it stays the tree's last leaf whatever the items do.
+//
+// 把顶层切分成 item. EOF token 留给 cst_parse 处理, 这样无论 item 怎么解析,
+// 它都保持为树的最后一个叶子.
 static void cst_parse_items(LibcpContext* ctx, LibcpCstNode* parent, LibcpCstParser* p) {
   while (p->ok && p->tok && p->tok->kind != TK_EOF) {
     if (cst_is_close(p->tok)) {
@@ -2414,12 +2652,18 @@ static void cst_parse_items(LibcpContext* ctx, LibcpCstNode* parent, LibcpCstPar
 
 // Build the CST for libcp_tokenize_file_impl()'s output. The EOF marker has its own
 // kind because it carries the file's trailing trivia and no spelling.
+//
+// 为 libcp_tokenize_file_impl() 的输出构建 CST. EOF 标记有独立的 kind,
+// 因为它携带文件末尾的 trivia 且没有拼写.
 LibcpCstNode* libcp_cst_parse(LibcpContext* ctx, LibcpToken* tok) {
   ENTER_RET(ctx, NULL);
   LibcpCstContext cst = {};
 
   // Seeded names first: they participate in every declaration decision
   // alongside the file-local scan (PLAN-l5 W2).
+  //
+  // 先放入种子名字: 它们与文件内扫描结果一起参与每一个声明判定
+  // (PLAN-l5 W2).
   for (int i = 0; i < ctx->cst_seeds_len; i++)
     libcp_strarray_push(ctx, &cst.typedefs, libcp_arena_strdup(ctx, ctx->cst_seeds[i]));
   cst_collect_typedefs(ctx, &cst, tok);
@@ -2434,6 +2678,7 @@ LibcpCstNode* libcp_cst_parse(LibcpContext* ctx, LibcpToken* tok) {
   return root;
 }
 
+// 叶子按先 trivia 后拼写的顺序写出原始字节; 内部节点递归下降.
 static void cst_reconstruct_node(LibcpCstNode* node, FILE* out) {
   if (node->tok) {
     fwrite(node->tok->trivia, 1, node->tok->trivia_len, out);
@@ -2448,12 +2693,16 @@ static void cst_reconstruct_node(LibcpCstNode* node, FILE* out) {
 // Write the raw bytes of the tree's leaves in order (trivia then spelling
 // for every token). On libcp_tokenize_file_impl()'s direct output this equals the
 // input file's raw text.
+//
+// 按顺序写出树中各叶子的原始字节 (每个 token 先 trivia 后拼写). 对
+// libcp_tokenize_file_impl() 的直接输出, 这等于输入文件的原始文本.
 void libcp_cst_reconstruct(LibcpContext* ctx, LibcpCstNode* root, FILE* out) {
   ENTER_VOID(ctx);
   cst_reconstruct_node(root, out);
   LEAVE(ctx);
 }
 
+// CST kind 到 dump 文本名的映射; 必须覆盖所有 kind, 否则落到 unreachable().
 static char* cst_kind_name(LibcpContext* ctx, LibcpCstKind kind) {
   switch (kind) {
     case CST_TRANSLATION_UNIT: return "TU";
@@ -2522,6 +2771,10 @@ static char* cst_kind_name(LibcpContext* ctx, LibcpCstKind kind) {
 // dump line never ends in whitespace. The spelling never contains a raw
 // newline (continuations are part of it and are escaped as \\ + \n), so
 // one leaf is one line.
+//
+// 与 token dump (main.c) 相同的转义: \n, \t, \r 与 \\ 用 C 风格, 其余不可见
+// 字符用 \xHH, 包括空格, 这样 dump 行不会以空白结尾. 拼写里从不包含裸换行
+// (续行属于拼写, 会转义成 \\ + \n), 因此一个叶子就是一行.
 static void cst_print_escaped(FILE* out, char* p, int len) {
   for (int i = 0; i < len; i++) {
     unsigned char c = p[i];
@@ -2559,12 +2812,16 @@ static void cst_dump_node(LibcpContext* ctx, LibcpCstNode* node, FILE* out, int 
 // Print the tree shape, two spaces per level. Leaf text is the token's
 // raw spelling (not its trivia); the dump locks the tree, the round-trip
 // locks the bytes.
+//
+// 打印树形, 每层两个空格. 叶子文本是 token 的原始拼写 (不含 trivia); dump
+// 锁定树形, 往返重建锁定字节.
 void libcp_cst_dump(LibcpContext* ctx, LibcpCstNode* root, FILE* out) {
   ENTER_VOID(ctx);
   cst_dump_node(ctx, root, out, 0);
   LEAVE(ctx);
 }
 
+// 递归校验: 叶子必须按 token 链顺序逐一对上, 内部节点不得持有 token.
 static bool cst_verify_node(LibcpCstNode* node, LibcpToken** cur) {
   if (node->tok) {
     if (node->child_count || *cur != node->tok)
@@ -2582,6 +2839,10 @@ static bool cst_verify_node(LibcpCstNode* node, LibcpToken** cur) {
 // I1 / I3: the leaves in order are exactly the tokens of `tok`, each once
 // (pointer equality), and every leaf holds a token while every inner node
 // holds none. Returns the result; the caller reports it.
+//
+// I1 / I3: 按顺序排列的叶子恰好是 `tok` 的各个 token, 每个只出现一次
+// (指针相等), 并且每个叶子持有 token 而每个内部节点不持有. 返回结果,
+// 由调用者报告.
 bool libcp_cst_verify(LibcpContext* ctx, LibcpCstNode* root, LibcpToken* tok) {
   ENTER_RET(ctx, false);
   LibcpToken* cur = tok;

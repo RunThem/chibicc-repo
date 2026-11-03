@@ -1,6 +1,11 @@
+// Unicode 支持: UTF-8 编解码, C11 标识符字符判定, 以及在等宽字体下的
+// 显示宽度. 词法分析用它识别非 ASCII 标识符; 诊断用它把源码位置换算
+// 成列号 (见 tokenize.c).
 #include "libcp.h"
 
 // Encode a given character in UTF-8.
+//
+// 把给定字符编码为 UTF-8, 返回写入 `buf` 的字节数 (1 到 4).
 int libcp_encode_utf8(char* buf, uint32_t c) {
   if (c <= 0x7F) {
     buf[0] = c;
@@ -34,6 +39,10 @@ int libcp_encode_utf8(char* buf, uint32_t c) {
 // encoded in one to four bytes. One byte UTF-8 code points are
 // identical to ASCII. Non-ASCII characters are encoded using more
 // than one byte.
+//
+// 从源文件中读出一个 UTF-8 编码的 Unicode 码点; 这里假定源文件总是
+// UTF-8. UTF-8 是变长编码, 一个码点占 1 到 4 个字节, 其中单字节的
+// 码点与 ASCII 相同, 非 ASCII 字符用多于一个字节表示.
 uint32_t libcp_decode_utf8(LibcpContext* ctx, char** new_pos, char* p) {
   if ((unsigned char)*p < 128) {
     *new_pos = p + 1;
@@ -47,6 +56,9 @@ uint32_t libcp_decode_utf8(LibcpContext* ctx, char** new_pos, char* p) {
   if ((unsigned char)*p >= 0b11110000) {
     // Valid four-byte leads stop at F4; F5..FF cannot encode a code
     // point and would otherwise alias a valid range.
+    //
+    // 合法的四字节首字节止于 F4; F5..FF 无法编码任何码点, 不拦住就会
+    // 与合法范围发生混叠.
     if ((unsigned char)*p > 0b11110100)
       libcp_error_at(ctx, start, "invalid UTF-8 sequence");
     len = 4;
@@ -70,6 +82,10 @@ uint32_t libcp_decode_utf8(LibcpContext* ctx, char** new_pos, char* p) {
   // Reject an overlong form (the shortest form for each length starts at
   // 0x80, 0x800 and 0x10000), a UTF-16 surrogate, and a code point above
   // the Unicode maximum.
+  //
+  // 拒绝过长编码 (各长度最短形式分别从 0x80, 0x800, 0x10000 起),
+  // UTF-16 代理区码点, 以及超过 Unicode 上限的码点. min 按字节长度
+  // 索引, 下标 0 与 1 只是占位.
   static uint32_t min[] = {0, 0, 0x80, 0x800, 0x10000};
   if (c < min[len] || (c >= 0xD800 && c <= 0xDFFF) || c > 0x10FFFF)
     libcp_error_at(ctx, start, "invalid UTF-8 sequence");
@@ -78,6 +94,7 @@ uint32_t libcp_decode_utf8(LibcpContext* ctx, char** new_pos, char* p) {
   return c;
 }
 
+// 在成对排列的 [start, end] 区间表中查找 c; 表以 -1 结尾.
 static bool in_range(uint32_t* range, uint32_t c) {
   for (int i = 0; range[i] != -1; i += 2)
     if (range[i] <= c && c <= range[i + 1])
@@ -95,6 +112,15 @@ static bool in_range(uint32_t* range, uint32_t c) {
 // For example, ¾ (U+00BE) is a valid identifier because characters in
 // 0x00BE-0x00C0 are allowed, while neither ⟘ (U+27D8) nor '　'
 // (U+3000, full-width space) are allowed because they are out of range.
+//
+// C11 不仅允许 ASCII, 也允许某些 Unicode 区间内的多字节字符出现在
+// 标识符中.
+//
+// 若给定字符可以作为标识符的首字符, 本函数返回 true.
+//
+// 例如 ¾ (U+00BE) 是合法首字符, 因为 0x00BE-0x00C0 在允许范围内;
+// 而 ⟘ (U+27D8) 与 U+3000 (全角空格) 都不允许, 因为它们不在任何
+// 区间内.
 bool libcp_is_ident1(uint32_t c) {
   static uint32_t range[] = {
       '_',     '_',     'a',     'z',     'A',     'Z',     '$',     '$',     0x00A8,  0x00A8,
@@ -115,6 +141,9 @@ bool libcp_is_ident1(uint32_t c) {
 
 // Returns true if a given character is acceptable as a non-first
 // character of an identifier.
+//
+// 若给定字符可以作为标识符的非首字符, 返回 true: 在首字符集合之外,
+// 再并上数字以及组合记号等附加区间.
 bool libcp_is_ident2(uint32_t c) {
   static uint32_t range[] = {
       '0',
@@ -139,6 +168,10 @@ bool libcp_is_ident2(uint32_t c) {
 // character in a fixed-width font.
 //
 // Based on https://www.cl.cam.ac.uk/~mgk25/ucs/wcwidth.c
+//
+// 返回在等宽字体下显示给定字符所需的列数.
+//
+// 基于 https://www.cl.cam.ac.uk/~mgk25/ucs/wcwidth.c
 static int char_width(uint32_t c) {
   static uint32_t range1[] = {
       0x0000,  0x001F,  0x007f,  0x00a0,  0x0300,  0x036F,  0x0483,  0x0486,  0x0488,  0x0489,
@@ -172,6 +205,8 @@ static int char_width(uint32_t c) {
       0x1D242, 0x1D244, 0xE0001, 0xE0001, 0xE0020, 0xE007F, 0xE0100, 0xE01EF, -1,
   };
 
+  // range1 中的字符按 0 列处理 (组合记号, 控制字符与零宽字符);
+  // range2 按 2 列处理 (CJK, 韩文与全角形式); 其余按 1 列.
   if (in_range(range1, c))
     return 0;
 
@@ -188,6 +223,9 @@ static int char_width(uint32_t c) {
 
 // Returns the number of columns needed to display a given
 // string in a fixed-width font.
+//
+// 返回在等宽字体下显示给定字符串所需的列数; 诊断用它把字节偏移换算
+// 成列号.
 int libcp_display_width(LibcpContext* ctx, char* p, int len) {
   char* start = p;
   int w       = 0;
