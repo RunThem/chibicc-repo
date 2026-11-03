@@ -9,7 +9,7 @@
 #define LIBCP_DIAGNOSTIC_H
 
 typedef enum libcp_diagnostic_severity {
-  LIBCP_DIAG_ERROR = 0,
+  LIBCP_DIAG_ERROR   = 0,
   LIBCP_DIAG_WARNING = 1,
 } LibcpDiagnosticSeverity;
 
@@ -37,15 +37,15 @@ typedef enum libcp_diagnostic_severity {
 struct libcp_macro_prov;
 struct libcp_token;
 typedef struct libcp_diagnostic {
-  const char *filename;
+  const char* filename;
   int line;
   int column;
   LibcpDiagnosticSeverity severity;
-  const char *message;
-  const struct libcp_token *tok;
-  const struct libcp_macro_prov *prov;
+  const char* message;
+  const struct libcp_token* tok;
+  const struct libcp_macro_prov* prov;
 } LibcpDiagnostic;
 
-typedef void (*LibcpDiagnosticFn)(void *user, const LibcpDiagnostic *);
+typedef void (*LibcpDiagnosticFn)(void* user, const LibcpDiagnostic*);
 
 #endif

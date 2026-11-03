@@ -40,13 +40,13 @@
 #define GP_MAX 6
 #define FP_MAX 8
 
-static FILE *output_file;
+static FILE* output_file;
 static int depth;
-static char *argreg8[] = {"%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"};
-static char *argreg16[] = {"%di", "%si", "%dx", "%cx", "%r8w", "%r9w"};
-static char *argreg32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
-static char *argreg64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
-static LibcpObj *current_fn;
+static char* argreg8[]  = {"%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"};
+static char* argreg16[] = {"%di", "%si", "%dx", "%cx", "%r8w", "%r9w"};
+static char* argreg32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
+static char* argreg64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+static LibcpObj* current_fn;
 
 // Codegen-owned state that used to live on the public LibcpNode/LibcpType/LibcpObj
 // structs (PLAN L1). The library-facing shape keeps only what the
@@ -56,39 +56,39 @@ static LibcpObj *current_fn;
 // allocation of this consumer.
 typedef struct CgNode CgNode;
 struct CgNode {
-  LibcpNode *node;
-  CgNode *next;
-  char *brk_label;
-  char *cont_label;
-  char *unique_label;
-  LibcpObj *ret_buffer;
-  LibcpNode *case_next;
-  LibcpNode *default_case;
+  LibcpNode* node;
+  CgNode* next;
+  char* brk_label;
+  char* cont_label;
+  char* unique_label;
+  LibcpObj* ret_buffer;
+  LibcpNode* case_next;
+  LibcpNode* default_case;
   bool pass_by_stack;
   bool is_lowered;
 };
 
 typedef struct CgType CgType;
 struct CgType {
-  LibcpType *ty;
-  CgType *next;
-  LibcpObj *vla_size;
+  LibcpType* ty;
+  CgType* next;
+  LibcpObj* vla_size;
 };
 
 typedef struct CgObj CgObj;
 struct CgObj {
-  LibcpObj *obj;
-  CgObj *next;
+  LibcpObj* obj;
+  CgObj* next;
   int offset;
   int stack_size;
 };
 
 #define CG_BUCKETS 4096
-static CgNode *cg_nodes[CG_BUCKETS];
-static CgType *cg_types[CG_BUCKETS];
-static CgObj *cg_objs[CG_BUCKETS];
+static CgNode* cg_nodes[CG_BUCKETS];
+static CgType* cg_types[CG_BUCKETS];
+static CgObj* cg_objs[CG_BUCKETS];
 
-static unsigned cg_hash(void *p) {
+static unsigned cg_hash(void* p) {
   uintptr_t x = (uintptr_t)p;
   x ^= x >> 17;
   x *= (uintptr_t)0xed5ad4bbU;
@@ -96,50 +96,50 @@ static unsigned cg_hash(void *p) {
   return x % CG_BUCKETS;
 }
 
-static CgNode *cg(LibcpNode *node) {
+static CgNode* cg(LibcpNode* node) {
   unsigned h = cg_hash(node);
-  for (CgNode *p = cg_nodes[h]; p; p = p->next)
+  for (CgNode* p = cg_nodes[h]; p; p = p->next)
     if (p->node == node)
       return p;
 
-  CgNode *p = calloc(1, sizeof(CgNode));
-  p->node = node;
-  p->next = cg_nodes[h];
+  CgNode* p   = calloc(1, sizeof(CgNode));
+  p->node     = node;
+  p->next     = cg_nodes[h];
   cg_nodes[h] = p;
   return p;
 }
 
-static CgType *cg_type(LibcpType *ty) {
+static CgType* cg_type(LibcpType* ty) {
   unsigned h = cg_hash(ty);
-  for (CgType *p = cg_types[h]; p; p = p->next)
+  for (CgType* p = cg_types[h]; p; p = p->next)
     if (p->ty == ty)
       return p;
 
-  CgType *p = calloc(1, sizeof(CgType));
-  p->ty = ty;
-  p->next = cg_types[h];
+  CgType* p   = calloc(1, sizeof(CgType));
+  p->ty       = ty;
+  p->next     = cg_types[h];
   cg_types[h] = p;
   return p;
 }
 
-static CgObj *cg_obj(LibcpObj *obj) {
+static CgObj* cg_obj(LibcpObj* obj) {
   unsigned h = cg_hash(obj);
-  for (CgObj *p = cg_objs[h]; p; p = p->next)
+  for (CgObj* p = cg_objs[h]; p; p = p->next)
     if (p->obj == obj)
       return p;
 
-  CgObj *p = calloc(1, sizeof(CgObj));
-  p->obj = obj;
-  p->next = cg_objs[h];
+  CgObj* p   = calloc(1, sizeof(CgObj));
+  p->obj     = obj;
+  p->next    = cg_objs[h];
   cg_objs[h] = p;
   return p;
 }
 
-static int obj_offset(LibcpObj *obj) {
+static int obj_offset(LibcpObj* obj) {
   return cg_obj(obj)->offset;
 }
 
-static int obj_stack_size(LibcpObj *obj) {
+static int obj_stack_size(LibcpObj* obj) {
   return cg_obj(obj)->stack_size;
 }
 
@@ -155,17 +155,17 @@ static unsigned long bitfield_mask(int width) {
 // against them here, where the shaping pass used to bind the label
 // into the node. A switch saves the break label only - it is a break
 // target but not a continue target.
-static char *cur_brk_label;
-static char *cur_cont_label;
+static char* cur_brk_label;
+static char* cur_cont_label;
 
-static void gen_expr(LibcpContext *ctx, LibcpNode *node);
-static void gen_stmt(LibcpContext *ctx, LibcpNode *node);
-static LibcpNode *new_add(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok);
-static LibcpNode *new_sub(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok);
-static LibcpNode *lvar_init_comma(LibcpContext *ctx, LibcpObj *var, LibcpInitTree *init, LibcpToken *tok);
+static void gen_expr(LibcpContext* ctx, LibcpNode* node);
+static void gen_stmt(LibcpContext* ctx, LibcpNode* node);
+static LibcpNode* new_add(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, LibcpToken* tok);
+static LibcpNode* new_sub(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, LibcpToken* tok);
+static LibcpNode*
+    lvar_init_comma(LibcpContext* ctx, LibcpObj* var, LibcpInitTree* init, LibcpToken* tok);
 
-__attribute__((format(printf, 1, 2)))
-static void println(char *fmt, ...) {
+__attribute__((format(printf, 1, 2))) static void println(char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   vfprintf(output_file, fmt, ap);
@@ -183,7 +183,7 @@ static void push(void) {
   depth++;
 }
 
-static void pop(char *arg) {
+static void pop(char* arg) {
   println("  pop %s", arg);
   depth--;
 }
@@ -203,190 +203,180 @@ static void popf(int reg) {
 // Round up `n` to the nearest multiple of `align` is in strings.c now:
 // sema needs it too, and codegen must not be the library's dependency.
 
-static char *reg_dx(LibcpContext *ctx, int sz) {
+static char* reg_dx(LibcpContext* ctx, int sz) {
   switch (sz) {
-  case 1: return "%dl";
-  case 2: return "%dx";
-  case 4: return "%edx";
-  case 8: return "%rdx";
+    case 1: return "%dl";
+    case 2: return "%dx";
+    case 4: return "%edx";
+    case 8: return "%rdx";
   }
   unreachable();
 }
 
-static char *reg_ax(LibcpContext *ctx, int sz) {
+static char* reg_ax(LibcpContext* ctx, int sz) {
   switch (sz) {
-  case 1: return "%al";
-  case 2: return "%ax";
-  case 4: return "%eax";
-  case 8: return "%rax";
+    case 1: return "%al";
+    case 2: return "%ax";
+    case 4: return "%eax";
+    case 8: return "%rax";
   }
   unreachable();
 }
 
 // Compute the absolute address of a given node.
 // It's an error if a given node does not reside in memory.
-static void gen_addr(LibcpContext *ctx, LibcpNode *node) {
+static void gen_addr(LibcpContext* ctx, LibcpNode* node) {
   switch (node->kind) {
-  case ND_STRING:
-    // The literal's anonymous global (PLAN A9.1: the node keeps its
-    // kind), a global object like any other - the ND_VAR handling
-    // below covers it through the same `var` field.
-  case ND_VAR:
-    // Variable-length array, which is always local.
-    if (node->var->ty->kind == TY_VLA) {
-      println("  mov %d(%%rbp), %%rax", obj_offset(node->var));
-      return;
-    }
-
-    // Local variable
-    if (node->var->is_local) {
-      println("  lea %d(%%rbp), %%rax", obj_offset(node->var));
-      return;
-    }
-
-    if (opt_fpic) {
-      // Thread-local variable
-      if (node->var->is_tls) {
-        println("  data16 lea %s@tlsgd(%%rip), %%rdi", node->var->name);
-        println("  .value 0x6666");
-        println("  rex64");
-        println("  call __tls_get_addr@PLT");
+    case ND_STRING:
+      // The literal's anonymous global (PLAN A9.1: the node keeps its
+      // kind), a global object like any other - the ND_VAR handling
+      // below covers it through the same `var` field.
+    case ND_VAR:
+      // Variable-length array, which is always local.
+      if (node->var->ty->kind == TY_VLA) {
+        println("  mov %d(%%rbp), %%rax", obj_offset(node->var));
         return;
       }
 
-      // Function or global variable
-      println("  mov %s@GOTPCREL(%%rip), %%rax", node->var->name);
-      return;
-    }
+      // Local variable
+      if (node->var->is_local) {
+        println("  lea %d(%%rbp), %%rax", obj_offset(node->var));
+        return;
+      }
 
-    // Thread-local variable
-    if (node->var->is_tls) {
-      println("  mov %%fs:0, %%rax");
-      println("  add $%s@tpoff, %%rax", node->var->name);
-      return;
-    }
+      if (opt_fpic) {
+        // Thread-local variable
+        if (node->var->is_tls) {
+          println("  data16 lea %s@tlsgd(%%rip), %%rdi", node->var->name);
+          println("  .value 0x6666");
+          println("  rex64");
+          println("  call __tls_get_addr@PLT");
+          return;
+        }
 
-    // Here, we generate an absolute address of a function or a global
-    // variable. Even though they exist at a certain address at runtime,
-    // their addresses are not known at link-time for the following
-    // two reasons.
-    //
-    //  - Address randomization: Executables are loaded to memory as a
-    //    whole but it is not known what address they are loaded to.
-    //    Therefore, at link-time, relative address in the same
-    //    exectuable (i.e. the distance between two functions in the
-    //    same executable) is known, but the absolute address is not
-    //    known.
-    //
-    //  - Dynamic linking: Dynamic shared objects (DSOs) or .so files
-    //    are loaded to memory alongside an executable at runtime and
-    //    linked by the runtime loader in memory. We know nothing
-    //    about addresses of global stuff that may be defined by DSOs
-    //    until the runtime relocation is complete.
-    //
-    // In order to deal with the former case, we use RIP-relative
-    // addressing, denoted by `(%rip)`. For the latter, we obtain an
-    // address of a stuff that may be in a shared object file from the
-    // Global Offset Table using `@GOTPCREL(%rip)` notation.
-
-    // Function
-    if (node->ty->kind == TY_FUNC) {
-      if (node->var->is_definition)
-        println("  lea %s(%%rip), %%rax", node->var->name);
-      else
+        // Function or global variable
         println("  mov %s@GOTPCREL(%%rip), %%rax", node->var->name);
-      return;
-    }
+        return;
+      }
 
-    // Global variable
-    println("  lea %s(%%rip), %%rax", node->var->name);
-    return;
-  case ND_DEREF:
-    gen_expr(ctx, node->lhs);
-    return;
-  case ND_COMMA:
-    gen_expr(ctx, node->lhs);
-    gen_addr(ctx, node->rhs);
-    return;
-  case ND_SUBSCRIPT: {
-    // `x[y]` keeps its faithful spelling (PLAN B1.1a): the scaled,
-    // converted sum the shaping pass used to build ahead of time is
-    // built here, at the point the address is needed, and emitted
-    // right away. new_add types it and applies the element-size
-    // scaling exactly as the pass did, so the instructions are the
-    // ones the old `*(x+y)` form produced. It carries the lowered
-    // mark, so the emitter's own additive lowering (PLAN B2) leaves
-    // it alone.
-    LibcpNode *add = new_add(ctx, node->lhs, node->rhs, node->tok);
-    gen_expr(ctx, add);
-    return;
-  }
-  case ND_MEMBER:
-    // A member access still carrying its `->` marker (PLAN B1.1b) goes
-    // through the pointer value its operand is, so the address it
-    // contributes is that value itself; the plain `.` form keeps
-    // taking the operand's address. The member binding and the
-    // member's type were settled in sema.
-    if (node->arrow_tok)
+      // Thread-local variable
+      if (node->var->is_tls) {
+        println("  mov %%fs:0, %%rax");
+        println("  add $%s@tpoff, %%rax", node->var->name);
+        return;
+      }
+
+      // Here, we generate an absolute address of a function or a global
+      // variable. Even though they exist at a certain address at runtime,
+      // their addresses are not known at link-time for the following
+      // two reasons.
+      //
+      //  - Address randomization: Executables are loaded to memory as a
+      //    whole but it is not known what address they are loaded to.
+      //    Therefore, at link-time, relative address in the same
+      //    exectuable (i.e. the distance between two functions in the
+      //    same executable) is known, but the absolute address is not
+      //    known.
+      //
+      //  - Dynamic linking: Dynamic shared objects (DSOs) or .so files
+      //    are loaded to memory alongside an executable at runtime and
+      //    linked by the runtime loader in memory. We know nothing
+      //    about addresses of global stuff that may be defined by DSOs
+      //    until the runtime relocation is complete.
+      //
+      // In order to deal with the former case, we use RIP-relative
+      // addressing, denoted by `(%rip)`. For the latter, we obtain an
+      // address of a stuff that may be in a shared object file from the
+      // Global Offset Table using `@GOTPCREL(%rip)` notation.
+
+      // Function
+      if (node->ty->kind == TY_FUNC) {
+        if (node->var->is_definition)
+          println("  lea %s(%%rip), %%rax", node->var->name);
+        else
+          println("  mov %s@GOTPCREL(%%rip), %%rax", node->var->name);
+        return;
+      }
+
+      // Global variable
+      println("  lea %s(%%rip), %%rax", node->var->name);
+      return;
+    case ND_DEREF: gen_expr(ctx, node->lhs); return;
+    case ND_COMMA:
       gen_expr(ctx, node->lhs);
-    else
-      gen_addr(ctx, node->lhs);
-    println("  add $%d, %%rax", node->member->offset);
-    return;
-  case ND_FUNCALL:
-    if (cg(node)->ret_buffer) {
-      gen_expr(ctx, node);
+      gen_addr(ctx, node->rhs);
+      return;
+    case ND_SUBSCRIPT: {
+      // `x[y]` keeps its faithful spelling (PLAN B1.1a): the scaled,
+      // converted sum the shaping pass used to build ahead of time is
+      // built here, at the point the address is needed, and emitted
+      // right away. new_add types it and applies the element-size
+      // scaling exactly as the pass did, so the instructions are the
+      // ones the old `*(x+y)` form produced. It carries the lowered
+      // mark, so the emitter's own additive lowering (PLAN B2) leaves
+      // it alone.
+      LibcpNode* add = new_add(ctx, node->lhs, node->rhs, node->tok);
+      gen_expr(ctx, add);
       return;
     }
-    break;
-  case ND_GENERIC:
-    // The selection's conclusion, an lvalue if the selected result
-    // is one (PLAN A9.1: the node keeps its kind and the field
-    // carries the result).
-    gen_addr(ctx, node->generic_sel);
-    return;
-  case ND_ASSIGN:
-  case ND_COND:
-    if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION) {
-      gen_expr(ctx, node);
+    case ND_MEMBER:
+      // A member access still carrying its `->` marker (PLAN B1.1b) goes
+      // through the pointer value its operand is, so the address it
+      // contributes is that value itself; the plain `.` form keeps
+      // taking the operand's address. The member binding and the
+      // member's type were settled in sema.
+      if (node->arrow_tok)
+        gen_expr(ctx, node->lhs);
+      else
+        gen_addr(ctx, node->lhs);
+      println("  add $%d, %%rax", node->member->offset);
       return;
-    }
-    break;
-  case ND_VLA_PTR:
-    println("  lea %d(%%rbp), %%rax", obj_offset(node->var));
-    return;
+    case ND_FUNCALL:
+      if (cg(node)->ret_buffer) {
+        gen_expr(ctx, node);
+        return;
+      }
+      break;
+    case ND_GENERIC:
+      // The selection's conclusion, an lvalue if the selected result
+      // is one (PLAN A9.1: the node keeps its kind and the field
+      // carries the result).
+      gen_addr(ctx, node->generic_sel);
+      return;
+    case ND_ASSIGN:
+    case ND_COND:
+      if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION) {
+        gen_expr(ctx, node);
+        return;
+      }
+      break;
+    case ND_VLA_PTR: println("  lea %d(%%rbp), %%rax", obj_offset(node->var)); return;
   }
 
   libcp_error_tok(ctx, node->tok, "not an lvalue");
 }
 
 // Load a value from where %rax is pointing to.
-static void load(LibcpType *ty) {
+static void load(LibcpType* ty) {
   switch (ty->kind) {
-  case TY_ARRAY:
-  case TY_STRUCT:
-  case TY_UNION:
-  case TY_FUNC:
-  case TY_VLA:
-    // If it is an array, do not attempt to load a value to the
-    // register because in general we can't load an entire array to a
-    // register. As a result, the result of an evaluation of an array
-    // becomes not the array itself but the address of the array.
-    // This is where "array is automatically converted to a pointer to
-    // the first element of the array in C" occurs.
-    return;
-  case TY_FLOAT:
-    println("  movss (%%rax), %%xmm0");
-    return;
-  case TY_DOUBLE:
-    println("  movsd (%%rax), %%xmm0");
-    return;
-  case TY_LDOUBLE:
-    println("  fldt (%%rax)");
-    return;
+    case TY_ARRAY:
+    case TY_STRUCT:
+    case TY_UNION:
+    case TY_FUNC:
+    case TY_VLA:
+      // If it is an array, do not attempt to load a value to the
+      // register because in general we can't load an entire array to a
+      // register. As a result, the result of an evaluation of an array
+      // becomes not the array itself but the address of the array.
+      // This is where "array is automatically converted to a pointer to
+      // the first element of the array in C" occurs.
+      return;
+    case TY_FLOAT: println("  movss (%%rax), %%xmm0"); return;
+    case TY_DOUBLE: println("  movsd (%%rax), %%xmm0"); return;
+    case TY_LDOUBLE: println("  fldt (%%rax)"); return;
   }
 
-  char *insn = ty->is_unsigned ? "movz" : "movs";
+  char* insn = ty->is_unsigned ? "movz" : "movs";
 
   // When we load a char or a short value to a register, we always
   // extend them to the size of int, so we can assume the lower half of
@@ -404,26 +394,20 @@ static void load(LibcpType *ty) {
 }
 
 // Store %rax to an address that the stack top is pointing to.
-static void store(LibcpType *ty) {
+static void store(LibcpType* ty) {
   pop("%rdi");
 
   switch (ty->kind) {
-  case TY_STRUCT:
-  case TY_UNION:
-    for (int i = 0; i < ty->size; i++) {
-      println("  mov %d(%%rax), %%r8b", i);
-      println("  mov %%r8b, %d(%%rdi)", i);
-    }
-    return;
-  case TY_FLOAT:
-    println("  movss %%xmm0, (%%rdi)");
-    return;
-  case TY_DOUBLE:
-    println("  movsd %%xmm0, (%%rdi)");
-    return;
-  case TY_LDOUBLE:
-    println("  fstpt (%%rdi)");
-    return;
+    case TY_STRUCT:
+    case TY_UNION:
+      for (int i = 0; i < ty->size; i++) {
+        println("  mov %d(%%rax), %%r8b", i);
+        println("  mov %%r8b, %d(%%rdi)", i);
+      }
+      return;
+    case TY_FLOAT: println("  movss %%xmm0, (%%rdi)"); return;
+    case TY_DOUBLE: println("  movsd %%xmm0, (%%rdi)"); return;
+    case TY_LDOUBLE: println("  fstpt (%%rdi)"); return;
   }
 
   if (ty->size == 1)
@@ -436,21 +420,21 @@ static void store(LibcpType *ty) {
     println("  mov %%rax, (%%rdi)");
 }
 
-static void cmp_zero(LibcpType *ty) {
+static void cmp_zero(LibcpType* ty) {
   switch (ty->kind) {
-  case TY_FLOAT:
-    println("  xorps %%xmm1, %%xmm1");
-    println("  ucomiss %%xmm1, %%xmm0");
-    return;
-  case TY_DOUBLE:
-    println("  xorpd %%xmm1, %%xmm1");
-    println("  ucomisd %%xmm1, %%xmm0");
-    return;
-  case TY_LDOUBLE:
-    println("  fldz");
-    println("  fucomip");
-    println("  fstp %%st(0)");
-    return;
+    case TY_FLOAT:
+      println("  xorps %%xmm1, %%xmm1");
+      println("  ucomiss %%xmm1, %%xmm0");
+      return;
+    case TY_DOUBLE:
+      println("  xorpd %%xmm1, %%xmm1");
+      println("  ucomisd %%xmm1, %%xmm0");
+      return;
+    case TY_LDOUBLE:
+      println("  fldz");
+      println("  fucomip");
+      println("  fstp %%st(0)");
+      return;
   }
 
   if (libcp_is_integer(ty) && ty->size <= 4)
@@ -459,31 +443,36 @@ static void cmp_zero(LibcpType *ty) {
     println("  cmp $0, %%rax");
 }
 
-enum { I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, F80 };
+enum {
+  I8,
+  I16,
+  I32,
+  I64,
+  U8,
+  U16,
+  U32,
+  U64,
+  F32,
+  F64,
+  F80
+};
 
-static int getTypeId(LibcpType *ty) {
+static int getTypeId(LibcpType* ty) {
   switch (ty->kind) {
-  case TY_CHAR:
-    return ty->is_unsigned ? U8 : I8;
-  case TY_SHORT:
-    return ty->is_unsigned ? U16 : I16;
-  case TY_INT:
-    return ty->is_unsigned ? U32 : I32;
-  case TY_LONG:
-    return ty->is_unsigned ? U64 : I64;
-  case TY_FLOAT:
-    return F32;
-  case TY_DOUBLE:
-    return F64;
-  case TY_LDOUBLE:
-    return F80;
+    case TY_CHAR: return ty->is_unsigned ? U8 : I8;
+    case TY_SHORT: return ty->is_unsigned ? U16 : I16;
+    case TY_INT: return ty->is_unsigned ? U32 : I32;
+    case TY_LONG: return ty->is_unsigned ? U64 : I64;
+    case TY_FLOAT: return F32;
+    case TY_DOUBLE: return F64;
+    case TY_LDOUBLE: return F80;
   }
   return U64;
 }
 
 // The table for type casts
-static char i32i8[] = "movsbl %al, %eax";
-static char i32u8[] = "movzbl %al, %eax";
+static char i32i8[]  = "movsbl %al, %eax";
+static char i32u8[]  = "movzbl %al, %eax";
 static char i32i16[] = "movswl %ax, %eax";
 static char i32u16[] = "movzwl %ax, %eax";
 static char i32f32[] = "cvtsi2ssl %eax, %xmm0";
@@ -501,16 +490,14 @@ static char i64f64[] = "cvtsi2sdq %rax, %xmm0";
 static char i64f80[] = "movq %rax, -8(%rsp); fildll -8(%rsp)";
 
 static char u64f32[] = "cvtsi2ssq %rax, %xmm0";
-static char u64f64[] =
-  "test %rax,%rax; js 1f; pxor %xmm0,%xmm0; cvtsi2sd %rax,%xmm0; jmp 2f; "
-  "1: mov %rax,%rdi; and $1,%eax; pxor %xmm0,%xmm0; shr %rdi; "
-  "or %rax,%rdi; cvtsi2sd %rdi,%xmm0; addsd %xmm0,%xmm0; 2:";
-static char u64f80[] =
-  "mov %rax, -8(%rsp); fildq -8(%rsp); test %rax, %rax; jns 1f;"
-  "mov $1602224128, %eax; mov %eax, -4(%rsp); fadds -4(%rsp); 1:";
+static char u64f64[] = "test %rax,%rax; js 1f; pxor %xmm0,%xmm0; cvtsi2sd %rax,%xmm0; jmp 2f; "
+                       "1: mov %rax,%rdi; and $1,%eax; pxor %xmm0,%xmm0; shr %rdi; "
+                       "or %rax,%rdi; cvtsi2sd %rdi,%xmm0; addsd %xmm0,%xmm0; 2:";
+static char u64f80[] = "mov %rax, -8(%rsp); fildq -8(%rsp); test %rax, %rax; jns 1f;"
+                       "mov $1602224128, %eax; mov %eax, -4(%rsp); fadds -4(%rsp); 1:";
 
-static char f32i8[] = "cvttss2sil %xmm0, %eax; movsbl %al, %eax";
-static char f32u8[] = "cvttss2sil %xmm0, %eax; movzbl %al, %eax";
+static char f32i8[]  = "cvttss2sil %xmm0, %eax; movsbl %al, %eax";
+static char f32u8[]  = "cvttss2sil %xmm0, %eax; movzbl %al, %eax";
 static char f32i16[] = "cvttss2sil %xmm0, %eax; movswl %ax, %eax";
 static char f32u16[] = "cvttss2sil %xmm0, %eax; movzwl %ax, %eax";
 static char f32i32[] = "cvttss2sil %xmm0, %eax";
@@ -520,8 +507,8 @@ static char f32u64[] = "cvttss2siq %xmm0, %rax";
 static char f32f64[] = "cvtss2sd %xmm0, %xmm0";
 static char f32f80[] = "movss %xmm0, -4(%rsp); flds -4(%rsp)";
 
-static char f64i8[] = "cvttsd2sil %xmm0, %eax; movsbl %al, %eax";
-static char f64u8[] = "cvttsd2sil %xmm0, %eax; movzbl %al, %eax";
+static char f64i8[]  = "cvttsd2sil %xmm0, %eax; movsbl %al, %eax";
+static char f64u8[]  = "cvttsd2sil %xmm0, %eax; movzbl %al, %eax";
 static char f64i16[] = "cvttsd2sil %xmm0, %eax; movswl %ax, %eax";
 static char f64u16[] = "cvttsd2sil %xmm0, %eax; movzwl %ax, %eax";
 static char f64i32[] = "cvttsd2sil %xmm0, %eax";
@@ -531,14 +518,14 @@ static char f64u64[] = "cvttsd2siq %xmm0, %rax";
 static char f64f32[] = "cvtsd2ss %xmm0, %xmm0";
 static char f64f80[] = "movsd %xmm0, -8(%rsp); fldl -8(%rsp)";
 
-#define FROM_F80_1                                           \
-  "fnstcw -10(%rsp); movzwl -10(%rsp), %eax; or $12, %ah; " \
+#define FROM_F80_1                                                                                 \
+  "fnstcw -10(%rsp); movzwl -10(%rsp), %eax; or $12, %ah; "                                        \
   "mov %ax, -12(%rsp); fldcw -12(%rsp); "
 
 #define FROM_F80_2 " -24(%rsp); fldcw -10(%rsp); "
 
-static char f80i8[] = FROM_F80_1 "fistps" FROM_F80_2 "movsbl -24(%rsp), %eax";
-static char f80u8[] = FROM_F80_1 "fistps" FROM_F80_2 "movzbl -24(%rsp), %eax";
+static char f80i8[]  = FROM_F80_1 "fistps" FROM_F80_2 "movsbl -24(%rsp), %eax";
+static char f80u8[]  = FROM_F80_1 "fistps" FROM_F80_2 "movzbl -24(%rsp), %eax";
 static char f80i16[] = FROM_F80_1 "fistps" FROM_F80_2 "movzbl -24(%rsp), %eax";
 static char f80u16[] = FROM_F80_1 "fistpl" FROM_F80_2 "movswl -24(%rsp), %eax";
 static char f80i32[] = FROM_F80_1 "fistpl" FROM_F80_2 "mov -24(%rsp), %eax";
@@ -548,24 +535,24 @@ static char f80u64[] = FROM_F80_1 "fistpq" FROM_F80_2 "mov -24(%rsp), %rax";
 static char f80f32[] = "fstps -8(%rsp); movss -8(%rsp), %xmm0";
 static char f80f64[] = "fstpl -8(%rsp); movsd -8(%rsp), %xmm0";
 
-static char *cast_table[][11] = {
-  // i8   i16     i32     i64     u8     u16     u32     u64     f32     f64     f80
-  {NULL,  NULL,   NULL,   i32i64, i32u8, i32u16, NULL,   i32i64, i32f32, i32f64, i32f80}, // i8
-  {i32i8, NULL,   NULL,   i32i64, i32u8, i32u16, NULL,   i32i64, i32f32, i32f64, i32f80}, // i16
-  {i32i8, i32i16, NULL,   i32i64, i32u8, i32u16, NULL,   i32i64, i32f32, i32f64, i32f80}, // i32
-  {i32i8, i32i16, NULL,   NULL,   i32u8, i32u16, NULL,   NULL,   i64f32, i64f64, i64f80}, // i64
+static char* cast_table[][11] = {
+    // i8   i16     i32     i64     u8     u16     u32     u64     f32     f64     f80
+    {NULL,  NULL,   NULL,   i32i64, i32u8, i32u16, NULL,   i32i64, i32f32, i32f64, i32f80}, // i8
+    {i32i8, NULL,   NULL,   i32i64, i32u8, i32u16, NULL,   i32i64, i32f32, i32f64, i32f80}, // i16
+    {i32i8, i32i16, NULL,   i32i64, i32u8, i32u16, NULL,   i32i64, i32f32, i32f64, i32f80}, // i32
+    {i32i8, i32i16, NULL,   NULL,   i32u8, i32u16, NULL,   NULL,   i64f32, i64f64, i64f80}, // i64
 
-  {i32i8, NULL,   NULL,   i32i64, NULL,  NULL,   NULL,   i32i64, i32f32, i32f64, i32f80}, // u8
-  {i32i8, i32i16, NULL,   i32i64, i32u8, NULL,   NULL,   i32i64, i32f32, i32f64, i32f80}, // u16
-  {i32i8, i32i16, NULL,   u32i64, i32u8, i32u16, NULL,   u32i64, u32f32, u32f64, u32f80}, // u32
-  {i32i8, i32i16, NULL,   NULL,   i32u8, i32u16, NULL,   NULL,   u64f32, u64f64, u64f80}, // u64
+    {i32i8, NULL,   NULL,   i32i64, NULL,  NULL,   NULL,   i32i64, i32f32, i32f64, i32f80}, // u8
+    {i32i8, i32i16, NULL,   i32i64, i32u8, NULL,   NULL,   i32i64, i32f32, i32f64, i32f80}, // u16
+    {i32i8, i32i16, NULL,   u32i64, i32u8, i32u16, NULL,   u32i64, u32f32, u32f64, u32f80}, // u32
+    {i32i8, i32i16, NULL,   NULL,   i32u8, i32u16, NULL,   NULL,   u64f32, u64f64, u64f80}, // u64
 
-  {f32i8, f32i16, f32i32, f32i64, f32u8, f32u16, f32u32, f32u64, NULL,   f32f64, f32f80}, // f32
-  {f64i8, f64i16, f64i32, f64i64, f64u8, f64u16, f64u32, f64u64, f64f32, NULL,   f64f80}, // f64
-  {f80i8, f80i16, f80i32, f80i64, f80u8, f80u16, f80u32, f80u64, f80f32, f80f64, NULL},   // f80
+    {f32i8, f32i16, f32i32, f32i64, f32u8, f32u16, f32u32, f32u64, NULL,   f32f64, f32f80}, // f32
+    {f64i8, f64i16, f64i32, f64i64, f64u8, f64u16, f64u32, f64u64, f64f32, NULL,   f64f80}, // f64
+    {f80i8, f80i16, f80i32, f80i64, f80u8, f80u16, f80u32, f80u64, f80f32, f80f64, NULL  }, // f80
 };
 
-static void cast(LibcpType *from, LibcpType *to) {
+static void cast(LibcpType* from, LibcpType* to) {
   if (to->kind == TY_VOID)
     return;
 
@@ -594,9 +581,9 @@ static void cast(LibcpType *from, LibcpType *to) {
 //
 // This function returns true if `ty` has only floating-point
 // members in its byte range [lo, hi).
-static bool has_flonum(LibcpType *ty, int lo, int hi, int offset) {
+static bool has_flonum(LibcpType* ty, int lo, int hi, int offset) {
   if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
-    for (LibcpMember *mem = ty->members; mem; mem = mem->next)
+    for (LibcpMember* mem = ty->members; mem; mem = mem->next)
       if (!has_flonum(mem->ty, lo, hi, offset + mem->offset))
         return false;
     return true;
@@ -612,15 +599,15 @@ static bool has_flonum(LibcpType *ty, int lo, int hi, int offset) {
   return offset < lo || hi <= offset || ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE;
 }
 
-static bool has_flonum1(LibcpType *ty) {
+static bool has_flonum1(LibcpType* ty) {
   return has_flonum(ty, 0, 8, 0);
 }
 
-static bool has_flonum2(LibcpType *ty) {
+static bool has_flonum2(LibcpType* ty) {
   return has_flonum(ty, 8, 16, 0);
 }
 
-static void push_struct(LibcpType *ty) {
+static void push_struct(LibcpType* ty) {
   int sz = libcp_align_to(ty->size, 8);
   println("  sub $%d, %%rsp", sz);
   depth += sz / 8;
@@ -631,33 +618,28 @@ static void push_struct(LibcpType *ty) {
   }
 }
 
-static void push_args2(LibcpContext *ctx, LibcpNode *args, bool first_pass) {
+static void push_args2(LibcpContext* ctx, LibcpNode* args, bool first_pass) {
   if (!args)
     return;
   push_args2(ctx, args->next, first_pass);
 
-  CgNode *ci = cg(args);
+  CgNode* ci = cg(args);
   if ((first_pass && !ci->pass_by_stack) || (!first_pass && ci->pass_by_stack))
     return;
 
   gen_expr(ctx, args);
 
   switch (args->ty->kind) {
-  case TY_STRUCT:
-  case TY_UNION:
-    push_struct(args->ty);
-    break;
-  case TY_FLOAT:
-  case TY_DOUBLE:
-    pushf();
-    break;
-  case TY_LDOUBLE:
-    println("  sub $16, %%rsp");
-    println("  fstpt (%%rsp)");
-    depth += 2;
-    break;
-  default:
-    push();
+    case TY_STRUCT:
+    case TY_UNION: push_struct(args->ty); break;
+    case TY_FLOAT:
+    case TY_DOUBLE: pushf(); break;
+    case TY_LDOUBLE:
+      println("  sub $16, %%rsp");
+      println("  fstpt (%%rsp)");
+      depth += 2;
+      break;
+    default: push();
   }
 }
 
@@ -680,7 +662,7 @@ static void push_args2(LibcpContext *ctx, LibcpNode *args, bool first_pass) {
 //
 // - If a function is variadic, set the number of floating-point type
 //   arguments to RAX.
-static int push_args(LibcpContext *ctx, LibcpNode *node) {
+static int push_args(LibcpContext* ctx, LibcpNode* node) {
   int stack = 0, gp = 0, fp = 0;
 
   // If the return type is a large struct/union, the caller passes
@@ -689,44 +671,44 @@ static int push_args(LibcpContext *ctx, LibcpNode *node) {
     gp++;
 
   // Load as many arguments to the registers as possible.
-  for (LibcpNode *arg = node->args; arg; arg = arg->next) {
-    LibcpType *ty = arg->ty;
+  for (LibcpNode* arg = node->args; arg; arg = arg->next) {
+    LibcpType* ty = arg->ty;
 
     switch (ty->kind) {
-    case TY_STRUCT:
-    case TY_UNION:
-      if (ty->size > 16) {
-        cg(arg)->pass_by_stack = true;
-        stack += libcp_align_to(ty->size, 8) / 8;
-      } else {
-        bool fp1 = has_flonum1(ty);
-        bool fp2 = has_flonum2(ty);
-
-        if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
-          fp = fp + fp1 + fp2;
-          gp = gp + !fp1 + !fp2;
-        } else {
+      case TY_STRUCT:
+      case TY_UNION:
+        if (ty->size > 16) {
           cg(arg)->pass_by_stack = true;
           stack += libcp_align_to(ty->size, 8) / 8;
+        } else {
+          bool fp1 = has_flonum1(ty);
+          bool fp2 = has_flonum2(ty);
+
+          if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
+            fp = fp + fp1 + fp2;
+            gp = gp + !fp1 + !fp2;
+          } else {
+            cg(arg)->pass_by_stack = true;
+            stack += libcp_align_to(ty->size, 8) / 8;
+          }
         }
-      }
-      break;
-    case TY_FLOAT:
-    case TY_DOUBLE:
-      if (fp++ >= FP_MAX) {
+        break;
+      case TY_FLOAT:
+      case TY_DOUBLE:
+        if (fp++ >= FP_MAX) {
+          cg(arg)->pass_by_stack = true;
+          stack++;
+        }
+        break;
+      case TY_LDOUBLE:
         cg(arg)->pass_by_stack = true;
-        stack++;
-      }
-      break;
-    case TY_LDOUBLE:
-      cg(arg)->pass_by_stack = true;
-      stack += 2;
-      break;
-    default:
-      if (gp++ >= GP_MAX) {
-        cg(arg)->pass_by_stack = true;
-        stack++;
-      }
+        stack += 2;
+        break;
+      default:
+        if (gp++ >= GP_MAX) {
+          cg(arg)->pass_by_stack = true;
+          stack++;
+        }
     }
   }
 
@@ -749,8 +731,8 @@ static int push_args(LibcpContext *ctx, LibcpNode *node) {
   return stack;
 }
 
-static void copy_ret_buffer(LibcpObj *var) {
-  LibcpType *ty = var->ty;
+static void copy_ret_buffer(LibcpObj* var) {
+  LibcpType* ty = var->ty;
   int gp = 0, fp = 0;
 
   if (has_flonum1(ty)) {
@@ -776,8 +758,8 @@ static void copy_ret_buffer(LibcpObj *var) {
       else
         println("  movsd %%xmm%d, %d(%%rbp)", fp, obj_offset(var) + 8);
     } else {
-      char *reg1 = (gp == 0) ? "%al" : "%dl";
-      char *reg2 = (gp == 0) ? "%rax" : "%rdx";
+      char* reg1 = (gp == 0) ? "%al" : "%dl";
+      char* reg2 = (gp == 0) ? "%rax" : "%rdx";
       for (int i = 8; i < MIN(16, ty->size); i++) {
         println("  mov %s, %d(%%rbp)", reg1, obj_offset(var) + i);
         println("  shr $8, %s", reg2);
@@ -787,7 +769,7 @@ static void copy_ret_buffer(LibcpObj *var) {
 }
 
 static void copy_struct_reg(void) {
-  LibcpType *ty = current_fn->ty->return_ty;
+  LibcpType* ty = current_fn->ty->return_ty;
   int gp = 0, fp = 0;
 
   println("  mov %%rax, %%rdi");
@@ -816,8 +798,8 @@ static void copy_struct_reg(void) {
       else
         println("  movsd 8(%%rdi), %%xmm%d", fp);
     } else {
-      char *reg1 = (gp == 0) ? "%al" : "%dl";
-      char *reg2 = (gp == 0) ? "%rax" : "%rdx";
+      char* reg1 = (gp == 0) ? "%al" : "%dl";
+      char* reg2 = (gp == 0) ? "%rax" : "%rdx";
       println("  mov $0, %s", reg2);
       for (int i = MIN(16, ty->size) - 1; i >= 8; i--) {
         println("  shl $8, %s", reg2);
@@ -828,8 +810,8 @@ static void copy_struct_reg(void) {
 }
 
 static void copy_struct_mem(void) {
-  LibcpType *ty = current_fn->ty->return_ty;
-  LibcpObj *var = current_fn->params;
+  LibcpType* ty = current_fn->ty->return_ty;
+  LibcpObj* var = current_fn->params;
 
   println("  mov %d(%%rbp), %%rdi", obj_offset(var));
 
@@ -868,7 +850,7 @@ static void builtin_alloca(void) {
 }
 
 // Generate code for a given node.
-static void gen_expr(LibcpContext *ctx, LibcpNode *node) {
+static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
   // A faithful `+`/`-` still carries its source shape (PLAN B2): the
   // element-size scaling, the `num + ptr` canonicalization and the
   // conversions libcp_new_arith applies are made here, at emission, by the
@@ -879,391 +861,390 @@ static void gen_expr(LibcpContext *ctx, LibcpNode *node) {
   // built itself carry the mark and fall through to the plain
   // machine-arithmetic emission below.
   if ((node->kind == ND_ADD || node->kind == ND_SUB) && !cg(node)->is_lowered)
-    node = node->kind == ND_ADD ? new_add(ctx, node->lhs, node->rhs, node->tok)
-                                : new_sub(ctx, node->lhs, node->rhs, node->tok);
+    node = node->kind == ND_ADD ? new_add(ctx, node->lhs, node->rhs, node->tok) :
+                                  new_sub(ctx, node->lhs, node->rhs, node->tok);
 
   println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
 
   switch (node->kind) {
-  case ND_NULL_EXPR:
-    return;
-  case ND_NUM: {
-    switch (node->ty->kind) {
-    case TY_FLOAT: {
-      union { float f32; uint32_t u32; } u = { node->fval };
-      println("  mov $%u, %%eax  # float %Lf", u.u32, node->fval);
-      println("  movq %%rax, %%xmm0");
-      return;
-    }
-    case TY_DOUBLE: {
-      union { double f64; uint64_t u64; } u = { node->fval };
-      println("  mov $%lu, %%rax  # double %Lf", (unsigned long)u.u64, node->fval);
-      println("  movq %%rax, %%xmm0");
-      return;
-    }
-    case TY_LDOUBLE: {
-      union { long double f80; uint64_t u64[2]; } u;
-      memset(&u, 0, sizeof(u));
-      u.f80 = node->fval;
-      println("  mov $%lu, %%rax  # long double %Lf", (unsigned long)u.u64[0], node->fval);
-      println("  mov %%rax, -16(%%rsp)");
-      println("  mov $%lu, %%rax", (unsigned long)u.u64[1]);
-      println("  mov %%rax, -8(%%rsp)");
-      println("  fldt -16(%%rsp)");
-      return;
-    }
-    }
-
-    println("  mov $%ld, %%rax", (long)node->val);
-    return;
-  }
-  case ND_SIZEOF:
-  case ND_ALIGNOF:
-  case ND_TYPES_COMPATIBLE:
-  case ND_REG_CLASS:
-    // The conclusions sema recorded in `val` (PLAN A9.1): a size, an
-    // alignment, a type compatibility or a register class - all
-    // numbers, all typed like the literals they used to fold to, so
-    // the integer form above applies. A sizeof of a VLA never
-    // arrives here: the shaping pass lowered it to the comma that
-    // reads the size variable.
-    println("  mov $%ld, %%rax", (long)node->val);
-    return;
-  case ND_GENERIC:
-    // The selection's conclusion (PLAN A9.1): emit the selected
-    // result expression.
-    gen_expr(ctx, node->generic_sel);
-    return;
-  case ND_NEG:
-    gen_expr(ctx, node->lhs);
-
-    switch (node->ty->kind) {
-    case TY_FLOAT:
-      println("  mov $1, %%rax");
-      println("  shl $31, %%rax");
-      println("  movq %%rax, %%xmm1");
-      println("  xorps %%xmm1, %%xmm0");
-      return;
-    case TY_DOUBLE:
-      println("  mov $1, %%rax");
-      println("  shl $63, %%rax");
-      println("  movq %%rax, %%xmm1");
-      println("  xorpd %%xmm1, %%xmm0");
-      return;
-    case TY_LDOUBLE:
-      println("  fchs");
-      return;
-    }
-
-    println("  neg %%rax");
-    return;
-  case ND_STRING:
-    // The literal's anonymous global (PLAN A9.1: the node keeps its
-    // kind): an array in expression context, so the ND_VAR handling
-    // below takes its address and the array load is a no-op - the
-    // same instructions the lowered ND_VAR produced.
-  case ND_VAR:
-    gen_addr(ctx, node);
-    load(node->ty);
-    return;
-  case ND_MEMBER: {
-    gen_addr(ctx, node);
-    load(node->ty);
-
-    LibcpMember *mem = node->member;
-    if (mem->is_bitfield) {
-      println("  shl $%d, %%rax", 64 - mem->bit_width - mem->bit_offset);
-      if (mem->ty->is_unsigned)
-        println("  shr $%d, %%rax", 64 - mem->bit_width);
-      else
-        println("  sar $%d, %%rax", 64 - mem->bit_width);
-    }
-    return;
-  }
-  case ND_SUBSCRIPT:
-    // `x[y]` in value context (PLAN B1.1a): the address gen_addr
-    // computes, then the pointee load - the instructions of the old
-    // `*(x+y)` form, with the sum built on demand.
-    gen_addr(ctx, node);
-    load(node->ty);
-    return;
-  case ND_DEREF:
-    gen_expr(ctx, node->lhs);
-    load(node->ty);
-    return;
-  case ND_ADDR:
-    gen_addr(ctx, node->lhs);
-    return;
-  case ND_ASSIGN:
-    gen_addr(ctx, node->lhs);
-    push();
-    gen_expr(ctx, node->rhs);
-
-    if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
-      println("  mov %%rax, %%r8");
-
-      // If the lhs is a bitfield, we need to read the current value
-      // from memory and merge it with a new value.
-      LibcpMember *mem = node->lhs->member;
-      println("  mov %%rax, %%rdi");
-
-      // `and` takes a sign-extended 32-bit immediate. A mask wider than
-      // that (a bit-field of 32 or more bits) has to be materialized in
-      // a register first.
-      long field_mask = (long)bitfield_mask(mem->bit_width);
-      if (field_mask > INT32_MAX || field_mask < INT32_MIN) {
-        println("  mov $%ld, %%r9", field_mask);
-        println("  and %%r9, %%rdi");
-      } else {
-        println("  and $%ld, %%rdi", field_mask);
+    case ND_NULL_EXPR: return;
+    case ND_NUM: {
+      switch (node->ty->kind) {
+        case TY_FLOAT: {
+          union {
+            float f32;
+            uint32_t u32;
+          } u = {node->fval};
+          println("  mov $%u, %%eax  # float %Lf", u.u32, node->fval);
+          println("  movq %%rax, %%xmm0");
+          return;
+        }
+        case TY_DOUBLE: {
+          union {
+            double f64;
+            uint64_t u64;
+          } u = {node->fval};
+          println("  mov $%lu, %%rax  # double %Lf", (unsigned long)u.u64, node->fval);
+          println("  movq %%rax, %%xmm0");
+          return;
+        }
+        case TY_LDOUBLE: {
+          union {
+            long double f80;
+            uint64_t u64[2];
+          } u;
+          memset(&u, 0, sizeof(u));
+          u.f80 = node->fval;
+          println("  mov $%lu, %%rax  # long double %Lf", (unsigned long)u.u64[0], node->fval);
+          println("  mov %%rax, -16(%%rsp)");
+          println("  mov $%lu, %%rax", (unsigned long)u.u64[1]);
+          println("  mov %%rax, -8(%%rsp)");
+          println("  fldt -16(%%rsp)");
+          return;
+        }
       }
 
-      println("  shl $%d, %%rdi", mem->bit_offset);
-
-      println("  mov (%%rsp), %%rax");
-      load(mem->ty);
-
-      long mask = (long)(bitfield_mask(mem->bit_width) << mem->bit_offset);
-      println("  mov $%ld, %%r9", ~mask);
-      println("  and %%r9, %%rax");
-      println("  or %%rdi, %%rax");
-      store(node->ty);
-      println("  mov %%r8, %%rax");
+      println("  mov $%ld, %%rax", (long)node->val);
       return;
     }
+    case ND_SIZEOF:
+    case ND_ALIGNOF:
+    case ND_TYPES_COMPATIBLE:
+    case ND_REG_CLASS:
+      // The conclusions sema recorded in `val` (PLAN A9.1): a size, an
+      // alignment, a type compatibility or a register class - all
+      // numbers, all typed like the literals they used to fold to, so
+      // the integer form above applies. A sizeof of a VLA never
+      // arrives here: the shaping pass lowered it to the comma that
+      // reads the size variable.
+      println("  mov $%ld, %%rax", (long)node->val);
+      return;
+    case ND_GENERIC:
+      // The selection's conclusion (PLAN A9.1): emit the selected
+      // result expression.
+      gen_expr(ctx, node->generic_sel);
+      return;
+    case ND_NEG:
+      gen_expr(ctx, node->lhs);
 
-    store(node->ty);
-    return;
-  case ND_STMT_EXPR:
-    for (LibcpNode *n = node->body; n; n = n->next)
-      gen_stmt(ctx, n);
-    return;
-  case ND_COMMA:
-    gen_expr(ctx, node->lhs);
-    gen_expr(ctx, node->rhs);
-    return;
-  case ND_CAST:
-    gen_expr(ctx, node->lhs);
-    cast(node->lhs->ty, node->ty);
-    return;
-  case ND_MEMZERO:
-    // `rep stosb` is equivalent to `memset(%rdi, %al, %rcx)`.
-    println("  mov $%d, %%rcx", node->var->ty->size);
-    println("  lea %d(%%rbp), %%rdi", obj_offset(node->var));
-    println("  mov $0, %%al");
-    println("  rep stosb");
-    return;
-  case ND_COND: {
-    if (node->is_elvis) {
-      // The GNU `a ?: b` (PLAN B1.1e): the value of the test is the
-      // result, so it stays in the register the test left it in -
-      // rax, xmm0, or the x87 stack top - and no temporary slot is
-      // needed. sema recorded only the conclusion (the common type of
-      // the two arms) without converting the faithful operands, so
-      // each arm is converted to that type here. The label names are
-      // the ones the old `tmp = a, tmp ? tmp : b` lowering emitted.
+      switch (node->ty->kind) {
+        case TY_FLOAT:
+          println("  mov $1, %%rax");
+          println("  shl $31, %%rax");
+          println("  movq %%rax, %%xmm1");
+          println("  xorps %%xmm1, %%xmm0");
+          return;
+        case TY_DOUBLE:
+          println("  mov $1, %%rax");
+          println("  shl $63, %%rax");
+          println("  movq %%rax, %%xmm1");
+          println("  xorpd %%xmm1, %%xmm0");
+          return;
+        case TY_LDOUBLE: println("  fchs"); return;
+      }
+
+      println("  neg %%rax");
+      return;
+    case ND_STRING:
+      // The literal's anonymous global (PLAN A9.1: the node keeps its
+      // kind): an array in expression context, so the ND_VAR handling
+      // below takes its address and the array load is a no-op - the
+      // same instructions the lowered ND_VAR produced.
+    case ND_VAR:
+      gen_addr(ctx, node);
+      load(node->ty);
+      return;
+    case ND_MEMBER: {
+      gen_addr(ctx, node);
+      load(node->ty);
+
+      LibcpMember* mem = node->member;
+      if (mem->is_bitfield) {
+        println("  shl $%d, %%rax", 64 - mem->bit_width - mem->bit_offset);
+        if (mem->ty->is_unsigned)
+          println("  shr $%d, %%rax", 64 - mem->bit_width);
+        else
+          println("  sar $%d, %%rax", 64 - mem->bit_width);
+      }
+      return;
+    }
+    case ND_SUBSCRIPT:
+      // `x[y]` in value context (PLAN B1.1a): the address gen_addr
+      // computes, then the pointee load - the instructions of the old
+      // `*(x+y)` form, with the sum built on demand.
+      gen_addr(ctx, node);
+      load(node->ty);
+      return;
+    case ND_DEREF:
+      gen_expr(ctx, node->lhs);
+      load(node->ty);
+      return;
+    case ND_ADDR: gen_addr(ctx, node->lhs); return;
+    case ND_ASSIGN:
+      gen_addr(ctx, node->lhs);
+      push();
+      gen_expr(ctx, node->rhs);
+
+      if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
+        println("  mov %%rax, %%r8");
+
+        // If the lhs is a bitfield, we need to read the current value
+        // from memory and merge it with a new value.
+        LibcpMember* mem = node->lhs->member;
+        println("  mov %%rax, %%rdi");
+
+        // `and` takes a sign-extended 32-bit immediate. A mask wider than
+        // that (a bit-field of 32 or more bits) has to be materialized in
+        // a register first.
+        long field_mask = (long)bitfield_mask(mem->bit_width);
+        if (field_mask > INT32_MAX || field_mask < INT32_MIN) {
+          println("  mov $%ld, %%r9", field_mask);
+          println("  and %%r9, %%rdi");
+        } else {
+          println("  and $%ld, %%rdi", field_mask);
+        }
+
+        println("  shl $%d, %%rdi", mem->bit_offset);
+
+        println("  mov (%%rsp), %%rax");
+        load(mem->ty);
+
+        long mask = (long)(bitfield_mask(mem->bit_width) << mem->bit_offset);
+        println("  mov $%ld, %%r9", ~mask);
+        println("  and %%r9, %%rax");
+        println("  or %%rdi, %%rax");
+        store(node->ty);
+        println("  mov %%r8, %%rax");
+        return;
+      }
+
+      store(node->ty);
+      return;
+    case ND_STMT_EXPR:
+      for (LibcpNode* n = node->body; n; n = n->next)
+        gen_stmt(ctx, n);
+      return;
+    case ND_COMMA:
+      gen_expr(ctx, node->lhs);
+      gen_expr(ctx, node->rhs);
+      return;
+    case ND_CAST:
+      gen_expr(ctx, node->lhs);
+      cast(node->lhs->ty, node->ty);
+      return;
+    case ND_MEMZERO:
+      // `rep stosb` is equivalent to `memset(%rdi, %al, %rcx)`.
+      println("  mov $%d, %%rcx", node->var->ty->size);
+      println("  lea %d(%%rbp), %%rdi", obj_offset(node->var));
+      println("  mov $0, %%al");
+      println("  rep stosb");
+      return;
+    case ND_COND: {
+      if (node->is_elvis) {
+        // The GNU `a ?: b` (PLAN B1.1e): the value of the test is the
+        // result, so it stays in the register the test left it in -
+        // rax, xmm0, or the x87 stack top - and no temporary slot is
+        // needed. sema recorded only the conclusion (the common type of
+        // the two arms) without converting the faithful operands, so
+        // each arm is converted to that type here. The label names are
+        // the ones the old `tmp = a, tmp ? tmp : b` lowering emitted.
+        int c = count();
+        gen_expr(ctx, node->cond);
+
+        // cmp_zero consumes whatever value it compares on the x87
+        // stack; the duplicate taken here is the one left behind as the
+        // truthy arm's result.
+        if (node->cond->ty->kind == TY_LDOUBLE)
+          println("  fld %%st(0)");
+
+        cmp_zero(node->cond->ty);
+        println("  je .L.else.%d", c);
+        cast(node->cond->ty, node->ty);
+        println("  jmp .L.end.%d", c);
+        println(".L.else.%d:", c);
+
+        // The falsy arm drops the test's value before computing its own.
+        if (node->cond->ty->kind == TY_LDOUBLE)
+          println("  fstp %%st(0)");
+
+        gen_expr(ctx, node->els);
+        cast(node->els->ty, node->ty);
+        println(".L.end.%d:", c);
+        return;
+      }
       int c = count();
       gen_expr(ctx, node->cond);
-
-      // cmp_zero consumes whatever value it compares on the x87
-      // stack; the duplicate taken here is the one left behind as the
-      // truthy arm's result.
-      if (node->cond->ty->kind == TY_LDOUBLE)
-        println("  fld %%st(0)");
-
       cmp_zero(node->cond->ty);
       println("  je .L.else.%d", c);
-      cast(node->cond->ty, node->ty);
+      gen_expr(ctx, node->then);
       println("  jmp .L.end.%d", c);
       println(".L.else.%d:", c);
-
-      // The falsy arm drops the test's value before computing its own.
-      if (node->cond->ty->kind == TY_LDOUBLE)
-        println("  fstp %%st(0)");
-
       gen_expr(ctx, node->els);
-      cast(node->els->ty, node->ty);
       println(".L.end.%d:", c);
       return;
     }
-    int c = count();
-    gen_expr(ctx, node->cond);
-    cmp_zero(node->cond->ty);
-    println("  je .L.else.%d", c);
-    gen_expr(ctx, node->then);
-    println("  jmp .L.end.%d", c);
-    println(".L.else.%d:", c);
-    gen_expr(ctx, node->els);
-    println(".L.end.%d:", c);
-    return;
-  }
-  case ND_NOT:
-    gen_expr(ctx, node->lhs);
-    cmp_zero(node->lhs->ty);
-    println("  sete %%al");
-    println("  movzx %%al, %%rax");
-    return;
-  case ND_BITNOT:
-    gen_expr(ctx, node->lhs);
-    println("  not %%rax");
-    return;
-  case ND_LOGAND: {
-    int c = count();
-    gen_expr(ctx, node->lhs);
-    cmp_zero(node->lhs->ty);
-    println("  je .L.false.%d", c);
-    gen_expr(ctx, node->rhs);
-    cmp_zero(node->rhs->ty);
-    println("  je .L.false.%d", c);
-    println("  mov $1, %%rax");
-    println("  jmp .L.end.%d", c);
-    println(".L.false.%d:", c);
-    println("  mov $0, %%rax");
-    println(".L.end.%d:", c);
-    return;
-  }
-  case ND_LOGOR: {
-    int c = count();
-    gen_expr(ctx, node->lhs);
-    cmp_zero(node->lhs->ty);
-    println("  jne .L.true.%d", c);
-    gen_expr(ctx, node->rhs);
-    cmp_zero(node->rhs->ty);
-    println("  jne .L.true.%d", c);
-    println("  mov $0, %%rax");
-    println("  jmp .L.end.%d", c);
-    println(".L.true.%d:", c);
-    println("  mov $1, %%rax");
-    println(".L.end.%d:", c);
-    return;
-  }
-  case ND_FUNCALL: {
-    if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca")) {
-      gen_expr(ctx, node->args);
-      println("  mov %%rax, %%rdi");
-      builtin_alloca();
+    case ND_NOT:
+      gen_expr(ctx, node->lhs);
+      cmp_zero(node->lhs->ty);
+      println("  sete %%al");
+      println("  movzx %%al, %%rax");
+      return;
+    case ND_BITNOT:
+      gen_expr(ctx, node->lhs);
+      println("  not %%rax");
+      return;
+    case ND_LOGAND: {
+      int c = count();
+      gen_expr(ctx, node->lhs);
+      cmp_zero(node->lhs->ty);
+      println("  je .L.false.%d", c);
+      gen_expr(ctx, node->rhs);
+      cmp_zero(node->rhs->ty);
+      println("  je .L.false.%d", c);
+      println("  mov $1, %%rax");
+      println("  jmp .L.end.%d", c);
+      println(".L.false.%d:", c);
+      println("  mov $0, %%rax");
+      println(".L.end.%d:", c);
       return;
     }
-
-    int stack_args = push_args(ctx, node);
-    gen_expr(ctx, node->lhs);
-
-    int gp = 0, fp = 0;
-
-    // If the return type is a large struct/union, the caller passes
-    // a pointer to a buffer as if it were the first argument.
-    if (cg(node)->ret_buffer && node->ty->size > 16)
-      pop(argreg64[gp++]);
-
-    for (LibcpNode *arg = node->args; arg; arg = arg->next) {
-      LibcpType *ty = arg->ty;
-
-      switch (ty->kind) {
-      case TY_STRUCT:
-      case TY_UNION:
-        if (ty->size > 16)
-          continue;
-
-        bool fp1 = has_flonum1(ty);
-        bool fp2 = has_flonum2(ty);
-
-        if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
-          if (fp1)
-            popf(fp++);
-          else
-            pop(argreg64[gp++]);
-
-          if (ty->size > 8) {
-            if (fp2)
-              popf(fp++);
-            else
-              pop(argreg64[gp++]);
-          }
-        }
-        break;
-      case TY_FLOAT:
-      case TY_DOUBLE:
-        if (fp < FP_MAX)
-          popf(fp++);
-        break;
-      case TY_LDOUBLE:
-        break;
-      default:
-        if (gp < GP_MAX)
-          pop(argreg64[gp++]);
+    case ND_LOGOR: {
+      int c = count();
+      gen_expr(ctx, node->lhs);
+      cmp_zero(node->lhs->ty);
+      println("  jne .L.true.%d", c);
+      gen_expr(ctx, node->rhs);
+      cmp_zero(node->rhs->ty);
+      println("  jne .L.true.%d", c);
+      println("  mov $0, %%rax");
+      println("  jmp .L.end.%d", c);
+      println(".L.true.%d:", c);
+      println("  mov $1, %%rax");
+      println(".L.end.%d:", c);
+      return;
+    }
+    case ND_FUNCALL: {
+      if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca")) {
+        gen_expr(ctx, node->args);
+        println("  mov %%rax, %%rdi");
+        builtin_alloca();
+        return;
       }
-    }
 
-    println("  mov %%rax, %%r10");
-    println("  mov $%d, %%rax", fp);
-    println("  call *%%r10");
-    println("  add $%d, %%rsp", stack_args * 8);
+      int stack_args = push_args(ctx, node);
+      gen_expr(ctx, node->lhs);
 
-    depth -= stack_args;
+      int gp = 0, fp = 0;
 
-    // It looks like the most significant 48 or 56 bits in RAX may
-    // contain garbage if a function return type is short or bool/char,
-    // respectively. We clear the upper bits here.
-    switch (node->ty->kind) {
-    case TY_BOOL:
-      println("  movzx %%al, %%eax");
+      // If the return type is a large struct/union, the caller passes
+      // a pointer to a buffer as if it were the first argument.
+      if (cg(node)->ret_buffer && node->ty->size > 16)
+        pop(argreg64[gp++]);
+
+      for (LibcpNode* arg = node->args; arg; arg = arg->next) {
+        LibcpType* ty = arg->ty;
+
+        switch (ty->kind) {
+          case TY_STRUCT:
+          case TY_UNION:
+            if (ty->size > 16)
+              continue;
+
+            bool fp1 = has_flonum1(ty);
+            bool fp2 = has_flonum2(ty);
+
+            if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
+              if (fp1)
+                popf(fp++);
+              else
+                pop(argreg64[gp++]);
+
+              if (ty->size > 8) {
+                if (fp2)
+                  popf(fp++);
+                else
+                  pop(argreg64[gp++]);
+              }
+            }
+            break;
+          case TY_FLOAT:
+          case TY_DOUBLE:
+            if (fp < FP_MAX)
+              popf(fp++);
+            break;
+          case TY_LDOUBLE: break;
+          default:
+            if (gp < GP_MAX)
+              pop(argreg64[gp++]);
+        }
+      }
+
+      println("  mov %%rax, %%r10");
+      println("  mov $%d, %%rax", fp);
+      println("  call *%%r10");
+      println("  add $%d, %%rsp", stack_args * 8);
+
+      depth -= stack_args;
+
+      // It looks like the most significant 48 or 56 bits in RAX may
+      // contain garbage if a function return type is short or bool/char,
+      // respectively. We clear the upper bits here.
+      switch (node->ty->kind) {
+        case TY_BOOL: println("  movzx %%al, %%eax"); return;
+        case TY_CHAR:
+          if (node->ty->is_unsigned)
+            println("  movzbl %%al, %%eax");
+          else
+            println("  movsbl %%al, %%eax");
+          return;
+        case TY_SHORT:
+          if (node->ty->is_unsigned)
+            println("  movzwl %%ax, %%eax");
+          else
+            println("  movswl %%ax, %%eax");
+          return;
+      }
+
+      // If the return type is a small struct, a value is returned
+      // using up to two registers.
+      if (cg(node)->ret_buffer && node->ty->size <= 16) {
+        copy_ret_buffer(cg(node)->ret_buffer);
+        println("  lea %d(%%rbp), %%rax", obj_offset(cg(node)->ret_buffer));
+      }
+
       return;
-    case TY_CHAR:
-      if (node->ty->is_unsigned)
-        println("  movzbl %%al, %%eax");
-      else
-        println("  movsbl %%al, %%eax");
-      return;
-    case TY_SHORT:
-      if (node->ty->is_unsigned)
-        println("  movzwl %%ax, %%eax");
-      else
-        println("  movswl %%ax, %%eax");
+    }
+    case ND_LABEL_VAL: println("  lea %s(%%rip), %%rax", cg(node)->unique_label); return;
+    case ND_CAS: {
+      gen_expr(ctx, node->cas_addr);
+      push();
+      gen_expr(ctx, node->cas_new);
+      push();
+      gen_expr(ctx, node->cas_old);
+      println("  mov %%rax, %%r8");
+      load(node->cas_old->ty->base);
+      pop("%rdx");  // new
+      pop("%rdi");  // addr
+
+      int sz = node->cas_addr->ty->base->size;
+      println("  lock cmpxchg %s, (%%rdi)", reg_dx(ctx, sz));
+      println("  sete %%cl");
+      println("  je 1f");
+      println("  mov %s, (%%r8)", reg_ax(ctx, sz));
+      println("1:");
+      println("  movzbl %%cl, %%eax");
       return;
     }
+    case ND_EXCH: {
+      gen_expr(ctx, node->lhs);
+      push();
+      gen_expr(ctx, node->rhs);
+      pop("%rdi");
 
-    // If the return type is a small struct, a value is returned
-    // using up to two registers.
-    if (cg(node)->ret_buffer && node->ty->size <= 16) {
-      copy_ret_buffer(cg(node)->ret_buffer);
-      println("  lea %d(%%rbp), %%rax", obj_offset(cg(node)->ret_buffer));
+      int sz = node->lhs->ty->base->size;
+      println("  xchg %s, (%%rdi)", reg_ax(ctx, sz));
+      return;
     }
-
-    return;
-  }
-  case ND_LABEL_VAL:
-    println("  lea %s(%%rip), %%rax", cg(node)->unique_label);
-    return;
-  case ND_CAS: {
-    gen_expr(ctx, node->cas_addr);
-    push();
-    gen_expr(ctx, node->cas_new);
-    push();
-    gen_expr(ctx, node->cas_old);
-    println("  mov %%rax, %%r8");
-    load(node->cas_old->ty->base);
-    pop("%rdx"); // new
-    pop("%rdi"); // addr
-
-    int sz = node->cas_addr->ty->base->size;
-    println("  lock cmpxchg %s, (%%rdi)", reg_dx(ctx, sz));
-    println("  sete %%cl");
-    println("  je 1f");
-    println("  mov %s, (%%r8)", reg_ax(ctx, sz));
-    println("1:");
-    println("  movzbl %%cl, %%eax");
-    return;
-  }
-  case ND_EXCH: {
-    gen_expr(ctx, node->lhs);
-    push();
-    gen_expr(ctx, node->rhs);
-    pop("%rdi");
-
-    int sz = node->lhs->ty->base->size;
-    println("  xchg %s, (%%rdi)", reg_ax(ctx, sz));
-    return;
-  }
   }
 
   // The comparison shapes the emitter knows are `<` and `<=`; the
@@ -1276,102 +1257,86 @@ static void gen_expr(LibcpContext *ctx, LibcpNode *node) {
   // is the one of the operand the swap moves to the left, which is
   // also how the evaluator reads the faithful pair.
   if (node->kind == ND_GT || node->kind == ND_GE) {
-    LibcpNode *swapped = libcp_new_binary(ctx, node->kind == ND_GT ? ND_LT : ND_LE,
-                               node->rhs, node->lhs, node->tok);
+    LibcpNode* swapped =
+        libcp_new_binary(ctx, node->kind == ND_GT ? ND_LT : ND_LE, node->rhs, node->lhs, node->tok);
     swapped->ty = node->ty;
     gen_expr(ctx, swapped);
     return;
   }
 
   switch (node->lhs->ty->kind) {
-  case TY_FLOAT:
-  case TY_DOUBLE: {
-    gen_expr(ctx, node->rhs);
-    pushf();
-    gen_expr(ctx, node->lhs);
-    popf(1);
+    case TY_FLOAT:
+    case TY_DOUBLE: {
+      gen_expr(ctx, node->rhs);
+      pushf();
+      gen_expr(ctx, node->lhs);
+      popf(1);
 
-    char *sz = (node->lhs->ty->kind == TY_FLOAT) ? "ss" : "sd";
+      char* sz = (node->lhs->ty->kind == TY_FLOAT) ? "ss" : "sd";
 
-    switch (node->kind) {
-    case ND_ADD:
-      println("  add%s %%xmm1, %%xmm0", sz);
-      return;
-    case ND_SUB:
-      println("  sub%s %%xmm1, %%xmm0", sz);
-      return;
-    case ND_MUL:
-      println("  mul%s %%xmm1, %%xmm0", sz);
-      return;
-    case ND_DIV:
-      println("  div%s %%xmm1, %%xmm0", sz);
-      return;
-    case ND_EQ:
-    case ND_NE:
-    case ND_LT:
-    case ND_LE:
-      println("  ucomi%s %%xmm0, %%xmm1", sz);
+      switch (node->kind) {
+        case ND_ADD: println("  add%s %%xmm1, %%xmm0", sz); return;
+        case ND_SUB: println("  sub%s %%xmm1, %%xmm0", sz); return;
+        case ND_MUL: println("  mul%s %%xmm1, %%xmm0", sz); return;
+        case ND_DIV: println("  div%s %%xmm1, %%xmm0", sz); return;
+        case ND_EQ:
+        case ND_NE:
+        case ND_LT:
+        case ND_LE:
+          println("  ucomi%s %%xmm0, %%xmm1", sz);
 
-      if (node->kind == ND_EQ) {
-        println("  sete %%al");
-        println("  setnp %%dl");
-        println("  and %%dl, %%al");
-      } else if (node->kind == ND_NE) {
-        println("  setne %%al");
-        println("  setp %%dl");
-        println("  or %%dl, %%al");
-      } else if (node->kind == ND_LT) {
-        println("  seta %%al");
-      } else {
-        println("  setae %%al");
+          if (node->kind == ND_EQ) {
+            println("  sete %%al");
+            println("  setnp %%dl");
+            println("  and %%dl, %%al");
+          } else if (node->kind == ND_NE) {
+            println("  setne %%al");
+            println("  setp %%dl");
+            println("  or %%dl, %%al");
+          } else if (node->kind == ND_LT) {
+            println("  seta %%al");
+          } else {
+            println("  setae %%al");
+          }
+
+          println("  and $1, %%al");
+          println("  movzb %%al, %%rax");
+          return;
       }
 
-      println("  and $1, %%al");
-      println("  movzb %%al, %%rax");
-      return;
+      libcp_error_tok(ctx, node->tok, "invalid expression");
     }
+    case TY_LDOUBLE: {
+      gen_expr(ctx, node->lhs);
+      gen_expr(ctx, node->rhs);
 
-    libcp_error_tok(ctx, node->tok, "invalid expression");
-  }
-  case TY_LDOUBLE: {
-    gen_expr(ctx, node->lhs);
-    gen_expr(ctx, node->rhs);
+      switch (node->kind) {
+        case ND_ADD: println("  faddp"); return;
+        case ND_SUB: println("  fsubrp"); return;
+        case ND_MUL: println("  fmulp"); return;
+        case ND_DIV: println("  fdivrp"); return;
+        case ND_EQ:
+        case ND_NE:
+        case ND_LT:
+        case ND_LE:
+          println("  fcomip");
+          println("  fstp %%st(0)");
 
-    switch (node->kind) {
-    case ND_ADD:
-      println("  faddp");
-      return;
-    case ND_SUB:
-      println("  fsubrp");
-      return;
-    case ND_MUL:
-      println("  fmulp");
-      return;
-    case ND_DIV:
-      println("  fdivrp");
-      return;
-    case ND_EQ:
-    case ND_NE:
-    case ND_LT:
-    case ND_LE:
-      println("  fcomip");
-      println("  fstp %%st(0)");
+          if (node->kind == ND_EQ)
+            println("  sete %%al");
+          else if (node->kind == ND_NE)
+            println("  setne %%al");
+          else if (node->kind == ND_LT)
+            println("  seta %%al");
+          else
+            println("  setae %%al");
 
-      if (node->kind == ND_EQ)
-        println("  sete %%al");
-      else if (node->kind == ND_NE)
-        println("  setne %%al");
-      else if (node->kind == ND_LT)
-        println("  seta %%al");
-      else
-        println("  setae %%al");
+          println("  movzb %%al, %%rax");
+          return;
+      }
 
-      println("  movzb %%al, %%rax");
-      return;
+      libcp_error_tok(ctx, node->tok, "invalid expression");
     }
-
-    libcp_error_tok(ctx, node->tok, "invalid expression");
-  }
   }
 
   gen_expr(ctx, node->rhs);
@@ -1392,272 +1357,253 @@ static void gen_expr(LibcpContext *ctx, LibcpNode *node) {
   }
 
   switch (node->kind) {
-  case ND_ADD:
-    println("  add %s, %s", di, ax);
-    return;
-  case ND_SUB:
-    println("  sub %s, %s", di, ax);
-    return;
-  case ND_MUL:
-    println("  imul %s, %s", di, ax);
-    return;
-  case ND_DIV:
-  case ND_MOD:
-    if (node->ty->is_unsigned) {
-      println("  mov $0, %s", dx);
-      println("  div %s", di);
-    } else {
-      if (node->lhs->ty->size == 8)
-        println("  cqo");
-      else
-        println("  cdq");
-      println("  idiv %s", di);
-    }
+    case ND_ADD: println("  add %s, %s", di, ax); return;
+    case ND_SUB: println("  sub %s, %s", di, ax); return;
+    case ND_MUL: println("  imul %s, %s", di, ax); return;
+    case ND_DIV:
+    case ND_MOD:
+      if (node->ty->is_unsigned) {
+        println("  mov $0, %s", dx);
+        println("  div %s", di);
+      } else {
+        if (node->lhs->ty->size == 8)
+          println("  cqo");
+        else
+          println("  cdq");
+        println("  idiv %s", di);
+      }
 
-    if (node->kind == ND_MOD)
-      println("  mov %%rdx, %%rax");
-    return;
-  case ND_BITAND:
-    println("  and %s, %s", di, ax);
-    return;
-  case ND_BITOR:
-    println("  or %s, %s", di, ax);
-    return;
-  case ND_BITXOR:
-    println("  xor %s, %s", di, ax);
-    return;
-  case ND_EQ:
-  case ND_NE:
-  case ND_LT:
-  case ND_LE:
-    println("  cmp %s, %s", di, ax);
+      if (node->kind == ND_MOD)
+        println("  mov %%rdx, %%rax");
+      return;
+    case ND_BITAND: println("  and %s, %s", di, ax); return;
+    case ND_BITOR: println("  or %s, %s", di, ax); return;
+    case ND_BITXOR: println("  xor %s, %s", di, ax); return;
+    case ND_EQ:
+    case ND_NE:
+    case ND_LT:
+    case ND_LE:
+      println("  cmp %s, %s", di, ax);
 
-    if (node->kind == ND_EQ) {
-      println("  sete %%al");
-    } else if (node->kind == ND_NE) {
-      println("  setne %%al");
-    } else if (node->kind == ND_LT) {
+      if (node->kind == ND_EQ) {
+        println("  sete %%al");
+      } else if (node->kind == ND_NE) {
+        println("  setne %%al");
+      } else if (node->kind == ND_LT) {
+        if (node->lhs->ty->is_unsigned)
+          println("  setb %%al");
+        else
+          println("  setl %%al");
+      } else if (node->kind == ND_LE) {
+        if (node->lhs->ty->is_unsigned)
+          println("  setbe %%al");
+        else
+          println("  setle %%al");
+      }
+
+      println("  movzb %%al, %%rax");
+      return;
+    case ND_SHL:
+      println("  mov %%rdi, %%rcx");
+      println("  shl %%cl, %s", ax);
+      return;
+    case ND_SHR:
+      println("  mov %%rdi, %%rcx");
       if (node->lhs->ty->is_unsigned)
-        println("  setb %%al");
+        println("  shr %%cl, %s", ax);
       else
-        println("  setl %%al");
-    } else if (node->kind == ND_LE) {
-      if (node->lhs->ty->is_unsigned)
-        println("  setbe %%al");
-      else
-        println("  setle %%al");
-    }
-
-    println("  movzb %%al, %%rax");
-    return;
-  case ND_SHL:
-    println("  mov %%rdi, %%rcx");
-    println("  shl %%cl, %s", ax);
-    return;
-  case ND_SHR:
-    println("  mov %%rdi, %%rcx");
-    if (node->lhs->ty->is_unsigned)
-      println("  shr %%cl, %s", ax);
-    else
-      println("  sar %%cl, %s", ax);
-    return;
+        println("  sar %%cl, %s", ax);
+      return;
   }
 
   libcp_error_tok(ctx, node->tok, "invalid expression");
 }
 
-static void gen_stmt(LibcpContext *ctx, LibcpNode *node) {
+static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
   println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
 
   switch (node->kind) {
-  case ND_IF: {
-    int c = count();
-    gen_expr(ctx, node->cond);
-    cmp_zero(node->cond->ty);
-    println("  je  .L.else.%d", c);
-    gen_stmt(ctx, node->then);
-    println("  jmp .L.end.%d", c);
-    println(".L.else.%d:", c);
-    if (node->els)
-      gen_stmt(ctx, node->els);
-    println(".L.end.%d:", c);
-    return;
-  }
-  case ND_WHILE: {
-    // The faithful loop (PLAN B1.2a): the emission is the one the old
-    // `while`-to-`for` rewrite produced - no init, no increment, so
-    // the continue label sits on the closing jump - with this loop's
-    // labels in force for the body.
-    int c = count();
-    char *brk = cur_brk_label;
-    char *cont = cur_cont_label;
-    cur_brk_label = cg(node)->brk_label;
-    cur_cont_label = cg(node)->cont_label;
+    case ND_IF: {
+      int c = count();
+      gen_expr(ctx, node->cond);
+      cmp_zero(node->cond->ty);
+      println("  je  .L.else.%d", c);
+      gen_stmt(ctx, node->then);
+      println("  jmp .L.end.%d", c);
+      println(".L.else.%d:", c);
+      if (node->els)
+        gen_stmt(ctx, node->els);
+      println(".L.end.%d:", c);
+      return;
+    }
+    case ND_WHILE: {
+      // The faithful loop (PLAN B1.2a): the emission is the one the old
+      // `while`-to-`for` rewrite produced - no init, no increment, so
+      // the continue label sits on the closing jump - with this loop's
+      // labels in force for the body.
+      int c          = count();
+      char* brk      = cur_brk_label;
+      char* cont     = cur_cont_label;
+      cur_brk_label  = cg(node)->brk_label;
+      cur_cont_label = cg(node)->cont_label;
 
-    println(".L.begin.%d:", c);
-    gen_expr(ctx, node->cond);
-    cmp_zero(node->cond->ty);
-    println("  je %s", cg(node)->brk_label);
-    gen_stmt(ctx, node->then);
-    println("%s:", cg(node)->cont_label);
-    println("  jmp .L.begin.%d", c);
-    println("%s:", cg(node)->brk_label);
-
-    cur_brk_label = brk;
-    cur_cont_label = cont;
-    return;
-  }
-  case ND_FOR: {
-    int c = count();
-    char *brk = cur_brk_label;
-    char *cont = cur_cont_label;
-    cur_brk_label = cg(node)->brk_label;
-    cur_cont_label = cg(node)->cont_label;
-
-    if (node->init)
-      gen_stmt(ctx, node->init);
-    println(".L.begin.%d:", c);
-    if (node->cond) {
+      println(".L.begin.%d:", c);
       gen_expr(ctx, node->cond);
       cmp_zero(node->cond->ty);
       println("  je %s", cg(node)->brk_label);
-    }
-    gen_stmt(ctx, node->then);
-    println("%s:", cg(node)->cont_label);
-    if (node->inc)
-      gen_expr(ctx, node->inc);
-    println("  jmp .L.begin.%d", c);
-    println("%s:", cg(node)->brk_label);
+      gen_stmt(ctx, node->then);
+      println("%s:", cg(node)->cont_label);
+      println("  jmp .L.begin.%d", c);
+      println("%s:", cg(node)->brk_label);
 
-    cur_brk_label = brk;
-    cur_cont_label = cont;
-    return;
-  }
-  case ND_DO: {
-    int c = count();
-    char *brk = cur_brk_label;
-    char *cont = cur_cont_label;
-    cur_brk_label = cg(node)->brk_label;
-    cur_cont_label = cg(node)->cont_label;
-
-    println(".L.begin.%d:", c);
-    gen_stmt(ctx, node->then);
-    println("%s:", cg(node)->cont_label);
-    gen_expr(ctx, node->cond);
-    cmp_zero(node->cond->ty);
-    println("  jne .L.begin.%d", c);
-    println("%s:", cg(node)->brk_label);
-
-    cur_brk_label = brk;
-    cur_cont_label = cont;
-    return;
-  }
-  case ND_SWITCH: {
-    // A switch owns a break target but not a continue target (PLAN
-    // B1.2a): the continue label of an enclosing loop stays in force
-    // in the body.
-    char *brk = cur_brk_label;
-    cur_brk_label = cg(node)->brk_label;
-
-    gen_expr(ctx, node->cond);
-
-    for (LibcpNode *n = cg(node)->case_next; n; n = cg(n)->case_next) {
-      char *ax = (node->cond->ty->size == 8) ? "%rax" : "%eax";
-      char *di = (node->cond->ty->size == 8) ? "%rdi" : "%edi";
-
-      if (n->begin == n->end) {
-        println("  cmp $%ld, %s", n->begin, ax);
-        println("  je %s", cg(n)->unique_label);
-        continue;
-      }
-
-      // [GNU] Case ranges
-      println("  mov %s, %s", ax, di);
-      println("  sub $%ld, %s", n->begin, di);
-      println("  cmp $%ld, %s", n->end - n->begin, di);
-      println("  jbe %s", cg(n)->unique_label);
-    }
-
-    if (cg(node)->default_case)
-      println("  jmp %s", cg(cg(node)->default_case)->unique_label);
-
-    println("  jmp %s", cg(node)->brk_label);
-    gen_stmt(ctx, node->then);
-    println("%s:", cg(node)->brk_label);
-
-    cur_brk_label = brk;
-    return;
-  }
-  case ND_CASE:
-    println("%s:", cg(node)->unique_label);
-    gen_stmt(ctx, node->lhs);
-    return;
-  case ND_BLOCK:
-    for (LibcpNode *n = node->body; n; n = n->next)
-      gen_stmt(ctx, n);
-    return;
-  case ND_DECL: {
-    // A declaration record reaching the emitter (PLAN B1.2b): a
-    // block-scope static (sema's serializer already wrote its data
-    // image) and a fixed-size object without an initializer produce
-    // no code; an initialized one becomes the comma chain the
-    // expansion used to build in the pass - the zeroing, then the
-    // per-element assignments - emitted here.
-    if (node->attr.is_static || !node->init_resolved)
+      cur_brk_label  = brk;
+      cur_cont_label = cont;
       return;
-
-    LibcpNode *chain = lvar_init_comma(ctx, node->var, node->init_resolved,
-                                  node->decl_init->tok);
-    node->decl_init = NULL;
-    node->init_resolved = NULL;
-    libcp_add_type(ctx, chain);
-    gen_expr(ctx, chain);
-    return;
-  }
-  case ND_BREAK:
-    // Resolved against the innermost loop or switch at emission time
-    // (PLAN B1.2a); sema's check already rejected a stray one.
-    println("  jmp %s", cur_brk_label);
-    return;
-  case ND_CONTINUE:
-    // The innermost loop, whatever switch may lie in between.
-    println("  jmp %s", cur_cont_label);
-    return;
-  case ND_GOTO:
-    println("  jmp %s", cg(node)->unique_label);
-    return;
-  case ND_GOTO_EXPR:
-    gen_expr(ctx, node->lhs);
-    println("  jmp *%%rax");
-    return;
-  case ND_LABEL:
-    println("%s:", cg(node)->unique_label);
-    gen_stmt(ctx, node->lhs);
-    return;
-  case ND_RETURN:
-    if (node->lhs) {
-      gen_expr(ctx, node->lhs);
-      LibcpType *ty = node->lhs->ty;
-
-      switch (ty->kind) {
-      case TY_STRUCT:
-      case TY_UNION:
-        if (ty->size <= 16)
-          copy_struct_reg();
-        else
-          copy_struct_mem();
-        break;
-      }
     }
+    case ND_FOR: {
+      int c          = count();
+      char* brk      = cur_brk_label;
+      char* cont     = cur_cont_label;
+      cur_brk_label  = cg(node)->brk_label;
+      cur_cont_label = cg(node)->cont_label;
 
-    println("  jmp .L.return.%s", current_fn->name);
-    return;
-  case ND_EXPR_STMT:
-    gen_expr(ctx, node->lhs);
-    return;
-  case ND_ASM:
-    println("  %s", node->asm_str);
-    return;
+      if (node->init)
+        gen_stmt(ctx, node->init);
+      println(".L.begin.%d:", c);
+      if (node->cond) {
+        gen_expr(ctx, node->cond);
+        cmp_zero(node->cond->ty);
+        println("  je %s", cg(node)->brk_label);
+      }
+      gen_stmt(ctx, node->then);
+      println("%s:", cg(node)->cont_label);
+      if (node->inc)
+        gen_expr(ctx, node->inc);
+      println("  jmp .L.begin.%d", c);
+      println("%s:", cg(node)->brk_label);
+
+      cur_brk_label  = brk;
+      cur_cont_label = cont;
+      return;
+    }
+    case ND_DO: {
+      int c          = count();
+      char* brk      = cur_brk_label;
+      char* cont     = cur_cont_label;
+      cur_brk_label  = cg(node)->brk_label;
+      cur_cont_label = cg(node)->cont_label;
+
+      println(".L.begin.%d:", c);
+      gen_stmt(ctx, node->then);
+      println("%s:", cg(node)->cont_label);
+      gen_expr(ctx, node->cond);
+      cmp_zero(node->cond->ty);
+      println("  jne .L.begin.%d", c);
+      println("%s:", cg(node)->brk_label);
+
+      cur_brk_label  = brk;
+      cur_cont_label = cont;
+      return;
+    }
+    case ND_SWITCH: {
+      // A switch owns a break target but not a continue target (PLAN
+      // B1.2a): the continue label of an enclosing loop stays in force
+      // in the body.
+      char* brk     = cur_brk_label;
+      cur_brk_label = cg(node)->brk_label;
+
+      gen_expr(ctx, node->cond);
+
+      for (LibcpNode* n = cg(node)->case_next; n; n = cg(n)->case_next) {
+        char* ax = (node->cond->ty->size == 8) ? "%rax" : "%eax";
+        char* di = (node->cond->ty->size == 8) ? "%rdi" : "%edi";
+
+        if (n->begin == n->end) {
+          println("  cmp $%ld, %s", n->begin, ax);
+          println("  je %s", cg(n)->unique_label);
+          continue;
+        }
+
+        // [GNU] Case ranges
+        println("  mov %s, %s", ax, di);
+        println("  sub $%ld, %s", n->begin, di);
+        println("  cmp $%ld, %s", n->end - n->begin, di);
+        println("  jbe %s", cg(n)->unique_label);
+      }
+
+      if (cg(node)->default_case)
+        println("  jmp %s", cg(cg(node)->default_case)->unique_label);
+
+      println("  jmp %s", cg(node)->brk_label);
+      gen_stmt(ctx, node->then);
+      println("%s:", cg(node)->brk_label);
+
+      cur_brk_label = brk;
+      return;
+    }
+    case ND_CASE:
+      println("%s:", cg(node)->unique_label);
+      gen_stmt(ctx, node->lhs);
+      return;
+    case ND_BLOCK:
+      for (LibcpNode* n = node->body; n; n = n->next)
+        gen_stmt(ctx, n);
+      return;
+    case ND_DECL: {
+      // A declaration record reaching the emitter (PLAN B1.2b): a
+      // block-scope static (sema's serializer already wrote its data
+      // image) and a fixed-size object without an initializer produce
+      // no code; an initialized one becomes the comma chain the
+      // expansion used to build in the pass - the zeroing, then the
+      // per-element assignments - emitted here.
+      if (node->attr.is_static || !node->init_resolved)
+        return;
+
+      LibcpNode* chain = lvar_init_comma(ctx, node->var, node->init_resolved, node->decl_init->tok);
+      node->decl_init  = NULL;
+      node->init_resolved = NULL;
+      libcp_add_type(ctx, chain);
+      gen_expr(ctx, chain);
+      return;
+    }
+    case ND_BREAK:
+      // Resolved against the innermost loop or switch at emission time
+      // (PLAN B1.2a); sema's check already rejected a stray one.
+      println("  jmp %s", cur_brk_label);
+      return;
+    case ND_CONTINUE:
+      // The innermost loop, whatever switch may lie in between.
+      println("  jmp %s", cur_cont_label);
+      return;
+    case ND_GOTO: println("  jmp %s", cg(node)->unique_label); return;
+    case ND_GOTO_EXPR:
+      gen_expr(ctx, node->lhs);
+      println("  jmp *%%rax");
+      return;
+    case ND_LABEL:
+      println("%s:", cg(node)->unique_label);
+      gen_stmt(ctx, node->lhs);
+      return;
+    case ND_RETURN:
+      if (node->lhs) {
+        gen_expr(ctx, node->lhs);
+        LibcpType* ty = node->lhs->ty;
+
+        switch (ty->kind) {
+          case TY_STRUCT:
+          case TY_UNION:
+            if (ty->size <= 16)
+              copy_struct_reg();
+            else
+              copy_struct_mem();
+            break;
+        }
+      }
+
+      println("  jmp .L.return.%s", current_fn->name);
+      return;
+    case ND_EXPR_STMT: gen_expr(ctx, node->lhs); return;
+    case ND_ASM: println("  %s", node->asm_str); return;
   }
 
   libcp_error_tok(ctx, node->tok, "invalid statement");
@@ -1691,24 +1637,24 @@ static void gen_stmt(LibcpContext *ctx, LibcpNode *node) {
 static int label_base;  // the counter's stopping point, taken once
 static int label_seq;   // labels handed out since then
 
-static LibcpNode *current_switch;
+static LibcpNode* current_switch;
 static LibcpNodeArray cg_labels;  // the labels of the function being shaped
 
-static char *new_label(LibcpContext *ctx) {
+static char* new_label(LibcpContext* ctx) {
   return libcp_format(ctx, ".L..%d", label_base + label_seq++);
 }
 
-static void shape_node(LibcpContext *ctx, LibcpNode *node);
-static bool expand_decl(LibcpContext *ctx, LibcpNode *node);
-static void shape_init_exprs(LibcpContext *ctx, LibcpInitTree *init);
+static void shape_node(LibcpContext* ctx, LibcpNode* node);
+static bool expand_decl(LibcpContext* ctx, LibcpNode* node);
+static void shape_init_exprs(LibcpContext* ctx, LibcpInitTree* init);
 
 // Whether a declaration's type involves a VLA anywhere: its runtime
 // size slot has to exist before assign_lvar_offsets runs, so such a
 // record is still expanded in the pass. Every other declaration keeps
 // its place and reaches the emitter, which builds its initializer
 // chain at emission time (PLAN B1.2b).
-static bool decl_needs_vla_size(LibcpNode *node) {
-  for (LibcpType *t = node->var->ty; t; t = t->base)
+static bool decl_needs_vla_size(LibcpNode* node) {
+  for (LibcpType* t = node->var->ty; t; t = t->base)
     if (t->kind == TY_VLA)
       return true;
   return false;
@@ -1722,33 +1668,31 @@ static bool decl_needs_vla_size(LibcpNode *node) {
 // unhooked here (PLAN A8.2). A nested function's body is not entered
 // from here: the program list is its home and this pass walks it from
 // there exactly once (contract 3(e)).
-static void shape_chain(LibcpContext *ctx, LibcpNode **head) {
-  for (LibcpNode **pp = head; *pp;) {
-    LibcpNode *n = *pp;
+static void shape_chain(LibcpContext* ctx, LibcpNode** head) {
+  for (LibcpNode** pp = head; *pp;) {
+    LibcpNode* n = *pp;
 
     switch (n->kind) {
-    case ND_TYPEDEF:
-    case ND_ENUM_CONST:
-    case ND_GVAR_DECL:
-    case ND_FUNCDEF:
-      *pp = n->next;
-      continue;
-    case ND_DECL:
-      if (decl_needs_vla_size(n))
-        expand_decl(ctx, n);
-      else
-        // The record stays; this walk is what still reaches the
-        // residue kinds a resolved initializer may hold (op=, an
-        // inc/dec, a VLA sizeof, a compound literal, a
-        // struct-returning call - the additive scaling is no longer
-        // one of them, it is lowered at emission, PLAN B2).
-        shape_init_exprs(ctx, n->init_resolved);
-      pp = &(*pp)->next;
-      continue;
-    default:
-      shape_node(ctx, n);
-      pp = &(*pp)->next;
-      continue;
+      case ND_TYPEDEF:
+      case ND_ENUM_CONST:
+      case ND_GVAR_DECL:
+      case ND_FUNCDEF: *pp = n->next; continue;
+      case ND_DECL:
+        if (decl_needs_vla_size(n))
+          expand_decl(ctx, n);
+        else
+          // The record stays; this walk is what still reaches the
+          // residue kinds a resolved initializer may hold (op=, an
+          // inc/dec, a VLA sizeof, a compound literal, a
+          // struct-returning call - the additive scaling is no longer
+          // one of them, it is lowered at emission, PLAN B2).
+          shape_init_exprs(ctx, n->init_resolved);
+        pp = &(*pp)->next;
+        continue;
+      default:
+        shape_node(ctx, n);
+        pp = &(*pp)->next;
+        continue;
     }
   }
 }
@@ -1756,7 +1700,7 @@ static void shape_chain(LibcpContext *ctx, LibcpNode **head) {
 // Descends every subtree a node owns, statements and expressions
 // alike: a break can sit in a statement expression, which is an
 // expression node holding a statement chain.
-static void shape_children(LibcpContext *ctx, LibcpNode *node) {
+static void shape_children(LibcpContext* ctx, LibcpNode* node) {
   shape_node(ctx, node->lhs);
   shape_node(ctx, node->rhs);
   shape_node(ctx, node->cond);
@@ -1774,13 +1718,13 @@ static void shape_children(LibcpContext *ctx, LibcpNode *node) {
 // The temporaries a compound-assignment rewrite introduces are slots
 // of the consumer: they are created here so that they land in the
 // frame layout before assign_lvar_offsets runs (PLAN contract 3).
-static LibcpObj *new_lvar(char *name, LibcpType *ty) {
-  LibcpObj *var = calloc(1, sizeof(LibcpObj));
-  var->name = name;
-  var->ty = ty;
-  var->align = ty->align;
-  var->is_local = true;
-  var->next = current_fn->locals;
+static LibcpObj* new_lvar(char* name, LibcpType* ty) {
+  LibcpObj* var      = calloc(1, sizeof(LibcpObj));
+  var->name          = name;
+  var->ty            = ty;
+  var->align         = ty->align;
+  var->is_local      = true;
+  var->next          = current_fn->locals;
   current_fn->locals = var;
   return var;
 }
@@ -1788,9 +1732,13 @@ static LibcpObj *new_lvar(char *name, LibcpType *ty) {
 // The scaled operand of an additive operator on a pointer: `p + n`
 // advances by sizeof(*p) * n rather than by n, and when the pointee is
 // a VLA, by its runtime size rather than a compile-time one.
-static LibcpNode *scale_rhs(LibcpContext *ctx, LibcpType *ptr_ty, LibcpNode *rhs, LibcpToken *tok) {
+static LibcpNode* scale_rhs(LibcpContext* ctx, LibcpType* ptr_ty, LibcpNode* rhs, LibcpToken* tok) {
   if (ptr_ty->base->kind == TY_VLA)
-    return libcp_new_binary(ctx, ND_MUL, rhs, libcp_new_var_node(ctx, cg_type(ptr_ty->base)->vla_size, tok), tok);
+    return libcp_new_binary(ctx,
+                            ND_MUL,
+                            rhs,
+                            libcp_new_var_node(ctx, cg_type(ptr_ty->base)->vla_size, tok),
+                            tok);
   return libcp_new_binary(ctx, ND_MUL, rhs, libcp_new_long(ctx, ptr_ty->base->size, tok), tok);
 }
 
@@ -1799,7 +1747,7 @@ static LibcpNode *scale_rhs(LibcpContext *ctx, LibcpType *ptr_ty, LibcpNode *rhs
 // element count the `ptr - ptr` division scales down), so the emitter
 // must emit it as plain machine arithmetic - gen_expr lower a faithful
 // `+`/`-` itself and would scale this one a second time (PLAN B2).
-static LibcpNode *mark_lowered(LibcpNode *node) {
+static LibcpNode* mark_lowered(LibcpNode* node) {
   cg(node)->is_lowered = true;
   return node;
 }
@@ -1813,7 +1761,7 @@ static LibcpNode *mark_lowered(LibcpNode *node) {
 // It is both the helper codegen's own builders call and the definition
 // of the faithful lowering the emitter runs at emission (PLAN B2); its
 // product carries the mark either way.
-static LibcpNode *new_add(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok) {
+static LibcpNode* new_add(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, LibcpToken* tok) {
   libcp_add_type(ctx, lhs);
   libcp_add_type(ctx, rhs);
 
@@ -1826,9 +1774,9 @@ static LibcpNode *new_add(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, Lib
 
   // Canonicalize `num + ptr` to `ptr + num`.
   if (!lhs->ty->base && rhs->ty->base) {
-    LibcpNode *tmp = lhs;
-    lhs = rhs;
-    rhs = tmp;
+    LibcpNode* tmp = lhs;
+    lhs            = rhs;
+    rhs            = tmp;
   }
 
   // ptr + num; a pointer to a VLA scales by its runtime size
@@ -1836,7 +1784,7 @@ static LibcpNode *new_add(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, Lib
 }
 
 // Like `+`, `-` is overloaded for the pointer type.
-static LibcpNode *new_sub(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok) {
+static LibcpNode* new_sub(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, LibcpToken* tok) {
   libcp_add_type(ctx, lhs);
   libcp_add_type(ctx, rhs);
 
@@ -1859,8 +1807,8 @@ static LibcpNode *new_sub(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, Lib
   // through the emitter under the `DIV` just like a built `ptr + num`
   // does.
   if (lhs->ty->base && rhs->ty->base) {
-    LibcpNode *node = mark_lowered(libcp_new_binary(ctx, ND_SUB, lhs, rhs, tok));
-    node->ty = libcp_ty_long;
+    LibcpNode* node = mark_lowered(libcp_new_binary(ctx, ND_SUB, lhs, rhs, tok));
+    node->ty        = libcp_ty_long;
     return libcp_new_arith(ctx, ND_DIV, node, libcp_new_num(ctx, lhs->ty->base->size, tok), tok);
   }
 
@@ -1873,33 +1821,39 @@ static LibcpNode *new_sub(LibcpContext *ctx, LibcpNode *lhs, LibcpNode *rhs, Lib
 // from sema at A7.1 (it was the mirror of this function for one step):
 // the size variables are slots of this consumer, which is also why the
 // builder cannot live in the library any more.
-static LibcpNode *compute_vla_size(LibcpContext *ctx, LibcpType *ty, LibcpToken *tok) {
-  LibcpNode *node = ty->base ? compute_vla_size(ctx, ty->base, tok) : NULL;
+static LibcpNode* compute_vla_size(LibcpContext* ctx, LibcpType* ty, LibcpToken* tok) {
+  LibcpNode* node = ty->base ? compute_vla_size(ctx, ty->base, tok) : NULL;
 
   if (ty->kind != TY_VLA)
     return node;
 
-  LibcpNode *base_sz;
+  LibcpNode* base_sz;
   if (ty->base->kind == TY_VLA)
     base_sz = libcp_new_var_node(ctx, cg_type(ty->base)->vla_size, tok);
   else
     base_sz = libcp_new_num(ctx, ty->base->size, tok);
 
   cg_type(ty)->vla_size = new_lvar("", libcp_ty_ulong);
-  LibcpNode *expr = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok),
-                          libcp_new_binary(ctx, ND_MUL, ty->vla_len, base_sz, tok),
-                          tok);
+  LibcpNode* expr       = libcp_new_binary(ctx,
+                                     ND_ASSIGN,
+                                     libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok),
+                                     libcp_new_binary(ctx, ND_MUL, ty->vla_len, base_sz, tok),
+                                     tok);
   return node ? libcp_new_binary(ctx, ND_COMMA, node, expr, tok) : expr;
 }
 
 // `sizeof` of a VLA type: a reference to its runtime size variable,
 // computed first if this type has not had its size computed yet
 // (e.g. `sizeof(int[n])` with a fresh type).
-static LibcpNode *vla_size_expr(LibcpContext *ctx, LibcpType *ty, LibcpToken *tok) {
+static LibcpNode* vla_size_expr(LibcpContext* ctx, LibcpType* ty, LibcpToken* tok) {
   if (cg_type(ty)->vla_size)
     return libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok);
-  LibcpNode *lhs = compute_vla_size(ctx, ty, tok);
-  return libcp_new_binary(ctx, ND_COMMA, lhs, libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok), tok);
+  LibcpNode* lhs = compute_vla_size(ctx, ty, tok);
+  return libcp_new_binary(ctx,
+                          ND_COMMA,
+                          lhs,
+                          libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok),
+                          tok);
 }
 
 // The target expression of one initializer assignment (PLAN A8.1,
@@ -1908,20 +1862,20 @@ static LibcpNode *vla_size_expr(LibcpContext *ctx, LibcpType *ty, LibcpToken *to
 // dereference of the scaled addition - the shape the faithful
 // subscript would lower to - so no intermediate node needs a second
 // walk (contract 3(d)).
-static LibcpNode *init_desg_expr(LibcpContext *ctx, LibcpInitPath *desg, LibcpToken *tok) {
+static LibcpNode* init_desg_expr(LibcpContext* ctx, LibcpInitPath* desg, LibcpToken* tok) {
   if (desg->var)
     return libcp_new_var_node(ctx, desg->var, tok);
 
   if (desg->member) {
-    LibcpNode *node = libcp_new_unary(ctx, ND_MEMBER, init_desg_expr(ctx, desg->next, tok), tok);
-    node->member = desg->member;
+    LibcpNode* node = libcp_new_unary(ctx, ND_MEMBER, init_desg_expr(ctx, desg->next, tok), tok);
+    node->member    = desg->member;
     return node;
   }
 
-  LibcpNode *lhs = init_desg_expr(ctx, desg->next, tok);
-  LibcpNode *add = new_add(ctx, lhs, libcp_new_num(ctx, desg->idx, tok), tok);
-  LibcpNode *node = libcp_new_unary(ctx, ND_DEREF, add, tok);
-  node->ty = add->ty->base;
+  LibcpNode* lhs  = init_desg_expr(ctx, desg->next, tok);
+  LibcpNode* add  = new_add(ctx, lhs, libcp_new_num(ctx, desg->idx, tok), tok);
+  LibcpNode* node = libcp_new_unary(ctx, ND_DEREF, add, tok);
+  node->ty        = add->ty->base;
   return node;
 }
 
@@ -1929,30 +1883,34 @@ static LibcpNode *init_desg_expr(LibcpContext *ctx, LibcpInitPath *desg, LibcpTo
 // resolved tree (moved from sema at A8.1). Aggregates recurse into
 // their children; a union walks only the member the record selected;
 // a partial list is preceded by the MEMZERO in lvar_init_comma below.
-static LibcpNode *create_lvar_init(LibcpContext *ctx, LibcpInitTree *init, LibcpType *ty, LibcpInitPath *desg, LibcpToken *tok) {
+static LibcpNode* create_lvar_init(LibcpContext* ctx,
+                                   LibcpInitTree* init,
+                                   LibcpType* ty,
+                                   LibcpInitPath* desg,
+                                   LibcpToken* tok) {
   if (ty->kind == TY_ARRAY) {
-    LibcpNode *node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
+    LibcpNode* node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
     for (int i = 0; i < ty->array_len; i++) {
       LibcpInitPath desg2 = {desg, i};
-      LibcpNode *rhs = create_lvar_init(ctx, init->children[i], ty->base, &desg2, tok);
-      node = libcp_new_binary(ctx, ND_COMMA, node, rhs, tok);
+      LibcpNode* rhs      = create_lvar_init(ctx, init->children[i], ty->base, &desg2, tok);
+      node                = libcp_new_binary(ctx, ND_COMMA, node, rhs, tok);
     }
     return node;
   }
 
   if (ty->kind == TY_STRUCT && !init->expr) {
-    LibcpNode *node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
+    LibcpNode* node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
 
-    for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
+    for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
       LibcpInitPath desg2 = {desg, 0, mem};
-      LibcpNode *rhs = create_lvar_init(ctx, init->children[mem->idx], mem->ty, &desg2, tok);
-      node = libcp_new_binary(ctx, ND_COMMA, node, rhs, tok);
+      LibcpNode* rhs      = create_lvar_init(ctx, init->children[mem->idx], mem->ty, &desg2, tok);
+      node                = libcp_new_binary(ctx, ND_COMMA, node, rhs, tok);
     }
     return node;
   }
 
   if (ty->kind == TY_UNION) {
-    LibcpMember *mem = init->mem ? init->mem : ty->members;
+    LibcpMember* mem    = init->mem ? init->mem : ty->members;
     LibcpInitPath desg2 = {desg, 0, mem};
     return create_lvar_init(ctx, init->children[mem->idx], mem->ty, &desg2, tok);
   }
@@ -1960,7 +1918,7 @@ static LibcpNode *create_lvar_init(LibcpContext *ctx, LibcpInitTree *init, Libcp
   if (!init->expr)
     return libcp_new_node(ctx, ND_NULL_EXPR, tok);
 
-  LibcpNode *lhs = init_desg_expr(ctx, desg, tok);
+  LibcpNode* lhs = init_desg_expr(ctx, desg, tok);
   return libcp_new_binary(ctx, ND_ASSIGN, lhs, init->expr, tok);
 }
 
@@ -1971,28 +1929,29 @@ static LibcpNode *create_lvar_init(LibcpContext *ctx, LibcpInitTree *init, Libcp
 // - but the initializer expressions are old nodes nothing else in the
 // tree references, and an expression shared by several records (a
 // range designator) is shaped exactly once here.
-static void shape_init_exprs(LibcpContext *ctx, LibcpInitTree *init);
+static void shape_init_exprs(LibcpContext* ctx, LibcpInitTree* init);
 
 // Build the MEMZERO + assignment comma chain that initializes a local
 // variable from its resolved initializer tree. `tok` anchors the
 // synthesized nodes; the record's first token is where the parser used
 // to anchor them. Moved from sema at A8.1 with the declaration
 // expansion; sema itself no longer builds it.
-static LibcpNode *lvar_init_comma(LibcpContext *ctx, LibcpObj *var, LibcpInitTree *init, LibcpToken *tok) {
+static LibcpNode*
+    lvar_init_comma(LibcpContext* ctx, LibcpObj* var, LibcpInitTree* init, LibcpToken* tok) {
   LibcpInitPath desg = {NULL, 0, NULL, var};
 
   // If a partial initializer list is given, the standard requires
   // that unspecified elements are set to 0. Here, we simply
   // zero-initialize the entire memory region of a variable before
   // initializing it with user-supplied values.
-  LibcpNode *lhs = libcp_new_node(ctx, ND_MEMZERO, tok);
-  lhs->var = var;
+  LibcpNode* lhs = libcp_new_node(ctx, ND_MEMZERO, tok);
+  lhs->var       = var;
 
-  LibcpNode *rhs = create_lvar_init(ctx, init, var->ty, &desg, tok);
+  LibcpNode* rhs = create_lvar_init(ctx, init, var->ty, &desg, tok);
   return libcp_new_binary(ctx, ND_COMMA, lhs, rhs, tok);
 }
 
-static void shape_init_exprs(LibcpContext *ctx, LibcpInitTree *init) {
+static void shape_init_exprs(LibcpContext* ctx, LibcpInitTree* init) {
   if (!init)
     return;
 
@@ -2010,7 +1969,7 @@ static void shape_init_exprs(LibcpContext *ctx, LibcpInitTree *init) {
     return;
   }
 
-  for (LibcpMember *mem = init->ty->members; mem; mem = mem->next)
+  for (LibcpMember* mem = init->ty->members; mem; mem = mem->next)
     shape_init_exprs(ctx, init->children[mem->idx]);
 }
 
@@ -2024,17 +1983,17 @@ static void shape_init_exprs(LibcpContext *ctx, LibcpInitTree *init) {
 // initializer record resolved, and the block-scope static's data
 // image is already in .data. Moved from sema at A8.1; the VLA half
 // came over at A7.1, when the size slots did.
-static bool expand_decl(LibcpContext *ctx, LibcpNode *node) {
-  LibcpObj *var = node->var;
-  LibcpToken *tok = node->tok;
+static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
+  LibcpObj* var   = node->var;
+  LibcpToken* tok = node->tok;
 
   // A block-scope static produces no statement: its data image was
   // serialized by the annotation pass.
   if (node->attr.is_static)
     return false;
 
-  LibcpNode *vla_size = NULL;
-  for (LibcpType *t = var->ty; t; t = t->base) {
+  LibcpNode* vla_size = NULL;
+  for (LibcpType* t = var->ty; t; t = t->base) {
     if (t->kind == TY_VLA) {
       // The dimensions the size computation embeds have never been
       // through this pass - the type is their only reference. Shape
@@ -2049,17 +2008,20 @@ static bool expand_decl(LibcpContext *ctx, LibcpNode *node) {
     }
   }
 
-  LibcpNode *lowered = NULL;
+  LibcpNode* lowered = NULL;
 
   if (var->ty->kind == TY_VLA) {
     // `var = alloca(<size>)`: the size chain computed just above.
-    lowered = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_vla_ptr(ctx, var, tok),
-                         libcp_new_alloca(ctx, libcp_new_var_node(ctx, cg_type(var->ty)->vla_size, tok)),
-                         tok);
+    lowered = libcp_new_binary(
+        ctx,
+        ND_ASSIGN,
+        libcp_new_vla_ptr(ctx, var, tok),
+        libcp_new_alloca(ctx, libcp_new_var_node(ctx, cg_type(var->ty)->vla_size, tok)),
+        tok);
   } else if (node->init_resolved) {
     // The initializer comma; a pointer to a VLA reaches here too,
     // with the size chain sequenced in front of the assignments.
-    lowered = lvar_init_comma(ctx, var, node->init_resolved, node->decl_init->tok);
+    lowered         = lvar_init_comma(ctx, var, node->init_resolved, node->decl_init->tok);
     node->decl_init = NULL;
     // The initializer expressions have never been through this pass
     // and nothing else in the tree references them; the size chain
@@ -2074,9 +2036,8 @@ static bool expand_decl(LibcpContext *ctx, LibcpNode *node) {
     return false;
 
   node->kind = ND_EXPR_STMT;
-  node->lhs = (vla_size && lowered)
-                ? libcp_new_binary(ctx, ND_COMMA, vla_size, lowered, tok)
-                : (lowered ? lowered : vla_size);
+  node->lhs  = (vla_size && lowered) ? libcp_new_binary(ctx, ND_COMMA, vla_size, lowered, tok) :
+                                       (lowered ? lowered : vla_size);
   libcp_add_type(ctx, node);
   return true;
 }
@@ -2087,31 +2048,32 @@ static bool expand_decl(LibcpContext *ctx, LibcpNode *node) {
 // which is the shape `+`/`-` produce; the others are handed to libcp_add_type,
 // which converts the multiplicative and bitwise ones and leaves the
 // shifts alone.
-static LibcpNode *combine(LibcpContext *ctx, LibcpNodeKind op, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok) {
+static LibcpNode*
+    combine(LibcpContext* ctx, LibcpNodeKind op, LibcpNode* lhs, LibcpNode* rhs, LibcpToken* tok) {
   // The additive case takes operands that already went through
   // new_add/new_sub (this combines a read-modify-write value with its
   // scaled operand), so it is a plain machine arithmetic node too.
   if (op == ND_ADD || op == ND_SUB)
     return mark_lowered(libcp_new_arith(ctx, op, lhs, rhs, tok));
 
-  LibcpNode *node = libcp_new_binary(ctx, op, lhs, rhs, tok);
+  LibcpNode* node = libcp_new_binary(ctx, op, lhs, rhs, tok);
   libcp_add_type(ctx, node);
   return node;
 }
 
 // Build the `lhs op rhs` operand expression for a compound assignment
 // driven by node->op.
-static LibcpNode *compound_op(LibcpContext *ctx, LibcpNode *node, LibcpNode *lhs, LibcpToken *tok) {
-  LibcpNode *rhs = node->rhs;
+static LibcpNode* compound_op(LibcpContext* ctx, LibcpNode* node, LibcpNode* lhs, LibcpToken* tok) {
+  LibcpNode* rhs = node->rhs;
 
   // `+=`/`-=` are routed through new_add/new_sub so that the operand
   // checks run and the pointer arithmetic is scaled exactly as for
   // plain `+`/`-`; the operand they settle on is the one the rebuilt
   // expression combines with `lhs`.
   if (node->op == ND_ADD || node->op == ND_SUB) {
-    LibcpNode *scaled = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok)
-                                      : new_sub(ctx, node->lhs, node->rhs, tok);
-    rhs = scaled->rhs;
+    LibcpNode* scaled = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok) :
+                                             new_sub(ctx, node->lhs, node->rhs, tok);
+    rhs               = scaled->rhs;
   }
 
   return combine(ctx, node->op, lhs, rhs, tok);
@@ -2125,10 +2087,10 @@ static LibcpNode *compound_op(LibcpContext *ctx, LibcpNode *node, LibcpNode *lhs
 // However, if a given expression is of form `A.x op= C`, the input is
 // converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
 // to bitfields.
-static LibcpNode *to_assign(LibcpContext *ctx, LibcpNode *node) {
+static LibcpNode* to_assign(LibcpContext* ctx, LibcpNode* node) {
   libcp_add_type(ctx, node->lhs);
   libcp_add_type(ctx, node->rhs);
-  LibcpToken *tok = node->tok;
+  LibcpToken* tok = node->tok;
 
   // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
   // The member keeps its marker now (PLAN B1.1b), so the address of
@@ -2141,27 +2103,30 @@ static LibcpNode *to_assign(LibcpContext *ctx, LibcpNode *node) {
   // the member on it; the slot and the built shapes are the ones the
   // pre-B lowering produced.
   if (node->lhs->kind == ND_MEMBER) {
-    LibcpNode *operand = node->lhs->lhs;
-    bool arrow = node->lhs->arrow_tok;
-    LibcpObj *var = new_lvar("", libcp_pointer_to(ctx, arrow ? operand->ty->base : operand->ty));
-    LibcpNode *addr = arrow ? operand : libcp_new_unary(ctx, ND_ADDR, operand, tok);
+    LibcpNode* operand = node->lhs->lhs;
+    bool arrow         = node->lhs->arrow_tok;
+    LibcpObj* var   = new_lvar("", libcp_pointer_to(ctx, arrow ? operand->ty->base : operand->ty));
+    LibcpNode* addr = arrow ? operand : libcp_new_unary(ctx, ND_ADDR, operand, tok);
 
-    LibcpNode *expr1 = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, var, tok),
-                             addr, tok);
+    LibcpNode* expr1 =
+        libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, var, tok), addr, tok);
 
-    LibcpNode *expr2 = libcp_new_unary(ctx, ND_MEMBER,
-                            libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
-                            tok);
+    LibcpNode* expr2 =
+        libcp_new_unary(ctx,
+                        ND_MEMBER,
+                        libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
+                        tok);
     expr2->member = node->lhs->member;
 
-    LibcpNode *expr3 = libcp_new_unary(ctx, ND_MEMBER,
-                            libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
-                            tok);
+    LibcpNode* expr3 =
+        libcp_new_unary(ctx,
+                        ND_MEMBER,
+                        libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
+                        tok);
     expr3->member = node->lhs->member;
 
-    LibcpNode *expr4 = libcp_new_binary(ctx, ND_ASSIGN, expr2,
-                             compound_op(ctx, node, expr3, tok),
-                             tok);
+    LibcpNode* expr4 =
+        libcp_new_binary(ctx, ND_ASSIGN, expr2, compound_op(ctx, node, expr3, tok), tok);
 
     return libcp_new_binary(ctx, ND_COMMA, expr1, expr4, tok);
   }
@@ -2179,40 +2144,49 @@ static LibcpNode *to_assign(LibcpContext *ctx, LibcpNode *node) {
     // The `val` temporary holds the operand as `op` would have it, so
     // for `+=`/`-=` the scaling is computed eagerly here - through
     // new_add/new_sub, which is also what runs the operand checks.
-    LibcpNode *rhs = node->rhs;
+    LibcpNode* rhs = node->rhs;
     if (node->op == ND_ADD || node->op == ND_SUB) {
-      LibcpNode *operand = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok)
-                                         : new_sub(ctx, node->lhs, node->rhs, tok);
-      rhs = operand->rhs;
+      LibcpNode* operand = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok) :
+                                                new_sub(ctx, node->lhs, node->rhs, tok);
+      rhs                = operand->rhs;
     }
     libcp_add_type(ctx, rhs);
 
     LibcpNode head = {};
-    LibcpNode *cur = &head;
+    LibcpNode* cur = &head;
 
-    LibcpObj *addr = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
-    LibcpObj *val = new_lvar("", rhs->ty);
-    LibcpObj *old = new_lvar("", node->lhs->ty);
-    LibcpObj *new = new_lvar("", node->lhs->ty);
-
-    cur = cur->next =
-      libcp_new_unary(ctx, ND_EXPR_STMT,
-                libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, addr, tok),
-                           libcp_new_unary(ctx, ND_ADDR, node->lhs, tok), tok),
-                tok);
+    LibcpObj* addr = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
+    LibcpObj* val  = new_lvar("", rhs->ty);
+    LibcpObj* old  = new_lvar("", node->lhs->ty);
+    LibcpObj* new  = new_lvar("", node->lhs->ty);
 
     cur = cur->next =
-      libcp_new_unary(ctx, ND_EXPR_STMT,
-                libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, val, tok), rhs, tok),
-                tok);
+        libcp_new_unary(ctx,
+                        ND_EXPR_STMT,
+                        libcp_new_binary(ctx,
+                                         ND_ASSIGN,
+                                         libcp_new_var_node(ctx, addr, tok),
+                                         libcp_new_unary(ctx, ND_ADDR, node->lhs, tok),
+                                         tok),
+                        tok);
 
-    cur = cur->next =
-      libcp_new_unary(ctx, ND_EXPR_STMT,
-                libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, old, tok),
-                           libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, addr, tok), tok), tok),
-                tok);
+    cur = cur->next = libcp_new_unary(
+        ctx,
+        ND_EXPR_STMT,
+        libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, val, tok), rhs, tok),
+        tok);
 
-    LibcpNode *loop = libcp_new_node(ctx, ND_DO, tok);
+    cur = cur->next = libcp_new_unary(
+        ctx,
+        ND_EXPR_STMT,
+        libcp_new_binary(ctx,
+                         ND_ASSIGN,
+                         libcp_new_var_node(ctx, old, tok),
+                         libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, addr, tok), tok),
+                         tok),
+        tok);
+
+    LibcpNode* loop = libcp_new_node(ctx, ND_DO, tok);
 
     // The retry loop takes its labels here rather than through a
     // shape_node descent: its interior is codegen-built lowered form
@@ -2223,56 +2197,67 @@ static LibcpNode *to_assign(LibcpContext *ctx, LibcpNode *node) {
     // operands). The allocation order - break before continue, at the
     // point the enclosing statement was reached - matches what the
     // whole-tree descent would have produced.
-    cg(loop)->brk_label = new_label(ctx);
+    cg(loop)->brk_label  = new_label(ctx);
     cg(loop)->cont_label = new_label(ctx);
 
     // `val` already holds the operand as `op` would have it - scaled
     // for an additive operator on a pointer - so the retry loop
     // combines it with the old value without scaling again.
-    LibcpNode *body = libcp_new_binary(ctx, ND_ASSIGN,
-                            libcp_new_var_node(ctx, new, tok),
-                            combine(ctx, node->op, libcp_new_var_node(ctx, old, tok),
-                                    libcp_new_var_node(ctx, val, tok), tok),
-                            tok);
+    LibcpNode* body = libcp_new_binary(ctx,
+                                       ND_ASSIGN,
+                                       libcp_new_var_node(ctx, new, tok),
+                                       combine(ctx,
+                                               node->op,
+                                               libcp_new_var_node(ctx, old, tok),
+                                               libcp_new_var_node(ctx, val, tok),
+                                               tok),
+                                       tok);
 
-    loop->then = libcp_new_node(ctx, ND_BLOCK, tok);
+    loop->then       = libcp_new_node(ctx, ND_BLOCK, tok);
     loop->then->body = libcp_new_unary(ctx, ND_EXPR_STMT, body, tok);
 
-    LibcpNode *cas = libcp_new_node(ctx, ND_CAS, tok);
-    cas->cas_addr = libcp_new_var_node(ctx, addr, tok);
-    cas->cas_old = libcp_new_unary(ctx, ND_ADDR, libcp_new_var_node(ctx, old, tok), tok);
-    cas->cas_new = libcp_new_var_node(ctx, new, tok);
-    loop->cond = libcp_new_unary(ctx, ND_NOT, cas, tok);
+    LibcpNode* cas = libcp_new_node(ctx, ND_CAS, tok);
+    cas->cas_addr  = libcp_new_var_node(ctx, addr, tok);
+    cas->cas_old   = libcp_new_unary(ctx, ND_ADDR, libcp_new_var_node(ctx, old, tok), tok);
+    cas->cas_new   = libcp_new_var_node(ctx, new, tok);
+    loop->cond     = libcp_new_unary(ctx, ND_NOT, cas, tok);
 
     cur = cur->next = loop;
     cur = cur->next = libcp_new_unary(ctx, ND_EXPR_STMT, libcp_new_var_node(ctx, new, tok), tok);
 
-    LibcpNode *stmt_expr = libcp_new_node(ctx, ND_STMT_EXPR, tok);
-    stmt_expr->body = head.next;
+    LibcpNode* stmt_expr = libcp_new_node(ctx, ND_STMT_EXPR, tok);
+    stmt_expr->body      = head.next;
     return stmt_expr;
   }
 
   // Convert `A op= B` to ``tmp = &A, *tmp = *tmp op B`.
-  LibcpObj *var = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
+  LibcpObj* var = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
 
-  LibcpNode *expr1 = libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, var, tok),
-                           libcp_new_unary(ctx, ND_ADDR, node->lhs, tok), tok);
+  LibcpNode* expr1 = libcp_new_binary(ctx,
+                                      ND_ASSIGN,
+                                      libcp_new_var_node(ctx, var, tok),
+                                      libcp_new_unary(ctx, ND_ADDR, node->lhs, tok),
+                                      tok);
 
-  LibcpNode *expr2 =
-    libcp_new_binary(ctx, ND_ASSIGN,
-               libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
-               compound_op(ctx, node, libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok), tok),
-               tok);
+  LibcpNode* expr2 = libcp_new_binary(
+      ctx,
+      ND_ASSIGN,
+      libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
+      compound_op(ctx,
+                  node,
+                  libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
+                  tok),
+      tok);
 
   return libcp_new_binary(ctx, ND_COMMA, expr1, expr2, tok);
 }
 
 // Convert A++ to `(typeof A)((A += 1) - 1)`. Moved from parse.c.
-static LibcpNode *new_inc_dec(LibcpContext *ctx, LibcpNode *node, LibcpToken *tok, int addend) {
+static LibcpNode* new_inc_dec(LibcpContext* ctx, LibcpNode* node, LibcpToken* tok, int addend) {
   libcp_add_type(ctx, node);
-  LibcpNode *expr = libcp_new_binary(ctx, ND_ASSIGN, node, libcp_new_num(ctx, addend, tok), tok);
-  expr->op = ND_ADD;
-  LibcpNode *sub = new_add(ctx, to_assign(ctx, expr), libcp_new_num(ctx, -addend, tok), tok);
+  LibcpNode* expr = libcp_new_binary(ctx, ND_ASSIGN, node, libcp_new_num(ctx, addend, tok), tok);
+  expr->op        = ND_ADD;
+  LibcpNode* sub  = new_add(ctx, to_assign(ctx, expr), libcp_new_num(ctx, -addend, tok), tok);
   return libcp_new_cast(ctx, sub, node->ty);
 }
 
@@ -2281,184 +2266,184 @@ static LibcpNode *new_inc_dec(LibcpContext *ctx, LibcpNode *node, LibcpToken *to
 // emitter resolves a break or a continue against the innermost one at
 // emission time (PLAN B1.2a); the descent here only makes sure every
 // loop has them.
-static void shape_node(LibcpContext *ctx, LibcpNode *node) {
+static void shape_node(LibcpContext* ctx, LibcpNode* node) {
   if (!node)
     return;
 
   switch (node->kind) {
-  case ND_WHILE:
-  case ND_DO:
-  case ND_FOR: {
-    cg(node)->brk_label = new_label(ctx);
-    cg(node)->cont_label = new_label(ctx);
+    case ND_WHILE:
+    case ND_DO:
+    case ND_FOR: {
+      cg(node)->brk_label  = new_label(ctx);
+      cg(node)->cont_label = new_label(ctx);
 
-    shape_children(ctx, node);
+      shape_children(ctx, node);
 
-    // gen_stmt's `for` has a single-statement init slot, so an init
-    // chain the expansion left with more than one statement - or none
-    // at all - is reduced here (PLAN A8.1, moved from sema).
-    if (node->kind == ND_FOR) {
-      if (!node->init) {
-        // nothing to do
-      } else if (node->init->next) {
-        LibcpNode *blk = libcp_new_node(ctx, ND_BLOCK, node->init->tok);
-        blk->body = node->init;
-        node->init = blk;
+      // gen_stmt's `for` has a single-statement init slot, so an init
+      // chain the expansion left with more than one statement - or none
+      // at all - is reduced here (PLAN A8.1, moved from sema).
+      if (node->kind == ND_FOR) {
+        if (!node->init) {
+          // nothing to do
+        } else if (node->init->next) {
+          LibcpNode* blk = libcp_new_node(ctx, ND_BLOCK, node->init->tok);
+          blk->body      = node->init;
+          node->init     = blk;
+        }
       }
-    }
-    return;
-  }
-  case ND_SWITCH: {
-    cg(node)->brk_label = new_label(ctx);
-
-    LibcpNode *sw = current_switch;
-    current_switch = node;
-    shape_children(ctx, node);
-    current_switch = sw;
-    return;
-  }
-  case ND_CASE:
-    cg(node)->unique_label = new_label(ctx);
-    shape_node(ctx, node->lhs);
-
-    // Linked after the body: a case label may sit inside the statement
-    // of an earlier one (`case 0: while (..) { .. case 1: .. }`), and
-    // the chain is prepended, so this order is what puts the outer case
-    // ahead of the buried one in the comparison chain below.
-    if (node->is_default) {
-      cg(current_switch)->default_case = node;
-    } else {
-      cg(node)->case_next = cg(current_switch)->case_next;
-      cg(current_switch)->case_next = node;
-    }
-    return;
-  case ND_GOTO:
-    // Resolved with the function's collected references below, not
-    // here: sema stashed the goto and label-value population on the
-    // LibcpObj, because a label value can sit outside the statement tree.
-    return;
-  case ND_LABEL:
-    cg(node)->unique_label = new_label(ctx);
-    libcp_nodearray_push(ctx, &cg_labels, node);
-    shape_node(ctx, node->lhs);
-    return;
-  case ND_ASSIGN:
-    shape_children(ctx, node);
-    if (node->op) {
-      // A compound assignment as the parser recorded it: rewrite to
-      // the read-modify-write form (handling the member and atomic
-      // cases), then type the result afresh. The rewrite takes the
-      // whole node, because the atomic form becomes a statement
-      // expression, which carries its body outside lhs/rhs.
-      LibcpNode *result = to_assign(ctx, node);
-      LibcpNode *nxt = node->next;
-      *node = *result;
-      node->next = nxt;
-      libcp_add_type(ctx, node);
-    }
-    return;
-  case ND_INCDEC: {
-    // Lower `++i`/`i--` to the compound-assignment form, rewriting
-    // the node in place.
-    shape_children(ctx, node);
-    LibcpNode *operand = node->lhs;
-    LibcpToken *tok = node->tok;
-
-    if (node->is_post) {
-      // The result is the implicit cast restoring the operand's type
-      // around `(A += 1) - 1`, so its marking has to travel with the
-      // shape it contributes.
-      LibcpNode *result = new_inc_dec(ctx, operand, tok, node->addend);
-      node->kind = result->kind;
-      node->lhs = result->lhs;
-      node->ty = result->ty;
-      node->is_implicit = result->is_implicit;
       return;
     }
+    case ND_SWITCH: {
+      cg(node)->brk_label = new_label(ctx);
 
-    LibcpNode *expr = libcp_new_binary(ctx, ND_ASSIGN, operand, libcp_new_num(ctx, 1, tok), tok);
-    expr->op = node->addend < 0 ? ND_SUB : ND_ADD;
-    LibcpNode *result = to_assign(ctx, expr);
-    LibcpNode *nxt = node->next;
-    *node = *result;
-    node->next = nxt;
-    libcp_add_type(ctx, node);
-    return;
-  }
-  case ND_FUNCALL:
-    // The caller's return buffer is a slot of the consumer (PLAN
-    // A6.1): sema checked the callee, converted the arguments and
-    // recorded the return type; a struct or union one means the call
-    // needs a buffer, created here so it lands in the frame before
-    // assign_lvar_offsets runs.
-    shape_children(ctx, node);
-    if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
-      cg(node)->ret_buffer = new_lvar("", node->ty);
-    return;
-  case ND_COND:
-    // Both spellings keep their shape: the GNU `a ?: b` is emitted
-    // slot-free from its own fields (PLAN B1.1e, in gen_expr), and
-    // the ordinary conditional's arms were converted by sema.
-    shape_children(ctx, node);
-    return;
-  case ND_SIZEOF: {
-    // A sizeof of a VLA is the one conclusion that is a runtime
-    // value: lower it to the comma that computes and reads the size
-    // variable. Every other sizeof arrives concluded in `val`, and no
-    // form evaluates its operand, so there is nothing below to shape
-    // either way.
-    LibcpType *ty = node->ty_op ? node->ty_op : node->lhs->ty;
-    if (ty->kind == TY_VLA) {
-      // A type-name operand carries a fresh type, and the dimension
-      // expressions the chain is about to embed have never been
-      // through this pass - no statement tree reaches them. Shape
-      // them first, innermost first, the order the size computation
-      // walks. A declaration's type is left alone: its dimensions
-      // sit in the declaration's own lowered chain and the descent
-      // reaches them there (the declaration annotation set vla_size
-      // on exactly those types, which is how the two cases differ).
-      if (!cg_type(ty)->vla_size)
-        for (LibcpType *t = ty; t; t = t->base)
-          if (t->kind == TY_VLA)
-            shape_node(ctx, t->vla_len);
-
-      LibcpNode *expr = vla_size_expr(ctx, ty, node->tok);
-      libcp_add_type(ctx, expr);
-      LibcpNode *nxt = node->next;
-      *node = *expr;
-      node->next = nxt;
+      LibcpNode* sw  = current_switch;
+      current_switch = node;
+      shape_children(ctx, node);
+      current_switch = sw;
+      return;
     }
-    return;
-  }
-  case ND_GENERIC:
-    // Only the selected association's expression reaches the
-    // emission; the controlling expression and the unselected arms
-    // are typed but produce no code, so only the selection is shaped.
-    shape_node(ctx, node->generic_sel);
-    return;
-  case ND_COMPOUND_LITERAL:
-    // A block-scope compound literal: the initializer comma and the
-    // reference to the hidden object (PLAN A8.1; the object itself
-    // was created by sema's resolve pass, where the language says it
-    // exists). The file-scope case becomes a plain reference in sema,
-    // whose serializer owns the data.
-    {
-      LibcpObj *var = node->var;
+    case ND_CASE:
+      cg(node)->unique_label = new_label(ctx);
+      shape_node(ctx, node->lhs);
 
-      shape_init_exprs(ctx, node->init_resolved);
-      LibcpNode *lowered = lvar_init_comma(ctx, var, node->init_resolved,
-                                      node->decl_init->tok);
-      LibcpNode *comma = libcp_new_binary(ctx, ND_COMMA, lowered,
-                               libcp_new_var_node(ctx, var, node->tok), node->tok);
-      libcp_add_type(ctx, comma);
-      LibcpNode *nxt = node->next;
-      *node = *comma;
-      node->next = nxt;
+      // Linked after the body: a case label may sit inside the statement
+      // of an earlier one (`case 0: while (..) { .. case 1: .. }`), and
+      // the chain is prepended, so this order is what puts the outer case
+      // ahead of the buried one in the comparison chain below.
+      if (node->is_default) {
+        cg(current_switch)->default_case = node;
+      } else {
+        cg(node)->case_next           = cg(current_switch)->case_next;
+        cg(current_switch)->case_next = node;
+      }
+      return;
+    case ND_GOTO:
+      // Resolved with the function's collected references below, not
+      // here: sema stashed the goto and label-value population on the
+      // LibcpObj, because a label value can sit outside the statement tree.
+      return;
+    case ND_LABEL:
+      cg(node)->unique_label = new_label(ctx);
+      libcp_nodearray_push(ctx, &cg_labels, node);
+      shape_node(ctx, node->lhs);
+      return;
+    case ND_ASSIGN:
+      shape_children(ctx, node);
+      if (node->op) {
+        // A compound assignment as the parser recorded it: rewrite to
+        // the read-modify-write form (handling the member and atomic
+        // cases), then type the result afresh. The rewrite takes the
+        // whole node, because the atomic form becomes a statement
+        // expression, which carries its body outside lhs/rhs.
+        LibcpNode* result = to_assign(ctx, node);
+        LibcpNode* nxt    = node->next;
+        *node             = *result;
+        node->next        = nxt;
+        libcp_add_type(ctx, node);
+      }
+      return;
+    case ND_INCDEC: {
+      // Lower `++i`/`i--` to the compound-assignment form, rewriting
+      // the node in place.
+      shape_children(ctx, node);
+      LibcpNode* operand = node->lhs;
+      LibcpToken* tok    = node->tok;
+
+      if (node->is_post) {
+        // The result is the implicit cast restoring the operand's type
+        // around `(A += 1) - 1`, so its marking has to travel with the
+        // shape it contributes.
+        LibcpNode* result = new_inc_dec(ctx, operand, tok, node->addend);
+        node->kind        = result->kind;
+        node->lhs         = result->lhs;
+        node->ty          = result->ty;
+        node->is_implicit = result->is_implicit;
+        return;
+      }
+
+      LibcpNode* expr = libcp_new_binary(ctx, ND_ASSIGN, operand, libcp_new_num(ctx, 1, tok), tok);
+      expr->op        = node->addend < 0 ? ND_SUB : ND_ADD;
+      LibcpNode* result = to_assign(ctx, expr);
+      LibcpNode* nxt    = node->next;
+      *node             = *result;
+      node->next        = nxt;
+      libcp_add_type(ctx, node);
+      return;
     }
-    return;
-  default:
-    shape_children(ctx, node);
-    return;
+    case ND_FUNCALL:
+      // The caller's return buffer is a slot of the consumer (PLAN
+      // A6.1): sema checked the callee, converted the arguments and
+      // recorded the return type; a struct or union one means the call
+      // needs a buffer, created here so it lands in the frame before
+      // assign_lvar_offsets runs.
+      shape_children(ctx, node);
+      if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
+        cg(node)->ret_buffer = new_lvar("", node->ty);
+      return;
+    case ND_COND:
+      // Both spellings keep their shape: the GNU `a ?: b` is emitted
+      // slot-free from its own fields (PLAN B1.1e, in gen_expr), and
+      // the ordinary conditional's arms were converted by sema.
+      shape_children(ctx, node);
+      return;
+    case ND_SIZEOF: {
+      // A sizeof of a VLA is the one conclusion that is a runtime
+      // value: lower it to the comma that computes and reads the size
+      // variable. Every other sizeof arrives concluded in `val`, and no
+      // form evaluates its operand, so there is nothing below to shape
+      // either way.
+      LibcpType* ty = node->ty_op ? node->ty_op : node->lhs->ty;
+      if (ty->kind == TY_VLA) {
+        // A type-name operand carries a fresh type, and the dimension
+        // expressions the chain is about to embed have never been
+        // through this pass - no statement tree reaches them. Shape
+        // them first, innermost first, the order the size computation
+        // walks. A declaration's type is left alone: its dimensions
+        // sit in the declaration's own lowered chain and the descent
+        // reaches them there (the declaration annotation set vla_size
+        // on exactly those types, which is how the two cases differ).
+        if (!cg_type(ty)->vla_size)
+          for (LibcpType* t = ty; t; t = t->base)
+            if (t->kind == TY_VLA)
+              shape_node(ctx, t->vla_len);
+
+        LibcpNode* expr = vla_size_expr(ctx, ty, node->tok);
+        libcp_add_type(ctx, expr);
+        LibcpNode* nxt = node->next;
+        *node          = *expr;
+        node->next     = nxt;
+      }
+      return;
+    }
+    case ND_GENERIC:
+      // Only the selected association's expression reaches the
+      // emission; the controlling expression and the unselected arms
+      // are typed but produce no code, so only the selection is shaped.
+      shape_node(ctx, node->generic_sel);
+      return;
+    case ND_COMPOUND_LITERAL:
+      // A block-scope compound literal: the initializer comma and the
+      // reference to the hidden object (PLAN A8.1; the object itself
+      // was created by sema's resolve pass, where the language says it
+      // exists). The file-scope case becomes a plain reference in sema,
+      // whose serializer owns the data.
+      {
+        LibcpObj* var = node->var;
+
+        shape_init_exprs(ctx, node->init_resolved);
+        LibcpNode* lowered = lvar_init_comma(ctx, var, node->init_resolved, node->decl_init->tok);
+        LibcpNode* comma   = libcp_new_binary(ctx,
+                                            ND_COMMA,
+                                            lowered,
+                                            libcp_new_var_node(ctx, var, node->tok),
+                                            node->tok);
+        libcp_add_type(ctx, comma);
+        LibcpNode* nxt = node->next;
+        *node          = *comma;
+        node->next     = nxt;
+      }
+      return;
+    default: shape_children(ctx, node); return;
   }
 }
 
@@ -2466,14 +2451,14 @@ static void shape_node(LibcpContext *ctx, LibcpNode *node) {
 // them in the context) with the labels the descent above allocated,
 // writing the name each one jumps to. The undeclared-label check
 // already ran in sema, so every reference here matched there.
-static void resolve_label_refs(LibcpContext *ctx, LibcpObj *fn) {
-  LibcpNodeArray *refs = libcp_sema_label_gotos(ctx, fn);
+static void resolve_label_refs(LibcpContext* ctx, LibcpObj* fn) {
+  LibcpNodeArray* refs = libcp_sema_label_gotos(ctx, fn);
   if (!refs)
     return;
   for (int i = 0; i < refs->len; i++) {
-    LibcpNode *x = refs->data[i];
+    LibcpNode* x = refs->data[i];
     for (int j = 0; j < cg_labels.len; j++) {
-      LibcpNode *y = cg_labels.data[j];
+      LibcpNode* y = cg_labels.data[j];
       if (!strcmp(x->label, y->label)) {
         cg(x)->unique_label = cg(y)->unique_label;
         break;
@@ -2487,8 +2472,8 @@ static void resolve_label_refs(LibcpContext *ctx, LibcpObj *fn) {
 // [GNU] nested function's body - which also hangs inside its host's
 // body before sema's type_chain takes the record off the chain - is
 // visited exactly once, through its own entry here.
-static void shape(LibcpContext *ctx, LibcpObj *prog) {
-  for (LibcpObj *fn = prog; fn; fn = fn->next) {
+static void shape(LibcpContext* ctx, LibcpObj* prog) {
+  for (LibcpObj* fn = prog; fn; fn = fn->next) {
     if (!fn->is_function || !fn->is_definition)
       continue;
     // The rewrite temporaries created below enter this function's
@@ -2500,55 +2485,54 @@ static void shape(LibcpContext *ctx, LibcpObj *prog) {
 }
 
 // Assign offsets to local variables.
-static void assign_lvar_offsets(LibcpObj *prog) {
-  for (LibcpObj *fn = prog; fn; fn = fn->next) {
+static void assign_lvar_offsets(LibcpObj* prog) {
+  for (LibcpObj* fn = prog; fn; fn = fn->next) {
     if (!fn->is_function)
       continue;
 
     // If a function has many parameters, some parameters are
     // inevitably passed by stack rather than by register.
     // The first passed-by-stack parameter resides at RBP+16.
-    int top = 16;
+    int top    = 16;
     int bottom = 0;
 
     int gp = 0, fp = 0;
 
     // Assign offsets to pass-by-stack parameters.
-    for (LibcpObj *var = fn->params; var; var = var->next) {
-      LibcpType *ty = var->ty;
+    for (LibcpObj* var = fn->params; var; var = var->next) {
+      LibcpType* ty = var->ty;
 
       switch (ty->kind) {
-      case TY_STRUCT:
-      case TY_UNION:
-        if (ty->size <= 16) {
-          bool fp1 = has_flonum(ty, 0, 8, 0);
-          bool fp2 = has_flonum(ty, 8, 16, 8);
-          if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
-            fp = fp + fp1 + fp2;
-            gp = gp + !fp1 + !fp2;
-            continue;
+        case TY_STRUCT:
+        case TY_UNION:
+          if (ty->size <= 16) {
+            bool fp1 = has_flonum(ty, 0, 8, 0);
+            bool fp2 = has_flonum(ty, 8, 16, 8);
+            if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
+              fp = fp + fp1 + fp2;
+              gp = gp + !fp1 + !fp2;
+              continue;
+            }
           }
-        }
-        break;
-      case TY_FLOAT:
-      case TY_DOUBLE:
-        if (fp++ < FP_MAX)
-          continue;
-        break;
-      case TY_LDOUBLE:
-        break;
-      default:
-        if (gp++ < GP_MAX)
-          continue;
+          break;
+        case TY_FLOAT:
+        case TY_DOUBLE:
+          if (fp++ < FP_MAX)
+            continue;
+          break;
+        case TY_LDOUBLE: break;
+        default:
+          if (gp++ < GP_MAX)
+            continue;
       }
 
-      top = libcp_align_to(top, 8);
+      top                 = libcp_align_to(top, 8);
       cg_obj(var)->offset = top;
       top += var->ty->size;
     }
 
     // Assign offsets to pass-by-register parameters and local variables.
-    for (LibcpObj *var = fn->locals; var; var = var->next) {
+    for (LibcpObj* var = fn->locals; var; var = var->next) {
       if (obj_offset(var))
         continue;
 
@@ -2556,11 +2540,11 @@ static void assign_lvar_offsets(LibcpObj *prog) {
       // length at least 16 bytes. We need to align such array to at least
       // 16-byte boundaries. See p.14 of
       // https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-draft.pdf.
-      int align = (var->ty->kind == TY_ARRAY && var->ty->size >= 16)
-        ? MAX(16, var->align) : var->align;
+      int align =
+          (var->ty->kind == TY_ARRAY && var->ty->size >= 16) ? MAX(16, var->align) : var->align;
 
       bottom += var->ty->size;
-      bottom = libcp_align_to(bottom, align);
+      bottom              = libcp_align_to(bottom, align);
       cg_obj(var)->offset = -bottom;
     }
 
@@ -2568,8 +2552,8 @@ static void assign_lvar_offsets(LibcpObj *prog) {
   }
 }
 
-static void emit_data(LibcpObj *prog) {
-  for (LibcpObj *var = prog; var; var = var->next) {
+static void emit_data(LibcpObj* prog) {
+  for (LibcpObj* var = prog; var; var = var->next) {
     if (var->is_function || !var->is_definition)
       continue;
 
@@ -2578,8 +2562,8 @@ static void emit_data(LibcpObj *prog) {
     else
       println("  .globl %s", var->name);
 
-    int align = (var->ty->kind == TY_ARRAY && var->ty->size >= 16)
-      ? MAX(16, var->align) : var->align;
+    int align =
+        (var->ty->kind == TY_ARRAY && var->ty->size >= 16) ? MAX(16, var->align) : var->align;
 
     // Common symbol
     if (opt_fcommon && var->is_tentative) {
@@ -2599,11 +2583,13 @@ static void emit_data(LibcpObj *prog) {
       println("  .align %d", align);
       println("%s:", var->name);
 
-      LibcpRelocation *rel = var->rel;
-      int pos = 0;
+      LibcpRelocation* rel = var->rel;
+      int pos              = 0;
       while (pos < var->ty->size) {
         if (rel && rel->offset == pos) {
-          println("  .quad %s%+ld", rel->label ? rel->label : cg(rel->label_node)->unique_label, rel->addend);
+          println("  .quad %s%+ld",
+                  rel->label ? rel->label : cg(rel->label_node)->unique_label,
+                  rel->addend);
           rel = rel->next;
           pos += 8;
           continue;
@@ -2613,7 +2599,7 @@ static void emit_data(LibcpObj *prog) {
         // stopping at the next relocation. The only target is
         // little-endian x86-64, so a run packs into the directive's
         // value byte by byte (C7; this used to be one .byte per byte).
-        int len = (rel ? rel->offset : var->ty->size) - pos;
+        int len      = (rel ? rel->offset : var->ty->size) - pos;
         uint64_t val = 0;
 
         if (len >= 8) {
@@ -2651,43 +2637,31 @@ static void emit_data(LibcpObj *prog) {
   }
 }
 
-static void store_fp(LibcpContext *ctx, int r, int offset, int sz) {
+static void store_fp(LibcpContext* ctx, int r, int offset, int sz) {
   switch (sz) {
-  case 4:
-    println("  movss %%xmm%d, %d(%%rbp)", r, offset);
-    return;
-  case 8:
-    println("  movsd %%xmm%d, %d(%%rbp)", r, offset);
-    return;
+    case 4: println("  movss %%xmm%d, %d(%%rbp)", r, offset); return;
+    case 8: println("  movsd %%xmm%d, %d(%%rbp)", r, offset); return;
   }
   unreachable();
 }
 
 static void store_gp(int r, int offset, int sz) {
   switch (sz) {
-  case 1:
-    println("  mov %s, %d(%%rbp)", argreg8[r], offset);
-    return;
-  case 2:
-    println("  mov %s, %d(%%rbp)", argreg16[r], offset);
-    return;
-  case 4:
-    println("  mov %s, %d(%%rbp)", argreg32[r], offset);
-    return;
-  case 8:
-    println("  mov %s, %d(%%rbp)", argreg64[r], offset);
-    return;
-  default:
-    for (int i = 0; i < sz; i++) {
-      println("  mov %s, %d(%%rbp)", argreg8[r], offset + i);
-      println("  shr $8, %s", argreg64[r]);
-    }
-    return;
+    case 1: println("  mov %s, %d(%%rbp)", argreg8[r], offset); return;
+    case 2: println("  mov %s, %d(%%rbp)", argreg16[r], offset); return;
+    case 4: println("  mov %s, %d(%%rbp)", argreg32[r], offset); return;
+    case 8: println("  mov %s, %d(%%rbp)", argreg64[r], offset); return;
+    default:
+      for (int i = 0; i < sz; i++) {
+        println("  mov %s, %d(%%rbp)", argreg8[r], offset + i);
+        println("  shr $8, %s", argreg64[r]);
+      }
+      return;
   }
 }
 
-static void emit_text(LibcpContext *ctx, LibcpObj *prog) {
-  for (LibcpObj *fn = prog; fn; fn = fn->next) {
+static void emit_text(LibcpContext* ctx, LibcpObj* prog) {
+  for (LibcpObj* fn = prog; fn; fn = fn->next) {
     if (!fn->is_function || !fn->is_definition)
       continue;
 
@@ -2715,7 +2689,7 @@ static void emit_text(LibcpContext *ctx, LibcpObj *prog) {
     // Save arg registers if function is variadic
     if (fn->va_area) {
       int gp = 0, fp = 0;
-      for (LibcpObj *var = fn->params; var; var = var->next) {
+      for (LibcpObj* var = fn->params; var; var = var->next) {
         if (libcp_is_flonum(var->ty))
           fp++;
         else
@@ -2725,11 +2699,11 @@ static void emit_text(LibcpContext *ctx, LibcpObj *prog) {
       int off = obj_offset(fn->va_area);
 
       // va_elem
-      println("  movl $%d, %d(%%rbp)", gp * 8, off);          // gp_offset
-      println("  movl $%d, %d(%%rbp)", fp * 8 + 48, off + 4); // fp_offset
-      println("  movq %%rbp, %d(%%rbp)", off + 8);            // overflow_arg_area
+      println("  movl $%d, %d(%%rbp)", gp * 8, off);           // gp_offset
+      println("  movl $%d, %d(%%rbp)", fp * 8 + 48, off + 4);  // fp_offset
+      println("  movq %%rbp, %d(%%rbp)", off + 8);             // overflow_arg_area
       println("  addq $16, %d(%%rbp)", off + 8);
-      println("  movq %%rbp, %d(%%rbp)", off + 16);           // reg_save_area
+      println("  movq %%rbp, %d(%%rbp)", off + 16);  // reg_save_area
       println("  addq $%d, %d(%%rbp)", off + 24, off + 16);
 
       // __reg_save_area__
@@ -2751,34 +2725,31 @@ static void emit_text(LibcpContext *ctx, LibcpObj *prog) {
 
     // Save passed-by-register arguments to the stack
     int gp = 0, fp = 0;
-    for (LibcpObj *var = fn->params; var; var = var->next) {
+    for (LibcpObj* var = fn->params; var; var = var->next) {
       if (obj_offset(var) > 0)
         continue;
 
-      LibcpType *ty = var->ty;
+      LibcpType* ty = var->ty;
 
       switch (ty->kind) {
-      case TY_STRUCT:
-      case TY_UNION:
-        assert(ty->size <= 16);
-        if (has_flonum(ty, 0, 8, 0))
-          store_fp(ctx, fp++, obj_offset(var), MIN(8, ty->size));
-        else
-          store_gp(gp++, obj_offset(var), MIN(8, ty->size));
-
-        if (ty->size > 8) {
-          if (has_flonum(ty, 8, 16, 0))
-            store_fp(ctx, fp++, obj_offset(var) + 8, ty->size - 8);
+        case TY_STRUCT:
+        case TY_UNION:
+          assert(ty->size <= 16);
+          if (has_flonum(ty, 0, 8, 0))
+            store_fp(ctx, fp++, obj_offset(var), MIN(8, ty->size));
           else
-            store_gp(gp++, obj_offset(var) + 8, ty->size - 8);
-        }
-        break;
-      case TY_FLOAT:
-      case TY_DOUBLE:
-        store_fp(ctx, fp++, obj_offset(var), ty->size);
-        break;
-      default:
-        store_gp(gp++, obj_offset(var), ty->size);
+            store_gp(gp++, obj_offset(var), MIN(8, ty->size));
+
+          if (ty->size > 8) {
+            if (has_flonum(ty, 8, 16, 0))
+              store_fp(ctx, fp++, obj_offset(var) + 8, ty->size - 8);
+            else
+              store_gp(gp++, obj_offset(var) + 8, ty->size - 8);
+          }
+          break;
+        case TY_FLOAT:
+        case TY_DOUBLE: store_fp(ctx, fp++, obj_offset(var), ty->size); break;
+        default: store_gp(gp++, obj_offset(var), ty->size);
       }
     }
 
@@ -2801,10 +2772,10 @@ static void emit_text(LibcpContext *ctx, LibcpObj *prog) {
   }
 }
 
-void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
+void codegen(LibcpContext* ctx, LibcpObj* prog, FILE* out) {
   output_file = out;
 
-  LibcpFile **files = libcp_get_input_files(ctx);
+  LibcpFile** files = libcp_get_input_files(ctx);
   for (int i = 0; files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
 

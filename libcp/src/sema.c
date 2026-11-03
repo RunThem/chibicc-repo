@@ -45,45 +45,45 @@
 
 // `fn->locals` is the field the context's `locals` list is spliced
 // into; these helpers keep the field access out of the macro below.
-static LibcpObj *obj_locals(LibcpObj *fn) {
+static LibcpObj* obj_locals(LibcpObj* fn) {
   return fn->locals;
 }
 
-static void set_obj_locals(LibcpObj *fn, LibcpObj *v) {
+static void set_obj_locals(LibcpObj* fn, LibcpObj* v) {
   fn->locals = v;
 }
 
-static int64_t eval(LibcpContext *ctx, LibcpNode *node);
+static int64_t eval(LibcpContext* ctx, LibcpNode* node);
 
 // The target an address constant resolves to. `name` is a symbol the
 // serializer can write down now; `node` is a [GNU] `&&label` whose
 // `.L` name codegen allocates later.
 typedef struct {
-  char *name;
-  LibcpNode *node;
+  char* name;
+  LibcpNode* node;
 } LibcpLabelRef;
 
-static int64_t eval2(LibcpContext *ctx, LibcpNode *node, LibcpLabelRef *label);
-static int64_t eval_rval(LibcpContext *ctx, LibcpNode *node, LibcpLabelRef *label);
-static double eval_double(LibcpContext *ctx, LibcpNode *node);
-static bool is_const_expr(LibcpContext *ctx, LibcpNode *node);
-static void layout_struct(LibcpContext *ctx, LibcpType *ty);
-static void layout_union(LibcpContext *ctx, LibcpType *ty);
-static void type_chain(LibcpContext *ctx, LibcpNode *head);
-static void check_control_flow(LibcpContext *ctx, LibcpNode *body);
-static void analyze_function(LibcpContext *ctx, LibcpObj *fn);
-static void resolve_node(LibcpContext *ctx, LibcpNode *node);
-static void resolve_chain(LibcpContext *ctx, LibcpNode *node);
-static void resolve_function(LibcpContext *ctx, LibcpNode *node);
-static void resolve_enum_records(LibcpContext *ctx, LibcpNode *recs);
-static void resolve_type_exprs(LibcpContext *ctx, LibcpType *ty);
-static void resolve_type(LibcpContext *ctx, LibcpType *ty);
-static void serialize_gvar(LibcpContext *ctx, LibcpNode *node);
-static int attr_align(LibcpContext *ctx, LibcpVarAttr *attr);
-static LibcpObj *new_gvar(LibcpContext *ctx, char *name, LibcpType *ty);
-static LibcpObj *new_lvar(LibcpContext *ctx, char *name, LibcpType *ty);
-static char *new_unique_name(LibcpContext *ctx);
-static LibcpMember *get_struct_member(LibcpType *ty, LibcpToken *tok);
+static int64_t eval2(LibcpContext* ctx, LibcpNode* node, LibcpLabelRef* label);
+static int64_t eval_rval(LibcpContext* ctx, LibcpNode* node, LibcpLabelRef* label);
+static double eval_double(LibcpContext* ctx, LibcpNode* node);
+static bool is_const_expr(LibcpContext* ctx, LibcpNode* node);
+static void layout_struct(LibcpContext* ctx, LibcpType* ty);
+static void layout_union(LibcpContext* ctx, LibcpType* ty);
+static void type_chain(LibcpContext* ctx, LibcpNode* head);
+static void check_control_flow(LibcpContext* ctx, LibcpNode* body);
+static void analyze_function(LibcpContext* ctx, LibcpObj* fn);
+static void resolve_node(LibcpContext* ctx, LibcpNode* node);
+static void resolve_chain(LibcpContext* ctx, LibcpNode* node);
+static void resolve_function(LibcpContext* ctx, LibcpNode* node);
+static void resolve_enum_records(LibcpContext* ctx, LibcpNode* recs);
+static void resolve_type_exprs(LibcpContext* ctx, LibcpType* ty);
+static void resolve_type(LibcpContext* ctx, LibcpType* ty);
+static void serialize_gvar(LibcpContext* ctx, LibcpNode* node);
+static int attr_align(LibcpContext* ctx, LibcpVarAttr* attr);
+static LibcpObj* new_gvar(LibcpContext* ctx, char* name, LibcpType* ty);
+static LibcpObj* new_lvar(LibcpContext* ctx, char* name, LibcpType* ty);
+static char* new_unique_name(LibcpContext* ctx);
+static LibcpMember* get_struct_member(LibcpType* ty, LibcpToken* tok);
 
 // All local variable instances created for the function being analyzed
 // are accumulated to this list.
@@ -104,29 +104,29 @@ static LibcpMember *get_struct_member(LibcpType *ty, LibcpToken *tok);
 // a numeric literal whose type is settled at birth rather than read off
 // a token. Exported (see libcp.h): a consumer that builds a node needs
 // it to arrive typed, and these are the shapes it cannot build itself.
-LibcpNode *libcp_new_var_node(LibcpContext *ctx, LibcpObj *var, LibcpToken *tok) {
-  LibcpNode *node = libcp_new_node(ctx, ND_VAR, tok);
-  node->var = var;
+LibcpNode* libcp_new_var_node(LibcpContext* ctx, LibcpObj* var, LibcpToken* tok) {
+  LibcpNode* node = libcp_new_node(ctx, ND_VAR, tok);
+  node->var       = var;
   return node;
 }
 
-LibcpNode *libcp_new_vla_ptr(LibcpContext *ctx, LibcpObj *var, LibcpToken *tok) {
-  LibcpNode *node = libcp_new_node(ctx, ND_VLA_PTR, tok);
-  node->var = var;
+LibcpNode* libcp_new_vla_ptr(LibcpContext* ctx, LibcpObj* var, LibcpToken* tok) {
+  LibcpNode* node = libcp_new_node(ctx, ND_VLA_PTR, tok);
+  node->var       = var;
   return node;
 }
 
-LibcpNode *libcp_new_long(LibcpContext *ctx, int64_t val, LibcpToken *tok) {
-  LibcpNode *node = libcp_new_node(ctx, ND_NUM, tok);
-  node->val = val;
-  node->ty = libcp_ty_long;
+LibcpNode* libcp_new_long(LibcpContext* ctx, int64_t val, LibcpToken* tok) {
+  LibcpNode* node = libcp_new_node(ctx, ND_NUM, tok);
+  node->val       = val;
+  node->ty        = libcp_ty_long;
   return node;
 }
 
-LibcpNode *libcp_new_ulong(LibcpContext *ctx, long val, LibcpToken *tok) {
-  LibcpNode *node = libcp_new_node(ctx, ND_NUM, tok);
-  node->val = val;
-  node->ty = libcp_ty_ulong;
+LibcpNode* libcp_new_ulong(LibcpContext* ctx, long val, LibcpToken* tok) {
+  LibcpNode* node = libcp_new_node(ctx, ND_NUM, tok);
+  node->val       = val;
+  node->ty        = libcp_ty_ulong;
   return node;
 }
 
@@ -137,28 +137,28 @@ LibcpNode *libcp_new_ulong(LibcpContext *ctx, long val, LibcpToken *tok) {
 // marking the node is a single assignment. A cast the source wrote
 // arrives as an ND_CAST node from the parser instead, which leaves the
 // flag false, and libcp_add_type resolves rather than builds it.
-LibcpNode *libcp_new_cast(LibcpContext *ctx, LibcpNode *expr, LibcpType *ty) {
+LibcpNode* libcp_new_cast(LibcpContext* ctx, LibcpNode* expr, LibcpType* ty) {
   libcp_add_type(ctx, expr);
 
-  LibcpNode *node = libcp_arena_calloc(ctx, 1, sizeof(LibcpNode));
-  node->kind = ND_CAST;
-  node->tok = expr->tok;
-  node->lhs = expr;
-  node->ty = libcp_copy_type(ctx, ty);
+  LibcpNode* node   = libcp_arena_calloc(ctx, 1, sizeof(LibcpNode));
+  node->kind        = ND_CAST;
+  node->tok         = expr->tok;
+  node->lhs         = expr;
+  node->ty          = libcp_copy_type(ctx, ty);
   node->is_implicit = true;
   return node;
 }
 
 // An object or an enum constant the resolve pass has declared.
 typedef struct {
-  LibcpObj *var;
-  LibcpType *enum_ty;
+  LibcpObj* var;
+  LibcpType* enum_ty;
   int enum_val;
 } LibcpVarScope;
 
 // Represents a block scope.
 struct libcp_sema_scope {
-  LibcpSemaScope *next;
+  LibcpSemaScope* next;
   LibcpHashMap vars;
 };
 
@@ -168,17 +168,17 @@ struct libcp_sema_scope {
 // is what lets a repeated libcp_sema without a reset start from the
 // same state as a reset one (the audit's label_gotos / unique_name_id
 // omission).
-void libcp_sema_state_clear(LibcpContext *ctx) {
-  ctx->sema_scope = NULL;
-  ctx->locals = NULL;
-  ctx->globals = NULL;
-  ctx->sema_fn = NULL;
+void libcp_sema_state_clear(LibcpContext* ctx) {
+  ctx->sema_scope     = NULL;
+  ctx->locals         = NULL;
+  ctx->globals        = NULL;
+  ctx->sema_fn        = NULL;
   ctx->builtin_alloca = NULL;
-  ctx->gotos = (LibcpNodeArray){};
-  ctx->labels = (LibcpNodeArray){};
-  ctx->label_gotos = NULL;
-  ctx->loop_depth = 0;
-  ctx->switch_depth = 0;
+  ctx->gotos          = (LibcpNodeArray){};
+  ctx->labels         = (LibcpNodeArray){};
+  ctx->label_gotos    = NULL;
+  ctx->loop_depth     = 0;
+  ctx->switch_depth   = 0;
   ctx->unique_name_id = 0;
   ctx->resolving_body = false;
 }
@@ -189,57 +189,57 @@ void libcp_sema_state_clear(LibcpContext *ctx) {
 // stack lives in LibcpContext (PLAN L2.5).
 //
 // A run starts with the fields cleared and a fresh root scope.
-static void sema_init(LibcpContext *ctx) {
+static void sema_init(LibcpContext* ctx) {
   libcp_sema_state_clear(ctx);
   ctx->sema_scope = libcp_arena_calloc(ctx, 1, sizeof(LibcpSemaScope));
 }
 
-#define scope (ctx->sema_scope)
-#define locals (ctx->locals)
-#define globals (ctx->globals)
-#define sema_fn (ctx->sema_fn)
+#define scope          (ctx->sema_scope)
+#define locals         (ctx->locals)
+#define globals        (ctx->globals)
+#define sema_fn        (ctx->sema_fn)
 #define builtin_alloca (ctx->builtin_alloca)
 
-static void enter_scope(LibcpContext *ctx) {
-  LibcpSemaScope *sc = libcp_arena_calloc(ctx, 1, sizeof(LibcpSemaScope));
-  sc->next = scope;
-  scope = sc;
+static void enter_scope(LibcpContext* ctx) {
+  LibcpSemaScope* sc = libcp_arena_calloc(ctx, 1, sizeof(LibcpSemaScope));
+  sc->next           = scope;
+  scope              = sc;
 }
 
-static void leave_scope(LibcpContext *ctx) {
+static void leave_scope(LibcpContext* ctx) {
   scope = scope->next;
 }
 
 // Find a variable by name.
-static LibcpVarScope *find_var(LibcpContext *ctx, LibcpToken *tok) {
-  for (LibcpSemaScope *sc = scope; sc; sc = sc->next) {
-    LibcpVarScope *sc2 = libcp_hashmap_get2(ctx, &sc->vars, tok->loc, tok->len);
+static LibcpVarScope* find_var(LibcpContext* ctx, LibcpToken* tok) {
+  for (LibcpSemaScope* sc = scope; sc; sc = sc->next) {
+    LibcpVarScope* sc2 = libcp_hashmap_get2(ctx, &sc->vars, tok->loc, tok->len);
     if (sc2)
       return sc2;
   }
   return NULL;
 }
 
-static LibcpVarScope *push_scope(LibcpContext *ctx, char *name) {
-  LibcpVarScope *sc = libcp_arena_calloc(ctx, 1, sizeof(LibcpVarScope));
+static LibcpVarScope* push_scope(LibcpContext* ctx, char* name) {
+  LibcpVarScope* sc = libcp_arena_calloc(ctx, 1, sizeof(LibcpVarScope));
   libcp_hashmap_put(ctx, &scope->vars, name, sc);
   return sc;
 }
 
 // A block-scope declaration may not declare a void object. `tok` is the
 // position of the declaration, anchored exactly as the parser used to.
-static void check_declared_void(LibcpContext *ctx, LibcpToken *tok, LibcpType *ty) {
+static void check_declared_void(LibcpContext* ctx, LibcpToken* tok, LibcpType* ty) {
   if (ty->kind == TY_VOID)
     libcp_error_tok(ctx, tok, "variable declared void");
 }
 
 // Looks up a function in the file scope.
-static LibcpObj *find_func(LibcpContext *ctx, char *name) {
-  LibcpSemaScope *sc = scope;
+static LibcpObj* find_func(LibcpContext* ctx, char* name) {
+  LibcpSemaScope* sc = scope;
   while (sc->next)
     sc = sc->next;
 
-  LibcpVarScope *sc2 = libcp_hashmap_get(ctx, &sc->vars, name);
+  LibcpVarScope* sc2 = libcp_hashmap_get(ctx, &sc->vars, name);
   if (sc2 && sc2->var && sc2->var->is_function)
     return sc2->var;
   return NULL;
@@ -248,9 +248,13 @@ static LibcpObj *find_func(LibcpContext *ctx, char *name) {
 // Declares a function at file scope, or checks a redeclaration against
 // the object declared before. `tok` is the token following the
 // declarator and `is_definition` says whether a body follows.
-static LibcpObj *declare_function(LibcpContext *ctx, char *name, LibcpType *ty, LibcpVarAttr *attr, LibcpToken *tok,
-                             bool is_definition) {
-  LibcpObj *fn = find_func(ctx, name);
+static LibcpObj* declare_function(LibcpContext* ctx,
+                                  char* name,
+                                  LibcpType* ty,
+                                  LibcpVarAttr* attr,
+                                  LibcpToken* tok,
+                                  bool is_definition) {
+  LibcpObj* fn = find_func(ctx, name);
 
   if (fn) {
     // Redeclaration. The first check is unreachable in the current
@@ -265,11 +269,11 @@ static LibcpObj *declare_function(LibcpContext *ctx, char *name, LibcpType *ty, 
       libcp_error_tok(ctx, tok, "static declaration follows a non-static declaration");
     fn->is_definition = fn->is_definition || is_definition;
   } else {
-    fn = new_gvar(ctx, name, ty);
-    fn->is_function = true;
+    fn                = new_gvar(ctx, name, ty);
+    fn->is_function   = true;
     fn->is_definition = is_definition;
-    fn->is_static = attr->is_static || (attr->is_inline && !attr->is_extern);
-    fn->is_inline = attr->is_inline;
+    fn->is_static     = attr->is_static || (attr->is_inline && !attr->is_extern);
+    fn->is_inline     = attr->is_inline;
   }
 
   fn->is_root = !(fn->is_static && fn->is_inline);
@@ -281,17 +285,17 @@ static LibcpObj *declare_function(LibcpContext *ctx, char *name, LibcpType *ty, 
 // annotated and checked (a label value can live outside the statement
 // tree, in a block-scope static initializer, which only the
 // annotation pass reaches - see libcp_add_type's ND_LABEL_VAL case).
-#define gotos (ctx->gotos)
+#define gotos  (ctx->gotos)
 #define labels (ctx->labels)
 
 // The pairing check: every goto and label value must name a label of
 // the same function. Gotos may refer to a label that appears later,
 // so this runs once the whole body has been checked. The matched name
 // is written by codegen's shaping pass, which is what allocates it.
-static void check_labels(LibcpContext *ctx) {
+static void check_labels(LibcpContext* ctx) {
   for (int i = 0; i < gotos.len; i++) {
-    LibcpNode *x = gotos.data[i];
-    bool found = false;
+    LibcpNode* x = gotos.data[i];
+    bool found   = false;
     for (int j = 0; j < labels.len; j++)
       if (!strcmp(x->label, labels.data[j]->label)) {
         found = true;
@@ -310,20 +314,20 @@ static void check_labels(LibcpContext *ctx) {
 // nesting the checks need (a break binds to the innermost loop or
 // switch, a continue to the innermost loop, a case to the innermost
 // switch - existence is all each check asks). It writes no names.
-#define loop_depth (ctx->loop_depth)
+#define loop_depth   (ctx->loop_depth)
 #define switch_depth (ctx->switch_depth)
 
-static void check_node(LibcpContext *ctx, LibcpNode *node);
+static void check_node(LibcpContext* ctx, LibcpNode* node);
 
-static void check_chain(LibcpContext *ctx, LibcpNode *node) {
-  for (LibcpNode *n = node; n; n = n->next)
+static void check_chain(LibcpContext* ctx, LibcpNode* node) {
+  for (LibcpNode* n = node; n; n = n->next)
     check_node(ctx, n);
 }
 
 // Descends every subtree a node owns, statements and expressions alike:
 // a break can sit in a statement expression, which is an expression
 // node holding a statement chain.
-static void check_children(LibcpContext *ctx, LibcpNode *node) {
+static void check_children(LibcpContext* ctx, LibcpNode* node) {
   check_node(ctx, node->lhs);
   check_node(ctx, node->rhs);
   check_node(ctx, node->cond);
@@ -340,68 +344,64 @@ static void check_children(LibcpContext *ctx, LibcpNode *node) {
 
 // Pre-order, like the shaping pass it mirrors: the checks of a loop
 // fire inside it, the stray check of a case inside its switch.
-static void check_node(LibcpContext *ctx, LibcpNode *node) {
+static void check_node(LibcpContext* ctx, LibcpNode* node) {
   if (!node)
     return;
 
   switch (node->kind) {
-  case ND_WHILE:
-  case ND_DO:
-  case ND_FOR:
-    loop_depth++;
-    check_children(ctx, node);
-    loop_depth--;
-    return;
-  case ND_SWITCH:
-    switch_depth++;
-    check_children(ctx, node);
-    switch_depth--;
-    return;
-  case ND_CASE:
-    if (!switch_depth)
-      libcp_error_tok(ctx, node->tok, node->is_default ? "stray default" : "stray case");
-    check_node(ctx, node->lhs);
-    return;
-  case ND_BREAK:
-    if (!loop_depth && !switch_depth)
-      libcp_error_tok(ctx, node->tok, "stray break");
-    return;
-  case ND_CONTINUE:
-    if (!loop_depth)
-      libcp_error_tok(ctx, node->tok, "stray continue");
-    return;
-  case ND_GOTO:
-    libcp_nodearray_push(ctx, &gotos, node);
-    return;
-  case ND_LABEL:
-    libcp_nodearray_push(ctx, &labels, node);
-    check_node(ctx, node->lhs);
-    return;
-  case ND_FUNCDEF:
-    // A [GNU] nested definition: its own analysis ran when the record
-    // was reached - checks, label pairing and all - and its body is
-    // not this function's to descend. Walking it here would collect
-    // the nested function's goto and label nodes into this function's
-    // population, which its own resolution already handed to codegen.
-    return;
-  default:
-    check_children(ctx, node);
-    return;
+    case ND_WHILE:
+    case ND_DO:
+    case ND_FOR:
+      loop_depth++;
+      check_children(ctx, node);
+      loop_depth--;
+      return;
+    case ND_SWITCH:
+      switch_depth++;
+      check_children(ctx, node);
+      switch_depth--;
+      return;
+    case ND_CASE:
+      if (!switch_depth)
+        libcp_error_tok(ctx, node->tok, node->is_default ? "stray default" : "stray case");
+      check_node(ctx, node->lhs);
+      return;
+    case ND_BREAK:
+      if (!loop_depth && !switch_depth)
+        libcp_error_tok(ctx, node->tok, "stray break");
+      return;
+    case ND_CONTINUE:
+      if (!loop_depth)
+        libcp_error_tok(ctx, node->tok, "stray continue");
+      return;
+    case ND_GOTO: libcp_nodearray_push(ctx, &gotos, node); return;
+    case ND_LABEL:
+      libcp_nodearray_push(ctx, &labels, node);
+      check_node(ctx, node->lhs);
+      return;
+    case ND_FUNCDEF:
+      // A [GNU] nested definition: its own analysis ran when the record
+      // was reached - checks, label pairing and all - and its body is
+      // not this function's to descend. Walking it here would collect
+      // the nested function's goto and label nodes into this function's
+      // population, which its own resolution already handed to codegen.
+      return;
+    default: check_children(ctx, node); return;
   }
 }
 
-static void check_control_flow(LibcpContext *ctx, LibcpNode *body) {
+static void check_control_flow(LibcpContext* ctx, LibcpNode* body) {
   check_chain(ctx, body);
   check_labels(ctx);
 }
 
-static void mark_live(LibcpContext *ctx, LibcpObj *var) {
+static void mark_live(LibcpContext* ctx, LibcpObj* var) {
   if (!var->is_function || var->is_live)
     return;
   var->is_live = true;
 
   for (int i = 0; i < var->refs.len; i++) {
-    LibcpObj *fn = find_func(ctx, var->refs.data[i]);
+    LibcpObj* fn = find_func(ctx, var->refs.data[i]);
     if (fn)
       mark_live(ctx, fn);
   }
@@ -412,19 +412,19 @@ static void mark_live(LibcpContext *ctx, LibcpObj *var) {
 // survives; a tentative definition that has a real definition to attach
 // to is dropped. The lookups are hash maps - a scan of the whole list per
 // tentative declaration made this quadratic (C6).
-static void scan_globals(LibcpContext *ctx) {
+static void scan_globals(LibcpContext* ctx) {
   char real_tag, kept_tag;
   LibcpHashMap reals = {};
-  LibcpHashMap kept = {};
+  LibcpHashMap kept  = {};
 
-  for (LibcpObj *var = globals; var; var = var->next)
+  for (LibcpObj* var = globals; var; var = var->next)
     if (var->is_definition && !var->is_tentative)
       libcp_hashmap_put(ctx, &reals, var->name, &real_tag);
 
   LibcpObj head;
-  LibcpObj *cur = &head;
+  LibcpObj* cur = &head;
 
-  for (LibcpObj *var = globals; var; var = var->next) {
+  for (LibcpObj* var = globals; var; var = var->next) {
     if (!var->is_tentative) {
       cur = cur->next = var;
       continue;
@@ -440,13 +440,13 @@ static void scan_globals(LibcpContext *ctx) {
   }
 
   cur->next = NULL;
-  globals = head.next;
+  globals   = head.next;
 }
 
 // Finishes the translated unit: marks the functions reachable from a
 // root live and drops the redundant tentative definitions.
-static void finalize_globals(LibcpContext *ctx) {
-  for (LibcpObj *var = globals; var; var = var->next)
+static void finalize_globals(LibcpContext* ctx) {
+  for (LibcpObj* var = globals; var; var = var->next)
     if (var->is_root)
       mark_live(ctx, var);
 
@@ -459,12 +459,12 @@ static void finalize_globals(LibcpContext *ctx) {
 // value continues the running value of the list, exactly as the old
 // on-the-spot evaluation did. Each record is consumed (ty_op cleared)
 // so that a later walk skips it.
-static void resolve_enum_records(LibcpContext *ctx, LibcpNode *recs) {
+static void resolve_enum_records(LibcpContext* ctx, LibcpNode* recs) {
   // The walk stops at the first record that is not an enum constant:
   // on the top-level and block chains the run is followed by whatever
   // declaration record comes next, which carries its own type payload.
   while (recs && recs->kind == ND_ENUM_CONST) {
-    LibcpType *ety = recs->ty_op;
+    LibcpType* ety = recs->ty_op;
     if (!ety) {
       recs = recs->next;
       continue;
@@ -481,15 +481,16 @@ static void resolve_enum_records(LibcpContext *ctx, LibcpNode *recs) {
         val = eval(ctx, recs->lhs);
       }
       if (val < INT32_MIN || val > INT32_MAX)
-        libcp_error_tok(ctx, recs->lhs ? recs->lhs->tok : recs->tok,
-                  "enum constant value is out of range for int");
-      recs->val = val++;
+        libcp_error_tok(ctx,
+                        recs->lhs ? recs->lhs->tok : recs->tok,
+                        "enum constant value is out of range for int");
+      recs->val   = val++;
       recs->ty_op = NULL;
 
-      LibcpVarScope *sc = push_scope(ctx, libcp_get_ident(ctx, recs->tok));
-      sc->enum_ty = ety;
-      sc->enum_val = recs->val;
-      recs = recs->next;
+      LibcpVarScope* sc = push_scope(ctx, libcp_get_ident(ctx, recs->tok));
+      sc->enum_ty       = ety;
+      sc->enum_val      = recs->val;
+      recs              = recs->next;
     }
   }
 }
@@ -499,80 +500,76 @@ static void resolve_enum_records(LibcpContext *ctx, LibcpNode *recs) {
 // dimension or operand is settled before the outer one wrapped in it -
 // the order the parser's own recursion gave. A record is cleared as it is
 // consumed, so calling this again costs nothing.
-static void resolve_type(LibcpContext *ctx, LibcpType *ty) {
+static void resolve_type(LibcpContext* ctx, LibcpType* ty) {
   if (!ty)
     return;
 
   switch (ty->kind) {
-  case TY_PTR:
-    // A pointer's own layout is its own: the size and alignment do not
-    // depend on the target, and C lets the target stay incomplete. An
-    // aggregate target is deliberately not laid out from here. Doing so
-    // would place it while the aggregate that owns this pointer may
-    // still be mid-layout, and a target that holds that aggregate by
-    // value would then size it from its not-yet-placed members; the
-    // point of use resolves the target instead (resolve_member, a
-    // sizeof/alignof operand, a dereference). An array or function
-    // target still has to be settled: it carries an element size and a
-    // pending dimension or parameter types of its own.
-    if (ty->base && ty->base->kind != TY_STRUCT &&
-        ty->base->kind != TY_UNION)
+    case TY_PTR:
+      // A pointer's own layout is its own: the size and alignment do not
+      // depend on the target, and C lets the target stay incomplete. An
+      // aggregate target is deliberately not laid out from here. Doing so
+      // would place it while the aggregate that owns this pointer may
+      // still be mid-layout, and a target that holds that aggregate by
+      // value would then size it from its not-yet-placed members; the
+      // point of use resolves the target instead (resolve_member, a
+      // sizeof/alignof operand, a dereference). An array or function
+      // target still has to be settled: it carries an element size and a
+      // pending dimension or parameter types of its own.
+      if (ty->base && ty->base->kind != TY_STRUCT && ty->base->kind != TY_UNION)
+        resolve_type(ctx, ty->base);
+      break;
+    case TY_VLA: resolve_type(ctx, ty->base); break;
+    case TY_ARRAY:
       resolve_type(ctx, ty->base);
-    break;
-  case TY_VLA:
-    resolve_type(ctx, ty->base);
-    break;
-  case TY_ARRAY:
-    resolve_type(ctx, ty->base);
-    // An array the parser built on a not-yet-laid-out aggregate was
-    // sized with placeholder values; recompute now that the element
-    // type is complete. (A pending dimension recomputes below.)
-    if (!ty->dim_len && ty->array_len >= 0) {
-      ty->size = (ty->base->size < 0) ? -1 : ty->base->size * ty->array_len;
-      ty->align = ty->base->align;
-    }
-    break;
-  case TY_STRUCT:
-  case TY_UNION:
-    // The parser records the member list; placing the members is
-    // sema's job, done on first sight of the completed type. An
-    // aggregate's own members are placed before an outer one consumes
-    // their sizes, because the member types are resolved first.
-    //
-    // A definition still waiting for its members to be placed has size
-    // 0; one that is only forward-declared has size -1 and nothing to
-    // place. The flag is left set in that case so the completion of the
-    // tag (a later definition) still gets its layout.
-    if (ty->layout_pending && ty->size >= 0) {
-      ty->layout_pending = false;
-      if (ty->kind == TY_STRUCT)
-        layout_struct(ctx, ty);
-      else
-        layout_union(ctx, ty);
-    }
-    break;
-  case TY_FUNC:
-    // Enum constants a parameter's declspec defined ride on the
-    // function type; they become visible when the type is completed.
-    if (ty->spec_decls) {
-      resolve_enum_records(ctx, ty->spec_decls);
-      ty->spec_decls = NULL;
-    }
-    resolve_type(ctx, ty->return_ty);
-    for (LibcpType *param = ty->params; param; param = param->next)
-      resolve_type(ctx, param);
-    break;
-  default:
-    break;
+      // An array the parser built on a not-yet-laid-out aggregate was
+      // sized with placeholder values; recompute now that the element
+      // type is complete. (A pending dimension recomputes below.)
+      if (!ty->dim_len && ty->array_len >= 0) {
+        ty->size  = (ty->base->size < 0) ? -1 : ty->base->size * ty->array_len;
+        ty->align = ty->base->align;
+      }
+      break;
+    case TY_STRUCT:
+    case TY_UNION:
+      // The parser records the member list; placing the members is
+      // sema's job, done on first sight of the completed type. An
+      // aggregate's own members are placed before an outer one consumes
+      // their sizes, because the member types are resolved first.
+      //
+      // A definition still waiting for its members to be placed has size
+      // 0; one that is only forward-declared has size -1 and nothing to
+      // place. The flag is left set in that case so the completion of the
+      // tag (a later definition) still gets its layout.
+      if (ty->layout_pending && ty->size >= 0) {
+        ty->layout_pending = false;
+        if (ty->kind == TY_STRUCT)
+          layout_struct(ctx, ty);
+        else
+          layout_union(ctx, ty);
+      }
+      break;
+    case TY_FUNC:
+      // Enum constants a parameter's declspec defined ride on the
+      // function type; they become visible when the type is completed.
+      if (ty->spec_decls) {
+        resolve_enum_records(ctx, ty->spec_decls);
+        ty->spec_decls = NULL;
+      }
+      resolve_type(ctx, ty->return_ty);
+      for (LibcpType* param = ty->params; param; param = param->next)
+        resolve_type(ctx, param);
+      break;
+    default: break;
   }
 
   if (ty->align_expr) {
-    ty->align = (int) eval(ctx, ty->align_expr);
+    ty->align      = (int)eval(ctx, ty->align_expr);
     ty->align_expr = NULL;
   }
 
   if (ty->typeof_expr) {
-    LibcpNode *expr = ty->typeof_expr;
+    LibcpNode* expr = ty->typeof_expr;
     ty->typeof_expr = NULL;
 
     // The operand's type fills this record in rather than replacing it:
@@ -582,28 +579,28 @@ static void resolve_type(LibcpContext *ctx, LibcpType *ty) {
     libcp_add_type(ctx, expr);
     resolve_type(ctx, expr->ty);
 
-    LibcpToken *name = ty->name;
-    LibcpToken *name_pos = ty->name_pos;
-    *ty = *expr->ty;
-    ty->name = name;
-    ty->name_pos = name_pos;
+    LibcpToken* name     = ty->name;
+    LibcpToken* name_pos = ty->name_pos;
+    *ty                  = *expr->ty;
+    ty->name             = name;
+    ty->name_pos         = name_pos;
   }
 
   if (ty->dim_len) {
-    LibcpNode *dim = ty->dim_len;
-    ty->dim_len = NULL;
+    LibcpNode* dim = ty->dim_len;
+    ty->dim_len    = NULL;
 
     // A dimension that is not a constant expression, like the base of a
     // VLA, gives a variable-length array.
     if (ty->base->kind == TY_VLA || !is_const_expr(ctx, dim)) {
-      ty->kind = TY_VLA;
+      ty->kind    = TY_VLA;
       ty->vla_len = dim;
-      ty->size = 8;
-      ty->align = 8;
+      ty->size    = 8;
+      ty->align   = 8;
     } else {
-      ty->array_len = (int) eval(ctx, dim);
-      ty->size = ty->base->size * ty->array_len;
-      ty->align = ty->base->align;
+      ty->array_len = (int)eval(ctx, dim);
+      ty->size      = ty->base->size * ty->array_len;
+      ty->align     = ty->base->align;
     }
   }
 }
@@ -614,42 +611,39 @@ static void resolve_type(LibcpContext *ctx, LibcpType *ty) {
 // bound and the declaration records inside (a statement expression can
 // appear in a constant context) get declared, so that the evaluations
 // resolve_type performs afterwards find a complete picture.
-static void resolve_type_exprs(LibcpContext *ctx, LibcpType *ty) {
+static void resolve_type_exprs(LibcpContext* ctx, LibcpType* ty) {
   if (!ty)
     return;
 
   switch (ty->kind) {
-  case TY_PTR:
-  case TY_VLA:
-    resolve_type_exprs(ctx, ty->base);
-    break;
-  case TY_ARRAY:
-    resolve_type_exprs(ctx, ty->base);
-    resolve_node(ctx, ty->dim_len);
-    break;
-  case TY_FUNC:
-    resolve_type_exprs(ctx, ty->return_ty);
-    for (LibcpType *param = ty->params; param; param = param->next)
-      resolve_type_exprs(ctx, param);
-    break;
-  case TY_STRUCT:
-  case TY_UNION:
-    // Layout resolves the member types itself; walking them here would
-    // recurse forever on a self-referential member. The pending flag
-    // bounds the recursion exactly as it does for the layout.
-    if (ty->layout_pending) {
-      ty->layout_pending = false;
-      for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
-        resolve_type_exprs(ctx, mem->ty);
-        resolve_node(ctx, mem->width_expr);
-        resolve_node(ctx, mem->align_expr);
-        resolve_type_exprs(ctx, mem->align_ty);
+    case TY_PTR:
+    case TY_VLA: resolve_type_exprs(ctx, ty->base); break;
+    case TY_ARRAY:
+      resolve_type_exprs(ctx, ty->base);
+      resolve_node(ctx, ty->dim_len);
+      break;
+    case TY_FUNC:
+      resolve_type_exprs(ctx, ty->return_ty);
+      for (LibcpType* param = ty->params; param; param = param->next)
+        resolve_type_exprs(ctx, param);
+      break;
+    case TY_STRUCT:
+    case TY_UNION:
+      // Layout resolves the member types itself; walking them here would
+      // recurse forever on a self-referential member. The pending flag
+      // bounds the recursion exactly as it does for the layout.
+      if (ty->layout_pending) {
+        ty->layout_pending = false;
+        for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
+          resolve_type_exprs(ctx, mem->ty);
+          resolve_node(ctx, mem->width_expr);
+          resolve_node(ctx, mem->align_expr);
+          resolve_type_exprs(ctx, mem->align_ty);
+        }
+        ty->layout_pending = true;
       }
-      ty->layout_pending = true;
-    }
-    break;
-  default:
-    break;
+      break;
+    default: break;
   }
 
   resolve_node(ctx, ty->align_expr);
@@ -661,17 +655,17 @@ static void resolve_type_exprs(LibcpContext *ctx, LibcpType *ty) {
 // read once the type is complete, and the `_Alignas(expr)` one as a
 // constant expression to evaluate. The value is cached, because one
 // declaration declares several objects and each of them asks.
-static int attr_align(LibcpContext *ctx, LibcpVarAttr *attr) {
+static int attr_align(LibcpContext* ctx, LibcpVarAttr* attr) {
   if (!attr)
     return 0;
   if (attr->align_expr) {
-    attr->align = (int) eval(ctx, attr->align_expr);
+    attr->align      = (int)eval(ctx, attr->align_expr);
     attr->align_expr = NULL;
     return attr->align;
   }
   if (attr->align_ty) {
     resolve_type(ctx, attr->align_ty);
-    attr->align = attr->align_ty->align;
+    attr->align    = attr->align_ty->align;
     attr->align_ty = NULL;
     return attr->align;
   }
@@ -686,18 +680,18 @@ static int align_down(int n, int align) {
 // may still carry parser stashes (a dimension, a typeof operand), and
 // the `_Alignas` forms are settled here. A trailing incomplete-array
 // member becomes the zero-sized flexible array member.
-static void finalize_members(LibcpContext *ctx, LibcpType *ty) {
-  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
+static void finalize_members(LibcpContext* ctx, LibcpType* ty) {
+  for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
     resolve_type_exprs(ctx, mem->ty);
     resolve_type(ctx, mem->ty);
 
     if (mem->align_ty) {
       resolve_type(ctx, mem->align_ty);
-      mem->align = mem->align_ty->align;
+      mem->align    = mem->align_ty->align;
       mem->align_ty = NULL;
     }
     if (mem->align_expr) {
-      mem->align = (int) eval(ctx, mem->align_expr);
+      mem->align      = (int)eval(ctx, mem->align_expr);
       mem->align_expr = NULL;
     }
     if (!mem->align)
@@ -707,11 +701,11 @@ static void finalize_members(LibcpContext *ctx, LibcpType *ty) {
   // If the last element is an array of incomplete type, it's
   // called a "flexible array member". It should behave as if
   // if were a zero-sized array.
-  LibcpMember *last = NULL;
-  for (LibcpMember *mem = ty->members; mem; mem = mem->next)
+  LibcpMember* last = NULL;
+  for (LibcpMember* mem = ty->members; mem; mem = mem->next)
     last = mem;
   if (last && last->ty->kind == TY_ARRAY && last->ty->array_len < 0) {
-    last->ty = libcp_array_of(ctx, last->ty->base, 0);
+    last->ty        = libcp_array_of(ctx, last->ty->base, 0);
     ty->is_flexible = true;
   }
 }
@@ -719,8 +713,8 @@ static void finalize_members(LibcpContext *ctx, LibcpType *ty) {
 // Evaluate the recorded bitfield width expressions of a member list.
 // The parser records the width unevaluated; layout is where the value
 // is first needed.
-static void eval_bitfield_widths(LibcpContext *ctx, LibcpType *ty) {
-  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
+static void eval_bitfield_widths(LibcpContext* ctx, LibcpType* ty) {
+  for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
     if (mem->width_expr) {
       // C11 6.7.2.1p4: the width is a nonnegative integer constant
       // expression that does not exceed the width of the member's type.
@@ -733,10 +727,9 @@ static void eval_bitfield_widths(LibcpContext *ctx, LibcpType *ty) {
       if (width < 0)
         libcp_error_tok(ctx, mem->width_expr->tok, "negative width in bit-field");
       if (width > mem->ty->size * 8)
-        libcp_error_tok(ctx, mem->width_expr->tok,
-                  "width of bit-field exceeds its type");
+        libcp_error_tok(ctx, mem->width_expr->tok, "width of bit-field exceeds its type");
 
-      mem->bit_width = width;
+      mem->bit_width  = width;
       mem->width_expr = NULL;
     }
   }
@@ -746,7 +739,7 @@ static void eval_bitfield_widths(LibcpContext *ctx, LibcpType *ty) {
 // and alignment. The parser builds the member list (the syntax shape)
 // and marks it complete; resolve_type calls this on first sight, and
 // nested aggregates are laid out inner-first by the resolve order.
-static void layout_struct(LibcpContext *ctx, LibcpType *ty) {
+static void layout_struct(LibcpContext* ctx, LibcpType* ty) {
   // An `aligned` attribute on the type is a constant expression the
   // parser recorded; it has to be settled before the offsets are.
   resolve_type(ctx, ty);
@@ -760,7 +753,7 @@ static void layout_struct(LibcpContext *ctx, LibcpType *ty) {
 
   int bits = 0;
 
-  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
+  for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
     if (mem->is_bitfield && mem->bit_width == 0) {
       // Zero-width anonymous bitfield has a special meaning.
       // It affects only alignment.
@@ -770,7 +763,7 @@ static void layout_struct(LibcpContext *ctx, LibcpType *ty) {
       if (bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
         bits = libcp_align_to(bits, sz * 8);
 
-      mem->offset = align_down(bits / 8, sz);
+      mem->offset     = align_down(bits / 8, sz);
       mem->bit_offset = bits % (sz * 8);
       bits += mem->bit_width;
     } else {
@@ -789,7 +782,7 @@ static void layout_struct(LibcpContext *ctx, LibcpType *ty) {
 
 // Unions need no member offsets (they are all zero), only the union
 // of the member sizes and the largest member alignment.
-static void layout_union(LibcpContext *ctx, LibcpType *ty) {
+static void layout_union(LibcpContext* ctx, LibcpType* ty) {
   resolve_type(ctx, ty);
 
   if (ty->size < 0)
@@ -798,7 +791,7 @@ static void layout_union(LibcpContext *ctx, LibcpType *ty) {
   finalize_members(ctx, ty);
   eval_bitfield_widths(ctx, ty);
 
-  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
+  for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
     if (ty->align < mem->align)
       ty->align = mem->align;
     if (ty->size < mem->ty->size)
@@ -809,10 +802,10 @@ static void layout_union(LibcpContext *ctx, LibcpType *ty) {
 
 // Binds an unresolved name. A variable or function reference becomes
 // ND_VAR; an enum constant becomes ND_NUM.
-static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
-  LibcpToken *tok = node->tok;
-  LibcpVarScope *sc = find_var(ctx, tok);
-  LibcpObj *var = sc ? sc->var : NULL;
+static void bind_ident(LibcpContext* ctx, LibcpNode* node) {
+  LibcpToken* tok   = node->tok;
+  LibcpVarScope* sc = find_var(ctx, tok);
+  LibcpObj* var     = sc ? sc->var : NULL;
 
   if (var) {
     // For "static inline" functions, record the reference so that the
@@ -825,15 +818,15 @@ static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
     }
 
     node->kind = ND_VAR;
-    node->var = var;
-    node->ty = var->ty;
+    node->var  = var;
+    node->ty   = var->ty;
     return;
   }
 
   if (sc && sc->enum_ty) {
     node->kind = ND_NUM;
-    node->val = sc->enum_val;
-    node->ty = libcp_ty_int;
+    node->val  = sc->enum_val;
+    node->ty   = libcp_ty_int;
     return;
   }
 
@@ -842,21 +835,21 @@ static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
   libcp_error_tok(ctx, tok, "undefined variable");
 }
 
-static LibcpObj *new_var(LibcpContext *ctx, char *name, LibcpType *ty) {
-  LibcpObj *var = libcp_arena_calloc(ctx, 1, sizeof(LibcpObj));
-  var->name = name;
-  var->ty = ty;
+static LibcpObj* new_var(LibcpContext* ctx, char* name, LibcpType* ty) {
+  LibcpObj* var = libcp_arena_calloc(ctx, 1, sizeof(LibcpObj));
+  var->name     = name;
+  var->ty       = ty;
   resolve_type(ctx, ty);
-  var->align = ty->align;
+  var->align                 = ty->align;
   push_scope(ctx, name)->var = var;
   return var;
 }
 
-static LibcpObj *new_lvar(LibcpContext *ctx, char *name, LibcpType *ty) {
-  LibcpObj *var = new_var(ctx, name, ty);
+static LibcpObj* new_lvar(LibcpContext* ctx, char* name, LibcpType* ty) {
+  LibcpObj* var = new_var(ctx, name, ty);
   var->is_local = true;
-  var->next = locals;
-  locals = var;
+  var->next     = locals;
+  locals        = var;
   return var;
 }
 
@@ -867,21 +860,21 @@ static LibcpObj *new_lvar(LibcpContext *ctx, char *name, LibcpType *ty) {
 // keys its runtime size on, and a typedef'd VLA is shared by the
 // declarations that use it on purpose (A10.2), so it is returned as is;
 // its name slot stays unset.
-static LibcpType *named_type(LibcpContext *ctx, LibcpType *ty, LibcpToken *name_tok) {
+static LibcpType* named_type(LibcpContext* ctx, LibcpType* ty, LibcpToken* name_tok) {
   if (ty->kind == TY_VLA)
     return ty;
 
-  LibcpType *copy = libcp_copy_type(ctx, ty);
-  copy->name = name_tok;
+  LibcpType* copy = libcp_copy_type(ctx, ty);
+  copy->name      = name_tok;
   return copy;
 }
 
-static LibcpObj *new_gvar(LibcpContext *ctx, char *name, LibcpType *ty) {
-  LibcpObj *var = new_var(ctx, name, ty);
-  var->next = globals;
-  var->is_static = true;
+static LibcpObj* new_gvar(LibcpContext* ctx, char* name, LibcpType* ty) {
+  LibcpObj* var      = new_var(ctx, name, ty);
+  var->next          = globals;
+  var->is_static     = true;
   var->is_definition = true;
-  globals = var;
+  globals            = var;
   return var;
 }
 
@@ -889,9 +882,9 @@ static LibcpObj *new_gvar(LibcpContext *ctx, char *name, LibcpType *ty) {
 // object, but it is not linked into the globals list: codegen never
 // emits it, and leaving it out keeps that list the plain result of the
 // current TU instead of something libcp_sema() has to detach afterwards.
-static LibcpObj *new_builtin_gvar(LibcpContext *ctx, char *name, LibcpType *ty) {
-  LibcpObj *var = new_var(ctx, name, ty);
-  var->is_static = true;
+static LibcpObj* new_builtin_gvar(LibcpContext* ctx, char* name, LibcpType* ty) {
+  LibcpObj* var      = new_var(ctx, name, ty);
+  var->is_static     = true;
   var->is_definition = true;
   return var;
 }
@@ -911,27 +904,27 @@ static LibcpObj *new_builtin_gvar(LibcpContext *ctx, char *name, LibcpType *ty) 
 // against this same namespace (one counter), not a parallel one.
 #define unique_name_id (ctx->unique_name_id)
 
-static char *new_unique_name(LibcpContext *ctx) {
+static char* new_unique_name(LibcpContext* ctx) {
   return libcp_format(ctx, ".L..%d", unique_name_id++);
 }
 
 // Read-only peek at the counter: a consumer that allocates its own
 // `.L..%d` labels (codegen's shaping pass) continues from here.
-int libcp_unique_name_next(LibcpContext *ctx) {
+int libcp_unique_name_next(LibcpContext* ctx) {
   return unique_name_id;
 }
 
-static LibcpObj *new_anon_gvar(LibcpContext *ctx, LibcpType *ty) {
+static LibcpObj* new_anon_gvar(LibcpContext* ctx, LibcpType* ty) {
   return new_gvar(ctx, new_unique_name(ctx), ty);
 }
 
-static LibcpObj *new_string_literal(LibcpContext *ctx, char *p, LibcpType *ty) {
-  LibcpObj *var = new_anon_gvar(ctx, ty);
+static LibcpObj* new_string_literal(LibcpContext* ctx, char* p, LibcpType* ty) {
+  LibcpObj* var  = new_anon_gvar(ctx, ty);
   var->init_data = p;
   return var;
 }
 
-static void create_param_lvars(LibcpContext *ctx, LibcpType *param) {
+static void create_param_lvars(LibcpContext* ctx, LibcpType* param) {
   if (param) {
     create_param_lvars(ctx, param->next);
     if (!param->name)
@@ -946,13 +939,13 @@ static void create_param_lvars(LibcpContext *ctx, LibcpType *param) {
 // __FUNCTION__ strings. The resolve pass calls this once it reaches the
 // function body, so that everything is created in the same order as
 // before.
-static void begin_function(LibcpContext *ctx, LibcpObj *fn, LibcpType *ty) {
+static void begin_function(LibcpContext* ctx, LibcpObj* fn, LibcpType* ty) {
   locals = NULL;
   create_param_lvars(ctx, ty->params);
 
   // A buffer for a struct/union return value is passed
   // as the hidden first parameter.
-  LibcpType *rty = ty->return_ty;
+  LibcpType* rty = ty->return_ty;
   if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
     new_lvar(ctx, "", libcp_pointer_to(ctx, rty));
 
@@ -966,28 +959,29 @@ static void begin_function(LibcpContext *ctx, LibcpObj *fn, LibcpType *ty) {
   // automatically defined as a local variable containing
   // the current function name.
   push_scope(ctx, "__func__")->var =
-    new_string_literal(ctx, fn->name, libcp_array_of(ctx, libcp_ty_char, strlen(fn->name) + 1));
+      new_string_literal(ctx, fn->name, libcp_array_of(ctx, libcp_ty_char, strlen(fn->name) + 1));
 
   // [GNU] __FUNCTION__ is yet another name of __func__.
   push_scope(ctx, "__FUNCTION__")->var =
-    new_string_literal(ctx, fn->name, libcp_array_of(ctx, libcp_ty_char, strlen(fn->name) + 1));
+      new_string_literal(ctx, fn->name, libcp_array_of(ctx, libcp_ty_char, strlen(fn->name) + 1));
 }
 
-static void declare_builtin_functions(LibcpContext *ctx) {
-  LibcpType *ty = libcp_func_type(ctx, libcp_pointer_to(ctx, libcp_ty_void));
-  ty->params = libcp_copy_type(ctx, libcp_ty_int);
-  builtin_alloca = new_builtin_gvar(ctx, "alloca", ty);
+static void declare_builtin_functions(LibcpContext* ctx) {
+  LibcpType* ty                 = libcp_func_type(ctx, libcp_pointer_to(ctx, libcp_ty_void));
+  ty->params                    = libcp_copy_type(ctx, libcp_ty_int);
+  builtin_alloca                = new_builtin_gvar(ctx, "alloca", ty);
   builtin_alloca->is_definition = false;
 }
 
 // Build the `alloca(<size>)` call node for a VLA declaration. The call
 // arrives fully typed, so libcp_add_type skips it and codegen recognizes the
 // builtin by name.
-LibcpNode *libcp_new_alloca(LibcpContext *ctx, LibcpNode *sz) {
-  LibcpNode *node = libcp_new_unary(ctx, ND_FUNCALL, libcp_new_var_node(ctx, builtin_alloca, sz->tok), sz->tok);
+LibcpNode* libcp_new_alloca(LibcpContext* ctx, LibcpNode* sz) {
+  LibcpNode* node =
+      libcp_new_unary(ctx, ND_FUNCALL, libcp_new_var_node(ctx, builtin_alloca, sz->tok), sz->tok);
   node->func_ty = builtin_alloca->ty;
-  node->ty = builtin_alloca->ty->return_ty;
-  node->args = sz;
+  node->ty      = builtin_alloca->ty->return_ty;
+  node->args    = sz;
   libcp_add_type(ctx, sz);
   return node;
 }
@@ -1002,13 +996,17 @@ LibcpNode *libcp_new_alloca(LibcpContext *ctx, LibcpNode *sz) {
 //
 // Exported: this is how a consumer obtains a typed binary node, and with
 // it sema's conversion decisions, without re-implementing either.
-LibcpNode *libcp_new_arith(LibcpContext *ctx, LibcpNodeKind kind, LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok) {
+LibcpNode* libcp_new_arith(LibcpContext* ctx,
+                           LibcpNodeKind kind,
+                           LibcpNode* lhs,
+                           LibcpNode* rhs,
+                           LibcpToken* tok) {
   libcp_add_type(ctx, lhs);
   libcp_add_type(ctx, rhs);
   libcp_usual_arith_conv(ctx, &lhs, &rhs);
 
-  LibcpNode *node = libcp_new_binary(ctx, kind, lhs, rhs, tok);
-  node->ty = lhs->ty;
+  LibcpNode* node = libcp_new_binary(ctx, kind, lhs, rhs, tok);
+  node->ty        = lhs->ty;
   return node;
 }
 
@@ -1019,12 +1017,11 @@ LibcpNode *libcp_new_arith(LibcpContext *ctx, LibcpNodeKind kind, LibcpNode *lhs
 // recorded - a struct or union one tells the consumer to allocate the
 // buffer the call writes into. `tok` is the call's closing paren, where
 // the argument-count diagnostics are anchored.
-static void lower_funcall(LibcpContext *ctx, LibcpNode *node, LibcpToken *tok) {
-  LibcpNode *fn = node->lhs;
-  LibcpType *ty = fn->ty;
+static void lower_funcall(LibcpContext* ctx, LibcpNode* node, LibcpToken* tok) {
+  LibcpNode* fn = node->lhs;
+  LibcpType* ty = fn->ty;
 
-  if (ty->kind != TY_FUNC &&
-      (ty->kind != TY_PTR || ty->base->kind != TY_FUNC))
+  if (ty->kind != TY_FUNC && (ty->kind != TY_PTR || ty->base->kind != TY_FUNC))
     libcp_error_tok(ctx, fn->tok, "not a function");
 
   if (ty->kind != TY_FUNC)
@@ -1032,12 +1029,12 @@ static void lower_funcall(LibcpContext *ctx, LibcpNode *node, LibcpToken *tok) {
 
   node->func_ty = ty;
 
-  LibcpType *param_ty = ty->params;
-  LibcpNode head = {};
-  LibcpNode *cur = &head;
+  LibcpType* param_ty = ty->params;
+  LibcpNode head      = {};
+  LibcpNode* cur      = &head;
 
-  for (LibcpNode *arg = node->args; arg;) {
-    LibcpNode *next = arg->next;
+  for (LibcpNode* arg = node->args; arg;) {
+    LibcpNode* next = arg->next;
     libcp_add_type(ctx, arg);
 
     if (!param_ty && !ty->is_variadic)
@@ -1055,14 +1052,14 @@ static void lower_funcall(LibcpContext *ctx, LibcpNode *node, LibcpToken *tok) {
 
     arg->next = NULL;
     cur = cur->next = arg;
-    arg = next;
+    arg             = next;
   }
 
   if (param_ty)
     libcp_error_tok(ctx, tok, "too few arguments");
 
   node->args = head.next;
-  node->ty = ty->return_ty;
+  node->ty   = ty->return_ty;
 
   // A struct or union return value gets the caller-owned buffer, but
   // the slot itself is the consumer's (PLAN A6.1): codegen's shaping
@@ -1070,9 +1067,9 @@ static void lower_funcall(LibcpContext *ctx, LibcpNode *node, LibcpToken *tok) {
   // here is the conclusion - the return type - which the pass reads.
 }
 
-static LibcpInitTree *new_resolved_init(LibcpContext *ctx, LibcpType *ty, bool is_flexible) {
-  LibcpInitTree *init = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitTree));
-  init->ty = ty;
+static LibcpInitTree* new_resolved_init(LibcpContext* ctx, LibcpType* ty, bool is_flexible) {
+  LibcpInitTree* init = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitTree));
+  init->ty            = ty;
 
   if (ty->kind == TY_ARRAY) {
     if (is_flexible && ty->size < 0) {
@@ -1080,7 +1077,7 @@ static LibcpInitTree *new_resolved_init(LibcpContext *ctx, LibcpType *ty, bool i
       return init;
     }
 
-    init->children = libcp_arena_calloc(ctx, ty->array_len, sizeof(LibcpInitTree *));
+    init->children = libcp_arena_calloc(ctx, ty->array_len, sizeof(LibcpInitTree*));
     for (int i = 0; i < ty->array_len; i++)
       init->children[i] = new_resolved_init(ctx, ty->base, false);
     return init;
@@ -1089,16 +1086,16 @@ static LibcpInitTree *new_resolved_init(LibcpContext *ctx, LibcpType *ty, bool i
   if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
     // Count the number of struct members.
     int len = 0;
-    for (LibcpMember *mem = ty->members; mem; mem = mem->next)
+    for (LibcpMember* mem = ty->members; mem; mem = mem->next)
       len++;
 
-    init->children = libcp_arena_calloc(ctx, len, sizeof(LibcpInitTree *));
+    init->children = libcp_arena_calloc(ctx, len, sizeof(LibcpInitTree*));
 
-    for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
+    for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
       if (is_flexible && ty->is_flexible && !mem->next) {
-        LibcpInitTree *child = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitTree));
-        child->ty = mem->ty;
-        child->is_flexible = true;
+        LibcpInitTree* child     = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitTree));
+        child->ty                = mem->ty;
+        child->is_flexible       = true;
         init->children[mem->idx] = child;
       } else {
         init->children[mem->idx] = new_resolved_init(ctx, mem->ty, false);
@@ -1110,14 +1107,14 @@ static LibcpInitTree *new_resolved_init(LibcpContext *ctx, LibcpType *ty, bool i
   return init;
 }
 
-static LibcpType *copy_struct_type(LibcpContext *ctx, LibcpType *ty) {
+static LibcpType* copy_struct_type(LibcpContext* ctx, LibcpType* ty) {
   ty = libcp_copy_type(ctx, ty);
 
   LibcpMember head = {};
-  LibcpMember *cur = &head;
-  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
-    LibcpMember *m = libcp_arena_calloc(ctx, 1, sizeof(LibcpMember));
-    *m = *mem;
+  LibcpMember* cur = &head;
+  for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
+    LibcpMember* m = libcp_arena_calloc(ctx, 1, sizeof(LibcpMember));
+    *m             = *mem;
     cur = cur->next = m;
   }
 
@@ -1126,7 +1123,7 @@ static LibcpType *copy_struct_type(LibcpContext *ctx, LibcpType *ty) {
 }
 
 // Evaluate a recorded designator index expression.
-static int eval_desig_index(LibcpContext *ctx, LibcpNode *expr) {
+static int eval_desig_index(LibcpContext* ctx, LibcpNode* expr) {
   return eval(ctx, expr);
 }
 
@@ -1134,7 +1131,8 @@ static int eval_desig_index(LibcpContext *ctx, LibcpNode *expr) {
 // array being designated. Anchors mirror the old parse-time checks:
 // the begin bound reports at the token following the begin expression,
 // the end bound and the empty range at `]`.
-static void eval_array_desig(LibcpContext *ctx, LibcpInitDesig *d, LibcpType *ty, int *begin, int *end) {
+static void
+    eval_array_desig(LibcpContext* ctx, LibcpInitDesig* d, LibcpType* ty, int* begin, int* end) {
   *begin = eval_desig_index(ctx, d->begin);
   if (*begin >= ty->array_len)
     libcp_error_tok(ctx, d->after_begin, "array designator index exceeds array bounds");
@@ -1153,11 +1151,10 @@ static void eval_array_desig(LibcpContext *ctx, LibcpInitDesig *d, LibcpType *ty
 // Find the member a `.name` designator refers to. If the name lives
 // inside an anonymous struct member, that (nameless) member is
 // returned and the caller re-applies the designator to its subtree.
-static LibcpMember *find_init_member(LibcpContext *ctx, LibcpType *ty, LibcpToken *name) {
-  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
+static LibcpMember* find_init_member(LibcpContext* ctx, LibcpType* ty, LibcpToken* name) {
+  for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
     // Anonymous struct or union member
-    if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) &&
-        !mem->name) {
+    if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) && !mem->name) {
       if (get_struct_member(mem->ty, name))
         return mem;
       continue;
@@ -1179,59 +1176,77 @@ static LibcpMember *find_init_member(LibcpContext *ctx, LibcpType *ty, LibcpToke
 // Turn a recorded string literal into an expression node referencing
 // its anonymous global, which is what a string initializer for a
 // non-array target used to parse into.
-static LibcpNode *materialize_str(LibcpContext *ctx, LibcpInitializer *rec) {
-  LibcpNode *node = libcp_new_node(ctx, ND_STRING, rec->str_tok);
+static LibcpNode* materialize_str(LibcpContext* ctx, LibcpInitializer* rec) {
+  LibcpNode* node = libcp_new_node(ctx, ND_STRING, rec->str_tok);
   libcp_add_type(ctx, node);
   return node;
 }
 
 // Expand a string literal into the elements of a character array,
 // one character (of the element width) per element.
-static void resolve_string(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init) {
-  LibcpToken *tok = rec->str_tok;
-  int len = MIN(init->ty->array_len, tok->ty->array_len);
+static void resolve_string(LibcpContext* ctx, LibcpInitializer* rec, LibcpInitTree* init) {
+  LibcpToken* tok = rec->str_tok;
+  int len         = MIN(init->ty->array_len, tok->ty->array_len);
 
   switch (init->ty->base->size) {
-  case 1: {
-    char *str = tok->str;
-    for (int i = 0; i < len; i++)
-      init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
-    break;
-  }
-  case 2: {
-    uint16_t *str = (uint16_t *)tok->str;
-    for (int i = 0; i < len; i++)
-      init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
-    break;
-  }
-  case 4: {
-    uint32_t *str = (uint32_t *)tok->str;
-    for (int i = 0; i < len; i++)
-      init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
-    break;
-  }
-  default:
-    unreachable();
+    case 1: {
+      char* str = tok->str;
+      for (int i = 0; i < len; i++)
+        init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
+      break;
+    }
+    case 2: {
+      uint16_t* str = (uint16_t*)tok->str;
+      for (int i = 0; i < len; i++)
+        init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
+      break;
+    }
+    case 4: {
+      uint32_t* str = (uint32_t*)tok->str;
+      for (int i = 0; i < len; i++)
+        init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
+      break;
+    }
+    default: unreachable();
   }
 }
 
-static void resolve_value(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init, LibcpInitItem **cursor);
-static void resolve_desig(LibcpContext *ctx, LibcpInitTree *init, LibcpInitDesig *d, LibcpInitializer *rec, LibcpInitItem **cursor);
-static void resolve_array1(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init);
-static void resolve_array_cont(LibcpContext *ctx, LibcpInitTree *init, int i, LibcpInitItem **cursor);
-static void resolve_struct1(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init);
-static void resolve_struct_cont(LibcpContext *ctx, LibcpInitTree *init, LibcpMember *mem, LibcpInitItem **cursor);
-static void resolve_struct_first(LibcpContext *ctx, LibcpInitTree *init, LibcpMember *mem, LibcpInitializer *rec, LibcpInitItem **cursor);
-static void resolve_union(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init, LibcpInitItem **cursor);
-static int count_flex_list(LibcpContext *ctx, LibcpInitItem *items, LibcpType *ty);
-static int count_flex(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitItem **cursor, LibcpType *ty);
+static void resolve_value(LibcpContext* ctx,
+                          LibcpInitializer* rec,
+                          LibcpInitTree* init,
+                          LibcpInitItem** cursor);
+static void resolve_desig(LibcpContext* ctx,
+                          LibcpInitTree* init,
+                          LibcpInitDesig* d,
+                          LibcpInitializer* rec,
+                          LibcpInitItem** cursor);
+static void resolve_array1(LibcpContext* ctx, LibcpInitializer* rec, LibcpInitTree* init);
+static void
+    resolve_array_cont(LibcpContext* ctx, LibcpInitTree* init, int i, LibcpInitItem** cursor);
+static void resolve_struct1(LibcpContext* ctx, LibcpInitializer* rec, LibcpInitTree* init);
+static void resolve_struct_cont(LibcpContext* ctx,
+                                LibcpInitTree* init,
+                                LibcpMember* mem,
+                                LibcpInitItem** cursor);
+static void resolve_struct_first(LibcpContext* ctx,
+                                 LibcpInitTree* init,
+                                 LibcpMember* mem,
+                                 LibcpInitializer* rec,
+                                 LibcpInitItem** cursor);
+static void resolve_union(LibcpContext* ctx,
+                          LibcpInitializer* rec,
+                          LibcpInitTree* init,
+                          LibcpInitItem** cursor);
+static int count_flex_list(LibcpContext* ctx, LibcpInitItem* items, LibcpType* ty);
+static int
+    count_flex(LibcpContext* ctx, LibcpInitializer* rec, LibcpInitItem** cursor, LibcpType* ty);
 
 // Consume one braced-list item: apply its designator chain (if any)
 // and resolve its value. *cursor advances past the item and any
 // siblings the value consumes through brace elision.
-static void resolve_item(LibcpContext *ctx, LibcpInitItem **cursor, LibcpInitTree *init) {
-  LibcpInitItem *it = *cursor;
-  *cursor = it->next;
+static void resolve_item(LibcpContext* ctx, LibcpInitItem** cursor, LibcpInitTree* init) {
+  LibcpInitItem* it = *cursor;
+  *cursor           = it->next;
   resolve_desig(ctx, init, it->desigs, it->init, cursor);
 }
 
@@ -1239,7 +1254,11 @@ static void resolve_item(LibcpContext *ctx, LibcpInitItem **cursor, LibcpInitTre
 // is the record-driven form of the old designation(): `[n]` moves
 // within an array, `.name` within a struct or union, and after a
 // struct member the following siblings continue with the next members.
-static void resolve_desig(LibcpContext *ctx, LibcpInitTree *init, LibcpInitDesig *d, LibcpInitializer *rec, LibcpInitItem **cursor) {
+static void resolve_desig(LibcpContext* ctx,
+                          LibcpInitTree* init,
+                          LibcpInitDesig* d,
+                          LibcpInitializer* rec,
+                          LibcpInitItem** cursor) {
   if (!d) {
     resolve_value(ctx, rec, init, cursor);
     return;
@@ -1259,7 +1278,7 @@ static void resolve_desig(LibcpContext *ctx, LibcpInitTree *init, LibcpInitDesig
   }
 
   if (init->ty->kind == TY_STRUCT) {
-    LibcpMember *mem = find_init_member(ctx, init->ty, d->name);
+    LibcpMember* mem = find_init_member(ctx, init->ty, d->name);
     if (!mem->name) {
       // Anonymous struct member: re-apply the designator to its subtree.
       resolve_desig(ctx, init->children[mem->idx], d, rec, cursor);
@@ -1272,8 +1291,8 @@ static void resolve_desig(LibcpContext *ctx, LibcpInitTree *init, LibcpInitDesig
   }
 
   if (init->ty->kind == TY_UNION) {
-    LibcpMember *mem = find_init_member(ctx, init->ty, d->name);
-    init->mem = mem;
+    LibcpMember* mem = find_init_member(ctx, init->ty, d->name);
+    init->mem        = mem;
     if (!mem->name) {
       resolve_desig(ctx, init->children[mem->idx], d, rec, cursor);
       return;
@@ -1288,7 +1307,8 @@ static void resolve_desig(LibcpContext *ctx, LibcpInitTree *init, LibcpInitDesig
 // Fill array elements from sibling items (brace-elision continuation
 // or post-designator continuation), stopping at a designated item or
 // when the items run out.
-static void resolve_array_cont(LibcpContext *ctx, LibcpInitTree *init, int i, LibcpInitItem **cursor) {
+static void
+    resolve_array_cont(LibcpContext* ctx, LibcpInitTree* init, int i, LibcpInitItem** cursor) {
   for (; i < init->ty->array_len && *cursor && !(*cursor)->desigs; i++)
     resolve_item(ctx, cursor, init->children[i]);
 }
@@ -1296,12 +1316,12 @@ static void resolve_array_cont(LibcpContext *ctx, LibcpInitTree *init, int i, Li
 // Resolve a braced array initializer, designated items included.
 // Elements past the end of the array have no target; each one is
 // diagnosed and dropped (C11 6.7.9 constrains the excess).
-static void resolve_array1(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init) {
-  int i = 0;
-  LibcpInitItem *cursor = rec->items;
+static void resolve_array1(LibcpContext* ctx, LibcpInitializer* rec, LibcpInitTree* init) {
+  int i                 = 0;
+  LibcpInitItem* cursor = rec->items;
 
   while (cursor) {
-    LibcpInitItem *it = cursor;
+    LibcpInitItem* it = cursor;
 
     if (it->desigs && !it->desigs->name) {
       int begin, end;
@@ -1325,7 +1345,10 @@ static void resolve_array1(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTr
 
 // Fill struct members from sibling items, stopping at a designated
 // item or when the items run out.
-static void resolve_struct_cont(LibcpContext *ctx, LibcpInitTree *init, LibcpMember *mem, LibcpInitItem **cursor) {
+static void resolve_struct_cont(LibcpContext* ctx,
+                                LibcpInitTree* init,
+                                LibcpMember* mem,
+                                LibcpInitItem** cursor) {
   for (; mem && *cursor && !(*cursor)->desigs; mem = mem->next)
     resolve_item(ctx, cursor, init->children[mem->idx]);
 }
@@ -1333,7 +1356,11 @@ static void resolve_struct_cont(LibcpContext *ctx, LibcpInitTree *init, LibcpMem
 // Brace-elision entry for structs: the expression a struct was
 // "initialized" with becomes the first member's initializer and the
 // siblings continue with the following members.
-static void resolve_struct_first(LibcpContext *ctx, LibcpInitTree *init, LibcpMember *mem, LibcpInitializer *rec, LibcpInitItem **cursor) {
+static void resolve_struct_first(LibcpContext* ctx,
+                                 LibcpInitTree* init,
+                                 LibcpMember* mem,
+                                 LibcpInitializer* rec,
+                                 LibcpInitItem** cursor) {
   if (mem) {
     resolve_value(ctx, rec, init->children[mem->idx], cursor);
     mem = mem->next;
@@ -1342,16 +1369,16 @@ static void resolve_struct_first(LibcpContext *ctx, LibcpInitTree *init, LibcpMe
 }
 
 // Resolve a braced struct initializer.
-static void resolve_struct1(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init) {
-  LibcpMember *mem = init->ty->members;
-  LibcpInitItem *cursor = rec->items;
+static void resolve_struct1(LibcpContext* ctx, LibcpInitializer* rec, LibcpInitTree* init) {
+  LibcpMember* mem      = init->ty->members;
+  LibcpInitItem* cursor = rec->items;
 
   while (cursor) {
-    LibcpInitItem *it = cursor;
+    LibcpInitItem* it = cursor;
 
     if (it->desigs && it->desigs->name) {
-      LibcpMember *m = find_init_member(ctx, init->ty, it->desigs->name);
-      cursor = it->next;
+      LibcpMember* m = find_init_member(ctx, init->ty, it->desigs->name);
+      cursor         = it->next;
       if (m->name)
         resolve_desig(ctx, init->children[m->idx], it->desigs->next, it->init, &cursor);
       else
@@ -1373,14 +1400,17 @@ static void resolve_struct1(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitT
 // take only one initializer, and that initializes the first union
 // member by default. You can initialize another member using a
 // designated initializer.
-static void resolve_union(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init, LibcpInitItem **cursor) {
+static void resolve_union(LibcpContext* ctx,
+                          LibcpInitializer* rec,
+                          LibcpInitTree* init,
+                          LibcpInitItem** cursor) {
   if (rec->kind == INIT_LIST) {
-    LibcpInitItem *it = rec->items;
+    LibcpInitItem* it = rec->items;
 
     if (it && it->desigs && it->desigs->name) {
-      LibcpMember *mem = find_init_member(ctx, init->ty, it->desigs->name);
-      init->mem = mem;
-      LibcpInitItem *next = it->next;
+      LibcpMember* mem    = find_init_member(ctx, init->ty, it->desigs->name);
+      init->mem           = mem;
+      LibcpInitItem* next = it->next;
       if (mem->name)
         resolve_desig(ctx, init->children[mem->idx], it->desigs->next, it->init, &next);
       else
@@ -1399,7 +1429,7 @@ static void resolve_union(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTre
       return;
     }
 
-    LibcpInitItem *next = it->next;
+    LibcpInitItem* next = it->next;
     resolve_desig(ctx, init->children[0], it->desigs, it->init, &next);
     if (next)
       libcp_error_tok(ctx, next->desigs ? next->desigs->tok : next->init->tok, "expected '}'");
@@ -1415,13 +1445,13 @@ static void resolve_union(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTre
 // resolved against a throwaway tree, exactly like the old parser's
 // counting pass; designator bounds are not checked here (the build
 // pass checks them against the completed length).
-static int count_flex_list(LibcpContext *ctx, LibcpInitItem *items, LibcpType *ty) {
-  LibcpInitTree *dummy = new_resolved_init(ctx, ty->base, true);
+static int count_flex_list(LibcpContext* ctx, LibcpInitItem* items, LibcpType* ty) {
+  LibcpInitTree* dummy = new_resolved_init(ctx, ty->base, true);
   int i = 0, max = 0;
-  LibcpInitItem *cursor = items;
+  LibcpInitItem* cursor = items;
 
   while (cursor) {
-    LibcpInitItem *it = cursor;
+    LibcpInitItem* it = cursor;
     if (it->desigs && !it->desigs->name) {
       i = eval_desig_index(ctx, it->desigs->begin);
       if (it->desigs->end)
@@ -1439,8 +1469,9 @@ static int count_flex_list(LibcpContext *ctx, LibcpInitItem *items, LibcpType *t
 
 // The brace-elision form of count_flex_list: the first value is the
 // record itself and the siblings follow it.
-static int count_flex(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitItem **cursor, LibcpType *ty) {
-  LibcpInitTree *dummy = new_resolved_init(ctx, ty->base, true);
+static int
+    count_flex(LibcpContext* ctx, LibcpInitializer* rec, LibcpInitItem** cursor, LibcpType* ty) {
+  LibcpInitTree* dummy = new_resolved_init(ctx, ty->base, true);
   int i = 0, max = 0;
 
   resolve_value(ctx, rec, dummy, cursor);
@@ -1448,7 +1479,7 @@ static int count_flex(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitItem **
   max = MAX(max, i);
 
   while (*cursor) {
-    LibcpInitItem *it = *cursor;
+    LibcpInitItem* it = *cursor;
     if (it->desigs && !it->desigs->name) {
       i = eval_desig_index(ctx, it->desigs->begin);
       if (it->desigs->end)
@@ -1465,12 +1496,17 @@ static int count_flex(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitItem **
 }
 
 // Resolve one initializer record against its target slot.
-static void resolve_value(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTree *init, LibcpInitItem **cursor) {
-  LibcpType *ty = init->ty;
+static void resolve_value(LibcpContext* ctx,
+                          LibcpInitializer* rec,
+                          LibcpInitTree* init,
+                          LibcpInitItem** cursor) {
+  LibcpType* ty = init->ty;
 
   if (ty->kind == TY_ARRAY && rec->kind == INIT_STR) {
     if (init->is_flexible)
-      *init = *new_resolved_init(ctx, libcp_array_of(ctx, ty->base, rec->str_tok->ty->array_len), false);
+      *init = *new_resolved_init(ctx,
+                                 libcp_array_of(ctx, ty->base, rec->str_tok->ty->array_len),
+                                 false);
     resolve_string(ctx, rec, init);
     return;
   }
@@ -1479,11 +1515,11 @@ static void resolve_value(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTre
     if (init->is_flexible) {
       // The counting pass walks the siblings without consuming them;
       // the build pass below resolves them for real.
-      LibcpInitItem *save = *cursor;
-      int len = (rec->kind == INIT_LIST) ? count_flex_list(ctx, rec->items, ty)
-                                         : count_flex(ctx, rec, cursor, ty);
-      *cursor = save;
-      *init = *new_resolved_init(ctx, libcp_array_of(ctx, ty->base, len), false);
+      LibcpInitItem* save = *cursor;
+      int len             = (rec->kind == INIT_LIST) ? count_flex_list(ctx, rec->items, ty) :
+                                                       count_flex(ctx, rec, cursor, ty);
+      *cursor             = save;
+      *init               = *new_resolved_init(ctx, libcp_array_of(ctx, ty->base, len), false);
     }
 
     if (rec->kind == INIT_LIST) {
@@ -1504,7 +1540,7 @@ static void resolve_value(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTre
     // A struct can be initialized with another struct. E.g.
     // `struct T x = y;` where y is a variable of type `struct T`.
     // Handle that case first.
-    LibcpNode *expr = (rec->kind == INIT_STR) ? materialize_str(ctx, rec) : rec->expr;
+    LibcpNode* expr = (rec->kind == INIT_STR) ? materialize_str(ctx, rec) : rec->expr;
     libcp_add_type(ctx, expr);
     if (expr->ty->kind == TY_STRUCT) {
       init->expr = expr;
@@ -1524,12 +1560,12 @@ static void resolve_value(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTre
     // An initializer for a scalar variable can be surrounded by
     // braces. E.g. `int x = {3};`. Handle that case: exactly one
     // element, no designators.
-    LibcpInitItem *it = rec->items;
+    LibcpInitItem* it = rec->items;
     if (!it)
       libcp_error_tok(ctx, rec->tok->next, "expected an expression");
     if (it->desigs)
       libcp_error_tok(ctx, it->desigs->tok, "expected an expression");
-    LibcpInitItem *next = it->next;
+    LibcpInitItem* next = it->next;
     resolve_value(ctx, it->init, init, &next);
     if (next)
       libcp_error_tok(ctx, next->comma_tok, "expected '}'");
@@ -1544,15 +1580,18 @@ static void resolve_value(LibcpContext *ctx, LibcpInitializer *rec, LibcpInitTre
 // flexible arrays and complete flexible struct/union members. *new_ty
 // receives the completed type (it may differ from ty for flexible
 // arrays and flexible members).
-static LibcpInitTree *resolve_initializer(LibcpContext *ctx, LibcpInitializer *rec, LibcpType *ty, LibcpType **new_ty) {
-  LibcpInitItem *cursor = NULL;
-  LibcpInitTree *init = new_resolved_init(ctx, ty, true);
+static LibcpInitTree* resolve_initializer(LibcpContext* ctx,
+                                          LibcpInitializer* rec,
+                                          LibcpType* ty,
+                                          LibcpType** new_ty) {
+  LibcpInitItem* cursor = NULL;
+  LibcpInitTree* init   = new_resolved_init(ctx, ty, true);
   resolve_value(ctx, rec, init, &cursor);
 
   if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && ty->is_flexible) {
     ty = copy_struct_type(ctx, ty);
 
-    LibcpMember *mem = ty->members;
+    LibcpMember* mem = ty->members;
     while (mem->next)
       mem = mem->next;
     mem->ty = init->children[mem->idx]->ty;
@@ -1581,33 +1620,37 @@ static LibcpInitTree *resolve_initializer(LibcpContext *ctx, LibcpInitializer *r
 // node; sema resolves it and this lowering rebuilds the chain from the
 // result.
 
-static uint64_t read_buf(LibcpContext *ctx, char *buf, int sz) {
+static uint64_t read_buf(LibcpContext* ctx, char* buf, int sz) {
   if (sz == 1)
     return *buf;
   if (sz == 2)
-    return *(uint16_t *)buf;
+    return *(uint16_t*)buf;
   if (sz == 4)
-    return *(uint32_t *)buf;
+    return *(uint32_t*)buf;
   if (sz == 8)
-    return *(uint64_t *)buf;
+    return *(uint64_t*)buf;
   unreachable();
 }
 
-static void write_buf(LibcpContext *ctx, char *buf, uint64_t val, int sz) {
+static void write_buf(LibcpContext* ctx, char* buf, uint64_t val, int sz) {
   if (sz == 1)
     *buf = val;
   else if (sz == 2)
-    *(uint16_t *)buf = val;
+    *(uint16_t*)buf = val;
   else if (sz == 4)
-    *(uint32_t *)buf = val;
+    *(uint32_t*)buf = val;
   else if (sz == 8)
-    *(uint64_t *)buf = val;
+    *(uint64_t*)buf = val;
   else
     unreachable();
 }
 
-static LibcpRelocation *
-write_gvar_data(LibcpContext *ctx, LibcpRelocation *cur, LibcpInitTree *init, LibcpType *ty, char *buf, int offset) {
+static LibcpRelocation* write_gvar_data(LibcpContext* ctx,
+                                        LibcpRelocation* cur,
+                                        LibcpInitTree* init,
+                                        LibcpType* ty,
+                                        char* buf,
+                                        int offset) {
   if (ty->kind == TY_ARRAY) {
     int sz = ty->base->size;
     for (int i = 0; i < ty->array_len; i++)
@@ -1616,22 +1659,21 @@ write_gvar_data(LibcpContext *ctx, LibcpRelocation *cur, LibcpInitTree *init, Li
   }
 
   if (ty->kind == TY_STRUCT) {
-    for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
+    for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
       if (mem->is_bitfield) {
-        LibcpNode *expr = init->children[mem->idx]->expr;
+        LibcpNode* expr = init->children[mem->idx]->expr;
         if (!expr)
           break;
 
-        char *loc = buf + offset + mem->offset;
-        uint64_t oldval = read_buf(ctx, loc, mem->ty->size);
-        uint64_t newval = eval(ctx, expr);
-        uint64_t mask = mem->bit_width == 64 ? ~0ULL
-                                             : (1ULL << mem->bit_width) - 1;
+        char* loc         = buf + offset + mem->offset;
+        uint64_t oldval   = read_buf(ctx, loc, mem->ty->size);
+        uint64_t newval   = eval(ctx, expr);
+        uint64_t mask     = mem->bit_width == 64 ? ~0ULL : (1ULL << mem->bit_width) - 1;
         uint64_t combined = oldval | ((newval & mask) << mem->bit_offset);
         write_buf(ctx, loc, combined, mem->ty->size);
       } else {
-        cur = write_gvar_data(ctx, cur, init->children[mem->idx], mem->ty, buf,
-                              offset + mem->offset);
+        cur =
+            write_gvar_data(ctx, cur, init->children[mem->idx], mem->ty, buf, offset + mem->offset);
       }
     }
     return cur;
@@ -1640,64 +1682,63 @@ write_gvar_data(LibcpContext *ctx, LibcpRelocation *cur, LibcpInitTree *init, Li
   if (ty->kind == TY_UNION) {
     if (!init->mem)
       return cur;
-    return write_gvar_data(ctx, cur, init->children[init->mem->idx],
-                           init->mem->ty, buf, offset);
+    return write_gvar_data(ctx, cur, init->children[init->mem->idx], init->mem->ty, buf, offset);
   }
 
   if (!init->expr)
     return cur;
 
   if (ty->kind == TY_FLOAT) {
-    *(float *)(buf + offset) = eval_double(ctx, init->expr);
+    *(float*)(buf + offset) = eval_double(ctx, init->expr);
     return cur;
   }
 
   if (ty->kind == TY_DOUBLE) {
-    *(double *)(buf + offset) = eval_double(ctx, init->expr);
+    *(double*)(buf + offset) = eval_double(ctx, init->expr);
     return cur;
   }
 
   LibcpLabelRef label = {};
-  uint64_t val = eval2(ctx, init->expr, &label);
+  uint64_t val        = eval2(ctx, init->expr, &label);
 
   if (!label.name && !label.node) {
     write_buf(ctx, buf + offset, val, ty->size);
     return cur;
   }
 
-  LibcpRelocation *rel = libcp_arena_calloc(ctx, 1, sizeof(LibcpRelocation));
-  rel->offset = offset;
-  rel->label = label.name;
-  rel->label_node = label.node;
-  rel->addend = val;
-  cur->next = rel;
+  LibcpRelocation* rel = libcp_arena_calloc(ctx, 1, sizeof(LibcpRelocation));
+  rel->offset          = offset;
+  rel->label           = label.name;
+  rel->label_node      = label.node;
+  rel->addend          = val;
+  cur->next            = rel;
   return cur->next;
 }
 
 // Serialize a resolved initializer tree into the .data image of a
 // global variable.
-static void gvar_init_data(LibcpContext *ctx, LibcpObj *var, LibcpInitTree *init) {
+static void gvar_init_data(LibcpContext* ctx, LibcpObj* var, LibcpInitTree* init) {
   LibcpRelocation head = {};
-  char *buf = libcp_arena_calloc(ctx, 1, var->ty->size);
+  char* buf            = libcp_arena_calloc(ctx, 1, var->ty->size);
   write_gvar_data(ctx, &head, init, var->ty, buf, 0);
   var->init_data = buf;
-  var->rel = head.next;
+  var->rel       = head.next;
 }
 
 // Resolve a global variable's faithful initializer record and
 // serialize it into the variable's .data image. Initializers for
 // global variables are evaluated at compile-time; it is a compile
 // error if an initializer list contains a non-constant expression.
-static void serialize_gvar(LibcpContext *ctx, LibcpNode *node) {
+static void serialize_gvar(LibcpContext* ctx, LibcpNode* node) {
   if (!node->decl_init)
     return;
 
   gvar_init_data(ctx, node->var, node->init_resolved);
-  node->decl_init = NULL;
+  node->decl_init     = NULL;
   node->init_resolved = NULL;
 }
 
-LibcpType *libcp_get_common_type(LibcpContext *ctx, LibcpType *ty1, LibcpType *ty2) {
+LibcpType* libcp_get_common_type(LibcpContext* ctx, LibcpType* ty1, LibcpType* ty2) {
   if (ty1->base)
     return libcp_pointer_to(ctx, ty1->base);
 
@@ -1733,18 +1774,17 @@ LibcpType *libcp_get_common_type(LibcpContext *ctx, LibcpType *ty1, LibcpType *t
 // be promoted to match with the other.
 //
 // This operation is called the "usual arithmetic conversion".
-void libcp_usual_arith_conv(LibcpContext *ctx, LibcpNode **lhs, LibcpNode **rhs) {
-  LibcpType *ty = libcp_get_common_type(ctx, (*lhs)->ty, (*rhs)->ty);
-  *lhs = libcp_new_cast(ctx, *lhs, ty);
-  *rhs = libcp_new_cast(ctx, *rhs, ty);
+void libcp_usual_arith_conv(LibcpContext* ctx, LibcpNode** lhs, LibcpNode** rhs) {
+  LibcpType* ty = libcp_get_common_type(ctx, (*lhs)->ty, (*rhs)->ty);
+  *lhs          = libcp_new_cast(ctx, *lhs, ty);
+  *rhs          = libcp_new_cast(ctx, *rhs, ty);
 }
 
 // Find a struct member by name, descending into anonymous members.
-static LibcpMember *get_struct_member(LibcpType *ty, LibcpToken *tok) {
-  for (LibcpMember *mem = ty->members; mem; mem = mem->next) {
+static LibcpMember* get_struct_member(LibcpType* ty, LibcpToken* tok) {
+  for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
     // Anonymous struct member
-    if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) &&
-        !mem->name) {
+    if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) && !mem->name) {
       if (get_struct_member(mem->ty, tok))
         return mem;
       continue;
@@ -1756,8 +1796,7 @@ static LibcpMember *get_struct_member(LibcpType *ty, LibcpToken *tok) {
       continue;
 
     // Regular struct member
-    if (mem->name->len == tok->len &&
-        !strncmp(mem->name->loc, tok->loc, tok->len))
+    if (mem->name->len == tok->len && !strncmp(mem->name->loc, tok->loc, tok->len))
       return mem;
   }
   return NULL;
@@ -1770,10 +1809,10 @@ static LibcpMember *get_struct_member(LibcpType *ty, LibcpToken *tok) {
 // its own between the operand and the named member.
 //
 // `node` is rewritten in place because its parent points at it.
-static void resolve_member(LibcpContext *ctx, LibcpNode *node) {
-  LibcpNode *operand = node->lhs;
-  LibcpType *ty = operand->ty;
-  LibcpToken *arrow = node->arrow_tok;
+static void resolve_member(LibcpContext* ctx, LibcpNode* node) {
+  LibcpNode* operand = node->lhs;
+  LibcpType* ty      = operand->ty;
+  LibcpToken* arrow  = node->arrow_tok;
 
   // `x->y` is `(*x).y`; these are the checks the dereference would
   // make, anchored at the arrow.
@@ -1795,32 +1834,32 @@ static void resolve_member(LibcpContext *ctx, LibcpNode *node) {
   resolve_type(ctx, ty);
 
   bool flattened = false;
-  LibcpNode *cur = operand;
+  LibcpNode* cur = operand;
   for (;;) {
-    LibcpMember *mem = get_struct_member(ty, node->tok);
+    LibcpMember* mem = get_struct_member(ty, node->tok);
     if (!mem)
       libcp_error_tok(ctx, node->tok, "no such member");
 
-    LibcpNode *link = libcp_new_unary(ctx, ND_MEMBER, cur, node->tok);
-    link->member = mem;
+    LibcpNode* link = libcp_new_unary(ctx, ND_MEMBER, cur, node->tok);
+    link->member    = mem;
     if (arrow) {
       // The dereference belongs to the innermost link. The marker
       // stays on it: codegen's gen_addr reads it as the dereference
       // the `->` stands for (PLAN B1.1b - the shaping pass no longer
       // rewrites it away).
       link->arrow_tok = arrow;
-      arrow = NULL;
+      arrow           = NULL;
     }
     link->ty = mem->ty;
-    cur = link;
+    cur      = link;
 
     if (mem->name)
       break;
     flattened = true;
-    ty = mem->ty;
+    ty        = mem->ty;
   }
 
-  node->lhs = cur->lhs;
+  node->lhs    = cur->lhs;
   node->member = cur->member;
   // The outermost link dissolved into this node. With flattening the
   // innermost link stays wrapped and carries the marker, so this
@@ -1841,17 +1880,17 @@ static void resolve_member(LibcpContext *ctx, LibcpNode *node) {
 // the node afresh. The other associations are typed for their checks
 // only - they are expressions in the source, and a real compiler reports
 // their errors too.
-static void select_generic(LibcpContext *ctx, LibcpNode *node) {
+static void select_generic(LibcpContext* ctx, LibcpNode* node) {
   libcp_add_type(ctx, node->cond);
 
-  LibcpType *ty = node->cond->ty;
+  LibcpType* ty = node->cond->ty;
   if (ty->kind == TY_FUNC)
     ty = libcp_pointer_to(ctx, ty);
   else if (ty->kind == TY_ARRAY)
     ty = libcp_pointer_to(ctx, ty->base);
 
-  LibcpNode *sel = NULL;
-  for (LibcpNode *assoc = node->args; assoc; assoc = assoc->next) {
+  LibcpNode* sel = NULL;
+  for (LibcpNode* assoc = node->args; assoc; assoc = assoc->next) {
     if (!assoc->ty_op) {
       if (!sel)
         sel = assoc->lhs;
@@ -1863,10 +1902,12 @@ static void select_generic(LibcpContext *ctx, LibcpNode *node) {
   }
 
   if (!sel)
-    libcp_error_tok(ctx, node->tok, "controlling expression type not compatible with"
-              " any generic association type");
+    libcp_error_tok(ctx,
+                    node->tok,
+                    "controlling expression type not compatible with"
+                    " any generic association type");
 
-  for (LibcpNode *assoc = node->args; assoc; assoc = assoc->next)
+  for (LibcpNode* assoc = node->args; assoc; assoc = assoc->next)
     if (assoc->lhs != sel)
       libcp_add_type(ctx, assoc->lhs);
 
@@ -1878,7 +1919,7 @@ static void select_generic(LibcpContext *ctx, LibcpNode *node) {
   // the unselected ones are above.
   libcp_add_type(ctx, sel);
   node->generic_sel = sel;
-  node->ty = sel->ty;
+  node->ty          = sel->ty;
 }
 
 // Walks a statement chain, typing each node. The declaration records
@@ -1890,21 +1931,17 @@ static void select_generic(LibcpContext *ctx, LibcpNode *node) {
 // serialized global data keeps its position in the emission (contract
 // 4), and a [GNU] nested function definition's body is analyzed at
 // this position of the enclosing body, as the parser used to.
-static void type_chain(LibcpContext *ctx, LibcpNode *head) {
-  for (LibcpNode *n = head; n; n = n->next) {
+static void type_chain(LibcpContext* ctx, LibcpNode* head) {
+  for (LibcpNode* n = head; n; n = n->next) {
     switch (n->kind) {
-    case ND_TYPEDEF:
-    case ND_ENUM_CONST:
-      continue;
-    case ND_GVAR_DECL:
-      serialize_gvar(ctx, n);
-      continue;
-    case ND_FUNCDEF:
-      if (n->body)
-        analyze_function(ctx, n->var);
-      continue;
-    default:
-      break;
+      case ND_TYPEDEF:
+      case ND_ENUM_CONST: continue;
+      case ND_GVAR_DECL: serialize_gvar(ctx, n); continue;
+      case ND_FUNCDEF:
+        if (n->body)
+          analyze_function(ctx, n->var);
+        continue;
+      default: break;
     }
 
     libcp_add_type(ctx, n);
@@ -1917,7 +1954,7 @@ static void type_chain(LibcpContext *ctx, LibcpNode *head) {
 // expansion that used to type them is the consumer's now, so the
 // annotation is explicit here, in the same position the old
 // expansion ran.
-static void annotate_init_exprs(LibcpContext *ctx, LibcpInitTree *init) {
+static void annotate_init_exprs(LibcpContext* ctx, LibcpInitTree* init) {
   if (!init)
     return;
 
@@ -1935,7 +1972,7 @@ static void annotate_init_exprs(LibcpContext *ctx, LibcpInitTree *init) {
     return;
   }
 
-  for (LibcpMember *mem = init->ty->members; mem; mem = mem->next)
+  for (LibcpMember* mem = init->ty->members; mem; mem = mem->next)
     annotate_init_exprs(ctx, init->children[mem->idx]);
 }
 
@@ -1951,7 +1988,7 @@ static void annotate_init_exprs(LibcpContext *ctx, LibcpInitTree *init) {
 // once - which is also why a consumer must not run its own shaping over a
 // subtree twice: this guard stops a second *annotation*, not a second
 // *lowering* (PLAN contract 3(d)).
-void libcp_add_type(LibcpContext *ctx, LibcpNode *node) {
+void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
   if (!node || node->ty)
     return;
 
@@ -1975,7 +2012,7 @@ void libcp_add_type(LibcpContext *ctx, LibcpNode *node) {
   // Without such a last statement the construct has type void, which
   // gcc accepts (C5 audit); a void expression is usable wherever no
   // value is needed.
-  LibcpNode *stmt_expr_value = NULL;
+  LibcpNode* stmt_expr_value = NULL;
   if (node->kind == ND_STMT_EXPR) {
     stmt_expr_value = node->body;
     while (stmt_expr_value && stmt_expr_value->next)
@@ -1993,397 +2030,390 @@ void libcp_add_type(LibcpContext *ctx, LibcpNode *node) {
   libcp_add_type(ctx, node->inc);
   type_chain(ctx, node->body);
 
-  for (LibcpNode *n = node->args; n; n = n->next)
+  for (LibcpNode* n = node->args; n; n = n->next)
     libcp_add_type(ctx, n);
 
   switch (node->kind) {
-  case ND_NUM:
-    node->ty = libcp_ty_int;
-    return;
-  case ND_ADD:
-  case ND_SUB: {
-    // A raw `+`/`-` from the parser: the lowerings (the pointer
-    // scaling, the `num + ptr` canonicalization and the ptr-ptr
-    // element count) are the consumer's now (PLAN A4.1). What stays
-    // here is the operand acceptance - the branches new_add/new_sub
-    // check when they rebuild - and the result type. No conversion
-    // casts: the rebuilding libcp_new_arith runs the same usual_arith_conv
-    // it always did, and doubling it would stack cast nodes.
-    LibcpType *lt = node->lhs->ty;
-    LibcpType *rt = node->rhs->ty;
-    if (node->kind == ND_ADD) {
-      if (lt->base && rt->base)
-        libcp_error_tok(ctx, node->tok, "invalid operands");
-    } else {
-      if (lt->base && rt->base) {
-        // The difference itself is an element count, so it is typed
-        // long; the division that scales it down is built on top.
-        node->ty = libcp_ty_long;
+    case ND_NUM: node->ty = libcp_ty_int; return;
+    case ND_ADD:
+    case ND_SUB: {
+      // A raw `+`/`-` from the parser: the lowerings (the pointer
+      // scaling, the `num + ptr` canonicalization and the ptr-ptr
+      // element count) are the consumer's now (PLAN A4.1). What stays
+      // here is the operand acceptance - the branches new_add/new_sub
+      // check when they rebuild - and the result type. No conversion
+      // casts: the rebuilding libcp_new_arith runs the same usual_arith_conv
+      // it always did, and doubling it would stack cast nodes.
+      LibcpType* lt = node->lhs->ty;
+      LibcpType* rt = node->rhs->ty;
+      if (node->kind == ND_ADD) {
+        if (lt->base && rt->base)
+          libcp_error_tok(ctx, node->tok, "invalid operands");
+      } else {
+        if (lt->base && rt->base) {
+          // The difference itself is an element count, so it is typed
+          // long; the division that scales it down is built on top.
+          node->ty = libcp_ty_long;
+          return;
+        }
+        if (!((libcp_is_numeric(lt) && libcp_is_numeric(rt)) ||
+              (lt->base && (lt->base->kind == TY_VLA || libcp_is_integer(rt)))))
+          libcp_error_tok(ctx, node->tok, "invalid operands");
+      }
+      node->ty = libcp_get_common_type(ctx, lt, rt);
+      return;
+    }
+    case ND_MUL:
+    case ND_DIV:
+    case ND_MOD:
+    case ND_BITAND:
+    case ND_BITOR:
+    case ND_BITXOR:
+      libcp_usual_arith_conv(ctx, &node->lhs, &node->rhs);
+      node->ty = node->lhs->ty;
+      return;
+    case ND_NEG: {
+      LibcpType* ty = libcp_get_common_type(ctx, libcp_ty_int, node->lhs->ty);
+      node->lhs     = libcp_new_cast(ctx, node->lhs, ty);
+      node->ty      = ty;
+      return;
+    }
+    case ND_ASSIGN:
+      if (node->op) {
+        // A compound assignment stays as the parser recorded it: the
+        // read-modify-write rewrite is the consumer's shaping pass
+        // (PLAN A5.1). Every form that rewrite produces takes the left
+        // operand's type, so the annotation records it here; the checks
+        // the rewrite used to run ride on the rewritten tree and stay
+        // with it.
+        node->ty = node->lhs->ty;
         return;
       }
-      if (!((libcp_is_numeric(lt) && libcp_is_numeric(rt)) ||
-            (lt->base && (lt->base->kind == TY_VLA || libcp_is_integer(rt)))))
-        libcp_error_tok(ctx, node->tok, "invalid operands");
-    }
-    node->ty = libcp_get_common_type(ctx, lt, rt);
-    return;
-  }
-  case ND_MUL:
-  case ND_DIV:
-  case ND_MOD:
-  case ND_BITAND:
-  case ND_BITOR:
-  case ND_BITXOR:
-    libcp_usual_arith_conv(ctx, &node->lhs, &node->rhs);
-    node->ty = node->lhs->ty;
-    return;
-  case ND_NEG: {
-    LibcpType *ty = libcp_get_common_type(ctx, libcp_ty_int, node->lhs->ty);
-    node->lhs = libcp_new_cast(ctx, node->lhs, ty);
-    node->ty = ty;
-    return;
-  }
-  case ND_ASSIGN:
-    if (node->op) {
-      // A compound assignment stays as the parser recorded it: the
-      // read-modify-write rewrite is the consumer's shaping pass
-      // (PLAN A5.1). Every form that rewrite produces takes the left
-      // operand's type, so the annotation records it here; the checks
-      // the rewrite used to run ride on the rewritten tree and stay
-      // with it.
+      if (node->lhs->ty->kind == TY_ARRAY)
+        libcp_error_tok(ctx, node->lhs->tok, "not an lvalue");
+      if (node->lhs->ty->kind != TY_STRUCT)
+        node->rhs = libcp_new_cast(ctx, node->rhs, node->lhs->ty);
       node->ty = node->lhs->ty;
       return;
-    }
-    if (node->lhs->ty->kind == TY_ARRAY)
-      libcp_error_tok(ctx, node->lhs->tok, "not an lvalue");
-    if (node->lhs->ty->kind != TY_STRUCT)
-      node->rhs = libcp_new_cast(ctx, node->rhs, node->lhs->ty);
-    node->ty = node->lhs->ty;
-    return;
-  case ND_INCDEC:
-    // Stays as the parser recorded it; the compound-assignment rewrite
-    // is the consumer's shaping pass (PLAN A5.1). Both the pre- and
-    // post- forms carry the operand's type - the post-form's cast back
-    // to it is built there.
-    node->ty = node->lhs->ty;
-    return;
-  case ND_GT:
-  case ND_GE:
-  case ND_LT:
-  case ND_LE:
-    // The faithful `>`/`>=` keeps its operands and its kind here;
-    // swapping them into the `<`/`<=` shape gen_expr reads is the
-    // consumer's (PLAN A4.1). The conversion does not care which way
-    // the operands face - the common type is symmetric - so the cast
-    // nodes land on the same operands either way.
-    libcp_usual_arith_conv(ctx, &node->lhs, &node->rhs);
-    node->ty = libcp_ty_int;
-    return;
-  case ND_EQ:
-  case ND_NE:
-    libcp_usual_arith_conv(ctx, &node->lhs, &node->rhs);
-    node->ty = libcp_ty_int;
-    return;
-  case ND_FUNCALL:
-    // Lower the faithful call node: the callee check, the argument
-    // conversions and the return buffer.
-    lower_funcall(ctx, node, node->tok);
-    return;
-  case ND_NOT:
-  case ND_LOGOR:
-  case ND_LOGAND:
-    node->ty = libcp_ty_int;
-    return;
-  case ND_BITNOT:
-  case ND_SHL:
-  case ND_SHR: {
-    // C11 6.5.3.3p3 and 6.5.7p3: the integer promotions apply to these
-    // operands, so a narrow left operand makes the result `int`. The
-    // result type is a conclusion consumers read (`sizeof`, `_Generic`),
-    // not just an instruction-selection hint.
-    LibcpType *ty = libcp_get_common_type(ctx, libcp_ty_int, node->lhs->ty);
-    node->ty = ty;
-    return;
-  }
-  case ND_STRING: {
-    // Materialize the literal's anonymous global, created here where
-    // the literal is typed (PLAN contract 4). The node keeps its kind
-    // and points at the object: the consumers - the evaluator and
-    // codegen's address generation - read `node->var`.
-    LibcpObj *var = new_string_literal(ctx, node->tok->str, node->tok->ty);
-    node->var = var;
-    node->ty = var->ty;
-    return;
-  }
-  case ND_IDENT:
-    // The resolve pass binds every name while the scope it was
-    // written in is reconstructed; this is the safety net for nodes
-    // the evaluator reaches directly.
-    bind_ident(ctx, node);
-    return;
-  case ND_VAR:
-  case ND_VLA_PTR:
-    node->ty = node->var->ty;
-    return;
-  case ND_SIZEOF:
-  case ND_ALIGNOF: {
-    // The conclusion is a number: the size or the alignment of the
-    // resolved type, recorded in the same `val` slot a literal uses.
-    // A `sizeof expr` operand is typed but never evaluated, so its
-    // nodes are not part of what the consumer emits. A sizeof of a
-    // VLA is a runtime value, not a constant: the consumer's shaping
-    // pass rebuilds that one as the comma expression that computes
-    // and reads the size variable (PLAN A9.1; the builder itself is
-    // still sema's until A7.1). The operand stays on the node for
-    // that case - it is what identifies the type.
-    LibcpType *ty = node->ty_op;
-    if (!ty) {
-      libcp_add_type(ctx, node->lhs);
-      ty = node->lhs->ty;
-    }
-    // The operand's type is read for its size, so the layout has to be
-    // complete; a struct reached through a dereference is not placed by
-    // the pointer rules alone.
-    resolve_type(ctx, ty);
-
-    node->ty = libcp_ty_ulong;
-    if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
+    case ND_INCDEC:
+      // Stays as the parser recorded it; the compound-assignment rewrite
+      // is the consumer's shaping pass (PLAN A5.1). Both the pre- and
+      // post- forms carry the operand's type - the post-form's cast back
+      // to it is built there.
+      node->ty = node->lhs->ty;
       return;
+    case ND_GT:
+    case ND_GE:
+    case ND_LT:
+    case ND_LE:
+      // The faithful `>`/`>=` keeps its operands and its kind here;
+      // swapping them into the `<`/`<=` shape gen_expr reads is the
+      // consumer's (PLAN A4.1). The conversion does not care which way
+      // the operands face - the common type is symmetric - so the cast
+      // nodes land on the same operands either way.
+      libcp_usual_arith_conv(ctx, &node->lhs, &node->rhs);
+      node->ty = libcp_ty_int;
+      return;
+    case ND_EQ:
+    case ND_NE:
+      libcp_usual_arith_conv(ctx, &node->lhs, &node->rhs);
+      node->ty = libcp_ty_int;
+      return;
+    case ND_FUNCALL:
+      // Lower the faithful call node: the callee check, the argument
+      // conversions and the return buffer.
+      lower_funcall(ctx, node, node->tok);
+      return;
+    case ND_NOT:
+    case ND_LOGOR:
+    case ND_LOGAND: node->ty = libcp_ty_int; return;
+    case ND_BITNOT:
+    case ND_SHL:
+    case ND_SHR: {
+      // C11 6.5.3.3p3 and 6.5.7p3: the integer promotions apply to these
+      // operands, so a narrow left operand makes the result `int`. The
+      // result type is a conclusion consumers read (`sizeof`, `_Generic`),
+      // not just an instruction-selection hint.
+      LibcpType* ty = libcp_get_common_type(ctx, libcp_ty_int, node->lhs->ty);
+      node->ty      = ty;
+      return;
+    }
+    case ND_STRING: {
+      // Materialize the literal's anonymous global, created here where
+      // the literal is typed (PLAN contract 4). The node keeps its kind
+      // and points at the object: the consumers - the evaluator and
+      // codegen's address generation - read `node->var`.
+      LibcpObj* var = new_string_literal(ctx, node->tok->str, node->tok->ty);
+      node->var     = var;
+      node->ty      = var->ty;
+      return;
+    }
+    case ND_IDENT:
+      // The resolve pass binds every name while the scope it was
+      // written in is reconstructed; this is the safety net for nodes
+      // the evaluator reaches directly.
+      bind_ident(ctx, node);
+      return;
+    case ND_VAR:
+    case ND_VLA_PTR: node->ty = node->var->ty; return;
+    case ND_SIZEOF:
+    case ND_ALIGNOF: {
+      // The conclusion is a number: the size or the alignment of the
+      // resolved type, recorded in the same `val` slot a literal uses.
+      // A `sizeof expr` operand is typed but never evaluated, so its
+      // nodes are not part of what the consumer emits. A sizeof of a
+      // VLA is a runtime value, not a constant: the consumer's shaping
+      // pass rebuilds that one as the comma expression that computes
+      // and reads the size variable (PLAN A9.1; the builder itself is
+      // still sema's until A7.1). The operand stays on the node for
+      // that case - it is what identifies the type.
+      LibcpType* ty = node->ty_op;
+      if (!ty) {
+        libcp_add_type(ctx, node->lhs);
+        ty = node->lhs->ty;
+      }
+      // The operand's type is read for its size, so the layout has to be
+      // complete; a struct reached through a dereference is not placed by
+      // the pointer rules alone.
+      resolve_type(ctx, ty);
 
-    node->val = node->kind == ND_SIZEOF ? ty->size : ty->align;
-    return;
-  }
-  case ND_TYPES_COMPATIBLE:
-    // `__builtin_types_compatible_p(T1, T2)`: a 0/1 conclusion in
-    // `val`, typed like the literal it always folded to.
-    resolve_type(ctx, node->ty_op);
-    resolve_type(ctx, node->ty_op2);
-    node->val = libcp_is_compatible(node->ty_op, node->ty_op2);
-    node->ty_op = NULL;
-    node->ty_op2 = NULL;
-    node->ty = libcp_ty_int;
-    return;
-  case ND_REG_CLASS: {
-    // `__builtin_reg_class(T)`: integer or pointer, floating-point,
-    // or anything else, as a 0/1/2 conclusion in `val`.
-    resolve_type(ctx, node->ty_op);
-    LibcpType *ty = node->ty_op;
-    int64_t val = 2;
-    if (libcp_is_integer(ty) || ty->kind == TY_PTR)
-      val = 0;
-    else if (libcp_is_flonum(ty))
-      val = 1;
+      node->ty = libcp_ty_ulong;
+      if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
+        return;
 
-    node->ty_op = NULL;
-    node->val = val;
-    node->ty = libcp_ty_int;
-    return;
-  }
-  case ND_COND:
-    if (node->is_elvis) {
-      // The GNU `a ?: b` keeps its shape here; lowering it to
-      // `tmp = a, tmp ? tmp : b` is the consumer's shaping pass
-      // (PLAN A9.1), which also owns the temporary slot. What stays
-      // is the conclusion: the type the lowered conditional would
-      // have - the common type of the operand and the else arm, or
-      // void when either is, exactly as the inner conditional of the
-      // lowered form concludes it.
-      LibcpType *ty = node->cond->ty;
-      if (ty->kind == TY_VOID || node->els->ty->kind == TY_VOID)
+      node->val = node->kind == ND_SIZEOF ? ty->size : ty->align;
+      return;
+    }
+    case ND_TYPES_COMPATIBLE:
+      // `__builtin_types_compatible_p(T1, T2)`: a 0/1 conclusion in
+      // `val`, typed like the literal it always folded to.
+      resolve_type(ctx, node->ty_op);
+      resolve_type(ctx, node->ty_op2);
+      node->val    = libcp_is_compatible(node->ty_op, node->ty_op2);
+      node->ty_op  = NULL;
+      node->ty_op2 = NULL;
+      node->ty     = libcp_ty_int;
+      return;
+    case ND_REG_CLASS: {
+      // `__builtin_reg_class(T)`: integer or pointer, floating-point,
+      // or anything else, as a 0/1/2 conclusion in `val`.
+      resolve_type(ctx, node->ty_op);
+      LibcpType* ty = node->ty_op;
+      int64_t val   = 2;
+      if (libcp_is_integer(ty) || ty->kind == TY_PTR)
+        val = 0;
+      else if (libcp_is_flonum(ty))
+        val = 1;
+
+      node->ty_op = NULL;
+      node->val   = val;
+      node->ty    = libcp_ty_int;
+      return;
+    }
+    case ND_COND:
+      if (node->is_elvis) {
+        // The GNU `a ?: b` keeps its shape here; lowering it to
+        // `tmp = a, tmp ? tmp : b` is the consumer's shaping pass
+        // (PLAN A9.1), which also owns the temporary slot. What stays
+        // is the conclusion: the type the lowered conditional would
+        // have - the common type of the operand and the else arm, or
+        // void when either is, exactly as the inner conditional of the
+        // lowered form concludes it.
+        LibcpType* ty = node->cond->ty;
+        if (ty->kind == TY_VOID || node->els->ty->kind == TY_VOID)
+          node->ty = libcp_ty_void;
+        else
+          node->ty = libcp_get_common_type(ctx, ty, node->els->ty);
+        return;
+      }
+      if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {
         node->ty = libcp_ty_void;
-      else
-        node->ty = libcp_get_common_type(ctx, ty, node->els->ty);
-      return;
-    }
-    if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {
-      node->ty = libcp_ty_void;
-    } else {
-      libcp_usual_arith_conv(ctx, &node->then, &node->els);
-      node->ty = node->then->ty;
-    }
-    return;
-  case ND_COMMA:
-    node->ty = node->rhs->ty;
-    return;
-  case ND_MEMBER:
-    // Bind the member name the parser left unresolved. Nodes that sema
-    // builds itself (compound assignment, initializer designators)
-    // carry their member already.
-    if (!node->member)
-      resolve_member(ctx, node);
-    node->ty = node->member->ty;
-    return;
-  case ND_ADDR: {
-    if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield)
-      libcp_error_tok(ctx, node->tok, "cannot take address of bitfield");
-
-    LibcpType *ty = node->lhs->ty;
-    if (ty->kind == TY_ARRAY)
-      node->ty = libcp_pointer_to(ctx, ty->base);
-    else
-      node->ty = libcp_pointer_to(ctx, ty);
-    return;
-  }
-  case ND_SUBSCRIPT: {
-    // `x[y]` stays itself and takes the pointee type as its
-    // conclusion. The operand pair is accepted exactly where new_add
-    // accepted it when the lowering lived here - both sides numeric,
-    // or one side carrying a base while the other carries none - and
-    // the pointee then passes the checks the dereference made. The
-    // `*(x+y)` rewrite with its scaling is codegen's (A3.1).
-    LibcpType *lt = node->lhs->ty;
-    LibcpType *rt = node->rhs->ty;
-
-    if (!(libcp_is_numeric(lt) && libcp_is_numeric(rt)) && !lt->base && !rt->base)
-      libcp_error_tok(ctx, node->tok, "invalid operands");
-    if (lt->base && rt->base)
-      libcp_error_tok(ctx, node->tok, "invalid operands");
-
-    LibcpType *base = lt->base ? lt->base : rt->base;
-    if (!base)
-      libcp_error_tok(ctx, node->tok, "invalid pointer dereference");
-    if (base->kind == TY_VOID)
-      libcp_error_tok(ctx, node->tok, "dereferencing a void pointer");
-    node->ty = base;
-    return;
-  }
-  case ND_DEREF:
-    if (node->lhs->ty->kind == TY_FUNC) {
-      // [https://www.sigbus.info/n1570#6.5.3.2p4] Dereferencing a
-      // function shouldn't do anything: `*foo` is just `foo`. The
-      // parser cannot check this without typing the operand, so the
-      // node survives until here; the conclusion is the function type
-      // and the node stays itself - the evaluator reads through it in
-      // constant expressions, and codegen loads nothing for it.
-      node->ty = node->lhs->ty;
-      return;
-    }
-    if (!node->lhs->ty->base)
-      libcp_error_tok(ctx, node->tok, "invalid pointer dereference");
-    if (node->lhs->ty->base->kind == TY_VOID)
-      libcp_error_tok(ctx, node->tok, "dereferencing a void pointer");
-
-    node->ty = node->lhs->ty->base;
-    // A struct or union read through a pointer is used by value from
-    // here on (`*p = x`, a struct argument), and that needs its members
-    // placed; the pointer rules deliberately leave the target alone.
-    resolve_type(ctx, node->ty);
-    return;
-  case ND_STMT_EXPR:
-    if (stmt_expr_value) {
-      node->ty = stmt_expr_value->lhs->ty;
-      return;
-    }
-    // [GNU] A statement expression whose last statement is not an
-    // expression statement has type void; gcc accepts it, and the
-    // expression is valid wherever no value is needed.
-    node->ty = libcp_ty_void;
-    return;
-  case ND_LABEL_VAL:
-    // [GNU] `&&lbl` is matched with the labels of the function by
-    // analyze. It is collected here rather than there because such an
-    // expression can live outside the statement tree - a block-scope
-    // static initializer holds one, and only the evaluator reaches it.
-    // The type annotation makes this run exactly once per node.
-    libcp_nodearray_push(ctx, &gotos, node);
-    node->ty = libcp_pointer_to(ctx, libcp_ty_void);
-    return;
-  case ND_CAS:
-    libcp_add_type(ctx, node->cas_addr);
-    libcp_add_type(ctx, node->cas_old);
-    libcp_add_type(ctx, node->cas_new);
-    node->ty = libcp_ty_bool;
-
-    if (node->cas_addr->ty->kind != TY_PTR)
-      libcp_error_tok(ctx, node->cas_addr->tok, "pointer expected");
-    if (node->cas_old->ty->kind != TY_PTR)
-      libcp_error_tok(ctx, node->cas_old->tok, "pointer expected");
-    return;
-  case ND_EXCH:
-    if (node->lhs->ty->kind != TY_PTR)
-      libcp_error_tok(ctx, node->lhs->tok, "pointer expected");
-    node->ty = node->lhs->ty->base;
-    return;
-  case ND_CAST:
-    // An explicit cast from the parser: the target type is the record
-    // in ty_op and the operand has been typed by the recursion above.
-    // Casts sema builds itself arrive fully typed and never get here.
-    resolve_type(ctx, node->ty_op);
-    node->ty = node->ty_op;
-    return;
-  case ND_RETURN:
-    // The implicit conversion to the return type. Struct and union
-    // returns are passed through as the parser left them.
-    if (node->lhs) {
-      LibcpType *ty = sema_fn->ty->return_ty;
-      if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
-        node->lhs = libcp_new_cast(ctx, node->lhs, ty);
-    }
-    return;
-  case ND_DECL: {
-    // A declaration record keeps its shape (PLAN A8.1): the checks
-    // run here, a block-scope static's initializer is serialized here
-    // (the data image's position in the emission is contract 4), and
-    // the initializer expressions are annotated here - explicitly,
-    // because nothing else reaches them: the expansion that used to
-    // type them is the consumer's now (contract 5). The consumer's
-    // shaping pass expands what remains into 0..n statements and
-    // removes the record from the chain when there are none.
-    LibcpObj *var = node->var;
-    LibcpToken *tok = node->tok;
-
-    if (node->attr.is_static) {
-      if (node->decl_init) {
-        gvar_init_data(ctx, var, node->init_resolved);
-        node->decl_init = NULL;
-        node->init_resolved = NULL;
+      } else {
+        libcp_usual_arith_conv(ctx, &node->then, &node->els);
+        node->ty = node->then->ty;
       }
       return;
+    case ND_COMMA: node->ty = node->rhs->ty; return;
+    case ND_MEMBER:
+      // Bind the member name the parser left unresolved. Nodes that sema
+      // builds itself (compound assignment, initializer designators)
+      // carry their member already.
+      if (!node->member)
+        resolve_member(ctx, node);
+      node->ty = node->member->ty;
+      return;
+    case ND_ADDR: {
+      if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield)
+        libcp_error_tok(ctx, node->tok, "cannot take address of bitfield");
+
+      LibcpType* ty = node->lhs->ty;
+      if (ty->kind == TY_ARRAY)
+        node->ty = libcp_pointer_to(ctx, ty->base);
+      else
+        node->ty = libcp_pointer_to(ctx, ty);
+      return;
     }
+    case ND_SUBSCRIPT: {
+      // `x[y]` stays itself and takes the pointee type as its
+      // conclusion. The operand pair is accepted exactly where new_add
+      // accepted it when the lowering lived here - both sides numeric,
+      // or one side carrying a base while the other carries none - and
+      // the pointee then passes the checks the dereference made. The
+      // `*(x+y)` rewrite with its scaling is codegen's (A3.1).
+      LibcpType* lt = node->lhs->ty;
+      LibcpType* rt = node->rhs->ty;
 
-    if (var->ty->kind == TY_VLA && node->decl_init)
-      // A variable-length object may not be initialized. The parser left
-      // the two standing side by side because whether a declaration is a
-      // VLA one depends on the dimension being a constant expression;
-      // the `=` is where that used to be reported.
-      libcp_error_tok(ctx, node->decl_init->eq_tok,
-                "variable-sized object may not be initialized");
+      if (!(libcp_is_numeric(lt) && libcp_is_numeric(rt)) && !lt->base && !rt->base)
+        libcp_error_tok(ctx, node->tok, "invalid operands");
+      if (lt->base && rt->base)
+        libcp_error_tok(ctx, node->tok, "invalid operands");
 
-    if (var->ty->kind != TY_VLA) {
-      // A declared object must have a complete, non-void type.
-      check_declared_void(ctx, tok, var->ty);
-      if (var->ty->size < 0)
-        libcp_error_tok(ctx, node->name_tok, "variable has incomplete type");
+      LibcpType* base = lt->base ? lt->base : rt->base;
+      if (!base)
+        libcp_error_tok(ctx, node->tok, "invalid pointer dereference");
+      if (base->kind == TY_VOID)
+        libcp_error_tok(ctx, node->tok, "dereferencing a void pointer");
+      node->ty = base;
+      return;
     }
+    case ND_DEREF:
+      if (node->lhs->ty->kind == TY_FUNC) {
+        // [https://www.sigbus.info/n1570#6.5.3.2p4] Dereferencing a
+        // function shouldn't do anything: `*foo` is just `foo`. The
+        // parser cannot check this without typing the operand, so the
+        // node survives until here; the conclusion is the function type
+        // and the node stays itself - the evaluator reads through it in
+        // constant expressions, and codegen loads nothing for it.
+        node->ty = node->lhs->ty;
+        return;
+      }
+      if (!node->lhs->ty->base)
+        libcp_error_tok(ctx, node->tok, "invalid pointer dereference");
+      if (node->lhs->ty->base->kind == TY_VOID)
+        libcp_error_tok(ctx, node->tok, "dereferencing a void pointer");
 
-    annotate_init_exprs(ctx, node->init_resolved);
-    return;
-  }
-  case ND_COMPOUND_LITERAL: {
-    // Materialize the compound literal. The resolve pass created the
-    // hidden variable it owns - a hidden local in block scope - and
-    // resolved its initializer record against the variable's type. At
-    // file scope the variable is an anonymous global whose data is
-    // serialized here and the node becomes a reference of it; in
-    // block scope the consumer builds the initializer comma and the
-    // reference (PLAN A8.1). The initializer expressions are
-    // annotated here either way - nothing else reaches them.
-    LibcpObj *var = node->var;
+      node->ty = node->lhs->ty->base;
+      // A struct or union read through a pointer is used by value from
+      // here on (`*p = x`, a struct argument), and that needs its members
+      // placed; the pointer rules deliberately leave the target alone.
+      resolve_type(ctx, node->ty);
+      return;
+    case ND_STMT_EXPR:
+      if (stmt_expr_value) {
+        node->ty = stmt_expr_value->lhs->ty;
+        return;
+      }
+      // [GNU] A statement expression whose last statement is not an
+      // expression statement has type void; gcc accepts it, and the
+      // expression is valid wherever no value is needed.
+      node->ty = libcp_ty_void;
+      return;
+    case ND_LABEL_VAL:
+      // [GNU] `&&lbl` is matched with the labels of the function by
+      // analyze. It is collected here rather than there because such an
+      // expression can live outside the statement tree - a block-scope
+      // static initializer holds one, and only the evaluator reaches it.
+      // The type annotation makes this run exactly once per node.
+      libcp_nodearray_push(ctx, &gotos, node);
+      node->ty = libcp_pointer_to(ctx, libcp_ty_void);
+      return;
+    case ND_CAS:
+      libcp_add_type(ctx, node->cas_addr);
+      libcp_add_type(ctx, node->cas_old);
+      libcp_add_type(ctx, node->cas_new);
+      node->ty = libcp_ty_bool;
 
-    annotate_init_exprs(ctx, node->init_resolved);
+      if (node->cas_addr->ty->kind != TY_PTR)
+        libcp_error_tok(ctx, node->cas_addr->tok, "pointer expected");
+      if (node->cas_old->ty->kind != TY_PTR)
+        libcp_error_tok(ctx, node->cas_old->tok, "pointer expected");
+      return;
+    case ND_EXCH:
+      if (node->lhs->ty->kind != TY_PTR)
+        libcp_error_tok(ctx, node->lhs->tok, "pointer expected");
+      node->ty = node->lhs->ty->base;
+      return;
+    case ND_CAST:
+      // An explicit cast from the parser: the target type is the record
+      // in ty_op and the operand has been typed by the recursion above.
+      // Casts sema builds itself arrive fully typed and never get here.
+      resolve_type(ctx, node->ty_op);
+      node->ty = node->ty_op;
+      return;
+    case ND_RETURN:
+      // The implicit conversion to the return type. Struct and union
+      // returns are passed through as the parser left them.
+      if (node->lhs) {
+        LibcpType* ty = sema_fn->ty->return_ty;
+        if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
+          node->lhs = libcp_new_cast(ctx, node->lhs, ty);
+      }
+      return;
+    case ND_DECL: {
+      // A declaration record keeps its shape (PLAN A8.1): the checks
+      // run here, a block-scope static's initializer is serialized here
+      // (the data image's position in the emission is contract 4), and
+      // the initializer expressions are annotated here - explicitly,
+      // because nothing else reaches them: the expansion that used to
+      // type them is the consumer's now (contract 5). The consumer's
+      // shaping pass expands what remains into 0..n statements and
+      // removes the record from the chain when there are none.
+      LibcpObj* var   = node->var;
+      LibcpToken* tok = node->tok;
 
-    if (!var->is_local) {
-      gvar_init_data(ctx, var, node->init_resolved);
-      node->decl_init = NULL;
-      node->init_resolved = NULL;
+      if (node->attr.is_static) {
+        if (node->decl_init) {
+          gvar_init_data(ctx, var, node->init_resolved);
+          node->decl_init     = NULL;
+          node->init_resolved = NULL;
+        }
+        return;
+      }
+
+      if (var->ty->kind == TY_VLA && node->decl_init)
+        // A variable-length object may not be initialized. The parser left
+        // the two standing side by side because whether a declaration is a
+        // VLA one depends on the dimension being a constant expression;
+        // the `=` is where that used to be reported.
+        libcp_error_tok(ctx,
+                        node->decl_init->eq_tok,
+                        "variable-sized object may not be initialized");
+
+      if (var->ty->kind != TY_VLA) {
+        // A declared object must have a complete, non-void type.
+        check_declared_void(ctx, tok, var->ty);
+        if (var->ty->size < 0)
+          libcp_error_tok(ctx, node->name_tok, "variable has incomplete type");
+      }
+
+      annotate_init_exprs(ctx, node->init_resolved);
+      return;
     }
-    node->ty = var->ty;
-    return;
-  }
+    case ND_COMPOUND_LITERAL: {
+      // Materialize the compound literal. The resolve pass created the
+      // hidden variable it owns - a hidden local in block scope - and
+      // resolved its initializer record against the variable's type. At
+      // file scope the variable is an anonymous global whose data is
+      // serialized here and the node becomes a reference of it; in
+      // block scope the consumer builds the initializer comma and the
+      // reference (PLAN A8.1). The initializer expressions are
+      // annotated here either way - nothing else reaches them.
+      LibcpObj* var = node->var;
+
+      annotate_init_exprs(ctx, node->init_resolved);
+
+      if (!var->is_local) {
+        gvar_init_data(ctx, var, node->init_resolved);
+        node->decl_init     = NULL;
+        node->init_resolved = NULL;
+      }
+      node->ty = var->ty;
+      return;
+    }
   }
 }
 
-static int64_t eval(LibcpContext *ctx, LibcpNode *node) {
+static int64_t eval(LibcpContext* ctx, LibcpNode* node) {
   return eval2(ctx, node, NULL);
 }
 
@@ -2403,264 +2433,246 @@ static int64_t eval(LibcpContext *ctx, LibcpNode *node) {
 // (A6.1 onwards), the entry call stays - it still types the tree -
 // but the switch starts seeing faithful kinds, which the cases below
 // recognize alongside the lowered ones.
-static int64_t eval2(LibcpContext *ctx, LibcpNode *node, LibcpLabelRef *label) {
+static int64_t eval2(LibcpContext* ctx, LibcpNode* node, LibcpLabelRef* label) {
   libcp_add_type(ctx, node);
 
   if (libcp_is_flonum(node->ty))
     return eval_double(ctx, node);
 
   switch (node->kind) {
-  case ND_ADD: {
-    // The additive lowering is codegen's now, so the faithful shape
-    // reaches here unscaled and this case is the only scaling: the
-    // pointer side is the operand whose own type has a base (the
-    // operands carry their semantic types - there are no conversion
-    // casts to pierce, and an explicit one must keep its target type),
-    // the numeric side is scaled by the element size, and `num + ptr`
-    // is accepted in the source order it was written. A VLA element
-    // size is a runtime value, not a constant. `ptr + ptr` is rejected
-    // by the annotation pass before the evaluator runs; the mirror
-    // here is for the same guarantee.
-    LibcpType *lt = node->lhs->ty;
-    LibcpType *rt = node->rhs->ty;
-    if (lt->base && rt->base)
-      libcp_error_tok(ctx, node->tok, "invalid operands");
-    if (lt->base && !rt->base) {
-      if (lt->base->kind == TY_VLA)
-        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
-      return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs) * lt->base->size;
-    }
-    if (!lt->base && rt->base) {
-      if (rt->base->kind == TY_VLA)
-        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
-      // The pointer side goes through eval2 with the caller's label
-      // and unscaled, the numeric side carries the scale - the same
-      // split the canonicalized lowered form had, with the pointer
-      // side still evaluated first.
-      return eval2(ctx, node->rhs, label) + eval2(ctx, node->lhs, label) * rt->base->size;
-    }
-    return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs);
-  }
-  case ND_SUB: {
-    // Same for `ptr - num`: the scaling is this case's now. A
-    // `num - ptr` is invalid and rejected upstream. For `ptr - ptr`
-    // the lowered form is `DIV(SUB(...), size)` - a different kind -
-    // so this branch only runs on the faithful subtraction, and it
-    // asks both sides as plain numbers (label == NULL), exactly the
-    // question the lowered DIV asked: the difference of two addresses
-    // is not a constant expression.
-    LibcpType *lt = node->lhs->ty;
-    LibcpType *rt = node->rhs->ty;
-    if (lt->base && rt->base) {
-      int64_t lhs = eval2(ctx, node->lhs, NULL);
-      int64_t rhs = eval2(ctx, node->rhs, NULL);
-      return (lhs - rhs) / lt->base->size;
-    }
-    if (rt->base && !lt->base)
-      libcp_error_tok(ctx, node->tok, "invalid operands");
-    if (lt->base) {
-      if (lt->base->kind == TY_VLA)
-        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
-      return eval2(ctx, node->lhs, label) - eval(ctx, node->rhs) * lt->base->size;
-    }
-    return eval2(ctx, node->lhs, label) - eval(ctx, node->rhs);
-  }
-  case ND_MUL:
-    return eval(ctx, node->lhs) * eval(ctx, node->rhs);
-  case ND_DIV:
-    if (node->ty->is_unsigned)
-      return (uint64_t)eval(ctx, node->lhs) / eval(ctx, node->rhs);
-    return eval(ctx, node->lhs) / eval(ctx, node->rhs);
-  case ND_NEG:
-    return -eval(ctx, node->lhs);
-  case ND_MOD:
-    if (node->ty->is_unsigned)
-      return (uint64_t)eval(ctx, node->lhs) % eval(ctx, node->rhs);
-    return eval(ctx, node->lhs) % eval(ctx, node->rhs);
-  case ND_BITAND:
-    return eval(ctx, node->lhs) & eval(ctx, node->rhs);
-  case ND_BITOR:
-    return eval(ctx, node->lhs) | eval(ctx, node->rhs);
-  case ND_BITXOR:
-    return eval(ctx, node->lhs) ^ eval(ctx, node->rhs);
-  case ND_SHL:
-    return eval(ctx, node->lhs) << eval(ctx, node->rhs);
-  case ND_SHR:
-    if (node->ty->is_unsigned && node->ty->size == 8)
-      return (uint64_t)eval(ctx, node->lhs) >> eval(ctx, node->rhs);
-    return eval(ctx, node->lhs) >> eval(ctx, node->rhs);
-  case ND_EQ:
-    return eval(ctx, node->lhs) == eval(ctx, node->rhs);
-  case ND_NE:
-    return eval(ctx, node->lhs) != eval(ctx, node->rhs);
-  case ND_GT:
-    // The faithful `>`: the lowering swapped the operands and turned
-    // this into `<`, so the faithful comparison runs the other way
-    // round, with the signedness taken from the operand the swap
-    // would have moved to the left.
-    if (node->rhs->ty->is_unsigned)
-      return (uint64_t)eval(ctx, node->rhs) < eval(ctx, node->lhs);
-    return eval(ctx, node->rhs) < eval(ctx, node->lhs);
-  case ND_GE:
-    if (node->rhs->ty->is_unsigned)
-      return (uint64_t)eval(ctx, node->rhs) <= eval(ctx, node->lhs);
-    return eval(ctx, node->rhs) <= eval(ctx, node->lhs);
-  case ND_LT:
-    if (node->lhs->ty->is_unsigned)
-      return (uint64_t)eval(ctx, node->lhs) < eval(ctx, node->rhs);
-    return eval(ctx, node->lhs) < eval(ctx, node->rhs);
-  case ND_LE:
-    if (node->lhs->ty->is_unsigned)
-      return (uint64_t)eval(ctx, node->lhs) <= eval(ctx, node->rhs);
-    return eval(ctx, node->lhs) <= eval(ctx, node->rhs);
-  case ND_COND:
-    // An elvis never becomes the comma form here: its value passes
-    // through the temporary the lowering stores the operand in, so
-    // it is a runtime value and not a constant.
-    if (node->is_elvis)
-      break;
-    return eval(ctx, node->cond) ? eval2(ctx, node->then, label) : eval2(ctx, node->els, label);
-  case ND_COMMA:
-    return eval2(ctx, node->rhs, label);
-  case ND_NOT:
-    return !eval(ctx, node->lhs);
-  case ND_BITNOT:
-    return ~eval(ctx, node->lhs);
-  case ND_LOGAND:
-    return eval(ctx, node->lhs) && eval(ctx, node->rhs);
-  case ND_LOGOR:
-    return eval(ctx, node->lhs) || eval(ctx, node->rhs);
-  case ND_CAST: {
-    int64_t val = eval2(ctx, node->lhs, label);
-    if (libcp_is_integer(node->ty)) {
-      switch (node->ty->size) {
-      case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
-      case 2: return node->ty->is_unsigned ? (uint16_t)val : (int16_t)val;
-      case 4: return node->ty->is_unsigned ? (uint32_t)val : (int32_t)val;
+    case ND_ADD: {
+      // The additive lowering is codegen's now, so the faithful shape
+      // reaches here unscaled and this case is the only scaling: the
+      // pointer side is the operand whose own type has a base (the
+      // operands carry their semantic types - there are no conversion
+      // casts to pierce, and an explicit one must keep its target type),
+      // the numeric side is scaled by the element size, and `num + ptr`
+      // is accepted in the source order it was written. A VLA element
+      // size is a runtime value, not a constant. `ptr + ptr` is rejected
+      // by the annotation pass before the evaluator runs; the mirror
+      // here is for the same guarantee.
+      LibcpType* lt = node->lhs->ty;
+      LibcpType* rt = node->rhs->ty;
+      if (lt->base && rt->base)
+        libcp_error_tok(ctx, node->tok, "invalid operands");
+      if (lt->base && !rt->base) {
+        if (lt->base->kind == TY_VLA)
+          libcp_error_tok(ctx, node->tok, "not a compile-time constant");
+        return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs) * lt->base->size;
       }
+      if (!lt->base && rt->base) {
+        if (rt->base->kind == TY_VLA)
+          libcp_error_tok(ctx, node->tok, "not a compile-time constant");
+        // The pointer side goes through eval2 with the caller's label
+        // and unscaled, the numeric side carries the scale - the same
+        // split the canonicalized lowered form had, with the pointer
+        // side still evaluated first.
+        return eval2(ctx, node->rhs, label) + eval2(ctx, node->lhs, label) * rt->base->size;
+      }
+      return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs);
     }
-    return val;
-  }
-  case ND_DEREF:
-    // `*foo` on a function designator is the function itself
-    // (6.5.3.2p4): the annotation pass stopped dissolving the node at
-    // A3.1, so the evaluator reads through it here, reaching the same
-    // operand the dissolved form left in the tree. Any other
-    // dereference is a runtime value and falls to the error below.
-    if (node->lhs->ty->kind == TY_FUNC)
-      return eval2(ctx, node->lhs, label);
-    break;
-  case ND_ADDR:
-    return eval_rval(ctx, node->lhs, label);
-  case ND_LABEL_VAL:
-    label->node = node;
-    return 0;
-  case ND_MEMBER:
-    // `p->arr`, an array member of a pointer operand: the member's
-    // address is the pointer value plus the offset, under the same
-    // two guards the lowered member (DEREF inside) passed through.
-    // A plain `.` member takes the address of its operand instead.
-    if (node->arrow_tok) {
+    case ND_SUB: {
+      // Same for `ptr - num`: the scaling is this case's now. A
+      // `num - ptr` is invalid and rejected upstream. For `ptr - ptr`
+      // the lowered form is `DIV(SUB(...), size)` - a different kind -
+      // so this branch only runs on the faithful subtraction, and it
+      // asks both sides as plain numbers (label == NULL), exactly the
+      // question the lowered DIV asked: the difference of two addresses
+      // is not a constant expression.
+      LibcpType* lt = node->lhs->ty;
+      LibcpType* rt = node->rhs->ty;
+      if (lt->base && rt->base) {
+        int64_t lhs = eval2(ctx, node->lhs, NULL);
+        int64_t rhs = eval2(ctx, node->rhs, NULL);
+        return (lhs - rhs) / lt->base->size;
+      }
+      if (rt->base && !lt->base)
+        libcp_error_tok(ctx, node->tok, "invalid operands");
+      if (lt->base) {
+        if (lt->base->kind == TY_VLA)
+          libcp_error_tok(ctx, node->tok, "not a compile-time constant");
+        return eval2(ctx, node->lhs, label) - eval(ctx, node->rhs) * lt->base->size;
+      }
+      return eval2(ctx, node->lhs, label) - eval(ctx, node->rhs);
+    }
+    case ND_MUL: return eval(ctx, node->lhs) * eval(ctx, node->rhs);
+    case ND_DIV:
+      if (node->ty->is_unsigned)
+        return (uint64_t)eval(ctx, node->lhs) / eval(ctx, node->rhs);
+      return eval(ctx, node->lhs) / eval(ctx, node->rhs);
+    case ND_NEG: return -eval(ctx, node->lhs);
+    case ND_MOD:
+      if (node->ty->is_unsigned)
+        return (uint64_t)eval(ctx, node->lhs) % eval(ctx, node->rhs);
+      return eval(ctx, node->lhs) % eval(ctx, node->rhs);
+    case ND_BITAND: return eval(ctx, node->lhs) & eval(ctx, node->rhs);
+    case ND_BITOR: return eval(ctx, node->lhs) | eval(ctx, node->rhs);
+    case ND_BITXOR: return eval(ctx, node->lhs) ^ eval(ctx, node->rhs);
+    case ND_SHL: return eval(ctx, node->lhs) << eval(ctx, node->rhs);
+    case ND_SHR:
+      if (node->ty->is_unsigned && node->ty->size == 8)
+        return (uint64_t)eval(ctx, node->lhs) >> eval(ctx, node->rhs);
+      return eval(ctx, node->lhs) >> eval(ctx, node->rhs);
+    case ND_EQ: return eval(ctx, node->lhs) == eval(ctx, node->rhs);
+    case ND_NE: return eval(ctx, node->lhs) != eval(ctx, node->rhs);
+    case ND_GT:
+      // The faithful `>`: the lowering swapped the operands and turned
+      // this into `<`, so the faithful comparison runs the other way
+      // round, with the signedness taken from the operand the swap
+      // would have moved to the left.
+      if (node->rhs->ty->is_unsigned)
+        return (uint64_t)eval(ctx, node->rhs) < eval(ctx, node->lhs);
+      return eval(ctx, node->rhs) < eval(ctx, node->lhs);
+    case ND_GE:
+      if (node->rhs->ty->is_unsigned)
+        return (uint64_t)eval(ctx, node->rhs) <= eval(ctx, node->lhs);
+      return eval(ctx, node->rhs) <= eval(ctx, node->lhs);
+    case ND_LT:
+      if (node->lhs->ty->is_unsigned)
+        return (uint64_t)eval(ctx, node->lhs) < eval(ctx, node->rhs);
+      return eval(ctx, node->lhs) < eval(ctx, node->rhs);
+    case ND_LE:
+      if (node->lhs->ty->is_unsigned)
+        return (uint64_t)eval(ctx, node->lhs) <= eval(ctx, node->rhs);
+      return eval(ctx, node->lhs) <= eval(ctx, node->rhs);
+    case ND_COND:
+      // An elvis never becomes the comma form here: its value passes
+      // through the temporary the lowering stores the operand in, so
+      // it is a runtime value and not a constant.
+      if (node->is_elvis)
+        break;
+      return eval(ctx, node->cond) ? eval2(ctx, node->then, label) : eval2(ctx, node->els, label);
+    case ND_COMMA: return eval2(ctx, node->rhs, label);
+    case ND_NOT: return !eval(ctx, node->lhs);
+    case ND_BITNOT: return ~eval(ctx, node->lhs);
+    case ND_LOGAND: return eval(ctx, node->lhs) && eval(ctx, node->rhs);
+    case ND_LOGOR: return eval(ctx, node->lhs) || eval(ctx, node->rhs);
+    case ND_CAST: {
+      int64_t val = eval2(ctx, node->lhs, label);
+      if (libcp_is_integer(node->ty)) {
+        switch (node->ty->size) {
+          case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
+          case 2: return node->ty->is_unsigned ? (uint16_t)val : (int16_t)val;
+          case 4: return node->ty->is_unsigned ? (uint32_t)val : (int32_t)val;
+        }
+      }
+      return val;
+    }
+    case ND_DEREF:
+      // `*foo` on a function designator is the function itself
+      // (6.5.3.2p4): the annotation pass stopped dissolving the node at
+      // A3.1, so the evaluator reads through it here, reaching the same
+      // operand the dissolved form left in the tree. Any other
+      // dereference is a runtime value and falls to the error below.
+      if (node->lhs->ty->kind == TY_FUNC)
+        return eval2(ctx, node->lhs, label);
+      break;
+    case ND_ADDR: return eval_rval(ctx, node->lhs, label);
+    case ND_LABEL_VAL: label->node = node; return 0;
+    case ND_MEMBER:
+      // `p->arr`, an array member of a pointer operand: the member's
+      // address is the pointer value plus the offset, under the same
+      // two guards the lowered member (DEREF inside) passed through.
+      // A plain `.` member takes the address of its operand instead.
+      if (node->arrow_tok) {
+        if (!label)
+          libcp_error_tok(ctx, node->tok, "not a compile-time constant");
+        if (node->ty->kind != TY_ARRAY)
+          libcp_error_tok(ctx, node->tok, "invalid initializer");
+        return eval2(ctx, node->lhs, label) + node->member->offset;
+      }
       if (!label)
         libcp_error_tok(ctx, node->tok, "not a compile-time constant");
       if (node->ty->kind != TY_ARRAY)
         libcp_error_tok(ctx, node->tok, "invalid initializer");
-      return eval2(ctx, node->lhs, label) + node->member->offset;
+      return eval_rval(ctx, node->lhs, label) + node->member->offset;
+    case ND_VAR:
+      if (!label)
+        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
+      if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
+        libcp_error_tok(ctx, node->tok, "invalid initializer");
+      label->name = node->var->name;
+      return 0;
+    case ND_STRING:
+      // The literal's anonymous global, materialized where the literal
+      // is annotated; the node keeps its kind and points at the
+      // object, so the address is read off the object directly.
+      if (!label)
+        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
+      label->name = node->var->name;
+      return 0;
+    case ND_COMPOUND_LITERAL:
+      // A file-scope compound literal's hidden object, whose data the
+      // annotation pass serialized; the consumer reads the object -
+      // the node keeps its kind since A9.2, like a string.
+      if (node->var->is_local)
+        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
+      label->name = node->var->name;
+      return 0;
+    case ND_SIZEOF:
+    case ND_ALIGNOF: {
+      // The conclusion the annotation pass records in `val` - the same
+      // slot a literal uses. A sizeof of a VLA is a runtime value, so
+      // that one is not a constant; an alignment always is.
+      LibcpType* ty = node->ty_op ? node->ty_op : node->lhs->ty;
+      if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
+        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
+      return node->val;
     }
-    if (!label)
-      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
-    if (node->ty->kind != TY_ARRAY)
-      libcp_error_tok(ctx, node->tok, "invalid initializer");
-    return eval_rval(ctx, node->lhs, label) + node->member->offset;
-  case ND_VAR:
-    if (!label)
-      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
-    if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
-      libcp_error_tok(ctx, node->tok, "invalid initializer");
-    label->name = node->var->name;
-    return 0;
-  case ND_STRING:
-    // The literal's anonymous global, materialized where the literal
-    // is annotated; the node keeps its kind and points at the
-    // object, so the address is read off the object directly.
-    if (!label)
-      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
-    label->name = node->var->name;
-    return 0;
-  case ND_COMPOUND_LITERAL:
-    // A file-scope compound literal's hidden object, whose data the
-    // annotation pass serialized; the consumer reads the object -
-    // the node keeps its kind since A9.2, like a string.
-    if (node->var->is_local)
-      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
-    label->name = node->var->name;
-    return 0;
-  case ND_SIZEOF:
-  case ND_ALIGNOF: {
-    // The conclusion the annotation pass records in `val` - the same
-    // slot a literal uses. A sizeof of a VLA is a runtime value, so
-    // that one is not a constant; an alignment always is.
-    LibcpType *ty = node->ty_op ? node->ty_op : node->lhs->ty;
-    if (node->kind == ND_SIZEOF && ty->kind == TY_VLA)
-      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
-    return node->val;
-  }
-  case ND_TYPES_COMPATIBLE:
-  case ND_REG_CLASS:
-    // Both fold to a number, recorded in `val`.
-    return node->val;
-  case ND_GENERIC:
-    // The conclusion of the selection: the result expression of the
-    // association the controlling expression picked.
-    return eval2(ctx, node->generic_sel, label);
-  case ND_NUM:
-    return node->val;
+    case ND_TYPES_COMPATIBLE:
+    case ND_REG_CLASS:
+      // Both fold to a number, recorded in `val`.
+      return node->val;
+    case ND_GENERIC:
+      // The conclusion of the selection: the result expression of the
+      // association the controlling expression picked.
+      return eval2(ctx, node->generic_sel, label);
+    case ND_NUM: return node->val;
   }
 
   libcp_error_tok(ctx, node->tok, "not a compile-time constant");
 }
 
-static int64_t eval_rval(LibcpContext *ctx, LibcpNode *node, LibcpLabelRef *label) {
+static int64_t eval_rval(LibcpContext* ctx, LibcpNode* node, LibcpLabelRef* label) {
   switch (node->kind) {
-  case ND_VAR:
-    if (node->var->is_local)
-      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
-    label->name = node->var->name;
-    return 0;
-  case ND_DEREF:
-    return eval2(ctx, node->lhs, label);
-  case ND_STRING:
-    // The literal's anonymous global, as above.
-    label->name = node->var->name;
-    return 0;
-  case ND_COMPOUND_LITERAL:
-    // The file-scope literal's hidden global, as above: its address
-    // is the object's, and a block-scope one is not a constant.
-    if (node->var->is_local)
-      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
-    label->name = node->var->name;
-    return 0;
-  case ND_SUBSCRIPT: {
-    // The address of `x[y]`: the base's address plus the index
-    // scaled by the element size. A VLA element size is a runtime
-    // value; an unscaled sum (both operands numbers) mirrors what
-    // the lowered `*(x+y)` evaluated to for that shape.
-    LibcpType *base = node->lhs->ty->base;
-    if (base && base->kind == TY_VLA)
-      libcp_error_tok(ctx, node->tok, "not a compile-time constant");
-    if (!base)
-      return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs);
-    return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs) * base->size;
-  }
-  case ND_MEMBER:
-    // `p->x`: the operand is the pointer itself, so the member's
-    // address is the pointer value plus the offset; a `.` member
-    // takes the address of its operand instead. No guards here, as
-    // in the lowered form: the operand's own evaluation produces
-    // whatever complaint is due.
-    if (node->arrow_tok)
-      return eval2(ctx, node->lhs, label) + node->member->offset;
-    return eval_rval(ctx, node->lhs, label) + node->member->offset;
+    case ND_VAR:
+      if (node->var->is_local)
+        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
+      label->name = node->var->name;
+      return 0;
+    case ND_DEREF: return eval2(ctx, node->lhs, label);
+    case ND_STRING:
+      // The literal's anonymous global, as above.
+      label->name = node->var->name;
+      return 0;
+    case ND_COMPOUND_LITERAL:
+      // The file-scope literal's hidden global, as above: its address
+      // is the object's, and a block-scope one is not a constant.
+      if (node->var->is_local)
+        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
+      label->name = node->var->name;
+      return 0;
+    case ND_SUBSCRIPT: {
+      // The address of `x[y]`: the base's address plus the index
+      // scaled by the element size. A VLA element size is a runtime
+      // value; an unscaled sum (both operands numbers) mirrors what
+      // the lowered `*(x+y)` evaluated to for that shape.
+      LibcpType* base = node->lhs->ty->base;
+      if (base && base->kind == TY_VLA)
+        libcp_error_tok(ctx, node->tok, "not a compile-time constant");
+      if (!base)
+        return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs);
+      return eval2(ctx, node->lhs, label) + eval(ctx, node->rhs) * base->size;
+    }
+    case ND_MEMBER:
+      // `p->x`: the operand is the pointer itself, so the member's
+      // address is the pointer value plus the offset; a `.` member
+      // takes the address of its operand instead. No guards here, as
+      // in the lowered form: the operand's own evaluation produces
+      // whatever complaint is due.
+      if (node->arrow_tok)
+        return eval2(ctx, node->lhs, label) + node->member->offset;
+      return eval_rval(ctx, node->lhs, label) + node->member->offset;
   }
 
   libcp_error_tok(ctx, node->tok, "invalid initializer");
@@ -2673,70 +2685,64 @@ static int64_t eval_rval(LibcpContext *ctx, LibcpNode *node, LibcpLabelRef *labe
 // sizeof case below has to answer false for a VLA operand by its own
 // kind, not because the fold hid it - otherwise a VLA silently
 // becomes a fixed array.
-static bool is_const_expr(LibcpContext *ctx, LibcpNode *node) {
+static bool is_const_expr(LibcpContext* ctx, LibcpNode* node) {
   libcp_add_type(ctx, node);
 
   switch (node->kind) {
-  case ND_ADD:
-  case ND_SUB:
-  case ND_MUL:
-  case ND_DIV:
-  case ND_BITAND:
-  case ND_BITOR:
-  case ND_BITXOR:
-  case ND_SHL:
-  case ND_SHR:
-  case ND_EQ:
-  case ND_NE:
-  case ND_LT:
-  case ND_LE:
-  case ND_GT:
-  case ND_GE:
-  case ND_LOGAND:
-  case ND_LOGOR:
-    return is_const_expr(ctx, node->lhs) && is_const_expr(ctx, node->rhs);
-  case ND_COND:
-    // An elvis is a runtime value: the lowering stores the operand
-    // in a temporary first.
-    if (node->is_elvis)
-      return false;
-    if (!is_const_expr(ctx, node->cond))
-      return false;
-    return is_const_expr(ctx, eval(ctx, node->cond) ? node->then : node->els);
-  case ND_COMMA:
-    return is_const_expr(ctx, node->rhs);
-  case ND_NEG:
-  case ND_NOT:
-  case ND_BITNOT:
-  case ND_CAST:
-    return is_const_expr(ctx, node->lhs);
-  case ND_SIZEOF:
-  case ND_ALIGNOF: {
-    // The alignment of a VLA is a constant; its size is not.
-    LibcpType *ty = node->ty_op ? node->ty_op : node->lhs->ty;
-    return node->kind == ND_ALIGNOF || ty->kind != TY_VLA;
-  }
-  case ND_TYPES_COMPATIBLE:
-  case ND_REG_CLASS:
-    return true;
-  case ND_GENERIC:
-    return is_const_expr(ctx, node->generic_sel);
-  case ND_NUM:
-    return true;
+    case ND_ADD:
+    case ND_SUB:
+    case ND_MUL:
+    case ND_DIV:
+    case ND_BITAND:
+    case ND_BITOR:
+    case ND_BITXOR:
+    case ND_SHL:
+    case ND_SHR:
+    case ND_EQ:
+    case ND_NE:
+    case ND_LT:
+    case ND_LE:
+    case ND_GT:
+    case ND_GE:
+    case ND_LOGAND:
+    case ND_LOGOR: return is_const_expr(ctx, node->lhs) && is_const_expr(ctx, node->rhs);
+    case ND_COND:
+      // An elvis is a runtime value: the lowering stores the operand
+      // in a temporary first.
+      if (node->is_elvis)
+        return false;
+      if (!is_const_expr(ctx, node->cond))
+        return false;
+      return is_const_expr(ctx, eval(ctx, node->cond) ? node->then : node->els);
+    case ND_COMMA: return is_const_expr(ctx, node->rhs);
+    case ND_NEG:
+    case ND_NOT:
+    case ND_BITNOT:
+    case ND_CAST: return is_const_expr(ctx, node->lhs);
+    case ND_SIZEOF:
+    case ND_ALIGNOF: {
+      // The alignment of a VLA is a constant; its size is not.
+      LibcpType* ty = node->ty_op ? node->ty_op : node->lhs->ty;
+      return node->kind == ND_ALIGNOF || ty->kind != TY_VLA;
+    }
+    case ND_TYPES_COMPATIBLE:
+    case ND_REG_CLASS: return true;
+    case ND_GENERIC: return is_const_expr(ctx, node->generic_sel);
+    case ND_NUM: return true;
   }
 
   return false;
 }
 
-int64_t libcp_const_expr(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok) {
-  LibcpNode *node = libcp_conditional(ctx, rest, tok);
+int64_t libcp_const_expr(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
+  LibcpNode* node = libcp_conditional(ctx, rest, tok);
   return eval(ctx, node);
 }
 
 // Annotates first, like eval2 (see there): the shapes this switch
 // sees are whatever the annotation pass currently produces, and the
 // faithful cases below take over as the lowerings leave it.
-static double eval_double(LibcpContext *ctx, LibcpNode *node) {
+static double eval_double(LibcpContext* ctx, LibcpNode* node) {
   libcp_add_type(ctx, node);
 
   if (libcp_is_integer(node->ty)) {
@@ -2746,32 +2752,26 @@ static double eval_double(LibcpContext *ctx, LibcpNode *node) {
   }
 
   switch (node->kind) {
-  case ND_ADD:
-    return eval_double(ctx, node->lhs) + eval_double(ctx, node->rhs);
-  case ND_SUB:
-    return eval_double(ctx, node->lhs) - eval_double(ctx, node->rhs);
-  case ND_MUL:
-    return eval_double(ctx, node->lhs) * eval_double(ctx, node->rhs);
-  case ND_DIV:
-    return eval_double(ctx, node->lhs) / eval_double(ctx, node->rhs);
-  case ND_NEG:
-    return -eval_double(ctx, node->lhs);
-  case ND_COND:
-    // An elvis is a runtime value; see eval2.
-    if (node->is_elvis)
-      break;
-    return eval_double(ctx, node->cond) ? eval_double(ctx, node->then) : eval_double(ctx, node->els);
-  case ND_COMMA:
-    return eval_double(ctx, node->rhs);
-  case ND_GENERIC:
-    // The selected association's expression.
-    return eval_double(ctx, node->generic_sel);
-  case ND_CAST:
-    if (libcp_is_flonum(node->lhs->ty))
-      return eval_double(ctx, node->lhs);
-    return eval(ctx, node->lhs);
-  case ND_NUM:
-    return node->fval;
+    case ND_ADD: return eval_double(ctx, node->lhs) + eval_double(ctx, node->rhs);
+    case ND_SUB: return eval_double(ctx, node->lhs) - eval_double(ctx, node->rhs);
+    case ND_MUL: return eval_double(ctx, node->lhs) * eval_double(ctx, node->rhs);
+    case ND_DIV: return eval_double(ctx, node->lhs) / eval_double(ctx, node->rhs);
+    case ND_NEG: return -eval_double(ctx, node->lhs);
+    case ND_COND:
+      // An elvis is a runtime value; see eval2.
+      if (node->is_elvis)
+        break;
+      return eval_double(ctx, node->cond) ? eval_double(ctx, node->then) :
+                                            eval_double(ctx, node->els);
+    case ND_COMMA: return eval_double(ctx, node->rhs);
+    case ND_GENERIC:
+      // The selected association's expression.
+      return eval_double(ctx, node->generic_sel);
+    case ND_CAST:
+      if (libcp_is_flonum(node->lhs->ty))
+        return eval_double(ctx, node->lhs);
+      return eval(ctx, node->lhs);
+    case ND_NUM: return node->fval;
   }
 
   libcp_error_tok(ctx, node->tok, "not a compile-time constant");
@@ -2795,15 +2795,15 @@ static double eval_double(LibcpContext *ctx, LibcpNode *node) {
 // Walks a faithful initializer record and resolves the expressions it
 // carries (values and designator bounds); resolution and lowering of
 // the record happen later, against the declared type.
-static void resolve_init_record(LibcpContext *ctx, LibcpInitializer *rec) {
+static void resolve_init_record(LibcpContext* ctx, LibcpInitializer* rec) {
   if (!rec)
     return;
 
   if (rec->kind == INIT_EXPR)
     resolve_node(ctx, rec->expr);
 
-  for (LibcpInitItem *it = rec->items; it; it = it->next) {
-    for (LibcpInitDesig *d = it->desigs; d; d = d->next) {
+  for (LibcpInitItem* it = rec->items; it; it = it->next) {
+    for (LibcpInitDesig* d = it->desigs; d; d = d->next) {
       resolve_node(ctx, d->begin);
       resolve_node(ctx, d->end);
     }
@@ -2811,7 +2811,7 @@ static void resolve_init_record(LibcpContext *ctx, LibcpInitializer *rec) {
   }
 }
 
-static void resolve_children(LibcpContext *ctx, LibcpNode *node) {
+static void resolve_children(LibcpContext* ctx, LibcpNode* node) {
   resolve_node(ctx, node->lhs);
   resolve_node(ctx, node->rhs);
   resolve_node(ctx, node->cond);
@@ -2826,7 +2826,7 @@ static void resolve_children(LibcpContext *ctx, LibcpNode *node) {
   resolve_node(ctx, node->cas_new);
 }
 
-static void resolve_node(LibcpContext *ctx, LibcpNode *node) {
+static void resolve_node(LibcpContext* ctx, LibcpNode* node) {
   if (!node)
     return;
 
@@ -2838,185 +2838,181 @@ static void resolve_node(LibcpContext *ctx, LibcpNode *node) {
   }
 
   switch (node->kind) {
-  case ND_TYPEDEF:
-    resolve_type_exprs(ctx, node->ty);
-    resolve_type(ctx, node->ty);
-    return;
-  case ND_ENUM_CONST:
-    if (node->ty_op)
-      resolve_enum_records(ctx, node);
-    return;
-  case ND_BLOCK:
-    if (node->is_scope_block)
+    case ND_TYPEDEF:
+      resolve_type_exprs(ctx, node->ty);
+      resolve_type(ctx, node->ty);
+      return;
+    case ND_ENUM_CONST:
+      if (node->ty_op)
+        resolve_enum_records(ctx, node);
+      return;
+    case ND_BLOCK:
+      if (node->is_scope_block)
+        enter_scope(ctx);
+      resolve_chain(ctx, node->body);
+      if (node->is_scope_block)
+        leave_scope(ctx);
+      return;
+    case ND_STMT_EXPR:
       enter_scope(ctx);
-    resolve_chain(ctx, node->body);
-    if (node->is_scope_block)
+      resolve_chain(ctx, node->body);
       leave_scope(ctx);
-    return;
-  case ND_STMT_EXPR:
-    enter_scope(ctx);
-    resolve_chain(ctx, node->body);
-    leave_scope(ctx);
-    return;
-  case ND_FOR:
-    // The init declarations share their scope with the rest of the
-    // statement, and the records the init chain may start with are
-    // registered inside it.
-    enter_scope(ctx);
-    resolve_chain(ctx, node->init);
-    resolve_node(ctx, node->cond);
-    resolve_node(ctx, node->inc);
-    resolve_node(ctx, node->then);
-    leave_scope(ctx);
-    return;
-  case ND_DECL: {
-    resolve_type_exprs(ctx, node->ty_op);
-    resolve_type(ctx, node->ty_op);
-
-    if (node->attr.is_static) {
-      // A block-scope static variable lives in the global data section
-      // under an anonymous name, but its name is registered like any
-      // other local. The void check is anchored where the old
-      // declaration site reported it: at the `=` if there is an
-      // initializer, at the declaration position otherwise.
-      LibcpToken *anchor = node->decl_init ? node->decl_init->eq_tok : node->tok;
-      check_declared_void(ctx, anchor, node->ty_op);
-      node->var = new_anon_gvar(ctx, node->ty_op);
-      push_scope(ctx, libcp_get_ident(ctx, node->name_tok))->var = node->var;
-    } else {
-      node->var = new_lvar(ctx, libcp_get_ident(ctx, node->name_tok),
-                           named_type(ctx, node->ty_op, node->name_tok));
-      int align = attr_align(ctx, &node->attr);
-      if (align)
-        node->var->align = align;
-    }
-
-    // The declared name is visible to its own initializer, as it was
-    // when the parser created the variable before parsing the `=`.
-    resolve_init_record(ctx, node->decl_init);
-
-    // The initializer is resolved here, at the declaration's position:
-    // resolution completes the declared type (an array sized by its
-    // initializer, a flexible member), and later references in the
-    // resolve order have to see the completed type.
-    if (node->decl_init) {
-      LibcpType *new_ty;
-      node->init_resolved =
-        resolve_initializer(ctx, node->decl_init, node->var->ty, &new_ty);
-      node->var->ty = new_ty;
-    }
-    return;
-  }
-  case ND_GVAR_DECL: {
-    resolve_type_exprs(ctx, node->ty_op);
-    resolve_type(ctx, node->ty_op);
-
-    LibcpObj *var = new_gvar(ctx, libcp_get_ident(ctx, node->name_tok),
-                        named_type(ctx, node->ty_op, node->name_tok));
-    var->is_definition = !node->attr.is_extern;
-    var->is_static = node->attr.is_static;
-    var->is_tls = node->attr.is_tls;
-    int align = attr_align(ctx, &node->attr);
-    if (align)
-      var->align = align;
-    if (!node->decl_init && !node->attr.is_extern && !node->attr.is_tls)
-      var->is_tentative = true;
-    node->var = var;
-
-    resolve_init_record(ctx, node->decl_init);
-    if (node->decl_init) {
-      LibcpType *new_ty;
-      node->init_resolved = resolve_initializer(ctx, node->decl_init, var->ty, &new_ty);
-      var->ty = new_ty;
-    }
-    return;
-  }
-  case ND_FUNCDEF:
-    resolve_function(ctx, node);
-    return;
-  case ND_COMPOUND_LITERAL:
-    // The hidden variable is created here, where the resolve context
-    // says whether the literal lives in an anonymous global or on the
-    // stack, and before the initializer record is walked.
-    resolve_type_exprs(ctx, node->ty_op);
-    resolve_type(ctx, node->ty_op);
-    node->var = resolving_body ? new_lvar(ctx, "", node->ty_op)
-                               : new_anon_gvar(ctx, node->ty_op);
-    resolve_init_record(ctx, node->decl_init);
-    if (node->decl_init) {
-      LibcpType *new_ty;
-      node->init_resolved =
-        resolve_initializer(ctx, node->decl_init, node->var->ty, &new_ty);
-      node->var->ty = new_ty;
-    }
-    return;
-  case ND_STRING: {
-    // The literal becomes a reference to its anonymous global here, at
-    // its source position, so the globals keep the declaration order
-    // the single-pass parser produced.
-    LibcpObj *var = new_string_literal(ctx, node->tok->str, node->tok->ty);
-    node->kind = ND_VAR;
-    node->var = var;
-    node->ty = var->ty;
-    return;
-  }
-  case ND_CASE:
-    // The value(s) a case label stands for: the parser recorded the
-    // operands unevaluated, because whether an expression is a
-    // constant is not a syntax question. They are truncated to `int`,
-    // as they were when the parser wrote `begin`/`end` on its way past
-    // them. `:` is where the range check is anchored.
-    resolve_node(ctx, node->begin_expr);
-    resolve_node(ctx, node->end_expr);
-    if (node->begin_expr) {
-      int begin = (int) eval(ctx, node->begin_expr);
-      int end = begin;
-
-      if (node->end_expr) {
-        end = (int) eval(ctx, node->end_expr);
-        if (end < begin)
-          libcp_error_tok(ctx, node->colon_tok, "empty case range specified");
-      }
-
-      node->begin = begin;
-      node->end = end;
-      node->begin_expr = NULL;
-      node->end_expr = NULL;
-    }
-    resolve_node(ctx, node->lhs);
-    return;
-  case ND_IDENT:
-    // Bind the name (variable, function or enum constant), rewriting
-    // the node into the shape codegen understands.
-    bind_ident(ctx, node);
-    return;
-  case ND_CAST:
-    resolve_type_exprs(ctx, node->ty_op);
-    resolve_type(ctx, node->ty_op);
-    break;
-  case ND_SIZEOF:
-  case ND_ALIGNOF:
-  case ND_REG_CLASS:
-  case ND_GENERIC_ASSOC:
-    if (node->ty_op) {
+      return;
+    case ND_FOR:
+      // The init declarations share their scope with the rest of the
+      // statement, and the records the init chain may start with are
+      // registered inside it.
+      enter_scope(ctx);
+      resolve_chain(ctx, node->init);
+      resolve_node(ctx, node->cond);
+      resolve_node(ctx, node->inc);
+      resolve_node(ctx, node->then);
+      leave_scope(ctx);
+      return;
+    case ND_DECL: {
       resolve_type_exprs(ctx, node->ty_op);
       resolve_type(ctx, node->ty_op);
+
+      if (node->attr.is_static) {
+        // A block-scope static variable lives in the global data section
+        // under an anonymous name, but its name is registered like any
+        // other local. The void check is anchored where the old
+        // declaration site reported it: at the `=` if there is an
+        // initializer, at the declaration position otherwise.
+        LibcpToken* anchor = node->decl_init ? node->decl_init->eq_tok : node->tok;
+        check_declared_void(ctx, anchor, node->ty_op);
+        node->var = new_anon_gvar(ctx, node->ty_op);
+        push_scope(ctx, libcp_get_ident(ctx, node->name_tok))->var = node->var;
+      } else {
+        node->var = new_lvar(ctx,
+                             libcp_get_ident(ctx, node->name_tok),
+                             named_type(ctx, node->ty_op, node->name_tok));
+        int align = attr_align(ctx, &node->attr);
+        if (align)
+          node->var->align = align;
+      }
+
+      // The declared name is visible to its own initializer, as it was
+      // when the parser created the variable before parsing the `=`.
+      resolve_init_record(ctx, node->decl_init);
+
+      // The initializer is resolved here, at the declaration's position:
+      // resolution completes the declared type (an array sized by its
+      // initializer, a flexible member), and later references in the
+      // resolve order have to see the completed type.
+      if (node->decl_init) {
+        LibcpType* new_ty;
+        node->init_resolved = resolve_initializer(ctx, node->decl_init, node->var->ty, &new_ty);
+        node->var->ty       = new_ty;
+      }
+      return;
     }
-    break;
-  case ND_TYPES_COMPATIBLE:
-    resolve_type_exprs(ctx, node->ty_op);
-    resolve_type(ctx, node->ty_op);
-    resolve_type_exprs(ctx, node->ty_op2);
-    resolve_type(ctx, node->ty_op2);
-    break;
-  default:
-    break;
+    case ND_GVAR_DECL: {
+      resolve_type_exprs(ctx, node->ty_op);
+      resolve_type(ctx, node->ty_op);
+
+      LibcpObj* var      = new_gvar(ctx,
+                               libcp_get_ident(ctx, node->name_tok),
+                               named_type(ctx, node->ty_op, node->name_tok));
+      var->is_definition = !node->attr.is_extern;
+      var->is_static     = node->attr.is_static;
+      var->is_tls        = node->attr.is_tls;
+      int align          = attr_align(ctx, &node->attr);
+      if (align)
+        var->align = align;
+      if (!node->decl_init && !node->attr.is_extern && !node->attr.is_tls)
+        var->is_tentative = true;
+      node->var = var;
+
+      resolve_init_record(ctx, node->decl_init);
+      if (node->decl_init) {
+        LibcpType* new_ty;
+        node->init_resolved = resolve_initializer(ctx, node->decl_init, var->ty, &new_ty);
+        var->ty             = new_ty;
+      }
+      return;
+    }
+    case ND_FUNCDEF: resolve_function(ctx, node); return;
+    case ND_COMPOUND_LITERAL:
+      // The hidden variable is created here, where the resolve context
+      // says whether the literal lives in an anonymous global or on the
+      // stack, and before the initializer record is walked.
+      resolve_type_exprs(ctx, node->ty_op);
+      resolve_type(ctx, node->ty_op);
+      node->var = resolving_body ? new_lvar(ctx, "", node->ty_op) : new_anon_gvar(ctx, node->ty_op);
+      resolve_init_record(ctx, node->decl_init);
+      if (node->decl_init) {
+        LibcpType* new_ty;
+        node->init_resolved = resolve_initializer(ctx, node->decl_init, node->var->ty, &new_ty);
+        node->var->ty       = new_ty;
+      }
+      return;
+    case ND_STRING: {
+      // The literal becomes a reference to its anonymous global here, at
+      // its source position, so the globals keep the declaration order
+      // the single-pass parser produced.
+      LibcpObj* var = new_string_literal(ctx, node->tok->str, node->tok->ty);
+      node->kind    = ND_VAR;
+      node->var     = var;
+      node->ty      = var->ty;
+      return;
+    }
+    case ND_CASE:
+      // The value(s) a case label stands for: the parser recorded the
+      // operands unevaluated, because whether an expression is a
+      // constant is not a syntax question. They are truncated to `int`,
+      // as they were when the parser wrote `begin`/`end` on its way past
+      // them. `:` is where the range check is anchored.
+      resolve_node(ctx, node->begin_expr);
+      resolve_node(ctx, node->end_expr);
+      if (node->begin_expr) {
+        int begin = (int)eval(ctx, node->begin_expr);
+        int end   = begin;
+
+        if (node->end_expr) {
+          end = (int)eval(ctx, node->end_expr);
+          if (end < begin)
+            libcp_error_tok(ctx, node->colon_tok, "empty case range specified");
+        }
+
+        node->begin      = begin;
+        node->end        = end;
+        node->begin_expr = NULL;
+        node->end_expr   = NULL;
+      }
+      resolve_node(ctx, node->lhs);
+      return;
+    case ND_IDENT:
+      // Bind the name (variable, function or enum constant), rewriting
+      // the node into the shape codegen understands.
+      bind_ident(ctx, node);
+      return;
+    case ND_CAST:
+      resolve_type_exprs(ctx, node->ty_op);
+      resolve_type(ctx, node->ty_op);
+      break;
+    case ND_SIZEOF:
+    case ND_ALIGNOF:
+    case ND_REG_CLASS:
+    case ND_GENERIC_ASSOC:
+      if (node->ty_op) {
+        resolve_type_exprs(ctx, node->ty_op);
+        resolve_type(ctx, node->ty_op);
+      }
+      break;
+    case ND_TYPES_COMPATIBLE:
+      resolve_type_exprs(ctx, node->ty_op);
+      resolve_type(ctx, node->ty_op);
+      resolve_type_exprs(ctx, node->ty_op2);
+      resolve_type(ctx, node->ty_op2);
+      break;
+    default: break;
   }
 
   resolve_children(ctx, node);
 }
 
-static void resolve_chain(LibcpContext *ctx, LibcpNode *node) {
+static void resolve_chain(LibcpContext* ctx, LibcpNode* node) {
   for (; node; node = node->next)
     resolve_node(ctx, node);
 }
@@ -3026,15 +3022,18 @@ static void resolve_chain(LibcpContext *ctx, LibcpNode *node) {
 // first, then the statements, with the scope stack the block structure
 // gives. The variable list is captured before the annotation pass adds
 // its temporaries; analyze_function splices those in afterwards.
-static void resolve_function(LibcpContext *ctx, LibcpNode *node) {
-  LibcpType *ty = node->ty_op;
+static void resolve_function(LibcpContext* ctx, LibcpNode* node) {
+  LibcpType* ty = node->ty_op;
   resolve_type_exprs(ctx, ty);
   resolve_type(ctx, ty);
 
-  LibcpObj *fn = declare_function(ctx, libcp_get_ident(ctx, node->name_tok),
-                             named_type(ctx, ty, node->name_tok), &node->attr,
-                             node->tok, node->body != NULL);
-  node->var = fn;
+  LibcpObj* fn = declare_function(ctx,
+                                  libcp_get_ident(ctx, node->name_tok),
+                                  named_type(ctx, ty, node->name_tok),
+                                  &node->attr,
+                                  node->tok,
+                                  node->body != NULL);
+  node->var    = fn;
 
   if (!node->body)
     return;
@@ -3047,11 +3046,11 @@ static void resolve_function(LibcpContext *ctx, LibcpNode *node) {
   // and restored around it, here and in the annotation pass
   // (analyze_function), which reads sema_fn for the return
   // conversions. The flag is saved for the same reach reason.
-  LibcpObj *save_locals = locals;
-  LibcpObj *save_fn = sema_fn;
-  bool save_body = resolving_body;
+  LibcpObj* save_locals = locals;
+  LibcpObj* save_fn     = sema_fn;
+  bool save_body        = resolving_body;
 
-  sema_fn = fn;
+  sema_fn        = fn;
   resolving_body = true;
 
   enter_scope(ctx);
@@ -3061,8 +3060,8 @@ static void resolve_function(LibcpContext *ctx, LibcpNode *node) {
   leave_scope(ctx);
 
   resolving_body = save_body;
-  sema_fn = save_fn;
-  locals = save_locals;
+  sema_fn        = save_fn;
+  locals         = save_locals;
 }
 
 // Runs the annotation + lowering pass and the control-flow descent over
@@ -3070,10 +3069,10 @@ static void resolve_function(LibcpContext *ctx, LibcpNode *node) {
 // collected on a fresh variable list and spliced in front of the ones
 // the resolve pass captured, so that the function's frame is complete
 // and no other function's list is polluted.
-static void splice_locals(LibcpContext *ctx, LibcpObj *fn) {
-  LibcpObj *pass2 = locals;
+static void splice_locals(LibcpContext* ctx, LibcpObj* fn) {
+  LibcpObj* pass2 = locals;
   if (pass2) {
-    LibcpObj *tail = pass2;
+    LibcpObj* tail = pass2;
     while (tail->next)
       tail = tail->next;
     tail->next = obj_locals(fn);
@@ -3085,29 +3084,29 @@ static void splice_locals(LibcpContext *ctx, LibcpObj *fn) {
 // parked in the context (PLAN L3.1b): they are a sema -> codegen
 // handoff, not a layer-3/4 field of LibcpObj. The parameter is not named
 // `gotos` because sema.c aliases that name to the context slot.
-void libcp_sema_store_label_gotos(LibcpContext *ctx, LibcpObj *fn, LibcpNodeArray refs) {
-  LibcpLabelGotoList *l = libcp_arena_calloc(ctx, 1, sizeof(LibcpLabelGotoList));
-  l->fn = fn;
-  l->refs = refs;
-  l->next = ctx->label_gotos;
-  ctx->label_gotos = l;
+void libcp_sema_store_label_gotos(LibcpContext* ctx, LibcpObj* fn, LibcpNodeArray refs) {
+  LibcpLabelGotoList* l = libcp_arena_calloc(ctx, 1, sizeof(LibcpLabelGotoList));
+  l->fn                 = fn;
+  l->refs               = refs;
+  l->next               = ctx->label_gotos;
+  ctx->label_gotos      = l;
 }
 
-LibcpNodeArray *libcp_sema_label_gotos(LibcpContext *ctx, LibcpObj *fn) {
-  for (LibcpLabelGotoList *l = ctx->label_gotos; l; l = l->next)
+LibcpNodeArray* libcp_sema_label_gotos(LibcpContext* ctx, LibcpObj* fn) {
+  for (LibcpLabelGotoList* l = ctx->label_gotos; l; l = l->next)
     if (l->fn == fn)
       return &l->refs;
   return NULL;
 }
 
-static void analyze_function(LibcpContext *ctx, LibcpObj *fn) {
+static void analyze_function(LibcpContext* ctx, LibcpObj* fn) {
   // The return conversions read the function being annotated, and a
   // nested definition's analysis runs from inside its host's, so the
   // context is saved and restored like the local list.
-  LibcpObj *save_fn = sema_fn;
-  sema_fn = fn;
-  LibcpObj *save = locals;
-  locals = NULL;
+  LibcpObj* save_fn = sema_fn;
+  sema_fn           = fn;
+  LibcpObj* save    = locals;
+  locals            = NULL;
   libcp_add_type(ctx, fn->body);
   check_control_flow(ctx, fn->body);
 
@@ -3120,7 +3119,7 @@ static void analyze_function(LibcpContext *ctx, LibcpObj *fn) {
   gotos = labels = (LibcpNodeArray){};
 
   splice_locals(ctx, fn);
-  locals = save;
+  locals  = save;
   sema_fn = save_fn;
 }
 
@@ -3129,28 +3128,25 @@ static void analyze_function(LibcpContext *ctx, LibcpObj *fn) {
 // codegen. A function record is resolved first, so that later records
 // see its name, and its body is annotated and descended right after -
 // the order the parser used to interleave declaration and analysis.
-LibcpObj *libcp_sema(LibcpContext *ctx, LibcpNode *toplevel) {
+LibcpObj* libcp_sema(LibcpContext* ctx, LibcpNode* toplevel) {
   ENTER_RET(ctx, NULL);
   sema_init(ctx);
   declare_builtin_functions(ctx);
 
-  for (LibcpNode *n = toplevel; n; n = n->next) {
+  for (LibcpNode* n = toplevel; n; n = n->next) {
     switch (n->kind) {
-    case ND_TYPEDEF:
-    case ND_ENUM_CONST:
-      resolve_node(ctx, n);
-      break;
-    case ND_GVAR_DECL:
-      resolve_node(ctx, n);
-      serialize_gvar(ctx, n);
-      break;
-    case ND_FUNCDEF:
-      resolve_function(ctx, n);
-      if (n->body)
-        analyze_function(ctx, n->var);
-      break;
-    default:
-      unreachable();
+      case ND_TYPEDEF:
+      case ND_ENUM_CONST: resolve_node(ctx, n); break;
+      case ND_GVAR_DECL:
+        resolve_node(ctx, n);
+        serialize_gvar(ctx, n);
+        break;
+      case ND_FUNCDEF:
+        resolve_function(ctx, n);
+        if (n->body)
+          analyze_function(ctx, n->var);
+        break;
+      default: unreachable();
     }
   }
 

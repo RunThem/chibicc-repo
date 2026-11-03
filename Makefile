@@ -19,6 +19,10 @@ DRIVER_SRCS=main.c codegen.c
 DRIVER_OBJS=$(DRIVER_SRCS:.c=.o)
 PUBLIC_HDRS=$(wildcard libcp/include/libcp/*.h)
 
+# clang-format scope: the library (sources and headers) plus the driver.
+# Tests and tools are deliberately out of scope.
+FMT_SRCS=$(LIB_SRCS) $(LIB_HDR) $(PUBLIC_HDRS) $(DRIVER_SRCS)
+
 TEST_SRCS=$(wildcard test/*.c)
 TESTS=$(TEST_SRCS:.c=.exe)
 
@@ -68,6 +72,18 @@ test/%.exe: chibicc test/%.c test/common test/test.h
 # fmt-tool because `fmt` is the binary it produces.
 fmt-tool: libcp.a tools/fmt.c
 	$(CC) $(CFLAGS) -o fmt tools/fmt.c libcp.a
+
+# Source formatting with the repo-root .clang-format, over libcp/ and the
+# driver only (never test/). A developer convenience, not a gate: when
+# clang-format is missing, say so and leave the sources untouched. It is
+# named `format`, not `fmt`, because `fmt` is the formatter binary.
+# Two passes: the first realigns trailing comment continuation lines that
+# hold non-ASCII text, the second settles them, so a rerun is a no-op.
+format:
+	@command -v clang-format >/dev/null 2>&1 || { \
+	  echo "format: clang-format not found, $(words $(FMT_SRCS)) files left untouched"; exit 0; }
+	clang-format -i --style=file $(FMT_SRCS)
+	clang-format -i --style=file $(FMT_SRCS)
 
 # The C-to-C printer (PLAN-c2c): a regression gate over layer 3, run by
 # make test / make test-stage2 only. It is not part of `all` and not
@@ -292,4 +308,4 @@ docker-snapshot-ndiff: docker-image
 	@rc=0; diff -ru .cache/.ndtmp/base .cache/.ndtmp/new || rc=1; rm -rf .cache/.ndtmp; \
 	  [ $$rc -eq 0 ] && echo "snapshot ndiff: empty" || { echo "snapshot ndiff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: all fmt-tool test clean test-stage2 test-all test-thirdparty check-library check-context install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff
+.PHONY: all fmt-tool format test clean test-stage2 test-all test-thirdparty check-library check-context install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff

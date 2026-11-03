@@ -72,19 +72,19 @@
 
 #ifdef LIBCP_DEFAULT_ALLOCATOR
 
-#include <stdlib.h>
+#  include <stdlib.h>
 
-#define LIBCP_MALLOC(size) malloc(size)
-#define LIBCP_CALLOC(count, size) calloc(count, size)
-#define LIBCP_REALLOC(ptr, size) realloc(ptr, size)
-#define LIBCP_FREE(ptr) free(ptr)
+#  define LIBCP_MALLOC(size)        malloc(size)
+#  define LIBCP_CALLOC(count, size) calloc(count, size)
+#  define LIBCP_REALLOC(ptr, size)  realloc(ptr, size)
+#  define LIBCP_FREE(ptr)           free(ptr)
 
 #elif defined(LIBCP_INTERNAL)
 
-#if !defined(LIBCP_MALLOC) || !defined(LIBCP_CALLOC) || \
-    !defined(LIBCP_REALLOC) || !defined(LIBCP_FREE)
-#error "define LIBCP_DEFAULT_ALLOCATOR (C library) or all four LIBCP_* allocator macros"
-#endif
+#  if !defined(LIBCP_MALLOC) || !defined(LIBCP_CALLOC) || !defined(LIBCP_REALLOC) ||               \
+      !defined(LIBCP_FREE)
+#    error "define LIBCP_DEFAULT_ALLOCATOR (C library) or all four LIBCP_* allocator macros"
+#  endif
 
 #endif
 

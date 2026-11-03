@@ -16,6 +16,6 @@
 //
 // 对解析器输出运行语义分析: 名字解析, 类型标注, 常量求值, 聚合体布局,
 // 以及控制流绑定. 返回供 codegen 使用的全局对象链表.
-LIBCP_API LibcpObj *libcp_sema(LibcpContext *ctx, LibcpNode *toplevel);
+LIBCP_API LibcpObj* libcp_sema(LibcpContext* ctx, LibcpNode* toplevel);
 
 #endif

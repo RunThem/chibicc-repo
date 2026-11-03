@@ -1,7 +1,12 @@
 #include "driver.h"
 
 typedef enum {
-  FILE_NONE, FILE_C, FILE_ASM, FILE_OBJ, FILE_AR, FILE_DSO,
+  FILE_NONE,
+  FILE_C,
+  FILE_ASM,
+  FILE_OBJ,
+  FILE_AR,
+  FILE_DSO,
 } FileType;
 
 bool opt_fcommon = true;
@@ -28,16 +33,16 @@ static bool opt_verify_expansions;
 static bool opt_dump_ast;
 static bool opt_static;
 static bool opt_shared;
-static char *opt_MF;
-static char *opt_MT;
-static char *opt_o;
+static char* opt_MF;
+static char* opt_MT;
+static char* opt_o;
 
 static LibcpStringArray ld_extra_args;
 static LibcpStringArray std_include_paths;
 
-char *base_file;
-static char *output_file;
-static LibcpContext *ctx;
+char* base_file;
+static char* output_file;
+static LibcpContext* ctx;
 
 static LibcpStringArray input_paths;
 static LibcpStringArray tmpfiles;
@@ -47,9 +52,16 @@ static void usage(int status) {
   exit(status);
 }
 
-static bool take_arg(char *arg) {
-  char *x[] = {
-    "-o", "-I", "-idirafter", "-include", "-x", "-MF", "-MT", "-Xlinker",
+static bool take_arg(char* arg) {
+  char* x[] = {
+      "-o",
+      "-I",
+      "-idirafter",
+      "-include",
+      "-x",
+      "-MF",
+      "-MT",
+      "-Xlinker",
   };
 
   for (int i = 0; i < sizeof(x) / sizeof(*x); i++)
@@ -58,7 +70,7 @@ static bool take_arg(char *arg) {
   return false;
 }
 
-static void add_default_include_paths(char *argv0) {
+static void add_default_include_paths(char* argv0) {
   // We expect that chibicc-specific include files are installed
   // to ./include relative to argv[0].
   libcp_context_add_include_path(ctx, libcp_format(ctx, "%s/include", dirname(strdup(argv0))));
@@ -73,17 +85,17 @@ static void add_default_include_paths(char *argv0) {
     libcp_strarray_push(ctx, &std_include_paths, ctx->include_paths[i]);
 }
 
-static void define(char *str) {
-  char *eq = strchr(str, '=');
+static void define(char* str) {
+  char* eq = strchr(str, '=');
   if (eq) {
-    char *name = strndup(str, eq - str);
+    char* name = strndup(str, eq - str);
     libcp_context_define(ctx, name, eq + 1);
   } else {
     libcp_context_define(ctx, str, "1");
   }
 }
 
-static FileType parse_opt_x(char *s) {
+static FileType parse_opt_x(char* s) {
   if (!strcmp(s, "c"))
     return FILE_C;
   if (!strcmp(s, "assembler"))
@@ -93,35 +105,33 @@ static FileType parse_opt_x(char *s) {
   libcp_error(ctx, "<command line>: unknown argument for -x: %s", s);
 }
 
-static char *quote_makefile(char *s) {
-  char *buf = calloc(1, strlen(s) * 2 + 1);
+static char* quote_makefile(char* s) {
+  char* buf = calloc(1, strlen(s) * 2 + 1);
 
   for (int i = 0, j = 0; s[i]; i++) {
     switch (s[i]) {
-    case '$':
-      buf[j++] = '$';
-      buf[j++] = '$';
-      break;
-    case '#':
-      buf[j++] = '\\';
-      buf[j++] = '#';
-      break;
-    case ' ':
-    case '\t':
-      for (int k = i - 1; k >= 0 && s[k] == '\\'; k--)
+      case '$':
+        buf[j++] = '$';
+        buf[j++] = '$';
+        break;
+      case '#':
         buf[j++] = '\\';
-      buf[j++] = '\\';
-      buf[j++] = s[i];
-      break;
-    default:
-      buf[j++] = s[i];
-      break;
+        buf[j++] = '#';
+        break;
+      case ' ':
+      case '\t':
+        for (int k = i - 1; k >= 0 && s[k] == '\\'; k--)
+          buf[j++] = '\\';
+        buf[j++] = '\\';
+        buf[j++] = s[i];
+        break;
+      default: buf[j++] = s[i]; break;
     }
   }
   return buf;
 }
 
-static void parse_args(int argc, char **argv) {
+static void parse_args(int argc, char** argv) {
   // Make sure that all command line options that take an argument
   // have an argument.
   for (int i = 1; i < argc; i++)
@@ -361,18 +371,11 @@ static void parse_args(int argc, char **argv) {
     }
 
     // These options are ignored for now.
-    if (!strncmp(argv[i], "-O", 2) ||
-        !strncmp(argv[i], "-W", 2) ||
-        !strncmp(argv[i], "-g", 2) ||
-        !strncmp(argv[i], "-std=", 5) ||
-        !strcmp(argv[i], "-ffreestanding") ||
-        !strcmp(argv[i], "-fno-builtin") ||
-        !strcmp(argv[i], "-fno-omit-frame-pointer") ||
-        !strcmp(argv[i], "-fno-stack-protector") ||
-        !strcmp(argv[i], "-fno-strict-aliasing") ||
-        !strcmp(argv[i], "-m64") ||
-        !strcmp(argv[i], "-mno-red-zone") ||
-        !strcmp(argv[i], "-w"))
+    if (!strncmp(argv[i], "-O", 2) || !strncmp(argv[i], "-W", 2) || !strncmp(argv[i], "-g", 2) ||
+        !strncmp(argv[i], "-std=", 5) || !strcmp(argv[i], "-ffreestanding") ||
+        !strcmp(argv[i], "-fno-builtin") || !strcmp(argv[i], "-fno-omit-frame-pointer") ||
+        !strcmp(argv[i], "-fno-stack-protector") || !strcmp(argv[i], "-fno-strict-aliasing") ||
+        !strcmp(argv[i], "-m64") || !strcmp(argv[i], "-mno-red-zone") || !strcmp(argv[i], "-w"))
       continue;
 
     if (argv[i][0] == '-' && argv[i][1] != '\0')
@@ -392,26 +395,26 @@ static void parse_args(int argc, char **argv) {
     opt_x = FILE_C;
 }
 
-static FILE *open_file(char *path) {
+static FILE* open_file(char* path) {
   if (!path || strcmp(path, "-") == 0)
     return stdout;
 
-  FILE *out = fopen(path, "w");
+  FILE* out = fopen(path, "w");
   if (!out)
     libcp_error(ctx, "cannot open output file: %s: %s", path, strerror(errno));
   return out;
 }
 
-static bool endswith(char *p, char *q) {
+static bool endswith(char* p, char* q) {
   int len1 = strlen(p);
   int len2 = strlen(q);
   return (len1 >= len2) && !strcmp(p + len1 - len2, q);
 }
 
 // Replace file extension
-static char *replace_extn(char *tmpl, char *extn) {
-  char *filename = basename(strdup(tmpl));
-  char *dot = strrchr(filename, '.');
+static char* replace_extn(char* tmpl, char* extn) {
+  char* filename = basename(strdup(tmpl));
+  char* dot      = strrchr(filename, '.');
   if (dot)
     *dot = '\0';
   return libcp_format(ctx, "%s%s", filename, extn);
@@ -422,9 +425,9 @@ static void cleanup(void) {
     unlink(tmpfiles.data[i]);
 }
 
-static char *create_tmpfile(void) {
-  char *path = strdup("/tmp/chibicc-XXXXXX");
-  int fd = mkstemp(path);
+static char* create_tmpfile(void) {
+  char* path = strdup("/tmp/chibicc-XXXXXX");
+  int fd     = mkstemp(path);
   if (fd == -1)
     libcp_error(ctx, "mkstemp failed: %s", strerror(errno));
   close(fd);
@@ -433,7 +436,7 @@ static char *create_tmpfile(void) {
   return path;
 }
 
-static void run_subprocess(char **argv) {
+static void run_subprocess(char** argv) {
   // If -### is given, dump the subprocess's command line.
   if (opt_hash_hash_hash) {
     fprintf(stderr, "%s", argv[0]);
@@ -468,9 +471,9 @@ static void run_subprocess(char **argv) {
     exit(1);
 }
 
-static void run_cc1(int argc, char **argv, char *input, char *output) {
-  char **args = calloc(argc + 10, sizeof(char *));
-  memcpy(args, argv, argc * sizeof(char *));
+static void run_cc1(int argc, char** argv, char* input, char* output) {
+  char** args = calloc(argc + 10, sizeof(char*));
+  memcpy(args, argv, argc * sizeof(char*));
   args[argc++] = "-cc1";
 
   if (input) {
@@ -487,8 +490,8 @@ static void run_cc1(int argc, char **argv, char *input, char *output) {
 }
 
 // Print tokens to stdout. Used for -E.
-static void print_tokens(LibcpToken *tok) {
-  FILE *out = open_file(opt_o ? opt_o : "-");
+static void print_tokens(LibcpToken* tok) {
+  FILE* out = open_file(opt_o ? opt_o : "-");
 
   int line = 1;
   for (; tok->kind != TK_EOF; tok = tok->next) {
@@ -506,8 +509,8 @@ static void print_tokens(LibcpToken *tok) {
 // Print one line of the token dump: a tag, the line number, the byte
 // offset into the file, the kind, and the text (omitted for a token
 // without a spelling, i.e. EOF).
-static void print_dump_line(FILE *out, char *tag, int line, int offset,
-                            char *kind, char *text, int len) {
+static void
+    print_dump_line(FILE* out, char* tag, int line, int offset, char* kind, char* text, int len) {
   fprintf(out, "%s %d %d %s", tag, line, offset, kind);
   if (len) {
     fputc(' ', out);
@@ -518,7 +521,7 @@ static void print_dump_line(FILE *out, char *tag, int line, int offset,
 
 // The raw position after any backslash-continuations starting at p (a
 // no-op when there is none).
-static char *skip_conts(char *p, char *end) {
+static char* skip_conts(char* p, char* end) {
   while (p + 1 < end && p[0] == '\\' && libcp_is_line_break(p + 1))
     p += 1 + libcp_line_break_len(p + 1);
   return p;
@@ -532,23 +535,23 @@ static char *skip_conts(char *p, char *end) {
 // (ws), a backslash-continuation (cont) or the leading BOM (bom). All of
 // a token's pieces come before its "T" line. Both are in raw
 // coordinates, so the dumped bytes tile the file. Used by test/trivia.sh.
-static void print_token_dump(LibcpToken *tok) {
-  FILE *out = open_file(opt_o ? opt_o : "-");
+static void print_token_dump(LibcpToken* tok) {
+  FILE* out = open_file(opt_o ? opt_o : "-");
 
   for (; tok; tok = tok->next) {
-    char *raw = tok->file->raw;
-    char *p = tok->trivia;
-    char *end = p + tok->trivia_len;
+    char* raw = tok->file->raw;
+    char* p   = tok->trivia;
+    char* end = p + tok->trivia_len;
 
     while (p < end) {
-      char *q;
-      char *kind;
+      char* q;
+      char* kind;
 
       if (p[0] == '\\' && p + 1 < end && libcp_is_line_break(p + 1)) {
-        q = p + 1 + libcp_line_break_len(p + 1);
+        q    = p + 1 + libcp_line_break_len(p + 1);
         kind = "cont";
       } else if (libcp_is_line_break(p)) {
-        q = p + libcp_line_break_len(p);
+        q    = p + libcp_line_break_len(p);
         kind = "nl";
       } else if (p[0] == '/' && p + 1 < end && p[1] == '/') {
         // The comment runs to the next break that a continuation does
@@ -570,7 +573,7 @@ static void print_token_dump(LibcpToken *tok) {
           if (q >= end)
             break;
           if (q[0] == '*') {
-            char *s = skip_conts(q + 1, end);
+            char* s = skip_conts(q + 1, end);
             if (s < end && s[0] == '/') {
               q = s + 1;
               break;
@@ -580,12 +583,13 @@ static void print_token_dump(LibcpToken *tok) {
         }
         kind = "bc";
       } else if (p == raw && !strncmp(p, "\xef\xbb\xbf", 3)) {
-        q = p + 3;
+        q    = p + 3;
         kind = "bom";
       } else {
         assert(isspace((unsigned char)*p));
-        for (q = p; q < end && !libcp_is_line_break(q) && q[0] != '\\' &&
-                    isspace((unsigned char)q[0]); q++)
+        for (q = p;
+             q < end && !libcp_is_line_break(q) && q[0] != '\\' && isspace((unsigned char)q[0]);
+             q++)
           ;
         kind = "ws";
       }
@@ -594,16 +598,20 @@ static void print_token_dump(LibcpToken *tok) {
       p = q;
     }
 
-    print_dump_line(out, "T", tok->line_no, tok->raw_loc - raw,
-                    libcp_token_kind_name(ctx, tok->kind), tok->raw_loc, tok->raw_len);
+    print_dump_line(out,
+                    "T",
+                    tok->line_no,
+                    tok->raw_loc - raw,
+                    libcp_token_kind_name(ctx, tok->kind),
+                    tok->raw_loc,
+                    tok->raw_len);
   }
 }
 
-
-static bool in_std_include_path(char *path) {
+static bool in_std_include_path(char* path) {
   for (int i = 0; i < std_include_paths.len; i++) {
-    char *dir = std_include_paths.data[i];
-    int len = strlen(dir);
+    char* dir = std_include_paths.data[i];
+    int len   = strlen(dir);
     if (strncmp(dir, path, len) == 0 && path[len] == '/')
       return true;
   }
@@ -614,7 +622,7 @@ static bool in_std_include_path(char *path) {
 // stdout in a format that "make" command can read. This feature is
 // used to automate file dependency management.
 static void print_dependencies(void) {
-  char *path;
+  char* path;
   if (opt_MF)
     path = opt_MF;
   else if (opt_MD)
@@ -624,13 +632,13 @@ static void print_dependencies(void) {
   else
     path = "-";
 
-  FILE *out = open_file(path);
+  FILE* out = open_file(path);
   if (opt_MT)
     fprintf(out, "%s:", opt_MT);
   else
     fprintf(out, "%s:", quote_makefile(replace_extn(base_file, ".o")));
 
-  LibcpFile **files = libcp_get_input_files(ctx);
+  LibcpFile** files = libcp_get_input_files(ctx);
 
   for (int i = 0; files[i]; i++) {
     if (opt_MMD && in_std_include_path(files[i]->name))
@@ -649,15 +657,15 @@ static void print_dependencies(void) {
   }
 }
 
-static LibcpToken *must_tokenize_file(char *path) {
+static LibcpToken* must_tokenize_file(char* path) {
   return libcp_tokenize_file(ctx, path);
 }
 
-static LibcpToken *append_tokens(LibcpToken *tok1, LibcpToken *tok2) {
+static LibcpToken* append_tokens(LibcpToken* tok1, LibcpToken* tok2) {
   if (!tok1 || tok1->kind == TK_EOF)
     return tok2;
 
-  LibcpToken *t = tok1;
+  LibcpToken* t = tok1;
   while (t->next->kind != TK_EOF)
     t = t->next;
   t->next = tok2;
@@ -675,100 +683,100 @@ static LibcpToken *append_tokens(LibcpToken *tok1, LibcpToken *tok2) {
 // synthesized buffer, not the source position of the expression.
 //
 
-static char *ast_node_kind_name(LibcpNodeKind kind) {
+static char* ast_node_kind_name(LibcpNodeKind kind) {
   switch (kind) {
-  case ND_NULL_EXPR:       return "ND_NULL_EXPR";
-  case ND_ADD:             return "ND_ADD";
-  case ND_SUB:             return "ND_SUB";
-  case ND_MUL:             return "ND_MUL";
-  case ND_DIV:             return "ND_DIV";
-  case ND_NEG:             return "ND_NEG";
-  case ND_MOD:             return "ND_MOD";
-  case ND_BITAND:          return "ND_BITAND";
-  case ND_BITOR:           return "ND_BITOR";
-  case ND_BITXOR:          return "ND_BITXOR";
-  case ND_SHL:             return "ND_SHL";
-  case ND_SHR:             return "ND_SHR";
-  case ND_EQ:              return "ND_EQ";
-  case ND_NE:              return "ND_NE";
-  case ND_LT:              return "ND_LT";
-  case ND_LE:              return "ND_LE";
-  case ND_GT:              return "ND_GT";
-  case ND_GE:              return "ND_GE";
-  case ND_ASSIGN:          return "ND_ASSIGN";
-  case ND_INCDEC:          return "ND_INCDEC";
-  case ND_SUBSCRIPT:       return "ND_SUBSCRIPT";
-  case ND_COND:            return "ND_COND";
-  case ND_COMMA:           return "ND_COMMA";
-  case ND_MEMBER:          return "ND_MEMBER";
-  case ND_ADDR:            return "ND_ADDR";
-  case ND_DEREF:           return "ND_DEREF";
-  case ND_NOT:             return "ND_NOT";
-  case ND_BITNOT:          return "ND_BITNOT";
-  case ND_LOGAND:          return "ND_LOGAND";
-  case ND_LOGOR:           return "ND_LOGOR";
-  case ND_RETURN:          return "ND_RETURN";
-  case ND_IF:              return "ND_IF";
-  case ND_FOR:             return "ND_FOR";
-  case ND_WHILE:           return "ND_WHILE";
-  case ND_DO:              return "ND_DO";
-  case ND_SWITCH:          return "ND_SWITCH";
-  case ND_CASE:            return "ND_CASE";
-  case ND_BLOCK:           return "ND_BLOCK";
-  case ND_GOTO:            return "ND_GOTO";
-  case ND_BREAK:           return "ND_BREAK";
-  case ND_CONTINUE:        return "ND_CONTINUE";
-  case ND_GOTO_EXPR:       return "ND_GOTO_EXPR";
-  case ND_LABEL:           return "ND_LABEL";
-  case ND_LABEL_VAL:       return "ND_LABEL_VAL";
-  case ND_FUNCALL:         return "ND_FUNCALL";
-  case ND_EXPR_STMT:       return "ND_EXPR_STMT";
-  case ND_STMT_EXPR:       return "ND_STMT_EXPR";
-  case ND_IDENT:           return "ND_IDENT";
-  case ND_VAR:             return "ND_VAR";
-  case ND_VLA_PTR:         return "ND_VLA_PTR";
-  case ND_NUM:             return "ND_NUM";
-  case ND_STRING:          return "ND_STRING";
-  case ND_SIZEOF:          return "ND_SIZEOF";
-  case ND_ALIGNOF:         return "ND_ALIGNOF";
-  case ND_GENERIC:         return "ND_GENERIC";
-  case ND_GENERIC_ASSOC:   return "ND_GENERIC_ASSOC";
-  case ND_TYPES_COMPATIBLE: return "ND_TYPES_COMPATIBLE";
-  case ND_REG_CLASS:       return "ND_REG_CLASS";
-  case ND_CAST:            return "ND_CAST";
-  case ND_MEMZERO:         return "ND_MEMZERO";
-  case ND_DECL:            return "ND_DECL";
-  case ND_GVAR_DECL:       return "ND_GVAR_DECL";
-  case ND_FUNCDEF:         return "ND_FUNCDEF";
-  case ND_TYPEDEF:         return "ND_TYPEDEF";
-  case ND_ENUM_CONST:      return "ND_ENUM_CONST";
-  case ND_COMPOUND_LITERAL: return "ND_COMPOUND_LITERAL";
-  case ND_ASM:             return "ND_ASM";
-  case ND_CAS:             return "ND_CAS";
-  case ND_EXCH:            return "ND_EXCH";
+    case ND_NULL_EXPR: return "ND_NULL_EXPR";
+    case ND_ADD: return "ND_ADD";
+    case ND_SUB: return "ND_SUB";
+    case ND_MUL: return "ND_MUL";
+    case ND_DIV: return "ND_DIV";
+    case ND_NEG: return "ND_NEG";
+    case ND_MOD: return "ND_MOD";
+    case ND_BITAND: return "ND_BITAND";
+    case ND_BITOR: return "ND_BITOR";
+    case ND_BITXOR: return "ND_BITXOR";
+    case ND_SHL: return "ND_SHL";
+    case ND_SHR: return "ND_SHR";
+    case ND_EQ: return "ND_EQ";
+    case ND_NE: return "ND_NE";
+    case ND_LT: return "ND_LT";
+    case ND_LE: return "ND_LE";
+    case ND_GT: return "ND_GT";
+    case ND_GE: return "ND_GE";
+    case ND_ASSIGN: return "ND_ASSIGN";
+    case ND_INCDEC: return "ND_INCDEC";
+    case ND_SUBSCRIPT: return "ND_SUBSCRIPT";
+    case ND_COND: return "ND_COND";
+    case ND_COMMA: return "ND_COMMA";
+    case ND_MEMBER: return "ND_MEMBER";
+    case ND_ADDR: return "ND_ADDR";
+    case ND_DEREF: return "ND_DEREF";
+    case ND_NOT: return "ND_NOT";
+    case ND_BITNOT: return "ND_BITNOT";
+    case ND_LOGAND: return "ND_LOGAND";
+    case ND_LOGOR: return "ND_LOGOR";
+    case ND_RETURN: return "ND_RETURN";
+    case ND_IF: return "ND_IF";
+    case ND_FOR: return "ND_FOR";
+    case ND_WHILE: return "ND_WHILE";
+    case ND_DO: return "ND_DO";
+    case ND_SWITCH: return "ND_SWITCH";
+    case ND_CASE: return "ND_CASE";
+    case ND_BLOCK: return "ND_BLOCK";
+    case ND_GOTO: return "ND_GOTO";
+    case ND_BREAK: return "ND_BREAK";
+    case ND_CONTINUE: return "ND_CONTINUE";
+    case ND_GOTO_EXPR: return "ND_GOTO_EXPR";
+    case ND_LABEL: return "ND_LABEL";
+    case ND_LABEL_VAL: return "ND_LABEL_VAL";
+    case ND_FUNCALL: return "ND_FUNCALL";
+    case ND_EXPR_STMT: return "ND_EXPR_STMT";
+    case ND_STMT_EXPR: return "ND_STMT_EXPR";
+    case ND_IDENT: return "ND_IDENT";
+    case ND_VAR: return "ND_VAR";
+    case ND_VLA_PTR: return "ND_VLA_PTR";
+    case ND_NUM: return "ND_NUM";
+    case ND_STRING: return "ND_STRING";
+    case ND_SIZEOF: return "ND_SIZEOF";
+    case ND_ALIGNOF: return "ND_ALIGNOF";
+    case ND_GENERIC: return "ND_GENERIC";
+    case ND_GENERIC_ASSOC: return "ND_GENERIC_ASSOC";
+    case ND_TYPES_COMPATIBLE: return "ND_TYPES_COMPATIBLE";
+    case ND_REG_CLASS: return "ND_REG_CLASS";
+    case ND_CAST: return "ND_CAST";
+    case ND_MEMZERO: return "ND_MEMZERO";
+    case ND_DECL: return "ND_DECL";
+    case ND_GVAR_DECL: return "ND_GVAR_DECL";
+    case ND_FUNCDEF: return "ND_FUNCDEF";
+    case ND_TYPEDEF: return "ND_TYPEDEF";
+    case ND_ENUM_CONST: return "ND_ENUM_CONST";
+    case ND_COMPOUND_LITERAL: return "ND_COMPOUND_LITERAL";
+    case ND_ASM: return "ND_ASM";
+    case ND_CAS: return "ND_CAS";
+    case ND_EXCH: return "ND_EXCH";
   }
   return "ND_UNKNOWN";
 }
 
-static char *ast_type_kind_name(LibcpTypeKind kind) {
+static char* ast_type_kind_name(LibcpTypeKind kind) {
   switch (kind) {
-  case TY_VOID:    return "void";
-  case TY_BOOL:    return "bool";
-  case TY_CHAR:    return "char";
-  case TY_SHORT:   return "short";
-  case TY_INT:     return "int";
-  case TY_LONG:    return "long";
-  case TY_FLOAT:   return "float";
-  case TY_DOUBLE:  return "double";
-  case TY_LDOUBLE: return "ldouble";
-  case TY_ENUM:    return "enum";
-  case TY_PTR:     return "ptr";
-  case TY_FUNC:    return "func";
-  case TY_ARRAY:   return "array";
-  case TY_VLA:     return "vla";
-  case TY_TYPEOF:  return "typeof";
-  case TY_STRUCT:  return "struct";
-  case TY_UNION:   return "union";
+    case TY_VOID: return "void";
+    case TY_BOOL: return "bool";
+    case TY_CHAR: return "char";
+    case TY_SHORT: return "short";
+    case TY_INT: return "int";
+    case TY_LONG: return "long";
+    case TY_FLOAT: return "float";
+    case TY_DOUBLE: return "double";
+    case TY_LDOUBLE: return "ldouble";
+    case TY_ENUM: return "enum";
+    case TY_PTR: return "ptr";
+    case TY_FUNC: return "func";
+    case TY_ARRAY: return "array";
+    case TY_VLA: return "vla";
+    case TY_TYPEOF: return "typeof";
+    case TY_STRUCT: return "struct";
+    case TY_UNION: return "union";
   }
   return "type?";
 }
@@ -776,7 +784,7 @@ static char *ast_type_kind_name(LibcpTypeKind kind) {
 // The source-written part of a type: its kind, the base/return chain and,
 // for an array, the declared length. Sizes, offsets and addresses are
 // sema/codegen conclusions and are deliberately not printed.
-static void ast_type_sig(FILE *out, LibcpType *ty) {
+static void ast_type_sig(FILE* out, LibcpType* ty) {
   if (!ty) {
     fputc('-', out);
     return;
@@ -786,56 +794,53 @@ static void ast_type_sig(FILE *out, LibcpType *ty) {
     fputs("atomic(", out);
 
   if (ty->is_unsigned &&
-      (ty->kind == TY_CHAR || ty->kind == TY_SHORT ||
-       ty->kind == TY_INT || ty->kind == TY_LONG))
+      (ty->kind == TY_CHAR || ty->kind == TY_SHORT || ty->kind == TY_INT || ty->kind == TY_LONG))
     fputc('u', out);
 
   switch (ty->kind) {
-  case TY_PTR:
-    fputs("ptr(", out);
-    ast_type_sig(out, ty->base);
-    fputc(')', out);
-    break;
-  case TY_ARRAY:
-    fprintf(out, "array(%d,", ty->array_len);
-    ast_type_sig(out, ty->base);
-    fputc(')', out);
-    break;
-  case TY_VLA:
-    fputs("vla(", out);
-    ast_type_sig(out, ty->base);
-    fputc(')', out);
-    break;
-  case TY_FUNC:
-    fputs("func(", out);
-    ast_type_sig(out, ty->return_ty);
-    fputc(')', out);
-    break;
-  default:
-    fputs(ast_type_kind_name(ty->kind), out);
-    break;
+    case TY_PTR:
+      fputs("ptr(", out);
+      ast_type_sig(out, ty->base);
+      fputc(')', out);
+      break;
+    case TY_ARRAY:
+      fprintf(out, "array(%d,", ty->array_len);
+      ast_type_sig(out, ty->base);
+      fputc(')', out);
+      break;
+    case TY_VLA:
+      fputs("vla(", out);
+      ast_type_sig(out, ty->base);
+      fputc(')', out);
+      break;
+    case TY_FUNC:
+      fputs("func(", out);
+      ast_type_sig(out, ty->return_ty);
+      fputc(')', out);
+      break;
+    default: fputs(ast_type_kind_name(ty->kind), out); break;
   }
 
   if (ty->is_atomic)
     fputc(')', out);
 }
 
-static void ast_quoted(FILE *out, char *p, int len) {
+static void ast_quoted(FILE* out, char* p, int len) {
   fputc('"', out);
   for (int i = 0; i < len; i++) {
     switch (p[i]) {
-    case '\n': fputs("\\n", out); break;
-    case '\t': fputs("\\t", out); break;
-    case '\r': fputs("\\r", out); break;
-    case '\\': fputs("\\\\", out); break;
-    case '"':  fputs("\\\"", out); break;
-    default:   fputc(p[i], out); break;
+      case '\n': fputs("\\n", out); break;
+      case '\t': fputs("\\t", out); break;
+      case '\r': fputs("\\r", out); break;
+      case '\\': fputs("\\\\", out); break;
+      case '"': fputs("\\\"", out); break;
+      default: fputc(p[i], out); break;
     }
   }
   fputc('"', out);
 }
 
-static void ast_span(FILE *out, LibcpToken *tok) {
+static void ast_span(FILE* out, LibcpToken* tok) {
   if (!tok) {
     fputs("@-", out);
     return;
@@ -846,14 +851,13 @@ static void ast_span(FILE *out, LibcpToken *tok) {
     return;
   }
 
-  char *line = tok->loc;
+  char* line = tok->loc;
   while (line > tok->file->contents && line[-1] != '\n')
     line--;
-  fprintf(out, "@%s:%d:%d", tok->file->name, tok->line_no,
-          (int)(tok->loc - line) + 1);
+  fprintf(out, "@%s:%d:%d", tok->file->name, tok->line_no, (int)(tok->loc - line) + 1);
 }
 
-static void ast_token(FILE *out, LibcpToken *tok) {
+static void ast_token(FILE* out, LibcpToken* tok) {
   if (!tok) {
     fputs("@- \"\"", out);
     return;
@@ -863,62 +867,59 @@ static void ast_token(FILE *out, LibcpToken *tok) {
   ast_quoted(out, tok->loc, tok->len);
 }
 
-static void ast_indent(FILE *out, int depth) {
+static void ast_indent(FILE* out, int depth) {
   for (int i = 0; i < depth; i++)
     fputs("  ", out);
 }
 
-static void ast_fields(FILE *out, LibcpNode *node) {
+static void ast_fields(FILE* out, LibcpNode* node) {
   switch (node->kind) {
-  case ND_ASSIGN:
-    if (node->op)
-      fprintf(out, " op=%s", ast_node_kind_name(node->op));
-    break;
-  case ND_INCDEC:
-    fprintf(out, " is_post=%d addend=%d", node->is_post, node->addend);
-    break;
-  case ND_COND:
-    if (node->is_elvis)
-      fputs(" is_elvis=1", out);
-    break;
-  case ND_MEMBER:
-    if (node->arrow_tok)
-      fputs(" arrow=1", out);
-    break;
-  case ND_GOTO:
-  case ND_LABEL:
-  case ND_LABEL_VAL:
-    if (node->label) {
-      fputs(" label=", out);
-      ast_quoted(out, node->label, strlen(node->label));
-    }
-    break;
-  case ND_BLOCK:
-    if (node->is_scope_block)
-      fputs(" is_scope_block=1", out);
-    break;
-  case ND_CAST:
-    if (node->is_implicit)
-      fputs(" is_implicit=1", out);
-    break;
-  case ND_CASE:
-    if (node->is_default)
-      fputs(" default=1", out);
-    break;
-  case ND_NUM:
-    if (node->ty && libcp_is_flonum(node->ty))
-      fprintf(out, " fval=%La", node->fval);
-    else
-      fprintf(out, " val=%lld", (long long)node->val);
-    break;
-  case ND_ASM:
-    if (node->asm_str) {
-      fputs(" asm_str=", out);
-      ast_quoted(out, node->asm_str, strlen(node->asm_str));
-    }
-    break;
-  default:
-    break;
+    case ND_ASSIGN:
+      if (node->op)
+        fprintf(out, " op=%s", ast_node_kind_name(node->op));
+      break;
+    case ND_INCDEC: fprintf(out, " is_post=%d addend=%d", node->is_post, node->addend); break;
+    case ND_COND:
+      if (node->is_elvis)
+        fputs(" is_elvis=1", out);
+      break;
+    case ND_MEMBER:
+      if (node->arrow_tok)
+        fputs(" arrow=1", out);
+      break;
+    case ND_GOTO:
+    case ND_LABEL:
+    case ND_LABEL_VAL:
+      if (node->label) {
+        fputs(" label=", out);
+        ast_quoted(out, node->label, strlen(node->label));
+      }
+      break;
+    case ND_BLOCK:
+      if (node->is_scope_block)
+        fputs(" is_scope_block=1", out);
+      break;
+    case ND_CAST:
+      if (node->is_implicit)
+        fputs(" is_implicit=1", out);
+      break;
+    case ND_CASE:
+      if (node->is_default)
+        fputs(" default=1", out);
+      break;
+    case ND_NUM:
+      if (node->ty && libcp_is_flonum(node->ty))
+        fprintf(out, " fval=%La", node->fval);
+      else
+        fprintf(out, " val=%lld", (long long)node->val);
+      break;
+    case ND_ASM:
+      if (node->asm_str) {
+        fputs(" asm_str=", out);
+        ast_quoted(out, node->asm_str, strlen(node->asm_str));
+      }
+      break;
+    default: break;
   }
 
   if (node->ty_op) {
@@ -938,9 +939,8 @@ static void ast_fields(FILE *out, LibcpNode *node) {
 
   // The declaration attributes the parser read. Frozen into the dump so
   // a storage-class or alignment drift is visible without sema.
-  if (node->kind == ND_DECL || node->kind == ND_GVAR_DECL ||
-      node->kind == ND_FUNCDEF) {
-    char *sep = "";
+  if (node->kind == ND_DECL || node->kind == ND_GVAR_DECL || node->kind == ND_FUNCDEF) {
+    char* sep = "";
     fputs(" attr=", out);
     if (node->attr.is_typedef) {
       fputs("typedef", out);
@@ -975,24 +975,24 @@ static void ast_fields(FILE *out, LibcpNode *node) {
   }
 }
 
-static char *ast_init_kind_name(int kind) {
+static char* ast_init_kind_name(int kind) {
   switch (kind) {
-  case INIT_LIST: return "LIST";
-  case INIT_EXPR: return "EXPR";
-  case INIT_STR:  return "STR";
+    case INIT_LIST: return "LIST";
+    case INIT_EXPR: return "EXPR";
+    case INIT_STR: return "STR";
   }
   return "?";
 }
 
-static void ast_node(FILE *out, LibcpNode *node, int depth);
-static void ast_initializer(FILE *out, LibcpInitializer *init, int depth);
+static void ast_node(FILE* out, LibcpNode* node, int depth);
+static void ast_initializer(FILE* out, LibcpInitializer* init, int depth);
 
-static void ast_chain(FILE *out, LibcpNode *node, int depth) {
+static void ast_chain(FILE* out, LibcpNode* node, int depth) {
   for (; node; node = node->next)
     ast_node(out, node, depth);
 }
 
-static void ast_initializer(FILE *out, LibcpInitializer *init, int depth) {
+static void ast_initializer(FILE* out, LibcpInitializer* init, int depth) {
   if (!init)
     return;
 
@@ -1019,7 +1019,7 @@ static void ast_initializer(FILE *out, LibcpInitializer *init, int depth) {
     return;
   }
 
-  for (LibcpInitItem *item = init->items; item; item = item->next) {
+  for (LibcpInitItem* item = init->items; item; item = item->next) {
     ast_indent(out, depth + 1);
     fputs("ITEM", out);
     if (item->comma_tok) {
@@ -1028,7 +1028,7 @@ static void ast_initializer(FILE *out, LibcpInitializer *init, int depth) {
     }
     fputc('\n', out);
 
-    for (LibcpInitDesig *d = item->desigs; d; d = d->next) {
+    for (LibcpInitDesig* d = item->desigs; d; d = d->next) {
       ast_indent(out, depth + 2);
       fputs("DESIG", out);
       if (d->name) {
@@ -1051,7 +1051,7 @@ static void ast_initializer(FILE *out, LibcpInitializer *init, int depth) {
   }
 }
 
-static void ast_node(FILE *out, LibcpNode *node, int depth) {
+static void ast_node(FILE* out, LibcpNode* node, int depth) {
   if (!node)
     return;
 
@@ -1093,12 +1093,12 @@ static void ast_node(FILE *out, LibcpNode *node, int depth) {
     ast_node(out, node->cas_new, depth + 1);
   if (node->decl_init)
     ast_initializer(out, node->decl_init, depth + 1);
-  if ((node->kind == ND_DECL || node->kind == ND_GVAR_DECL ||
-       node->kind == ND_FUNCDEF) && node->attr.align_expr)
+  if ((node->kind == ND_DECL || node->kind == ND_GVAR_DECL || node->kind == ND_FUNCDEF) &&
+      node->attr.align_expr)
     ast_node(out, node->attr.align_expr, depth + 1);
 }
 
-static void print_ast_dump(LibcpNode *node) {
+static void print_ast_dump(LibcpNode* node) {
   ast_chain(open_file(opt_o ? opt_o : "-"), node, 0);
 }
 
@@ -1106,9 +1106,8 @@ static int cc1(void) {
   // -dump-tokens, -reconstruct and the CST channels work on the raw stream
   // of the base file: the trivia contract, and the CST built on it, cover
   // libcp_tokenize()'s direct output, before preprocessing (plans/PLAN.md 判据 3).
-  if (opt_dump_tokens || opt_reconstruct ||
-      opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
-    LibcpToken *tok = must_tokenize_file(base_file);
+  if (opt_dump_tokens || opt_reconstruct || opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
+    LibcpToken* tok = must_tokenize_file(base_file);
     if (!tok)
       return 1;
     if (opt_dump_tokens)
@@ -1116,7 +1115,7 @@ static int cc1(void) {
     if (opt_reconstruct)
       libcp_reconstruct(ctx, tok, open_file(opt_o ? opt_o : "-"));
     if (opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
-      LibcpCstNode *root = libcp_cst_parse(ctx, tok);
+      LibcpCstNode* root = libcp_cst_parse(ctx, tok);
       if (!root)
         return 1;
       if (opt_dump_cst)
@@ -1129,13 +1128,13 @@ static int cc1(void) {
     return 0;
   }
 
-  LibcpToken *tok = NULL;
+  LibcpToken* tok = NULL;
 
   // Process -include option
   for (int i = 0; i < opt_include.len; i++) {
-    char *incl = opt_include.data[i];
+    char* incl = opt_include.data[i];
 
-    char *path;
+    char* path;
     if (libcp_file_exists(incl)) {
       path = incl;
     } else {
@@ -1144,14 +1143,14 @@ static int cc1(void) {
         libcp_error(ctx, "-include: %s: %s", incl, strerror(errno));
     }
 
-    LibcpToken *tok2 = must_tokenize_file(path);
+    LibcpToken* tok2 = must_tokenize_file(path);
     if (!tok2)
       return 1;
     tok = append_tokens(tok, tok2);
   }
 
   // Tokenize and parse.
-  LibcpToken *tok2 = must_tokenize_file(base_file);
+  LibcpToken* tok2 = must_tokenize_file(base_file);
   if (!tok2)
     return 1;
   tok = append_tokens(tok, tok2);
@@ -1182,7 +1181,7 @@ static int cc1(void) {
     return 0;
   }
 
-  LibcpNode *ast = libcp_parse(ctx, tok);
+  LibcpNode* ast = libcp_parse(ctx, tok);
   if (ctx->failed)
     return 1;
 
@@ -1193,33 +1192,33 @@ static int cc1(void) {
     return 0;
   }
 
-  LibcpObj *prog = libcp_sema(ctx, ast);
+  LibcpObj* prog = libcp_sema(ctx, ast);
   if (ctx->failed)
     return 1;
 
   // Open a temporary output buffer.
-  char *buf;
+  char* buf;
   size_t buflen;
-  FILE *output_buf = open_memstream(&buf, &buflen);
+  FILE* output_buf = open_memstream(&buf, &buflen);
 
   // Traverse the AST to emit assembly.
   codegen(ctx, prog, output_buf);
   fclose(output_buf);
 
   // Write the asembly text to a file.
-  FILE *out = open_file(output_file);
+  FILE* out = open_file(output_file);
   fwrite(buf, buflen, 1, out);
   fclose(out);
   return 0;
 }
 
-static void assemble(char *input, char *output) {
-  char *cmd[] = {"as", "-c", input, "-o", output, NULL};
+static void assemble(char* input, char* output) {
+  char* cmd[] = {"as", "-c", input, "-o", output, NULL};
   run_subprocess(cmd);
 }
 
-static char *find_file(char *pattern) {
-  char *path = NULL;
+static char* find_file(char* pattern) {
+  char* path = NULL;
   glob_t buf = {};
   glob(pattern, 0, NULL, &buf);
   if (buf.gl_pathc > 0)
@@ -1228,7 +1227,7 @@ static char *find_file(char *pattern) {
   return path;
 }
 
-static char *find_libpath(void) {
+static char* find_libpath(void) {
   if (libcp_file_exists("/usr/lib/x86_64-linux-gnu/crti.o"))
     return "/usr/lib/x86_64-linux-gnu";
   if (libcp_file_exists("/usr/lib64/crti.o"))
@@ -1236,15 +1235,15 @@ static char *find_libpath(void) {
   libcp_error(ctx, "library path is not found");
 }
 
-static char *find_gcc_libpath(void) {
-  char *paths[] = {
-    "/usr/lib/gcc/x86_64-linux-gnu/*/crtbegin.o",
-    "/usr/lib/gcc/x86_64-pc-linux-gnu/*/crtbegin.o", // For Gentoo
-    "/usr/lib/gcc/x86_64-redhat-linux/*/crtbegin.o", // For Fedora
+static char* find_gcc_libpath(void) {
+  char* paths[] = {
+      "/usr/lib/gcc/x86_64-linux-gnu/*/crtbegin.o",
+      "/usr/lib/gcc/x86_64-pc-linux-gnu/*/crtbegin.o",  // For Gentoo
+      "/usr/lib/gcc/x86_64-redhat-linux/*/crtbegin.o",  // For Fedora
   };
 
   for (int i = 0; i < sizeof(paths) / sizeof(*paths); i++) {
-    char *path = find_file(paths[i]);
+    char* path = find_file(paths[i]);
     if (path)
       return dirname(path);
   }
@@ -1252,7 +1251,7 @@ static char *find_gcc_libpath(void) {
   libcp_error(ctx, "gcc library path is not found");
 }
 
-static void run_linker(LibcpStringArray *inputs, char *output) {
+static void run_linker(LibcpStringArray* inputs, char* output) {
   LibcpStringArray arr = {};
 
   libcp_strarray_push(ctx, &arr, "ld");
@@ -1261,8 +1260,8 @@ static void run_linker(LibcpStringArray *inputs, char *output) {
   libcp_strarray_push(ctx, &arr, "-m");
   libcp_strarray_push(ctx, &arr, "elf_x86_64");
 
-  char *libpath = find_libpath();
-  char *gcc_libpath = find_gcc_libpath();
+  char* libpath     = find_libpath();
+  char* gcc_libpath = find_gcc_libpath();
 
   if (opt_shared) {
     libcp_strarray_push(ctx, &arr, libcp_format(ctx, "%s/crti.o", libpath));
@@ -1319,7 +1318,7 @@ static void run_linker(LibcpStringArray *inputs, char *output) {
   run_subprocess(arr.data);
 }
 
-static FileType get_file_type(char *filename) {
+static FileType get_file_type(char* filename) {
   if (opt_x != FILE_NONE)
     return opt_x;
 
@@ -1337,7 +1336,7 @@ static FileType get_file_type(char *filename) {
   libcp_error(ctx, "<command line>: unknown file extension: %s", filename);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   atexit(cleanup);
   ctx = libcp_context_new();
   parse_args(argc, argv);
@@ -1359,7 +1358,7 @@ int main(int argc, char **argv) {
   LibcpStringArray ld_args = {};
 
   for (int i = 0; i < input_paths.len; i++) {
-    char *input = input_paths.data[i];
+    char* input = input_paths.data[i];
 
     if (!strncmp(input, "-l", 2)) {
       libcp_strarray_push(ctx, &ld_args, input);
@@ -1367,8 +1366,8 @@ int main(int argc, char **argv) {
     }
 
     if (!strncmp(input, "-Wl,", 4)) {
-      char *s = strdup(input + 4);
-      char *arg = strtok(s, ",");
+      char* s   = strdup(input + 4);
+      char* arg = strtok(s, ",");
       while (arg) {
         libcp_strarray_push(ctx, &ld_args, arg);
         arg = strtok(NULL, ",");
@@ -1376,7 +1375,7 @@ int main(int argc, char **argv) {
       continue;
     }
 
-    char *output;
+    char* output;
     if (opt_o)
       output = opt_o;
     else if (opt_S)
@@ -1403,9 +1402,9 @@ int main(int argc, char **argv) {
 
     // Just libcp_preprocess (or dump/reconstruct the raw token or CST stream,
     // or run a provenance channel)
-    if (opt_E || opt_M || opt_dump_tokens || opt_reconstruct ||
-        opt_dump_cst || opt_reconstruct_cst || opt_verify_cst ||
-        opt_dump_expansions || opt_verify_expansions || opt_dump_ast) {
+    if (opt_E || opt_M || opt_dump_tokens || opt_reconstruct || opt_dump_cst ||
+        opt_reconstruct_cst || opt_verify_cst || opt_dump_expansions || opt_verify_expansions ||
+        opt_dump_ast) {
       run_cc1(argc, argv, input, NULL);
       continue;
     }
@@ -1418,15 +1417,15 @@ int main(int argc, char **argv) {
 
     // Compile and assemble
     if (opt_c) {
-      char *tmp = create_tmpfile();
+      char* tmp = create_tmpfile();
       run_cc1(argc, argv, input, tmp);
       assemble(tmp, output);
       continue;
     }
 
     // Compile, assemble and link
-    char *tmp1 = create_tmpfile();
-    char *tmp2 = create_tmpfile();
+    char* tmp1 = create_tmpfile();
+    char* tmp2 = create_tmpfile();
     run_cc1(argc, argv, input, tmp1);
     assemble(tmp1, tmp2);
     libcp_strarray_push(ctx, &ld_args, tmp2);

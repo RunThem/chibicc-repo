@@ -17,9 +17,8 @@
 #ifndef LIBCP_CONTEXT_H
 #define LIBCP_CONTEXT_H
 
-#include <stdbool.h>
-
 #include <libcp/diagnostic.h>
+#include <stdbool.h>
 
 // Marks a D7 function as exported from the shared library; the library
 // itself is built with -fvisibility=hidden (PLAN L3.3b). Every header
@@ -32,17 +31,17 @@
 // 定义了 __chibicc__, 且不解析前置的 visibility 属性; 它只构建静态库,
 // 那里不需要该标记.
 #if defined(__chibicc__)
-#define LIBCP_API
+#  define LIBCP_API
 #elif defined(__GNUC__) || defined(__clang__)
-#define LIBCP_API __attribute__((visibility("default")))
+#  define LIBCP_API __attribute__((visibility("default")))
 #else
-#define LIBCP_API
+#  define LIBCP_API
 #endif
 
 typedef struct LibcpContext LibcpContext;
 
-LIBCP_API LibcpContext *libcp_context_new(void);
-LIBCP_API void libcp_context_free(LibcpContext *ctx);
+LIBCP_API LibcpContext* libcp_context_new(void);
+LIBCP_API void libcp_context_free(LibcpContext* ctx);
 
 // Releases every per-TU allocation and clears the per-TU state, keeping
 // the configuration (include paths, macro operations, diagnostic
@@ -53,15 +52,14 @@ LIBCP_API void libcp_context_free(LibcpContext *ctx);
 // 释放所有 per-TU 分配并清空 per-TU 状态, 同时保留配置
 // (include 路径, 宏操作, 诊断回调). 此后该 context 返回的所有指针
 // 都失效. 发生错误会让 context 处于不一致状态: 再次使用前先 reset.
-LIBCP_API void libcp_context_reset(LibcpContext *ctx);
+LIBCP_API void libcp_context_reset(LibcpContext* ctx);
 
-LIBCP_API void libcp_context_set_diagnostic(LibcpContext *ctx,
-                                    LibcpDiagnosticFn fn, void *user);
-LIBCP_API bool libcp_context_failed(LibcpContext *ctx);
+LIBCP_API void libcp_context_set_diagnostic(LibcpContext* ctx, LibcpDiagnosticFn fn, void* user);
+LIBCP_API bool libcp_context_failed(LibcpContext* ctx);
 
-LIBCP_API void libcp_context_add_include_path(LibcpContext *ctx, char *path);
-LIBCP_API void libcp_context_define(LibcpContext *ctx, char *name, char *buf);
-LIBCP_API void libcp_context_undef(LibcpContext *ctx, char *name);
+LIBCP_API void libcp_context_add_include_path(LibcpContext* ctx, char* path);
+LIBCP_API void libcp_context_define(LibcpContext* ctx, char* name, char* buf);
+LIBCP_API void libcp_context_undef(LibcpContext* ctx, char* name);
 
 // A predefined macro in the context's set. `value` is the replacement
 // text; it is NULL for token-producing builtins and for the dynamic
@@ -72,8 +70,8 @@ LIBCP_API void libcp_context_undef(LibcpContext *ctx, char *name);
 // 内建宏以及动态的 __DATE__/__TIME__ 宏, 它为 NULL. 这些字符串归
 // context 所有, 并会被 libcp_context_reset 失效.
 typedef struct libcp_predefined_macro {
-  const char *name;
-  const char *value;
+  const char* name;
+  const char* value;
 } LibcpPredefinedMacro;
 
 // The predefined macro set is installed by default. The setter takes
@@ -85,8 +83,8 @@ typedef struct libcp_predefined_macro {
 // 预定义宏集合默认安装. setter 在下一次 libcp_context_reset 时生效
 // (禁用它会产生干净的环境; 已记录的 -D/-U 操作仍然生效). count 与 at
 // 函数枚举当前翻译单元已安装的集合 (禁用时为 0 项).
-LIBCP_API void libcp_context_set_predefined_macros(LibcpContext *ctx, bool enabled);
-LIBCP_API int libcp_context_predefined_count(LibcpContext *ctx);
-LIBCP_API LibcpPredefinedMacro libcp_context_predefined_at(LibcpContext *ctx, int index);
+LIBCP_API void libcp_context_set_predefined_macros(LibcpContext* ctx, bool enabled);
+LIBCP_API int libcp_context_predefined_count(LibcpContext* ctx);
+LIBCP_API LibcpPredefinedMacro libcp_context_predefined_at(LibcpContext* ctx, int index);
 
 #endif

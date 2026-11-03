@@ -14,11 +14,11 @@
 #include "libcp.h"
 
 typedef struct {
-  LibcpFile *file;
+  LibcpFile* file;
   long off;
 } LibcpPos;
 
-static LibcpPos pos_of(LibcpToken *tok) {
+static LibcpPos pos_of(LibcpToken* tok) {
   return (LibcpPos){tok->file, tok->loc - tok->file->contents};
 }
 
@@ -28,7 +28,7 @@ static int pos_lt(LibcpPos a, LibcpPos b) {
   return a.off < b.off;
 }
 
-static void consider(LibcpToken *tok, LibcpToken **start, LibcpToken **end) {
+static void consider(LibcpToken* tok, LibcpToken** start, LibcpToken** end) {
   if (!tok)
     return;
   if (!*start || pos_lt(pos_of(tok), pos_of(*start)))
@@ -37,7 +37,7 @@ static void consider(LibcpToken *tok, LibcpToken **start, LibcpToken **end) {
     *end = tok;
 }
 
-static void walk(const LibcpNode *node, LibcpToken **start, LibcpToken **end) {
+static void walk(const LibcpNode* node, LibcpToken** start, LibcpToken** end) {
   if (!node)
     return;
 
@@ -65,9 +65,8 @@ static void walk(const LibcpNode *node, LibcpToken **start, LibcpToken **end) {
   walk(node->atomic_expr, start, end);
 }
 
-void libcp_node_source_range(const LibcpNode *node, LibcpToken **start,
-                             LibcpToken **end) {
+void libcp_node_source_range(const LibcpNode* node, LibcpToken** start, LibcpToken** end) {
   *start = NULL;
-  *end = NULL;
+  *end   = NULL;
   walk(node, start, end);
 }

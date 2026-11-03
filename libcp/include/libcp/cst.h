@@ -11,9 +11,8 @@
 #ifndef LIBCP_CST_H
 #define LIBCP_CST_H
 
-#include <stdio.h>
-
 #include <libcp/token.h>
+#include <stdio.h>
 
 typedef enum {
   CST_TRANSLATION_UNIT,
@@ -83,18 +82,18 @@ typedef enum {
 typedef struct libcp_cst_node LibcpCstNode;
 struct libcp_cst_node {
   LibcpCstKind kind;
-  LibcpToken *tok;          // Set on leaves (CST_TOKEN / CST_EOF)
-                            // 在叶子上设置 (CST_TOKEN / CST_EOF)
+  LibcpToken* tok;  // Set on leaves (CST_TOKEN / CST_EOF)
+                    // 在叶子上设置 (CST_TOKEN / CST_EOF)
   // `children[0..child_count)` are the live children; the array's
   // capacity is private to cst.c.
   //
   // `children[0..child_count)` 是有效子节点; 数组容量是 cst.c 私有的.
-  LibcpCstNode **children;  // Set on inner nodes
+  LibcpCstNode** children;  // Set on inner nodes
                             // 在内部节点上设置
   int child_count;
 };
 
-LIBCP_API LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok);
+LIBCP_API LibcpCstNode* libcp_cst_parse(LibcpContext* ctx, LibcpToken* tok);
 // Seed a typedef name the preprocessor would get from an included
 // header: the CST is built before preprocessing, so its declaration
 // oracle cannot see such names and the consumer supplies them (e.g.
@@ -103,9 +102,9 @@ LIBCP_API LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok);
 // 预置一个 typedef 名, 这类名字在预处理后本会来自被包含的头文件:
 // CST 在预处理之前构建, 因此它的声明 oracle 看不到这些名字,
 // 由消费者提供 (例如 "va_list"). 属于配置: 跨 reset 保留.
-LIBCP_API void libcp_cst_seed_typedef(LibcpContext *ctx, char *name);
-LIBCP_API void libcp_cst_reconstruct(LibcpContext *ctx, LibcpCstNode *root, FILE *out);
-LIBCP_API void libcp_cst_dump(LibcpContext *ctx, LibcpCstNode *root, FILE *out);
-LIBCP_API bool libcp_cst_verify(LibcpContext *ctx, LibcpCstNode *root, LibcpToken *tok);
+LIBCP_API void libcp_cst_seed_typedef(LibcpContext* ctx, char* name);
+LIBCP_API void libcp_cst_reconstruct(LibcpContext* ctx, LibcpCstNode* root, FILE* out);
+LIBCP_API void libcp_cst_dump(LibcpContext* ctx, LibcpCstNode* root, FILE* out);
+LIBCP_API bool libcp_cst_verify(LibcpContext* ctx, LibcpCstNode* root, LibcpToken* tok);
 
 #endif

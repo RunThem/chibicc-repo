@@ -1,31 +1,33 @@
 #include "libcp.h"
 
-void libcp_strarray_push(LibcpContext *ctx, LibcpStringArray *arr, char *s) {
+void libcp_strarray_push(LibcpContext* ctx, LibcpStringArray* arr, char* s) {
   if (!arr->data) {
-    arr->data = libcp_arena_calloc(ctx, 8, sizeof(char *));
+    arr->data     = libcp_arena_calloc(ctx, 8, sizeof(char*));
     arr->capacity = 8;
   }
 
   if (arr->capacity == arr->len) {
     int oldcap = arr->capacity;
-    arr->data = libcp_arena_realloc(ctx, arr->data, sizeof(char *) * oldcap,
-                                      sizeof(char *) * oldcap * 2);
+    arr->data =
+        libcp_arena_realloc(ctx, arr->data, sizeof(char*) * oldcap, sizeof(char*) * oldcap * 2);
     arr->capacity = oldcap * 2;
   }
 
   arr->data[arr->len++] = s;
 }
 
-void libcp_nodearray_push(LibcpContext *ctx, LibcpNodeArray *arr, LibcpNode *node) {
+void libcp_nodearray_push(LibcpContext* ctx, LibcpNodeArray* arr, LibcpNode* node) {
   if (!arr->data) {
-    arr->data = libcp_arena_calloc(ctx, 8, sizeof(LibcpNode *));
+    arr->data     = libcp_arena_calloc(ctx, 8, sizeof(LibcpNode*));
     arr->capacity = 8;
   }
 
   if (arr->capacity == arr->len) {
-    int oldcap = arr->capacity;
-    arr->data = libcp_arena_realloc(ctx, arr->data, sizeof(LibcpNode *) * oldcap,
-                                      sizeof(LibcpNode *) * oldcap * 2);
+    int oldcap    = arr->capacity;
+    arr->data     = libcp_arena_realloc(ctx,
+                                    arr->data,
+                                    sizeof(LibcpNode*) * oldcap,
+                                    sizeof(LibcpNode*) * oldcap * 2);
     arr->capacity = oldcap * 2;
   }
 
@@ -40,34 +42,34 @@ int libcp_align_to(int n, int align) {
 
 // \xHH for everything invisible (including the space, so that a dump
 // line never ends in whitespace that tools could strip).
-void libcp_print_escaped(FILE *out, char *p, int len) {
+void libcp_print_escaped(FILE* out, char* p, int len) {
   for (int i = 0; i < len; i++) {
     unsigned char c = p[i];
 
     switch (c) {
-    case '\n': fprintf(out, "\\n"); break;
-    case '\t': fprintf(out, "\\t"); break;
-    case '\r': fprintf(out, "\\r"); break;
-    case '\\': fprintf(out, "\\\\"); break;
-    default:
-      if (c < 0x20 || c >= 0x7f || c == ' ')
-        fprintf(out, "\\x%02x", c);
-      else
-        fputc(c, out);
+      case '\n': fprintf(out, "\\n"); break;
+      case '\t': fprintf(out, "\\t"); break;
+      case '\r': fprintf(out, "\\r"); break;
+      case '\\': fprintf(out, "\\\\"); break;
+      default:
+        if (c < 0x20 || c >= 0x7f || c == ' ')
+          fprintf(out, "\\x%02x", c);
+        else
+          fputc(c, out);
     }
   }
 }
 
 // Returns true if a given file exists. Used by the preprocessor and the
 // driver; it lives in the library so a consumer does not need main.c.
-bool libcp_file_exists(char *path) {
+bool libcp_file_exists(char* path) {
   struct stat st;
   return !stat(path, &st);
 }
 
 // Takes a printf-style format string and returns a formatted string in
 // the context's arena.
-char *libcp_format(LibcpContext *ctx, char *fmt, ...) {
+char* libcp_format(LibcpContext* ctx, char* fmt, ...) {
   va_list ap;
   va_list ap2;
   va_start(ap, fmt);
@@ -75,7 +77,7 @@ char *libcp_format(LibcpContext *ctx, char *fmt, ...) {
   int len = vsnprintf(NULL, 0, fmt, ap2);
   va_end(ap2);
 
-  char *buf = libcp_arena_alloc(ctx, len + 1, 1);
+  char* buf = libcp_arena_alloc(ctx, len + 1, 1);
   vsnprintf(buf, len + 1, fmt, ap);
   va_end(ap);
   return buf;

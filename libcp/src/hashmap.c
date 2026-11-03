@@ -12,9 +12,9 @@
 #define LOW_WATERMARK 50
 
 // Represents a deleted hash entry
-#define TOMBSTONE ((void *)-1)
+#define TOMBSTONE ((void*)-1)
 
-static uint64_t fnv_hash(char *s, int len) {
+static uint64_t fnv_hash(char* s, int len) {
   uint64_t hash = 0xcbf29ce484222325;
   for (int i = 0; i < len; i++) {
     hash *= 0x100000001b3;
@@ -25,7 +25,7 @@ static uint64_t fnv_hash(char *s, int len) {
 
 // Make room for new entires in a given hashmap by removing
 // tombstones and possibly extending the bucket size.
-static void rehash(LibcpContext *ctx, LibcpHashMap *map) {
+static void rehash(LibcpContext* ctx, LibcpHashMap* map) {
   // Compute the size of the new hashmap.
   int nkeys = 0;
   for (int i = 0; i < map->capacity; i++)
@@ -39,11 +39,11 @@ static void rehash(LibcpContext *ctx, LibcpHashMap *map) {
 
   // Create a new hashmap and copy all key-values.
   LibcpHashMap map2 = {};
-  map2.buckets = libcp_arena_calloc(ctx, cap, sizeof(LibcpHashEntry));
-  map2.capacity = cap;
+  map2.buckets      = libcp_arena_calloc(ctx, cap, sizeof(LibcpHashEntry));
+  map2.capacity     = cap;
 
   for (int i = 0; i < map->capacity; i++) {
-    LibcpHashEntry *ent = &map->buckets[i];
+    LibcpHashEntry* ent = &map->buckets[i];
     if (ent->key && ent->key != TOMBSTONE)
       libcp_hashmap_put2(ctx, &map2, ent->key, ent->keylen, ent->val);
   }
@@ -52,19 +52,19 @@ static void rehash(LibcpContext *ctx, LibcpHashMap *map) {
   *map = map2;
 }
 
-static bool match(LibcpHashEntry *ent, char *key, int keylen) {
-  return ent->key && ent->key != TOMBSTONE &&
-         ent->keylen == keylen && memcmp(ent->key, key, keylen) == 0;
+static bool match(LibcpHashEntry* ent, char* key, int keylen) {
+  return ent->key && ent->key != TOMBSTONE && ent->keylen == keylen &&
+         memcmp(ent->key, key, keylen) == 0;
 }
 
-static LibcpHashEntry *get_entry(LibcpContext *ctx, LibcpHashMap *map, char *key, int keylen) {
+static LibcpHashEntry* get_entry(LibcpContext* ctx, LibcpHashMap* map, char* key, int keylen) {
   if (!map->buckets)
     return NULL;
 
   uint64_t hash = fnv_hash(key, keylen);
 
   for (int i = 0; i < map->capacity; i++) {
-    LibcpHashEntry *ent = &map->buckets[(hash + i) % map->capacity];
+    LibcpHashEntry* ent = &map->buckets[(hash + i) % map->capacity];
     if (match(ent, key, keylen))
       return ent;
     if (ent->key == NULL)
@@ -73,9 +73,10 @@ static LibcpHashEntry *get_entry(LibcpContext *ctx, LibcpHashMap *map, char *key
   unreachable();
 }
 
-static LibcpHashEntry *get_or_insert_entry(LibcpContext *ctx, LibcpHashMap *map, char *key, int keylen) {
+static LibcpHashEntry*
+    get_or_insert_entry(LibcpContext* ctx, LibcpHashMap* map, char* key, int keylen) {
   if (!map->buckets) {
-    map->buckets = libcp_arena_calloc(ctx, INIT_SIZE, sizeof(LibcpHashEntry));
+    map->buckets  = libcp_arena_calloc(ctx, INIT_SIZE, sizeof(LibcpHashEntry));
     map->capacity = INIT_SIZE;
   } else if ((map->used * 100) / map->capacity >= HIGH_WATERMARK) {
     rehash(ctx, map);
@@ -84,20 +85,20 @@ static LibcpHashEntry *get_or_insert_entry(LibcpContext *ctx, LibcpHashMap *map,
   uint64_t hash = fnv_hash(key, keylen);
 
   for (int i = 0; i < map->capacity; i++) {
-    LibcpHashEntry *ent = &map->buckets[(hash + i) % map->capacity];
+    LibcpHashEntry* ent = &map->buckets[(hash + i) % map->capacity];
 
     if (match(ent, key, keylen))
       return ent;
 
     if (ent->key == TOMBSTONE) {
-      ent->key = key;
+      ent->key    = key;
       ent->keylen = keylen;
       map->ndeleted--;
       return ent;
     }
 
     if (ent->key == NULL) {
-      ent->key = key;
+      ent->key    = key;
       ent->keylen = keylen;
       map->used++;
       return ent;
@@ -106,30 +107,30 @@ static LibcpHashEntry *get_or_insert_entry(LibcpContext *ctx, LibcpHashMap *map,
   unreachable();
 }
 
-void *libcp_hashmap_get(LibcpContext *ctx, LibcpHashMap *map, char *key) {
+void* libcp_hashmap_get(LibcpContext* ctx, LibcpHashMap* map, char* key) {
   return libcp_hashmap_get2(ctx, map, key, strlen(key));
 }
 
-void *libcp_hashmap_get2(LibcpContext *ctx, LibcpHashMap *map, char *key, int keylen) {
-  LibcpHashEntry *ent = get_entry(ctx, map, key, keylen);
+void* libcp_hashmap_get2(LibcpContext* ctx, LibcpHashMap* map, char* key, int keylen) {
+  LibcpHashEntry* ent = get_entry(ctx, map, key, keylen);
   return ent ? ent->val : NULL;
 }
 
-void libcp_hashmap_put(LibcpContext *ctx, LibcpHashMap *map, char *key, void *val) {
-   libcp_hashmap_put2(ctx, map, key, strlen(key), val);
+void libcp_hashmap_put(LibcpContext* ctx, LibcpHashMap* map, char* key, void* val) {
+  libcp_hashmap_put2(ctx, map, key, strlen(key), val);
 }
 
-void libcp_hashmap_put2(LibcpContext *ctx, LibcpHashMap *map, char *key, int keylen, void *val) {
-  LibcpHashEntry *ent = get_or_insert_entry(ctx, map, key, keylen);
-  ent->val = val;
+void libcp_hashmap_put2(LibcpContext* ctx, LibcpHashMap* map, char* key, int keylen, void* val) {
+  LibcpHashEntry* ent = get_or_insert_entry(ctx, map, key, keylen);
+  ent->val            = val;
 }
 
-void libcp_hashmap_delete(LibcpContext *ctx, LibcpHashMap *map, char *key) {
+void libcp_hashmap_delete(LibcpContext* ctx, LibcpHashMap* map, char* key) {
   libcp_hashmap_delete2(ctx, map, key, strlen(key));
 }
 
-void libcp_hashmap_delete2(LibcpContext *ctx, LibcpHashMap *map, char *key, int keylen) {
-  LibcpHashEntry *ent = get_entry(ctx, map, key, keylen);
+void libcp_hashmap_delete2(LibcpContext* ctx, LibcpHashMap* map, char* key, int keylen) {
+  LibcpHashEntry* ent = get_entry(ctx, map, key, keylen);
   if (!ent)
     return;
 

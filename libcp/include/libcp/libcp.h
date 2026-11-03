@@ -17,14 +17,14 @@
 #define LIBCP_H
 
 #include <libcp/allocator.h>
-#include <libcp/diagnostic.h>
+#include <libcp/ast.h>
 #include <libcp/context.h>
-#include <libcp/token.h>
+#include <libcp/cst.h>
+#include <libcp/diagnostic.h>
 #include <libcp/preprocess.h>
 #include <libcp/provenance.h>
-#include <libcp/cst.h>
-#include <libcp/ast.h>
 #include <libcp/sema.h>
+#include <libcp/token.h>
 
 // The library version (PLAN L3.3c). Only source compatibility is
 // promised: a change to a public struct is a version bump. Keep this in
@@ -34,6 +34,6 @@
 // 就相当于版本升级. 该值必须与 Makefile 中的 VERSION 保持同步
 // (test/install.sh 会检查).
 #define LIBCP_VERSION "0.1.0"
-LIBCP_API const char *libcp_version(void);
+LIBCP_API const char* libcp_version(void);
 
 #endif

@@ -44,6 +44,7 @@ CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch \
 | `libcp.a` | 静态库 |
 | `libcp.so` | 共享库, 仅 Linux |
 | `fmt-tool` | CST formatter MVP(`tools/fmt.c`), 链接 `libcp.a` |
+| `format` | 用 `.clang-format` 格式化 `libcp/` 与驱动器源码(不涉及测试) |
 | `test` | 完整测试套件 |
 | `test-stage2` | 自举测试 |
 | `check-library` | 公共面与打包闸门 |

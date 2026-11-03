@@ -18,6 +18,6 @@
 
 #include <libcp/token.h>
 
-LIBCP_API LibcpToken *libcp_preprocess(LibcpContext *ctx, LibcpToken *tok);
+LIBCP_API LibcpToken* libcp_preprocess(LibcpContext* ctx, LibcpToken* tok);
 
 #endif
