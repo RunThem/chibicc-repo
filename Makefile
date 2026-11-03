@@ -74,16 +74,35 @@ fmt-tool: libcp.a tools/fmt.c
 	$(CC) $(CFLAGS) -o fmt tools/fmt.c libcp.a
 
 # Source formatting with the repo-root .clang-format, over libcp/ and the
-# driver only (never test/). A developer convenience, not a gate: when
-# clang-format is missing, say so and leave the sources untouched. It is
-# named `format`, not `fmt`, because `fmt` is the formatter binary.
+# driver only (never test/). It is named `format`, not `fmt`, because
+# `fmt` is the formatter binary.
+#
+# The major version is pinned: clang-format output is not stable across
+# major releases, and this tree only converges under version 20 (the
+# header in .clang-format). Both targets refuse another major version
+# instead of rewriting the tree with different output; CI installs the
+# pinned release (see .github/workflows/format.yml). `format` stays a
+# developer convenience and skips silently when clang-format is missing;
+# `format-check` is the read-only gate and fails instead.
 # Two passes: the first realigns trailing comment continuation lines that
 # hold non-ASCII text, the second settles them, so a rerun is a no-op.
+CLANG_FORMAT ?= clang-format
+CLANG_FORMAT_VERSION ?= 20
+
 format:
-	@command -v clang-format >/dev/null 2>&1 || { \
-	  echo "format: clang-format not found, $(words $(FMT_SRCS)) files left untouched"; exit 0; }
-	clang-format -i --style=file $(FMT_SRCS)
-	clang-format -i --style=file $(FMT_SRCS)
+	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { \
+	  echo "format: $(CLANG_FORMAT) not found, $(words $(FMT_SRCS)) files left untouched"; exit 0; }
+	@$(CLANG_FORMAT) --version | grep -qE "version $(CLANG_FORMAT_VERSION)\." || { \
+	  echo "format: clang-format $(CLANG_FORMAT_VERSION).x required, found: $$($(CLANG_FORMAT) --version)"; exit 1; }
+	$(CLANG_FORMAT) -i --style=file $(FMT_SRCS)
+	$(CLANG_FORMAT) -i --style=file $(FMT_SRCS)
+
+format-check:
+	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { \
+	  echo "format-check: $(CLANG_FORMAT) not found (clang-format $(CLANG_FORMAT_VERSION).x required)"; exit 1; }
+	@$(CLANG_FORMAT) --version | grep -qE "version $(CLANG_FORMAT_VERSION)\." || { \
+	  echo "format-check: clang-format $(CLANG_FORMAT_VERSION).x required, found: $$($(CLANG_FORMAT) --version)"; exit 1; }
+	$(CLANG_FORMAT) --dry-run --Werror --style=file $(FMT_SRCS)
 
 # The C-to-C printer (PLAN-c2c): a regression gate over layer 3, run by
 # make test / make test-stage2 only. It is not part of `all` and not

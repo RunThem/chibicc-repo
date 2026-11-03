@@ -3,7 +3,7 @@
 # compiler and exercises the host-runnable front-end channels: the
 # generated x86-64 code cannot be assembled there. The thirdparty
 # projects stay on the manual Docker gates.
-name: ci
+name: build-test
 
 on:
   push:

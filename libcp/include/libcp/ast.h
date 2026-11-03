@@ -421,91 +421,91 @@ struct libcp_member {
 // AST node
 // AST 节点
 typedef enum {
-  ND_NULL_EXPR,      // Do nothing
-                     // 什么都不做
-  ND_ADD,            // +
-  ND_SUB,            // -
-  ND_MUL,            // *
-  ND_DIV,            // /
-  ND_NEG,            // unary -
-                     // 一元 -
-  ND_MOD,            // %
-  ND_BITAND,         // &
-  ND_BITOR,          // |
-  ND_BITXOR,         // ^
-  ND_SHL,            // <<
-  ND_SHR,            // >>
-  ND_EQ,             // ==
-  ND_NE,             // !=
-  ND_LT,             // <
-  ND_LE,             // <=
-  ND_GT,             // >
-  ND_GE,             // >=
-  ND_ASSIGN,         // =
-  ND_INCDEC,         // "++" and "--"
-                     // "++" 与 "--"
-  ND_SUBSCRIPT,      // x[y]
-  ND_COND,           // ?:
-  ND_COMMA,          // ,
-  ND_MEMBER,         // . (struct member access)
-                     // . (结构体成员访问)
-  ND_ADDR,           // unary &
-                     // 一元 &
-  ND_DEREF,          // unary *
-                     // 一元 *
-  ND_NOT,            // !
-  ND_BITNOT,         // ~
-  ND_LOGAND,         // &&
-  ND_LOGOR,          // ||
-  ND_RETURN,         // "return"
-  ND_IF,             // "if"
-  ND_FOR,            // "for" (also the lowered shape of "while")
-                     // "for" (也是 "while" 降级后的形态)
-  ND_WHILE,          // "while"; sema lowers it to ND_FOR
-                     // "while"; sema 将其降级为 ND_FOR
-  ND_DO,             // "do"
-  ND_SWITCH,         // "switch"
-  ND_CASE,           // "case"
-  ND_BLOCK,          // { ... }
-  ND_GOTO,           // "goto"
-  ND_BREAK,          // "break"; sema lowers it to a jump to the break label
-                     // "break"; sema 将其降级为跳到 break 标签
-  ND_CONTINUE,       // "continue"; sema lowers it to a jump to the continue label
-                     // "continue"; sema 将其降级为跳到 continue 标签
-  ND_GOTO_EXPR,      // "goto" labels-as-values
-                     // "goto" 标签值
-  ND_LABEL,          // Labeled statement
-                     // 带标签语句
-  ND_LABEL_VAL,      // [GNU] Labels-as-values
-                     // [GNU] 标签值
-  ND_FUNCALL,        // Function call
-                     // 函数调用
-  ND_EXPR_STMT,      // Expression statement
-                     // 表达式语句
-  ND_STMT_EXPR,      // Statement expression
-                     // 语句表达式
-  ND_IDENT,          // An unresolved name; sema binds it to a variable,
-                     // a function or an enum constant
-                     // 未解析的名字; sema 将其绑定到变量, 函数或枚举常量
-  ND_VAR,            // Variable
-                     // 变量
-  ND_VLA_PTR,        // VLA designator
-                     // 变长数组指示符
-  ND_NUM,            // Integer
-                     // 整数
-  ND_STRING,         // String literal; sema lowers it to an anonymous global
-                     // 字符串字面量; sema 将其降级为匿名全局对象
-  ND_SIZEOF,         // "sizeof"; sema folds it to its value
-                     // "sizeof"; sema 将其折叠为值
-  ND_ALIGNOF,        // "_Alignof"; sema folds it to its value
-                     // "_Alignof"; sema 将其折叠为值
-  ND_GENERIC,        // "_Generic"; sema selects an association and becomes it
-                     // "_Generic"; sema 选择一个关联并成为它
-  ND_GENERIC_ASSOC,  // One association of an ND_GENERIC: the type name in
-                     // ty_op (NULL for "default:"), the result expression in
-                     // lhs. A carrier only; it never reaches codegen.
-                     // ND_GENERIC 的一个关联: 类型名在 ty_op 中 ("default:"
-                     // 为 NULL), 结果表达式在 lhs 中. 仅作载体; 从不进入 codegen.
+  ND_NULL_EXPR,         // Do nothing
+                        // 什么都不做
+  ND_ADD,               // +
+  ND_SUB,               // -
+  ND_MUL,               // *
+  ND_DIV,               // /
+  ND_NEG,               // unary -
+                        // 一元 -
+  ND_MOD,               // %
+  ND_BITAND,            // &
+  ND_BITOR,             // |
+  ND_BITXOR,            // ^
+  ND_SHL,               // <<
+  ND_SHR,               // >>
+  ND_EQ,                // ==
+  ND_NE,                // !=
+  ND_LT,                // <
+  ND_LE,                // <=
+  ND_GT,                // >
+  ND_GE,                // >=
+  ND_ASSIGN,            // =
+  ND_INCDEC,            // "++" and "--"
+                        // "++" 与 "--"
+  ND_SUBSCRIPT,         // x[y]
+  ND_COND,              // ?:
+  ND_COMMA,             // ,
+  ND_MEMBER,            // . (struct member access)
+                        // . (结构体成员访问)
+  ND_ADDR,              // unary &
+                        // 一元 &
+  ND_DEREF,             // unary *
+                        // 一元 *
+  ND_NOT,               // !
+  ND_BITNOT,            // ~
+  ND_LOGAND,            // &&
+  ND_LOGOR,             // ||
+  ND_RETURN,            // "return"
+  ND_IF,                // "if"
+  ND_FOR,               // "for" (also the lowered shape of "while")
+                        // "for" (也是 "while" 降级后的形态)
+  ND_WHILE,             // "while"; sema lowers it to ND_FOR
+                        // "while"; sema 将其降级为 ND_FOR
+  ND_DO,                // "do"
+  ND_SWITCH,            // "switch"
+  ND_CASE,              // "case"
+  ND_BLOCK,             // { ... }
+  ND_GOTO,              // "goto"
+  ND_BREAK,             // "break"; sema lowers it to a jump to the break label
+                        // "break"; sema 将其降级为跳到 break 标签
+  ND_CONTINUE,          // "continue"; sema lowers it to a jump to the continue label
+                        // "continue"; sema 将其降级为跳到 continue 标签
+  ND_GOTO_EXPR,         // "goto" labels-as-values
+                        // "goto" 标签值
+  ND_LABEL,             // Labeled statement
+                        // 带标签语句
+  ND_LABEL_VAL,         // [GNU] Labels-as-values
+                        // [GNU] 标签值
+  ND_FUNCALL,           // Function call
+                        // 函数调用
+  ND_EXPR_STMT,         // Expression statement
+                        // 表达式语句
+  ND_STMT_EXPR,         // Statement expression
+                        // 语句表达式
+  ND_IDENT,             // An unresolved name; sema binds it to a variable,
+                        // a function or an enum constant
+                        // 未解析的名字; sema 将其绑定到变量, 函数或枚举常量
+  ND_VAR,               // Variable
+                        // 变量
+  ND_VLA_PTR,           // VLA designator
+                        // 变长数组指示符
+  ND_NUM,               // Integer
+                        // 整数
+  ND_STRING,            // String literal; sema lowers it to an anonymous global
+                        // 字符串字面量; sema 将其降级为匿名全局对象
+  ND_SIZEOF,            // "sizeof"; sema folds it to its value
+                        // "sizeof"; sema 将其折叠为值
+  ND_ALIGNOF,           // "_Alignof"; sema folds it to its value
+                        // "_Alignof"; sema 将其折叠为值
+  ND_GENERIC,           // "_Generic"; sema selects an association and becomes it
+                        // "_Generic"; sema 选择一个关联并成为它
+  ND_GENERIC_ASSOC,     // One association of an ND_GENERIC: the type name in
+                        // ty_op (NULL for "default:"), the result expression in
+                        // lhs. A carrier only; it never reaches codegen.
+                        // ND_GENERIC 的一个关联: 类型名在 ty_op 中 ("default:"
+                        // 为 NULL), 结果表达式在 lhs 中. 仅作载体; 从不进入 codegen.
   ND_TYPES_COMPATIBLE,  // "__builtin_types_compatible_p"; sema folds it to 0 or 1
                         // "__builtin_types_compatible_p"; sema 将其折叠为 0 或 1
   ND_REG_CLASS,         // "__builtin_reg_class"; sema folds it to its class

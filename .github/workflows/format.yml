@@ -1,0 +1,23 @@
+# The formatting gate: the tree is formatted with clang-format 20, the
+# version pinned in the Makefile and in the .clang-format header. The
+# runner's packaged clang-format (18 on Ubuntu 24.04) is deliberately not
+# used: formatting is not stable across major releases, so the job
+# installs the pinned release from PyPI and runs the read-only check.
+name: format
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format 20
+        run: |
+          pipx install "clang-format==20.1.8"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Check formatting
+        run: make format-check
