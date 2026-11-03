@@ -953,9 +953,14 @@ fi
 # 内为权威。
 normalize_dump() {
     # The driver's -dump-ast only accepts .c inputs; headers dump
-    # through a .c-named copy.
+    # through a .c-named copy. sed runs in the C locale: a string literal
+    # that carries raw non-UTF-8 bytes (test/unicode.c does) makes a
+    # multibyte sed abandon the match, so the literal survives on one side
+    # only and the two dumps compare unequal (the CI runner's C.UTF-8
+    # locale exposed this).
     cp "$1" "$tmp/dump_input.c"
-    "$chibicc" -Iinclude -Itest -dump-ast "$tmp/dump_input.c" 2>/dev/null | sed -E -e 's/@[^ ]+//g' -e 's/"(\\.|[^"\\])*"//g'
+    "$chibicc" -Iinclude -Itest -dump-ast "$tmp/dump_input.c" 2>/dev/null \
+        | LC_ALL=C sed -E -e 's/@[^ ]+//g' -e 's/"(\\.|[^"\\])*"//g'
 }
 
 if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
