@@ -64,9 +64,10 @@ test/%.exe: chibicc test/%.c test/common test/test.h
 	$(CC) -pthread -o $@ test/$*.o -xc test/common
 
 # The CST formatter MVP (PLAN-l5 W4): the library's first real consumer,
-# built against libcp.a through the public headers only.
-fmt: libcp.a tools/fmt.c
-	$(CC) $(CFLAGS) -o $@ tools/fmt.c libcp.a
+# built against libcp.a through the public headers only. The target is
+# fmt-tool because `fmt` is the binary it produces.
+fmt-tool: libcp.a tools/fmt.c
+	$(CC) $(CFLAGS) -o fmt tools/fmt.c libcp.a
 
 # The C-to-C printer (PLAN-c2c): a regression gate over layer 3, run by
 # make test / make test-stage2 only. It is not part of `all` and not
@@ -90,7 +91,7 @@ test: $(TESTS)
 	test/allocator.sh
 	test/self-test.sh
 	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
-	$(MAKE) fmt
+	$(MAKE) fmt-tool
 	test/fmt.sh ./chibicc ./fmt
 	$(MAKE) c2c
 	test/c2c.sh ./chibicc ./c2c
@@ -291,4 +292,4 @@ docker-snapshot-ndiff: docker-image
 	@rc=0; diff -ru .cache/.ndtmp/base .cache/.ndtmp/new || rc=1; rm -rf .cache/.ndtmp; \
 	  [ $$rc -eq 0 ] && echo "snapshot ndiff: empty" || { echo "snapshot ndiff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: all test clean test-stage2 test-all test-thirdparty check-library check-context install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff
+.PHONY: all fmt-tool test clean test-stage2 test-all test-thirdparty check-library check-context install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff docker-snapshot-ndiff

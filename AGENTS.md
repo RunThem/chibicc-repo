@@ -46,7 +46,8 @@
 
 - `make` - 构建 `chibicc` 二进制(纯 C11, 无外部依赖; CFLAGS 定义在 Makefile 中).
 - `make check-context` - 隐式上下文审计(`test/context-audit.sh --strict`): 库层无访问器 / 无 TLS / `.a` 无访问器符号, `codegen.c` 无 `cg_ctx`; 由 `make test` 一并调用.
-- `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 再依次跑 `test/driver.sh`(命令行选项), `test/diagnostic.sh`(诊断逐字节), `test/warning.sh`(警告逐字节), `test/shape.sh`(发射形状), `test/ast.sh`(第 3 层 AST 形态), `test/trivia.sh`(trivia 通道), `test/cst.sh`(CST 通道), `test/expand.sh`(provenance), `test/library.sh`(公共面与 ASan), `test/allocator.sh`(分配器替换), `test/self-test.sh`(库内自测), `test/cst-stats.sh`(UNPARSED golden), 最后 `make fmt` + `test/fmt.sh`(formatter)与 `make c2c` + `test/c2c.sh`(第 3 层回归闸门, 不随 `make` / `make install` 发布).
+- `make fmt-tool` - 构建 CST formatter(`tools/fmt.c`, 产物 `fmt`), 由 `make test` 调用后接 `test/fmt.sh`.
+- `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 再依次跑 `test/driver.sh`(命令行选项), `test/diagnostic.sh`(诊断逐字节), `test/warning.sh`(警告逐字节), `test/shape.sh`(发射形状), `test/ast.sh`(第 3 层 AST 形态), `test/trivia.sh`(trivia 通道), `test/cst.sh`(CST 通道), `test/expand.sh`(provenance), `test/library.sh`(公共面与 ASan), `test/allocator.sh`(分配器替换), `test/self-test.sh`(库内自测), `test/cst-stats.sh`(UNPARSED golden), 最后 `make fmt-tool` + `test/fmt.sh`(formatter)与 `make c2c` + `test/c2c.sh`(第 3 层回归闸门, 不随 `make` / `make install` 发布).
 - `make test-stage2` - 自举检查: 用 chibicc 编译它自己, 再重跑全部测试.
 - `make test-all` - 以上两项合计. `make clean` 用于清理.
 - 单独运行某个特性测试: `make test/sizeof.exe && ./test/sizeof.exe`(模式规则会自动处理).

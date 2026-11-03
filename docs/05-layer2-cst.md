@@ -305,7 +305,7 @@ if (node->kind == CST_UNPARSED) {
 
 ## 5.8 示例消费者: fmt
 
-`tools/fmt.c`(`make fmt` 构建, PLAN-l5 W4)是本层的第一个真实工具消费者:
+`tools/fmt.c`(`make fmt-tool` 构建, PLAN-l5 W4)是本层的第一个真实工具消费者:
 一个行保持的格式化器. 它只走 `libcp_tokenize_file` -> (`libcp_cst_seed_typedef`)
 -> `libcp_cst_parse`, 然后按树发射:
 
