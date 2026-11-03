@@ -8,7 +8,22 @@ enum { C1 };
 enum { C2 = C1 + 1 };
 typedef enum { TD_A = 1 } TD_E;
 
+// A pointer's target is resolved at its point of use: the enum below is
+// declared after the prototype that first mentions the pointer, but
+// before the struct whose member dimension names it.
+struct late_struct;
+struct holder {
+  struct late_struct *p;
+};
+void takes_holder(struct holder *);
+enum { LATE_DIM = 5 };
+struct late_struct {
+  char bytes[LATE_DIM];
+};
+
 int main() {
+  ASSERT(5, sizeof(struct late_struct));
+  ASSERT(5, LATE_DIM);
   ASSERT(0, ({ enum { zero, one, two }; zero; }));
   ASSERT(1, ({ enum { zero, one, two }; one; }));
   ASSERT(2, ({ enum { zero, one, two }; two; }));

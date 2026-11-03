@@ -791,6 +791,18 @@ static void resolve_type_exprs(LibcpContext* ctx, LibcpType* ty) {
 
   switch (ty->kind) {
     case TY_PTR:
+      // A pointer's target is settled at its point of use, exactly as
+      // resolve_type states. Descending into an aggregate target here
+      // would resolve its member dimensions at the position of whichever
+      // declaration mentioned the pointer first, before the constants
+      // they name are in scope.
+      //
+      // 指针的目标在使用点确定, 与 resolve_type 的规则完全一致. 在这里
+      // 下钻到聚合目标会让其成员的维度在最早提及该指针的那条声明的位置
+      // 解析, 早于它们命名的常量进入作用域.
+      if (ty->base && ty->base->kind != TY_STRUCT && ty->base->kind != TY_UNION)
+        resolve_type_exprs(ctx, ty->base);
+      break;
     case TY_VLA: resolve_type_exprs(ctx, ty->base); break;
     case TY_ARRAY:
       resolve_type_exprs(ctx, ty->base);
