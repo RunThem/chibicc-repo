@@ -1002,11 +1002,12 @@ else
 fi
 
 # -S 汇编逐字节等价: 打印产物编译出的汇编必须与原文逐字节相同。只在能
-# 就地汇编的环境跑 (有系统头, 即容器内)。.file 伪指令嵌源路径, 所以原地
-# 工作: 原文件先编译, 打印产物覆盖后再编译, cmp 两个 .s, 然后还原。容器
-# 里的 /work 是一次性副本, 就地改写是安全的。时间宏钉死 (macro.c 把
-# __DATE__/__TIME__ 当字符串用)。自举语料 (编译器自己的 ~15k 行源码) 一并
-# 入门 (PLAN-c2c 拍板 2)。
+# 就地汇编的环境跑 (有系统头, 即容器内)。打印产物写到 $tmp/p.c 后由
+# chibicc 直接编译, 不覆盖源文件: make -j test-all 会让 test 与 test-stage2
+# 并行跑这个脚本, 就地改写会让两次运行互相踩 backup, 把展开后的产物留在
+# 源码树里 (CI 的 codegen.c 事故)。.file 伪指令嵌源路径, .file/.loc 行在
+# 比较前剥离。时间宏钉死 (macro.c 把 __DATE__/__TIME__ 当字符串用)。自举
+# 语料 (编译器自己的 ~15k 行源码) 一并入门 (PLAN-c2c 拍板 2)。
 if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
    "$chibicc" -Iinclude -Itest -E "$tmp/probe.c" > /dev/null 2>&1; then
     s_fails=0
@@ -1024,7 +1025,6 @@ if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
             flags="-DLIBCP_DEFAULT_ALLOCATOR -Ilibcp/include -Ilibcp/src -Iinclude" ;;
         *)                       flags="-Iinclude -Itest" ;;
         esac
-        cp "$f" "$tmp/orig.bak"
         # 时间宏必须内联 (fmt.sh 的同款坑): 经变量展开会丢字面引号。
         "$chibicc" $flags -D__TIMESTAMP__='"Mon Jan  1 00:00:00 2024"' \
             -D__DATE__='"Jan  1 2024"' -D__TIME__='"00:00:00"' \
@@ -1033,11 +1033,9 @@ if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
         "$c2c_bin" $flags -D__TIMESTAMP__='"Mon Jan  1 00:00:00 2024"' \
             -D__DATE__='"Jan  1 2024"' -D__TIME__='"00:00:00"' \
             -I/usr/include/x86_64-linux-gnu -I/usr/include "$f" > "$tmp/p.c" 2>/dev/null
-        cp "$tmp/p.c" "$f"
         "$chibicc" $flags -D__TIMESTAMP__='"Mon Jan  1 00:00:00 2024"' \
             -D__DATE__='"Jan  1 2024"' -D__TIME__='"00:00:00"' \
-            -S -o "$tmp/b.s" "$f" 2>/dev/null
-        mv "$tmp/orig.bak" "$f"
+            -S -o "$tmp/b.s" "$tmp/p.c" 2>/dev/null
         # 展开后的单文件没有 #include 行, .file 的头文件表与 .loc 的行号
         # 本质上与原文不同 (fmt 保留 include 行所以能逐字节)。这里剥离调试
         # 行信息后比较: 指令序列, 标签, 数据与重定位逐字节。
