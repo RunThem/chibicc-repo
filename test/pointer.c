@@ -39,6 +39,23 @@ int main() {
   ASSERT(4, ({ int x[2][3]; int *y=x; y[4]=4; x[1][1]; }));
   ASSERT(5, ({ int x[2][3]; int *y=x; y[5]=5; x[1][2]; }));
 
+  // Pointer arithmetic and subscripting must lay out a bare aggregate
+  // target: sema defers struct/union layout, while codegen scales by the
+  // element size. Without that layout, codegen reads the placeholder
+  // size 0 and every index collapses to the first element.
+  //
+  // 指针算术与下标必须布局裸的聚合目标: sema 推迟 struct/union 布局,
+  // 而 codegen 按元素大小缩放. 不布局时读到占位大小 0, 所有下标都退化
+  // 到第一个元素.
+  ASSERT(16, ({ struct BarePtrIndex { int a; char pad[12]; } *p = (struct BarePtrIndex *)0x1000;
+                (char *)&p[1] - (char *)p; }));
+  ASSERT(32, ({ struct BarePtrAdd { int a; char pad[12]; } *p = (struct BarePtrAdd *)0x1000;
+                (char *)(p + 2) - (char *)p; }));
+  ASSERT(16, ({ struct BarePtrSub { int a; char pad[12]; } *p = (struct BarePtrSub *)0x1000;
+                (char *)p - (char *)(p - 1); }));
+  ASSERT(2, ({ struct BarePtrDiff { int a; char pad[12]; } *p = (struct BarePtrDiff *)0x1000;
+               p - (p - 2); }));
+
   printf("OK\n");
   return 0;
 }

@@ -2514,6 +2514,22 @@ void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
       // usual_arith_conv, 重复执行会堆叠 cast 节点.
       LibcpType* lt = node->lhs->ty;
       LibcpType* rt = node->rhs->ty;
+
+      // Pointer arithmetic consumes the pointee's size: codegen scales an
+      // integer operand by it and divides a `ptr - ptr` difference by it.
+      // resolve_type's pointer rule deliberately leaves a struct/union
+      // target alone, so the layout has to be triggered here, at the use
+      // point; otherwise codegen scales by the placeholder size 0.
+      //
+      // 指针算术要消费指向类型的大小: codegen 用它缩放整数操作数, 并把
+      // `ptr - ptr` 的差值除以它. resolve_type 的指针规则有意不碰
+      // struct/union 目标, 因此必须在这里的使用点触发布局; 否则 codegen
+      // 会用占位大小 0 缩放.
+      if (lt->base)
+        resolve_type(ctx, lt->base);
+      if (rt->base)
+        resolve_type(ctx, rt->base);
+
       if (node->kind == ND_ADD) {
         if (lt->base && rt->base)
           libcp_error_tok(ctx, node->tok, "invalid operands");
@@ -2801,6 +2817,14 @@ void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
         libcp_error_tok(ctx, node->tok, "invalid pointer dereference");
       if (base->kind == TY_VOID)
         libcp_error_tok(ctx, node->tok, "dereferencing a void pointer");
+      // Subscripting dereferences, so a struct/union pointee has to be
+      // laid out before codegen scales the index by its size. The pointer
+      // rule in resolve_type leaves the target alone on purpose.
+      //
+      // 下标同样是一次解引用: struct/union 指向类型必须先布局, 否则
+      // codegen 会用 0 作为元素大小缩放索引. resolve_type 的指针规则
+      // 有意不碰目标类型.
+      resolve_type(ctx, base);
       node->ty = base;
       return;
     }
