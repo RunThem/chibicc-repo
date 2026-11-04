@@ -3,8 +3,8 @@
 # macos-latest arm64 pool kept failing to hand out a runner, and the
 # front-end channels it carried (trivia, cst, expand, ast) already run
 # inside test-all on Linux. Building the compiler on macOS stays a local
-# check. The thirdparty job carries tinycc, libpng and sqlite; git and
-# cpython (tens of minutes to hours) stay on the manual Docker gates.
+# check, and the thirdparty job carries tinycc, libpng, git and sqlite;
+# cpython (tens of minutes to hours) stays on the manual Docker gates.
 name: test
 
 on:
@@ -36,7 +36,8 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends zlib1g-dev tcl-dev libtool
+          sudo apt-get install -y --no-install-recommends zlib1g-dev tcl-dev libtool \
+            libcurl4-openssl-dev libexpat1-dev gettext
       - name: Clone public repos over HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
       - name: Restore the clone cache
@@ -44,5 +45,5 @@ jobs:
         with:
           path: thirdparty
           key: thirdparty-v1-${{ hashFiles('test/thirdparty/*.sh') }}
-      - name: tinycc, libpng and sqlite
-        run: make -j"$(nproc)" test-thirdparty THIRDPARTY="tinycc libpng sqlite"
+      - name: tinycc, libpng, git and sqlite
+        run: make -j"$(nproc)" test-thirdparty THIRDPARTY="tinycc libpng git sqlite"
