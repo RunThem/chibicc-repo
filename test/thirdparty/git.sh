@@ -4,6 +4,13 @@ repo='git@github.com:git/git.git'
 git reset --hard 54e85e7af1ac9e9a92888060d6811ae767fea1bc
 
 $make clean
+
+# git 2.28 的 http.h 只按 "CURLOPT_USE_SSL 未定义 + CURLOPT_FTP_SSL 已定义" 判断
+# 旧 curl, 再把 CURLUSESSL_TRY 重定义为 CURLFTPSSL_TRY; curl >= 8.5 起 CURLUSESSL_*
+# 本身是宏, 两个定义互相展开后按 hideset 留下裸标识符, gcc 编译同样报 undeclared.
+# 与 chibicc 无关; 只在 CURLUSESSL_TRY 尚未是宏时 (旧 curl 的枚举时代) 保留垫片.
+sed -i 's/^#define CURLUSESSL_TRY CURLFTPSSL_TRY$/#ifndef CURLUSESSL_TRY\n#define CURLUSESSL_TRY CURLFTPSSL_TRY\n#endif/' http.h
+
 # test-lib.sh 的 SANITY 探针用不带 who 的 chmod -w/-r, 受 umask 影响; /workspaces 挂载带默认 ACL
 # (新建目录恒带 o+w) 时, 探针在 umask 022 下会以 "cannot prepare SANETESTD" 中止, 并留下 rm 不掉的
 # 目录. 显式 a 前缀让探针只看权限位, 与 umask 无关; 与 chibicc 无关, 只改测试框架.
