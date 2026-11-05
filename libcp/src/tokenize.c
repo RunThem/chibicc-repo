@@ -588,14 +588,19 @@ static bool convert_pp_int(LibcpContext* ctx, LibcpToken* tok) {
   }
 
   // strtoul saturates at ULONG_MAX and sets ERANGE on overflow; do not
-  // let an unrepresentable literal silently become ULONG_MAX.
+  // let an unrepresentable literal silently become ULONG_MAX. Remember the
+  // overflow and only diagnose it once the whole token is known to be an
+  // integer constant: with a trailing '.' or exponent the token is a
+  // floating constant whose integer part merely exceeds the range, and the
+  // float branch below must handle it.
   //
   // strtoul 在溢出时会饱和到 ULONG_MAX 并设置 ERANGE; 不能让无法表示的
-  // 整数字面量悄悄变成 ULONG_MAX.
-  errno       = 0;
-  int64_t val = strtoul(p, &p, base);
-  if (errno == ERANGE)
-    libcp_error_tok(ctx, tok, "integer literal is too large");
+  // 整数字面量悄悄变成 ULONG_MAX. 先记住溢出, 等确认整个 token 是整数常量
+  // 后再报错: 若后面还有 '.' 或指数, 它其实是整数部分超出范围的浮点常量,
+  // 应交给下面的浮点分支.
+  errno         = 0;
+  int64_t val   = strtoul(p, &p, base);
+  bool overflow = errno == ERANGE;
 
   // Read U, L or LL suffixes.
   // 读 U, L 或 LL 后缀.
@@ -623,6 +628,9 @@ static bool convert_pp_int(LibcpContext* ctx, LibcpToken* tok) {
 
   if (p != tok->loc + tok->len)
     return false;
+
+  if (overflow)
+    libcp_error_tok(ctx, tok, "integer literal is too large");
 
   // Infer a type.
   // 推断类型.

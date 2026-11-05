@@ -91,6 +91,11 @@ int main() {
   ASSERT(16, sizeof(5.l));
   ASSERT(16, sizeof(2.0L));
 
+  // 整数部分超出 ULONG_MAX 仍不影响浮点常量的合法性 (C11 6.4.4.2).
+  51090942171709440000.0;
+  ASSERT(8, sizeof(51090942171709440000.0));
+  ASSERT(1, 51090942171709440000.0 > 5e19);
+
   assert(1, size\
 of(char), \
          "sizeof(char)");
