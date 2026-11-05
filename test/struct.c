@@ -170,6 +170,15 @@ int main() {
                struct BackO3 { struct BackI3 in; int z; }; struct BackO3 o;
                o.in.back = &o; o.z = 9; o.in.back->z; }));
 
+  // `arr->m` is `(*arr).m`: the left operand undergoes the
+  // array-to-pointer conversion (C11 6.3.2.1p3), for a plain array and
+  // for an array member alike.
+  ASSERT(3, ({ struct ArrArrow { int x; } a[2]; a[0].x = 3; a->x; }));
+  ASSERT(4, ({ struct ArrArrow2 { int x; } a2[2]; a2[0].x = 4; a2[1].x = 5; a2->x; }));
+  ASSERT(6, ({ struct ArrHolder { struct { int y; } m[2]; } h;
+               h.m[0].y = 6; h.m[1].y = 7; h.m->y; }));
+  ASSERT(9, ({ int n = 2; struct ArrVla { int w; } v[n]; v[0].w = 9; v->w; }));
+
   printf("OK\n");
   return 0;
 }

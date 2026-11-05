@@ -2217,10 +2217,17 @@ static void resolve_member(LibcpContext* ctx, LibcpNode* node) {
   LibcpToken* arrow  = node->arrow_tok;
 
   // `x->y` is `(*x).y`; these are the checks the dereference would
-  // make, anchored at the arrow.
+  // make, anchored at the arrow. The left operand first undergoes the
+  // array-to-pointer conversion (6.3.2.1p3), so `arr->m` is
+  // `(&arr[0])->m` rather than an invalid dereference of an array.
   //
   // `x->y` 就是 `(*x).y`; 这里是解引用会做的检查, 锚点落在箭头上.
+  // 左操作数先经过数组到指针的转换 (6.3.2.1p3), 因此 `arr->m` 是
+  // `(&arr[0])->m`, 而不是对数组的非法解引用.
   if (arrow) {
+    if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
+      ty = libcp_pointer_to(ctx, ty->base);
+
     if (ty->kind != TY_PTR || !ty->base)
       libcp_error_tok(ctx, arrow, "invalid pointer dereference");
     if (ty->base->kind == TY_VOID)
