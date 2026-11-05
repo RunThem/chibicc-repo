@@ -1,16 +1,3 @@
-// LibcpNode source ranges (PLAN-l5 W5): the anchor-token extremes of a
-// subtree. Every node carries a representative token; this walk collects
-// the smallest and largest anchors by (file, offset), so a consumer can
-// map a subtree back to a source span without rewalking the tokens.
-//
-// Scope notes, deliberate for the MVP:
-// - `next` chains are siblings, not children: the range covers the
-//   subtree rooted at the argument only.
-// - LibcpInitializer trees are not descended; a
-//   declaration's range covers its node anchors.
-// - Tokens from synthetic buffers (macro bodies, pastes) compare by
-//   file pointer first, which is stable but arbitrary across buffers.
-//
 // LibcpNode 的源码范围 (PLAN-l5 W5): 子树的锚点 token 极值. 每个节点
 // 都携带一个代表 token; 本次遍历按 (file, offset) 收集最小与最大的
 // 锚点, 因此消费者可以把子树映射回源码区间, 而不必重新遍历 token.
@@ -20,7 +7,7 @@
 // - 不下降进 LibcpInitializer 树; 声明的范围覆盖它自身的节点锚点.
 // - 来自合成缓冲区 (宏体, 拼接) 的 token 先按 file 指针比较,
 //   这是稳定的, 但跨缓冲区比较时顺序是任意的.
-
+//
 #include "libcp.h"
 
 // token 位置: 所在文件加文件内偏移, 比较先后时用.

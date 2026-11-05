@@ -1,5 +1,3 @@
-// This is an implementation of the open-addressing hash table.
-//
 // 开放寻址哈希表的基础设施: 键是任意字节串 (key, keylen), 值是 void*.
 // 删除用 tombstone 标记, 使用率超过 70% 时 rehash, 重建后降到 50% 以下.
 // 桶数组来自 context 的 arena, 不逐项释放; 宏表, pragma once 集合与
@@ -7,19 +5,15 @@
 
 #include "libcp.h"
 
-// Initial hash bucket size
 // 初始桶数量.
 #define INIT_SIZE 16
 
-// Rehash if the usage exceeds 70%.
 // 使用率超过 70% 时 rehash.
 #define HIGH_WATERMARK 70
 
-// We'll keep the usage below 50% after rehashing.
 // rehash 之后把使用率保持在 50% 以下.
 #define LOW_WATERMARK 50
 
-// Represents a deleted hash entry
 // 表示一个已删除的哈希条目.
 #define TOMBSTONE ((void*)-1)
 
@@ -33,12 +27,8 @@ static uint64_t fnv_hash(char* s, int len) {
   return hash;
 }
 
-// Make room for new entires in a given hashmap by removing
-// tombstones and possibly extending the bucket size.
-//
 // 为新的插入腾出空间: 清掉 tombstone, 必要时扩大桶数组.
 static void rehash(LibcpContext* ctx, LibcpHashMap* map) {
-  // Compute the size of the new hashmap.
   // 先统计存活条目数, 据此确定新表的桶数.
   int nkeys = 0;
   for (int i = 0; i < map->capacity; i++)
@@ -50,7 +40,6 @@ static void rehash(LibcpContext* ctx, LibcpHashMap* map) {
     cap = cap * 2;
   assert(cap > 0);
 
-  // Create a new hashmap and copy all key-values.
   // 建一张新表并搬入全部存活键值; 新桶数组来自 arena, 旧数组不做释放.
   LibcpHashMap map2 = {};
   map2.buckets      = libcp_arena_calloc(ctx, cap, sizeof(LibcpHashEntry));
@@ -158,11 +147,6 @@ void libcp_hashmap_delete2(LibcpContext* ctx, LibcpHashMap* map, char* key, int 
   ent->key = TOMBSTONE;
   map->ndeleted++;
 
-  // Tombstones lengthen every probe until the next rehash, and `used`
-  // alone would only reach the insert watermark after more inserts. Once
-  // they outnumber the live entries, rebuild now so a delete-heavy
-  // stretch cannot leave the table half dead (C8).
-  //
   // tombstone 会延长之后每一次探测, 直到下一次 rehash; 只看 `used` 的
   // 话, 还要再插入很多次才会碰到插入水位. 一旦 tombstone 多于存活条目,
   // 就地重建, 以免一段以删除为主的时期把表留成半死状态 (C8).

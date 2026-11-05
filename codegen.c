@@ -1,39 +1,29 @@
-// This file turns the annotated tree into x86-64 assembly - and hosts
-// the shaping pass, the part of the old pipeline that rewrote the
-// faithful tree into the shapes the emitter understands. The pass runs
-// once per function before anything is assigned or emitted (plans/PLAN.md's
-// codegen-direct line moved its pieces here step by step), under six
-// invariants (plan contract 3):
+// 本文件把标注树变成 x86-64 汇编, 同时承载 shaping pass - 旧流水线中把
+// 忠实树改写成发射器所理解形状的那部分. 这个 pass 对每个函数运行一次,
+// 在分配或发射任何东西之前 (plans/PLAN.md 的 codegen-direct 路线把它
+// 的各部分逐步搬到这里), 并遵守六条不变量 (plan contract 3):
 //
-//  (a) post-order: a node's subtrees are shaped before the node is
-//      rewritten - an outer rewrite may rely on an inner one;
-//  (b) phase order: all expression and declaration shaping happens
-//      before the control-flow labeling, so loops built during the
-//      first phase still receive their labels;
-//  (c) per-function context: the temporary slots the rewrites create
-//      are appended to the current function's locals, and every slot
-//      exists before assign_lvar_offsets runs;
-//  (d) no re-entry: subtrees the pass builds are built already lowered,
-//      and the pass never walks a subtree it has shaped again - the
-//      tree carries no aliases that could lead it back in;
-//  (e) visit once: a nested function's body is shaped exactly once,
-//      from the program list, never through its host's body;
-//  (f) initializers are off the natural path: the resolved initializer
-//      trees are walked explicitly (shape_init_exprs), never by
-//      descending a node's fields.
+//  (a) 后序: 节点的子树先于该节点被改写 - 外层改写可以依赖内层改写;
+//  (b) 阶段顺序: 所有表达式与声明 shaping 都在控制流标签分配之前完成,
+//      因此第一阶段构造的循环仍能拿到自己的标签;
+//  (c) 每函数上下文: 改写创建的临时槽追加到当前函数的局部变量上,
+//      且每个槽都在 assign_lvar_offsets 运行之前就已存在;
+//  (d) 不重入: pass 构造的子树在构造时即已降级, 且 pass 从不再次遍历
+//      自己改写过的子树 - 树中不存在能把它引回去的别名;
+//  (e) 只访问一次: 嵌套函数体只从程序列表 shaping 恰好一次, 绝不通过
+//      宿主函数体抵达;
+//  (f) 初始化器不在自然路径上: 已 resolve 的初始化器树由 shape_init_exprs
+//      显式遍历, 绝不通过下降节点的字段抵达.
 //
-// The additive operators are the one lowering the emitter runs itself:
-// a faithful `+`/`-` arrives unscaled, and gen_expr replaces the node
-// with new_add/new_sub's product right before it emits it (PLAN B2).
-// The nodes those constructors build carry the `is_lowered` mark,
-// which is how the emitter tells an already lowered node - the
-// `x[y]` address gen_addr builds, a compound assignment's scaled
-// operand - from a faithful one.
+// 加法运算符是发射器自己执行的唯一一处降级: 忠实的 `+`/`-` 到达时
+// 未做缩放, gen_expr 在发射它之前把节点替换为 new_add/new_sub 的产物
+// (PLAN B2). 这两个构造函数建出的节点带 `is_lowered` 标记, 发射器据此
+// 把已降级的节点 - gen_addr 构造的 `x[y]` 地址, 复合赋值已缩放的运算数
+// - 与忠实的节点区分开.
 //
-// The pass also owns the label namespace and the temporary slots
-// (LibcpObj.ret_buffer, LibcpType::vla_size and friends); the fields it writes
-// are marked as such in libcp.h. Everything below is the emitter:
-// no optimization passes, by design.
+// 这个 pass 还掌管标签命名空间与临时槽 (返回缓冲区, VLA 尺寸槽等);
+// 它们保存在 codegen 私有的 per-node / per-type 表中 (见上文, PLAN L1).
+// 以下全部是发射器: 按设计没有优化 pass.
 
 #include "driver.h"
 
@@ -48,12 +38,10 @@ static char* argreg32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
 static char* argreg64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
 static LibcpObj* current_fn;
 
-// Codegen-owned state that used to live on the public LibcpNode/LibcpType/LibcpObj
-// structs (PLAN L1). The library-facing shape keeps only what the
-// source and sema put there; the labels, the lowering marker, the call
-// slots and the VLA size slots are keyed by pointer here. Entries are
-// created lazily and live as long as the process, like every other
-// allocation of this consumer.
+// 以前放在公共 LibcpNode/LibcpType/LibcpObj 结构体上的 codegen 私有状态
+// (PLAN L1). 面向库的形状只保留源码与 sema 放上去的东西; 标签, 降级标记,
+// 调用槽和 VLA 尺寸槽在这里以指针为键. 条目惰性创建, 存活到进程结束,
+// 与本消费者的其他分配一样.
 typedef struct CgNode CgNode;
 struct CgNode {
   LibcpNode* node;
@@ -143,18 +131,16 @@ static int obj_stack_size(LibcpObj* obj) {
   return cg_obj(obj)->stack_size;
 }
 
-// The low `width` bits set. A full-width bit-field would shift by the
-// width, which is UB (and on x86 masks the count, producing a zero
-// mask), so that case is spelled out.
+// 返回低 `width` 位全置 1 的掩码. 全宽位域若按 width 移位就是 UB (且
+// x86 会对计数取模, 得到零掩码), 所以这种情况单独写出.
 static unsigned long bitfield_mask(int width) {
   return width == 64 ? ~0UL : (1UL << width) - 1;
 }
 
-// The innermost enclosing loop's break and continue labels while a
-// body is being emitted (PLAN B1.2a): a break or a continue resolves
-// against them here, where the shaping pass used to bind the label
-// into the node. A switch saves the break label only - it is a break
-// target but not a continue target.
+// 发射函数体期间最内层包围循环的 break 与 continue 标签 (PLAN B1.2a):
+// break 或 continue 在这里对照它们解析, 而旧实现中由 shaping pass 把标签
+// 绑进节点. switch 只保存 break 标签 - 它是 break 目标, 但不是 continue
+// 目标.
 static char* cur_brk_label;
 static char* cur_cont_label;
 
@@ -200,8 +186,8 @@ static void popf(int reg) {
   depth--;
 }
 
-// Round up `n` to the nearest multiple of `align` is in strings.c now:
-// sema needs it too, and codegen must not be the library's dependency.
+// 把 `n` 向上取整到 `align` 最近倍数的函数现在位于 strings.c: sema 也
+// 需要它, 而 codegen 不能成为库的依赖.
 
 static char* reg_dx(LibcpContext* ctx, int sz) {
   switch (sz) {
@@ -223,29 +209,28 @@ static char* reg_ax(LibcpContext* ctx, int sz) {
   unreachable();
 }
 
-// Compute the absolute address of a given node.
-// It's an error if a given node does not reside in memory.
+// 计算给定节点的绝对地址.
+// 若节点不位于内存中则报错.
 static void gen_addr(LibcpContext* ctx, LibcpNode* node) {
   switch (node->kind) {
     case ND_STRING:
-      // The literal's anonymous global (PLAN A9.1: the node keeps its
-      // kind), a global object like any other - the ND_VAR handling
-      // below covers it through the same `var` field.
+      // 字面量的匿名全局对象 (PLAN A9.1: 节点保留自己的 kind), 与其他
+      // 全局对象无异 - 下面的 ND_VAR 处理通过同一个 `var` 字段覆盖它.
     case ND_VAR:
-      // Variable-length array, which is always local.
+      // 变长数组, 总是局部变量.
       if (node->var->ty->kind == TY_VLA) {
         println("  mov %d(%%rbp), %%rax", obj_offset(node->var));
         return;
       }
 
-      // Local variable
+      // 局部变量
       if (node->var->is_local) {
         println("  lea %d(%%rbp), %%rax", obj_offset(node->var));
         return;
       }
 
       if (opt_fpic) {
-        // Thread-local variable
+        // 线程局部变量
         if (node->var->is_tls) {
           println("  data16 lea %s@tlsgd(%%rip), %%rdi", node->var->name);
           println("  .value 0x6666");
@@ -254,42 +239,34 @@ static void gen_addr(LibcpContext* ctx, LibcpNode* node) {
           return;
         }
 
-        // Function or global variable
+        // 函数或全局变量
         println("  mov %s@GOTPCREL(%%rip), %%rax", node->var->name);
         return;
       }
 
-      // Thread-local variable
+      // 线程局部变量
       if (node->var->is_tls) {
         println("  mov %%fs:0, %%rax");
         println("  add $%s@tpoff, %%rax", node->var->name);
         return;
       }
 
-      // Here, we generate an absolute address of a function or a global
-      // variable. Even though they exist at a certain address at runtime,
-      // their addresses are not known at link-time for the following
-      // two reasons.
+      // 这里生成函数或全局变量的绝对地址. 它们在运行时有确定地址, 但
+      // 链接期并不知道, 原因有二.
       //
-      //  - Address randomization: Executables are loaded to memory as a
-      //    whole but it is not known what address they are loaded to.
-      //    Therefore, at link-time, relative address in the same
-      //    exectuable (i.e. the distance between two functions in the
-      //    same executable) is known, but the absolute address is not
-      //    known.
+      //  - 地址随机化: 可执行文件整体加载到内存, 但加载到哪个地址并不
+      //    得知. 因此在链接期, 同一可执行文件内的相对地址 (即同一可执行
+      //    文件中两个函数之间的距离) 是已知的, 绝对地址则未知.
       //
-      //  - Dynamic linking: Dynamic shared objects (DSOs) or .so files
-      //    are loaded to memory alongside an executable at runtime and
-      //    linked by the runtime loader in memory. We know nothing
-      //    about addresses of global stuff that may be defined by DSOs
-      //    until the runtime relocation is complete.
+      //  - 动态链接: 动态共享对象 (DSO) 或 .so 文件在运行时与可执行文件
+      //    一起加载到内存, 由运行时加载器在内存中链接. 在运行时重定位
+      //    完成之前, 对 DSO 可能定义的全局对象地址一无所知.
       //
-      // In order to deal with the former case, we use RIP-relative
-      // addressing, denoted by `(%rip)`. For the latter, we obtain an
-      // address of a stuff that may be in a shared object file from the
-      // Global Offset Table using `@GOTPCREL(%rip)` notation.
+      // 对前一种情况使用 RIP 相对寻址, 记作 `(%rip)`. 对后一种情况,
+      // 通过 `@GOTPCREL(%rip)` 记法从全局偏移表 (GOT) 取得可能位于共享
+      // 对象文件中的对象地址.
 
-      // Function
+      // 函数
       if (node->ty->kind == TY_FUNC) {
         if (node->var->is_definition)
           println("  lea %s(%%rip), %%rax", node->var->name);
@@ -298,7 +275,7 @@ static void gen_addr(LibcpContext* ctx, LibcpNode* node) {
         return;
       }
 
-      // Global variable
+      // 全局变量
       println("  lea %s(%%rip), %%rax", node->var->name);
       return;
     case ND_DEREF: gen_expr(ctx, node->lhs); return;
@@ -307,24 +284,19 @@ static void gen_addr(LibcpContext* ctx, LibcpNode* node) {
       gen_addr(ctx, node->rhs);
       return;
     case ND_SUBSCRIPT: {
-      // `x[y]` keeps its faithful spelling (PLAN B1.1a): the scaled,
-      // converted sum the shaping pass used to build ahead of time is
-      // built here, at the point the address is needed, and emitted
-      // right away. new_add types it and applies the element-size
-      // scaling exactly as the pass did, so the instructions are the
-      // ones the old `*(x+y)` form produced. It carries the lowered
-      // mark, so the emitter's own additive lowering (PLAN B2) leaves
-      // it alone.
+      // `x[y]` 保持忠实写法 (PLAN B1.1a): 以前由 shaping pass 预先构造的
+      // 已缩放, 已转换的和, 改在这里构造 - 就在需要地址的时刻 - 并立即
+      // 发射. new_add 为它定类型, 并完全按那个 pass 的做法施加元素大小
+      // 缩放, 因此指令与旧 `*(x+y)` 形式产生的一样. 它带降级标记, 所以
+      // 发射器自己的加法降级 (PLAN B2) 不会碰它.
       LibcpNode* add = new_add(ctx, node->lhs, node->rhs, node->tok);
       gen_expr(ctx, add);
       return;
     }
     case ND_MEMBER:
-      // A member access still carrying its `->` marker (PLAN B1.1b) goes
-      // through the pointer value its operand is, so the address it
-      // contributes is that value itself; the plain `.` form keeps
-      // taking the operand's address. The member binding and the
-      // member's type were settled in sema.
+      // 仍带 `->` 标记的成员访问 (PLAN B1.1b) 走其运算数本身的指针值,
+      // 因此它贡献的地址就是这个值本身; 普通的 `.` 形式仍取运算数的
+      // 地址. 成员绑定与成员类型已在 sema 中确定.
       if (node->arrow_tok)
         gen_expr(ctx, node->lhs);
       else
@@ -338,9 +310,8 @@ static void gen_addr(LibcpContext* ctx, LibcpNode* node) {
       }
       break;
     case ND_GENERIC:
-      // The selection's conclusion, an lvalue if the selected result
-      // is one (PLAN A9.1: the node keeps its kind and the field
-      // carries the result).
+      // 选择表达式的结论: 若被选中的结果本身是左值, 它也是左值
+      // (PLAN A9.1: 节点保留自己的 kind, 结果由字段携带).
       gen_addr(ctx, node->generic_sel);
       return;
     case ND_ASSIGN:
@@ -356,7 +327,7 @@ static void gen_addr(LibcpContext* ctx, LibcpNode* node) {
   libcp_error_tok(ctx, node->tok, "not an lvalue");
 }
 
-// Load a value from where %rax is pointing to.
+// 从 %rax 指向的位置加载值.
 static void load(LibcpType* ty) {
   switch (ty->kind) {
     case TY_ARRAY:
@@ -364,12 +335,9 @@ static void load(LibcpType* ty) {
     case TY_UNION:
     case TY_FUNC:
     case TY_VLA:
-      // If it is an array, do not attempt to load a value to the
-      // register because in general we can't load an entire array to a
-      // register. As a result, the result of an evaluation of an array
-      // becomes not the array itself but the address of the array.
-      // This is where "array is automatically converted to a pointer to
-      // the first element of the array in C" occurs.
+      // 若是数组, 不要试图把值加载到寄存器, 因为通常无法把整个数组装入
+      // 寄存器. 因此数组求值的结果不是数组本身, 而是数组的地址. C 中
+      // "数组自动转换为指向其首元素的指针" 就发生在这里.
       return;
     case TY_FLOAT: println("  movss (%%rax), %%xmm0"); return;
     case TY_DOUBLE: println("  movsd (%%rax), %%xmm0"); return;
@@ -378,11 +346,9 @@ static void load(LibcpType* ty) {
 
   char* insn = ty->is_unsigned ? "movz" : "movs";
 
-  // When we load a char or a short value to a register, we always
-  // extend them to the size of int, so we can assume the lower half of
-  // a register always contains a valid value. The upper half of a
-  // register for char, short and int may contain garbage. When we load
-  // a long value to a register, it simply occupies the entire register.
+  // 把 char 或 short 值加载到寄存器时总是扩展到 int 大小, 因此可以假定
+  // 寄存器的低半部分总是含有有效值. char, short 和 int 对应寄存器的高半
+  // 部分可能含有垃圾. 把 long 值加载到寄存器时, 它直接占用整个寄存器.
   if (ty->size == 1)
     println("  %sbl (%%rax), %%eax", insn);
   else if (ty->size == 2)
@@ -393,7 +359,7 @@ static void load(LibcpType* ty) {
     println("  mov (%%rax), %%rax");
 }
 
-// Store %rax to an address that the stack top is pointing to.
+// 把 %rax 存入栈顶所指向的地址.
 static void store(LibcpType* ty) {
   pop("%rdi");
 
@@ -470,7 +436,7 @@ static int getTypeId(LibcpType* ty) {
   return U64;
 }
 
-// The table for type casts
+// 类型转换表
 static char i32i8[]  = "movsbl %al, %eax";
 static char i32u8[]  = "movzbl %al, %eax";
 static char i32i16[] = "movswl %ax, %eax";
@@ -569,18 +535,14 @@ static void cast(LibcpType* from, LibcpType* to) {
     println("  %s", cast_table[t1][t2]);
 }
 
-// Structs or unions equal or smaller than 16 bytes are passed
-// using up to two registers.
+// 大小等于或小于 16 字节的 struct 或 union 最多用两个寄存器传递.
 //
-// If the first 8 bytes contains only floating-point type members,
-// they are passed in an XMM register. Otherwise, they are passed
-// in a general-purpose register.
+// 若前 8 个字节只含浮点类型成员, 则用 XMM 寄存器传递; 否则用通用寄存器
+// 传递.
 //
-// If a struct/union is larger than 8 bytes, the same rule is
-// applied to the the next 8 byte chunk.
+// 若 struct/union 大于 8 字节, 对下一个 8 字节块套用同样的规则.
 //
-// This function returns true if `ty` has only floating-point
-// members in its byte range [lo, hi).
+// 若 `ty` 在其字节区间 [lo, hi) 内只含浮点成员, 本函数返回 true.
 static bool has_flonum(LibcpType* ty, int lo, int hi, int offset) {
   if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
     for (LibcpMember* mem = ty->members; mem; mem = mem->next)
@@ -643,34 +605,28 @@ static void push_args2(LibcpContext* ctx, LibcpNode* args, bool first_pass) {
   }
 }
 
-// Load function call arguments. Arguments are already evaluated and
-// stored to the stack as local variables. What we need to do in this
-// function is to load them to registers or push them to the stack as
-// specified by the x86-64 psABI. Here is what the spec says:
+// 为函数调用安排实参传递. 这里按 x86-64 psABI 决定每个实参走寄存器
+// 还是走栈, 并求值后压栈; 调用点随后把走寄存器的实参弹入对应寄存器.
+// 规范的规定是:
 //
-// - Up to 6 arguments of integral type are passed using RDI, RSI,
-//   RDX, RCX, R8 and R9.
+// - 整型实参最多 6 个, 用 RDI, RSI, RDX, RCX, R8 和 R9 传递.
 //
-// - Up to 8 arguments of floating-point type are passed using XMM0 to
-//   XMM7.
+// - 浮点类型实参最多 8 个, 用 XMM0 到 XMM7 传递.
 //
-// - If all registers of an appropriate type are already used, push an
-//   argument to the stack in the right-to-left order.
+// - 相应类型的寄存器已经用完时, 实参按从右到左的顺序压栈.
 //
-// - Each argument passed on the stack takes 8 bytes, and the end of
-//   the argument area must be aligned to a 16 byte boundary.
+// - 每个压栈传递的实参占 8 字节, 实参区域的末端必须对齐到 16 字节边界.
 //
-// - If a function is variadic, set the number of floating-point type
-//   arguments to RAX.
+// - 函数是可变参数时, 把浮点类型实参的个数写入 RAX.
 static int push_args(LibcpContext* ctx, LibcpNode* node) {
   int stack = 0, gp = 0, fp = 0;
 
-  // If the return type is a large struct/union, the caller passes
-  // a pointer to a buffer as if it were the first argument.
+  // 返回类型是大的 struct/union 时, 调用方像传第一个实参那样传入一个
+  // 缓冲区指针.
   if (cg(node)->ret_buffer && node->ty->size > 16)
     gp++;
 
-  // Load as many arguments to the registers as possible.
+  // 尽可能让实参走寄存器.
   for (LibcpNode* arg = node->args; arg; arg = arg->next) {
     LibcpType* ty = arg->ty;
 
@@ -721,8 +677,8 @@ static int push_args(LibcpContext* ctx, LibcpNode* node) {
   push_args2(ctx, node->args, true);
   push_args2(ctx, node->args, false);
 
-  // If the return type is a large struct/union, the caller passes
-  // a pointer to a buffer as if it were the first argument.
+  // 返回类型是大的 struct/union 时, 调用方像传第一个实参那样传入一个
+  // 缓冲区指针.
   if (cg(node)->ret_buffer && node->ty->size > 16) {
     println("  lea %d(%%rbp), %%rax", obj_offset(cg(node)->ret_buffer));
     push();
@@ -822,11 +778,11 @@ static void copy_struct_mem(void) {
 }
 
 static void builtin_alloca(void) {
-  // Align size to 16 bytes.
+  // 把大小向上对齐到 16 字节.
   println("  add $15, %%rdi");
   println("  and $0xfffffff0, %%edi");
 
-  // Shift the temporary area by %rdi.
+  // 把临时区域下移 %rdi 字节.
   println("  mov %d(%%rbp), %%rcx", obj_offset(current_fn->alloca_bottom));
   println("  sub %%rsp, %%rcx");
   println("  mov %%rsp, %%rax");
@@ -843,23 +799,20 @@ static void builtin_alloca(void) {
   println("  jmp 1b");
   println("2:");
 
-  // Move alloca_bottom pointer.
+  // 移动 alloca_bottom 指针.
   println("  mov %d(%%rbp), %%rax", obj_offset(current_fn->alloca_bottom));
   println("  sub %%rdi, %%rax");
   println("  mov %%rax, %d(%%rbp)", obj_offset(current_fn->alloca_bottom));
 }
 
-// Generate code for a given node.
+// 为给定节点生成代码.
 static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
-  // A faithful `+`/`-` still carries its source shape (PLAN B2): the
-  // element-size scaling, the `num + ptr` canonicalization and the
-  // conversions libcp_new_arith applies are made here, at emission, by the
-  // same new_add/new_sub the shaping pass used to call ahead of time.
-  // The node is replaced rather than recursed into: the product
-  // carries the original node's token, so the debug lines and the
-  // evaluation order are the pre-B2 ones. Additive nodes codegen
-  // built itself carry the mark and fall through to the plain
-  // machine-arithmetic emission below.
+  // 忠实的 `+`/`-` 仍保留源码形态 (PLAN B2): 元素大小的缩放, `num + ptr`
+  // 的规范化以及 libcp_new_arith 所做的转换都在这里完成, 位于发射阶段,
+  // 用的是 shaping pass 过去提前调用的同一对 new_add/new_sub.
+  // 这里替换节点而不是递归进入: 产物携带原节点的 token, 所以调试行和
+  // 求值顺序都与 B2 之前相同. codegen 自己构建的加法节点带标记,
+  // 落入下面普通的机器算术发射路径.
   if ((node->kind == ND_ADD || node->kind == ND_SUB) && !cg(node)->is_lowered)
     node = node->kind == ND_ADD ? new_add(ctx, node->lhs, node->rhs, node->tok) :
                                   new_sub(ctx, node->lhs, node->rhs, node->tok);
@@ -911,17 +864,14 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
     case ND_ALIGNOF:
     case ND_TYPES_COMPATIBLE:
     case ND_REG_CLASS:
-      // The conclusions sema recorded in `val` (PLAN A9.1): a size, an
-      // alignment, a type compatibility or a register class - all
-      // numbers, all typed like the literals they used to fold to, so
-      // the integer form above applies. A sizeof of a VLA never
-      // arrives here: the shaping pass lowered it to the comma that
-      // reads the size variable.
+      // sema 记录在 `val` 中的结论 (PLAN A9.1): 大小, 对齐, 类型兼容性
+      // 或寄存器类别 - 全是数值, 类型与它们过去折叠成的字面量相同, 所以
+      // 上面的整数形式适用. VLA 的 sizeof 不会到这里: shaping pass 已把
+      // 它降级为读取大小变量的逗号表达式.
       println("  mov $%ld, %%rax", (long)node->val);
       return;
     case ND_GENERIC:
-      // The selection's conclusion (PLAN A9.1): emit the selected
-      // result expression.
+      // 选择得到的结论 (PLAN A9.1): 发射被选中的结果表达式.
       gen_expr(ctx, node->generic_sel);
       return;
     case ND_NEG:
@@ -946,10 +896,9 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
       println("  neg %%rax");
       return;
     case ND_STRING:
-      // The literal's anonymous global (PLAN A9.1: the node keeps its
-      // kind): an array in expression context, so the ND_VAR handling
-      // below takes its address and the array load is a no-op - the
-      // same instructions the lowered ND_VAR produced.
+      // 字面量的匿名全局对象 (PLAN A9.1: 节点保留自己的 kind): 在表达式
+      // 上下文中是数组, 所以下面的 ND_VAR 处理取它的地址, 数组加载是
+      // 空操作 - 与降级后的 ND_VAR 发射的指令相同.
     case ND_VAR:
       gen_addr(ctx, node);
       load(node->ty);
@@ -969,9 +918,9 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
       return;
     }
     case ND_SUBSCRIPT:
-      // `x[y]` in value context (PLAN B1.1a): the address gen_addr
-      // computes, then the pointee load - the instructions of the old
-      // `*(x+y)` form, with the sum built on demand.
+      // 值上下文中的 `x[y]` (PLAN B1.1a): 先发射 gen_addr 算出的地址,
+      // 再加载指向的对象 - 与旧的 `*(x+y)` 形态发出的指令相同, 其中的和
+      // 按需构建.
       gen_addr(ctx, node);
       load(node->ty);
       return;
@@ -988,14 +937,12 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
       if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
         println("  mov %%rax, %%r8");
 
-        // If the lhs is a bitfield, we need to read the current value
-        // from memory and merge it with a new value.
+        // lhs 是位域时, 需要从内存读取当前值, 再与新值合并.
         LibcpMember* mem = node->lhs->member;
         println("  mov %%rax, %%rdi");
 
-        // `and` takes a sign-extended 32-bit immediate. A mask wider than
-        // that (a bit-field of 32 or more bits) has to be materialized in
-        // a register first.
+        // `and` 只接受符号扩展的 32 位立即数. 更宽的掩码 (32 位及以上
+        // 的位域) 必须先装入寄存器.
         long field_mask = (long)bitfield_mask(mem->bit_width);
         if (field_mask > INT32_MAX || field_mask < INT32_MIN) {
           println("  mov $%ld, %%r9", field_mask);
@@ -1033,7 +980,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
       cast(node->lhs->ty, node->ty);
       return;
     case ND_MEMZERO:
-      // `rep stosb` is equivalent to `memset(%rdi, %al, %rcx)`.
+      // `rep stosb` 等价于 `memset(%rdi, %al, %rcx)`.
       println("  mov $%d, %%rcx", node->var->ty->size);
       println("  lea %d(%%rbp), %%rdi", obj_offset(node->var));
       println("  mov $0, %%al");
@@ -1041,19 +988,16 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
       return;
     case ND_COND: {
       if (node->is_elvis) {
-        // The GNU `a ?: b` (PLAN B1.1e): the value of the test is the
-        // result, so it stays in the register the test left it in -
-        // rax, xmm0, or the x87 stack top - and no temporary slot is
-        // needed. sema recorded only the conclusion (the common type of
-        // the two arms) without converting the faithful operands, so
-        // each arm is converted to that type here. The label names are
-        // the ones the old `tmp = a, tmp ? tmp : b` lowering emitted.
+        // GNU 的 `a ?: b` (PLAN B1.1e): 测试的值就是结果, 因此留在测试
+        // 求值后所在的寄存器里 - rax, xmm0 或 x87 栈顶 - 不需要临时槽.
+        // sema 只记录结论 (两个分支的公共类型), 不转换忠实的操作数, 所以
+        // 每个分支在这里转换到该类型. 标签名沿用旧的 `tmp = a, tmp ? tmp : b`
+        // 降级所发射的名字.
         int c = count();
         gen_expr(ctx, node->cond);
 
-        // cmp_zero consumes whatever value it compares on the x87
-        // stack; the duplicate taken here is the one left behind as the
-        // truthy arm's result.
+        // cmp_zero 会消耗它在 x87 栈上比较的那个值; 这里复制一份,
+        // 留下的那一份作为真值分支的结果.
         if (node->cond->ty->kind == TY_LDOUBLE)
           println("  fld %%st(0)");
 
@@ -1063,7 +1007,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
         println("  jmp .L.end.%d", c);
         println(".L.else.%d:", c);
 
-        // The falsy arm drops the test's value before computing its own.
+        // 假值分支在计算自己的值之前丢弃测试的值.
         if (node->cond->ty->kind == TY_LDOUBLE)
           println("  fstp %%st(0)");
 
@@ -1136,8 +1080,8 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
 
       int gp = 0, fp = 0;
 
-      // If the return type is a large struct/union, the caller passes
-      // a pointer to a buffer as if it were the first argument.
+      // 返回类型是大的 struct/union 时, 调用方像传第一个实参那样传入一个
+      // 缓冲区指针.
       if (cg(node)->ret_buffer && node->ty->size > 16)
         pop(argreg64[gp++]);
 
@@ -1186,9 +1130,8 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
 
       depth -= stack_args;
 
-      // It looks like the most significant 48 or 56 bits in RAX may
-      // contain garbage if a function return type is short or bool/char,
-      // respectively. We clear the upper bits here.
+      // 返回类型是 short 时, RAX 高 48 位; 是 bool/char 时, 高 56 位,
+      // 都可能含垃圾值. 这里清零高位.
       switch (node->ty->kind) {
         case TY_BOOL: println("  movzx %%al, %%eax"); return;
         case TY_CHAR:
@@ -1205,8 +1148,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
           return;
       }
 
-      // If the return type is a small struct, a value is returned
-      // using up to two registers.
+      // 若返回类型是小 struct, 返回值通过最多两个寄存器传递.
       if (cg(node)->ret_buffer && node->ty->size <= 16) {
         copy_ret_buffer(cg(node)->ret_buffer);
         println("  lea %d(%%rbp), %%rax", obj_offset(cg(node)->ret_buffer));
@@ -1223,8 +1165,8 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
       gen_expr(ctx, node->cas_old);
       println("  mov %%rax, %%r8");
       load(node->cas_old->ty->base);
-      pop("%rdx");  // new
-      pop("%rdi");  // addr
+      pop("%rdx");  // 新值
+      pop("%rdi");  // 地址
 
       int sz = node->cas_addr->ty->base->size;
       println("  lock cmpxchg %s, (%%rdi)", reg_dx(ctx, sz));
@@ -1247,15 +1189,12 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
     }
   }
 
-  // The comparison shapes the emitter knows are `<` and `<=`; the
-  // faithful `>` / `>=` keeps its operands now (PLAN B1.1c), so the
-  // swap the shaping pass used to write into the tree is made here,
-  // on a node built for this one emission and thrown away. The
-  // operands are the same objects and the roles are the ones the swap
-  // gave them, so the evaluation order and the condition emitted are
-  // exactly the pre-B tree's - the signedness the integer path reads
-  // is the one of the operand the swap moves to the left, which is
-  // also how the evaluator reads the faithful pair.
+  // 发射器认识的比较形状是 `<` 和 `<=`; 忠实的 `>` / `>=` 现在保留自己的
+  // 操作数 (PLAN B1.1c), 所以原先由 shaping pass 写进树里的交换改在这里做,
+  // 落在一个专为本次发射构造, 随后丢弃的节点上. 操作数是同一批对象, 角色
+  // 也仍是那次交换赋予的角色, 因此求值顺序与发射出的条件和 B 之前的树完全
+  // 一致 - 整数路径读取的符号性来自交换后位于左边的那个操作数, 求值器读取
+  // 忠实的一对操作数时也是如此.
   if (node->kind == ND_GT || node->kind == ND_GE) {
     LibcpNode* swapped =
         libcp_new_binary(ctx, node->kind == ND_GT ? ND_LT : ND_LE, node->rhs, node->lhs, node->tok);
@@ -1437,10 +1376,9 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
       return;
     }
     case ND_WHILE: {
-      // The faithful loop (PLAN B1.2a): the emission is the one the old
-      // `while`-to-`for` rewrite produced - no init, no increment, so
-      // the continue label sits on the closing jump - with this loop's
-      // labels in force for the body.
+      // 忠实的循环 (PLAN B1.2a): 发射结果与旧的 `while` 到 `for` 改写
+      // 所产生的一致 - 没有 init, 没有 increment, 所以 continue 标签
+      // 落在收尾的跳转上 - 循环体内生效的是本循环的标签.
       int c          = count();
       char* brk      = cur_brk_label;
       char* cont     = cur_cont_label;
@@ -1506,9 +1444,8 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
       return;
     }
     case ND_SWITCH: {
-      // A switch owns a break target but not a continue target (PLAN
-      // B1.2a): the continue label of an enclosing loop stays in force
-      // in the body.
+      // switch 拥有 break 目标但不拥有 continue 目标 (PLAN B1.2a):
+      // 外层循环的 continue 标签在循环体内仍然生效.
       char* brk     = cur_brk_label;
       cur_brk_label = cg(node)->brk_label;
 
@@ -1519,11 +1456,6 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
         char* ax  = wide ? "%rax" : "%eax";
         char* di  = wide ? "%rdi" : "%edi";
 
-        // A 32-bit switch narrows its labels to int, as the controlling
-        // expression is; a 64-bit one compares the full value. `cmp` takes
-        // only a sign-extended imm32, so a wide label that does not fit
-        // goes through %rdi (and %rsi for the range bound).
-        //
         // 32 位 switch 的标签按控制表达式的宽度收窄为 int; 64 位 switch
         // 比较完整取值. `cmp` 只接受符号扩展的 imm32, 因此放不下的 64 位
         // 标签先装入 %rdi (范围上界用 %rsi).
@@ -1543,7 +1475,7 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
           continue;
         }
 
-        // [GNU] Case ranges
+        // [GNU] case 范围
         println("  mov %s, %s", ax, di);
         if (wide_imm) {
           println("  mov $%ld, %%rsi", begin);
@@ -1576,12 +1508,10 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
         gen_stmt(ctx, n);
       return;
     case ND_DECL: {
-      // A declaration record reaching the emitter (PLAN B1.2b): a
-      // block-scope static (sema's serializer already wrote its data
-      // image) and a fixed-size object without an initializer produce
-      // no code; an initialized one becomes the comma chain the
-      // expansion used to build in the pass - the zeroing, then the
-      // per-element assignments - emitted here.
+      // 到达发射器的声明记录 (PLAN B1.2b): 块作用域 static (sema 的
+      // 序列化器已写好其数据镜像) 与没有初始化器的固定大小对象不产生代码;
+      // 带初始化器的对象变成逗号链, 这条链过去由 pass 里的展开构造 (先清零,
+      // 再逐元素赋值), 现在在这里发射.
       if (node->attr.is_static || !node->init_resolved)
         return;
 
@@ -1593,12 +1523,12 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
       return;
     }
     case ND_BREAK:
-      // Resolved against the innermost loop or switch at emission time
-      // (PLAN B1.2a); sema's check already rejected a stray one.
+      // 发射时按最内层的循环或 switch 解析 (PLAN B1.2a); sema 的检查
+      // 已经拒绝了游离的 break.
       println("  jmp %s", cur_brk_label);
       return;
     case ND_CONTINUE:
-      // The innermost loop, whatever switch may lie in between.
+      // 最内层的循环, 无论中间隔着多少层 switch.
       println("  jmp %s", cur_cont_label);
       return;
     case ND_GOTO: println("  jmp %s", cg(node)->unique_label); return;
@@ -1635,36 +1565,28 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
   libcp_error_tok(ctx, node->tok, "invalid statement");
 }
 
-// The shaping pass, at its terminal shape: the control-flow half of
-// what sema's post-annotation descent used to do, plus every
-// expression and declaration rewrite the older lines performed
-// (subscripts, members, compound assignment and inc/dec, additive
-// scaling and comparisons, calls, strings and other conclusions, the
-// elvis, VLA sizes, declarations and initializers - PLAN steps A2.1
-// through A9.2). It allocates the break/continue labels of loops and
-// switches, links the case labels into their switch, gives every label
-// its unique name, resolves the goto and [GNU] label-value references
-// against them, lowers `while` and `break`/`continue` to the ND_FOR
-// and ND_GOTO shapes gen_stmt understands, expands declaration records
-// into statements, and rewrites expressions into the forms the emitter
-// reads. The checks that rode inside those descents - the stray
-// diagnostics, the undeclared-label pairing and the operand checks -
-// stayed in sema, so this pass only does the work on trees that passed
-// them. The six invariants it lives by are stated at the top of the
-// file.
+// shaping pass 的最终形态: 它是 sema 在标注后下降中做过的控制流那一半
+// 的等价物, 再加上旧实现在 pass 内做过的那整套表达式与声明改写 (下标,
+// 成员, 复合赋值与 inc/dec, 加法缩放与比较, 调用, 字符串与其他结论,
+// elvis, VLA 尺寸, 声明与初始化器 - PLAN 步骤 A2.1 至 A9.2); 其中一部分
+// 改写现在已移到发射时完成. 留在 pass 里的是: 为循环分配 break/continue
+// 标签, 为 switch 分配 break 标签, 把 case 标签链接进所属的 switch, 给每个
+// 标签分配唯一名, 把 goto 与 [GNU] label-value 引用解析到这些标签, 为
+// `while`/`do`/`for` 保留节点形式 (gen_stmt 直接发射, break/continue
+// 在发射时解析到最内层目标), 展开带 VLA 的声明记录, 并把复合赋值与
+// inc/dec, VLA sizeof, 复合字面量等改写成发射器读取的形式. 这些下降里
+// 原先附带的检查 - 游离诊断, 未声明标签的配对和操作数检查 - 留在 sema,
+// 所以这个 pass 只处理通过检查的树. 它遵循的六条不变式写在文件开头.
 //
-// Label names keep the `.L..%d` format and continue the same number
-// space as sema's anonymous objects, from wherever the library's
-// counter stopped (libcp_unique_name_next at entry): the snapshot
-// normalizer renumbers exactly this suffix shape, so a different
-// prefix would surface as a diff even for a pure renumbering, and a
-// fresh sequence from zero would collide with the object names sema
-// already minted.
-static int label_base;  // the counter's stopping point, taken once
-static int label_seq;   // labels handed out since then
+// 标签名保持 `.L..%d` 格式, 沿用 sema 匿名对象所用的同一个编号空间, 从
+// 库计数器停下的地方继续 (入口处调用 libcp_unique_name_next): 快照
+// 归一化器只重编号这种后缀形状, 所以换一个前缀即使只是纯重编号也会表现为
+// diff, 而从零开始的新序列会与 sema 已经分配的对象名冲突.
+static int label_base;  // 计数器停下处的取值, 只在入口取一次
+static int label_seq;   // 此后发出的标签数
 
 static LibcpNode* current_switch;
-static LibcpNodeArray cg_labels;  // the labels of the function being shaped
+static LibcpNodeArray cg_labels;  // 当前正在 shape 的函数的标签
 
 static char* new_label(LibcpContext* ctx) {
   return libcp_format(ctx, ".L..%d", label_base + label_seq++);
@@ -1674,11 +1596,9 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node);
 static bool expand_decl(LibcpContext* ctx, LibcpNode* node);
 static void shape_init_exprs(LibcpContext* ctx, LibcpInitTree* init);
 
-// Whether a declaration's type involves a VLA anywhere: its runtime
-// size slot has to exist before assign_lvar_offsets runs, so such a
-// record is still expanded in the pass. Every other declaration keeps
-// its place and reaches the emitter, which builds its initializer
-// chain at emission time (PLAN B1.2b).
+// 声明的类型是否在任何一层涉及 VLA: 它的运行时大小槽必须在
+// assign_lvar_offsets 运行前存在, 所以这类记录仍在 pass 内展开. 其它声明
+// 保持原位到达发射器, 由发射器在发射时构造初始化器链 (PLAN B1.2b).
 static bool decl_needs_vla_size(LibcpNode* node) {
   for (LibcpType* t = node->var->ty; t; t = t->base)
     if (t->kind == TY_VLA)
@@ -1686,14 +1606,11 @@ static bool decl_needs_vla_size(LibcpNode* node) {
   return false;
 }
 
-// Walks a statement chain, editing it in place: a VLA declaration
-// record expands to its statements (PLAN A8.1), the declarations that
-// stay keep their place for the emitter (PLAN B1.2b), and the other
-// records - typedefs, enum constants, extern declarations and [GNU]
-// nested function definitions - produce no statement at all and are
-// unhooked here (PLAN A8.2). A nested function's body is not entered
-// from here: the program list is its home and this pass walks it from
-// there exactly once (contract 3(e)).
+// 遍历语句链并原地编辑: 带 VLA 的声明记录展开成它的语句 (PLAN A8.1),
+// 留下来的声明保持原位交给发射器 (PLAN B1.2b), 其它记录 - typedef,
+// 枚举常量, extern 声明与 [GNU] 嵌套函数定义 - 完全不产生语句, 在这里
+// 被摘链 (PLAN A8.2). 嵌套函数体不从这里进入: 程序列表才是它的归属,
+// 这个 pass 从那里恰好遍历它一次 (contract 3(e)).
 static void shape_chain(LibcpContext* ctx, LibcpNode** head) {
   for (LibcpNode** pp = head; *pp;) {
     LibcpNode* n = *pp;
@@ -1707,11 +1624,10 @@ static void shape_chain(LibcpContext* ctx, LibcpNode** head) {
         if (decl_needs_vla_size(n))
           expand_decl(ctx, n);
         else
-          // The record stays; this walk is what still reaches the
-          // residue kinds a resolved initializer may hold (op=, an
-          // inc/dec, a VLA sizeof, a compound literal, a
-          // struct-returning call - the additive scaling is no longer
-          // one of them, it is lowered at emission, PLAN B2).
+          // 记录保留; 已解析初始化器可能持有的那些残留节点种类靠这次
+          // 遍历到达 (op=, 一次 inc/dec, 一个 VLA sizeof, 一个复合字面量,
+          // 一个返回 struct 的调用 - 加法缩放已不在其中, 它在发射时
+          // 降级, PLAN B2).
           shape_init_exprs(ctx, n->init_resolved);
         pp = &(*pp)->next;
         continue;
@@ -1723,9 +1639,8 @@ static void shape_chain(LibcpContext* ctx, LibcpNode** head) {
   }
 }
 
-// Descends every subtree a node owns, statements and expressions
-// alike: a break can sit in a statement expression, which is an
-// expression node holding a statement chain.
+// 下降节点拥有的每棵子树, 语句与表达式一视同仁: break 可以出现在
+// 语句表达式里, 而语句表达式是一个持有语句链的表达式节点.
 static void shape_children(LibcpContext* ctx, LibcpNode* node) {
   shape_node(ctx, node->lhs);
   shape_node(ctx, node->rhs);
@@ -1741,9 +1656,8 @@ static void shape_children(LibcpContext* ctx, LibcpNode* node) {
   shape_node(ctx, node->cas_new);
 }
 
-// The temporaries a compound-assignment rewrite introduces are slots
-// of the consumer: they are created here so that they land in the
-// frame layout before assign_lvar_offsets runs (PLAN contract 3).
+// 复合赋值改写引入的临时变量是消费者的槽位: 在这里创建, 以便在
+// assign_lvar_offsets 运行前进入栈帧布局 (PLAN contract 3).
 static LibcpObj* new_lvar(char* name, LibcpType* ty) {
   LibcpObj* var      = calloc(1, sizeof(LibcpObj));
   var->name          = name;
@@ -1755,9 +1669,8 @@ static LibcpObj* new_lvar(char* name, LibcpType* ty) {
   return var;
 }
 
-// The scaled operand of an additive operator on a pointer: `p + n`
-// advances by sizeof(*p) * n rather than by n, and when the pointee is
-// a VLA, by its runtime size rather than a compile-time one.
+// 指针上加法运算符的被缩放操作数: `p + n` 前进 sizeof(*p) * n 而不是 n;
+// 被指向类型是 VLA 时, 按它的运行时大小而不是编译期大小缩放.
 static LibcpNode* scale_rhs(LibcpContext* ctx, LibcpType* ptr_ty, LibcpNode* rhs, LibcpToken* tok) {
   if (ptr_ty->base->kind == TY_VLA)
     return libcp_new_binary(ctx,
@@ -1768,25 +1681,22 @@ static LibcpNode* scale_rhs(LibcpContext* ctx, LibcpType* ptr_ty, LibcpNode* rhs
   return libcp_new_binary(ctx, ND_MUL, rhs, libcp_new_long(ctx, ptr_ty->base->size, tok), tok);
 }
 
-// Marks an additive node one of the lowering helpers below built. Its
-// operands carry the byte offsets as they are to be added (or the
-// element count the `ptr - ptr` division scales down), so the emitter
-// must emit it as plain machine arithmetic - gen_expr lower a faithful
-// `+`/`-` itself and would scale this one a second time (PLAN B2).
+// 把加法节点标记为由下面的 lowering helper 构造. 它的操作数已经带着
+// 将要相加的字节偏移 (或 `ptr - ptr` 的除法要缩小成元素个数的字节差),
+// 所以发射器必须把它当作普通机器算术发射 - gen_expr 会自行降级忠实的
+// `+`/`-`, 若不标记就会再缩放一次 (PLAN B2).
 static LibcpNode* mark_lowered(LibcpNode* node) {
   cg(node)->is_lowered = true;
   return node;
 }
 
-// In C, `+` operator is overloaded to perform the pointer arithmetic.
-// If p is a pointer, p+n adds not n but sizeof(*p)*n to the value of p,
-// so that p+n points to the location n elements (not bytes) ahead of p.
-// In other words, we need to scale an integer value before adding to a
-// pointer value. This function takes care of the scaling.
+// 在 C 中, `+` 运算符被重载来执行指针算术. 若 p 是指针, p+n 加到 p 的值
+// 上的不是 n 而是 sizeof(*p)*n, 使 p+n 指向 p 之后 n 个元素 (而不是 n 个
+// 字节) 的位置. 换言之, 在把整数值加到指针值之前需要先对它做缩放. 这个
+// 函数负责缩放.
 //
-// It is both the helper codegen's own builders call and the definition
-// of the faithful lowering the emitter runs at emission (PLAN B2); its
-// product carries the mark either way.
+// 它既是 codegen 自身 builder 调用的 helper, 也是发射器在发射时执行的
+// 忠实降级的定义 (PLAN B2); 无论哪条路径, 产物都带标记.
 static LibcpNode* new_add(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, LibcpToken* tok) {
   libcp_add_type(ctx, lhs);
   libcp_add_type(ctx, rhs);
@@ -1798,18 +1708,18 @@ static LibcpNode* new_add(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, Lib
   if (lhs->ty->base && rhs->ty->base)
     libcp_error_tok(ctx, tok, "invalid operands");
 
-  // Canonicalize `num + ptr` to `ptr + num`.
+  // 把 `num + ptr` 规范化为 `ptr + num`.
   if (!lhs->ty->base && rhs->ty->base) {
     LibcpNode* tmp = lhs;
     lhs            = rhs;
     rhs            = tmp;
   }
 
-  // ptr + num; a pointer to a VLA scales by its runtime size
+  // ptr + num; 指向 VLA 的指针按其运行时大小缩放
   return mark_lowered(libcp_new_arith(ctx, ND_ADD, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 }
 
-// Like `+`, `-` is overloaded for the pointer type.
+// 与 `+` 一样, `-` 对指针类型同样重载.
 static LibcpNode* new_sub(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, LibcpToken* tok) {
   libcp_add_type(ctx, lhs);
   libcp_add_type(ctx, rhs);
@@ -1818,7 +1728,7 @@ static LibcpNode* new_sub(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, Lib
   if (libcp_is_numeric(lhs->ty) && libcp_is_numeric(rhs->ty))
     return mark_lowered(libcp_new_arith(ctx, ND_SUB, lhs, rhs, tok));
 
-  // pointer to a VLA - num
+  // 指向 VLA 的指针 - num
   if (lhs->ty->base && lhs->ty->base->kind == TY_VLA)
     return mark_lowered(libcp_new_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 
@@ -1826,12 +1736,10 @@ static LibcpNode* new_sub(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, Lib
   if (lhs->ty->base && libcp_is_integer(rhs->ty))
     return mark_lowered(libcp_new_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 
-  // ptr - ptr, which returns how many elements are between the two. The
-  // difference itself is an element count, so it is typed long and left
-  // alone; only the division that follows it is converted. The
-  // subtraction is marked too - it is the raw byte difference and goes
-  // through the emitter under the `DIV` just like a built `ptr + num`
-  // does.
+  // ptr - ptr: 返回两者之间相隔多少个元素. 差值本身是元素个数,
+  // 因此类型为 long 且不再转换; 只有其后的除法被转换. 减法节点
+  // 也带标记 - 它是原始字节差, 会像构建出的 `ptr + num` 一样在
+  // `DIV` 之下经过发射器.
   if (lhs->ty->base && rhs->ty->base) {
     LibcpNode* node = mark_lowered(libcp_new_binary(ctx, ND_SUB, lhs, rhs, tok));
     node->ty        = libcp_ty_long;
@@ -1841,12 +1749,11 @@ static LibcpNode* new_sub(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, Lib
   libcp_error_tok(ctx, tok, "invalid operands");
 }
 
-// Generate code for computing a VLA size: one assignment per VLA the
-// type holds, sequenced innermost first, or NULL when it holds none - so
-// a declaration of a fixed-size object produces no code at all. Moved
-// from sema at A7.1 (it was the mirror of this function for one step):
-// the size variables are slots of this consumer, which is also why the
-// builder cannot live in the library any more.
+// 为计算 VLA 大小生成代码: 类型持有的每个 VLA 一条赋值, 最内层
+// 在前依次串联; 一个都不持有时返回 NULL - 所以固定大小对象的
+// 声明完全不产生代码. A7.1 从 sema 移来 (有一个步骤里它曾是本
+// 函数的镜像): 大小变量是这个消费者的槽位, 这也正是构建器不能
+// 再留在库里的原因.
 static LibcpNode* compute_vla_size(LibcpContext* ctx, LibcpType* ty, LibcpToken* tok) {
   LibcpNode* node = ty->base ? compute_vla_size(ctx, ty->base, tok) : NULL;
 
@@ -1868,9 +1775,8 @@ static LibcpNode* compute_vla_size(LibcpContext* ctx, LibcpType* ty, LibcpToken*
   return node ? libcp_new_binary(ctx, ND_COMMA, node, expr, tok) : expr;
 }
 
-// `sizeof` of a VLA type: a reference to its runtime size variable,
-// computed first if this type has not had its size computed yet
-// (e.g. `sizeof(int[n])` with a fresh type).
+// VLA 类型的 `sizeof`: 对其运行时大小变量的引用; 若该类型尚未
+// 计算过大小 (例如对全新类型写 `sizeof(int[n])`), 先计算.
 static LibcpNode* vla_size_expr(LibcpContext* ctx, LibcpType* ty, LibcpToken* tok) {
   if (cg_type(ty)->vla_size)
     return libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok);
@@ -1882,12 +1788,10 @@ static LibcpNode* vla_size_expr(LibcpContext* ctx, LibcpType* ty, LibcpToken* to
                           tok);
 }
 
-// The target expression of one initializer assignment (PLAN A8.1,
-// moved from sema): the path from the variable to the element the
-// record initializes. The subscript step is built directly as the
-// dereference of the scaled addition - the shape the faithful
-// subscript would lower to - so no intermediate node needs a second
-// walk (contract 3(d)).
+// 一条初始化赋值的赋值目标表达式 (PLAN A8.1, 从 sema 移来):
+// 从变量到该记录所初始化元素的路径. 下标步骤直接构建为缩放加法
+// 之上的解引用 - 忠实下标会降级成的形状 - 因此中间节点不需要
+// 再走一遍 (contract 3(d)).
 static LibcpNode* init_desg_expr(LibcpContext* ctx, LibcpInitPath* desg, LibcpToken* tok) {
   if (desg->var)
     return libcp_new_var_node(ctx, desg->var, tok);
@@ -1905,10 +1809,9 @@ static LibcpNode* init_desg_expr(LibcpContext* ctx, LibcpInitPath* desg, LibcpTo
   return node;
 }
 
-// Builds the assignment chain of a local initializer, walking the
-// resolved tree (moved from sema at A8.1). Aggregates recurse into
-// their children; a union walks only the member the record selected;
-// a partial list is preceded by the MEMZERO in lvar_init_comma below.
+// 构建局部初始化器的赋值链, 遍历已解析的树 (A8.1 从 sema 移来).
+// 聚合类型递归进入子节点; union 只走记录选中的成员; 部分列表
+// 由下面 lvar_init_comma 的 MEMZERO 打头.
 static LibcpNode* create_lvar_init(LibcpContext* ctx,
                                    LibcpInitTree* init,
                                    LibcpType* ty,
@@ -1948,28 +1851,23 @@ static LibcpNode* create_lvar_init(LibcpContext* ctx,
   return libcp_new_binary(ctx, ND_ASSIGN, lhs, init->expr, tok);
 }
 
-// Shapes every expression a resolved initializer record holds, once
-// each. The designator targets the expansion builds are already
-// lowered form - running the pass over them again would re-run the
-// expression cases over nodes this pass just built (the A4.1 lesson)
-// - but the initializer expressions are old nodes nothing else in the
-// tree references, and an expression shared by several records (a
-// range designator) is shaped exactly once here.
+// 对已解析初始化记录持有的每个表达式各整形一次. 展开构建的指定
+// 初始化器目标已是降级形态 - 再对它们跑一遍 pass 会对本 pass 刚
+// 构建的节点重复执行表达式分支 (A4.1 的教训) - 但初始化器表达式
+// 是旧节点, 树中没有别处引用它们; 被多条记录共享的表达式 (范围
+// 指定初始化器) 会随每条记录各到达一次, 同一节点因此被多次整形.
 static void shape_init_exprs(LibcpContext* ctx, LibcpInitTree* init);
 
-// Build the MEMZERO + assignment comma chain that initializes a local
-// variable from its resolved initializer tree. `tok` anchors the
-// synthesized nodes; the record's first token is where the parser used
-// to anchor them. Moved from sema at A8.1 with the declaration
-// expansion; sema itself no longer builds it.
+// 构建由已解析初始化树初始化局部变量的 MEMZERO + 赋值逗号链.
+// `tok` 为合成节点提供锚点; 记录的首个 token 就是解析器过去给
+// 这些节点作锚点的位置. A8.1 随声明展开从 sema 移来; sema 自身
+// 不再构建它.
 static LibcpNode*
     lvar_init_comma(LibcpContext* ctx, LibcpObj* var, LibcpInitTree* init, LibcpToken* tok) {
   LibcpInitPath desg = {NULL, 0, NULL, var};
 
-  // If a partial initializer list is given, the standard requires
-  // that unspecified elements are set to 0. Here, we simply
-  // zero-initialize the entire memory region of a variable before
-  // initializing it with user-supplied values.
+  // 给定部分初始化器列表时, 标准要求未指定的元素置 0. 这里直接
+  // 把变量的整块内存清零, 再用用户提供的值初始化.
   LibcpNode* lhs = libcp_new_node(ctx, ND_MEMZERO, tok);
   lhs->var       = var;
 
@@ -1999,34 +1897,28 @@ static void shape_init_exprs(LibcpContext* ctx, LibcpInitTree* init) {
     shape_init_exprs(ctx, init->children[mem->idx]);
 }
 
-// Expands a declaration record whose type involves a VLA into the
-// statement it stands for, and says whether the chain position it sat
-// at keeps a statement. A declaration that involves no VLA is left in
-// the chain for the emitter to expand at emission time (PLAN B1.2b) -
-// only the runtime size slot has to exist before the frame layout is
-// assigned, and that is what this half produces. The record arrives
-// exactly as the parser wrote it: sema ran the checks, left the
-// initializer record resolved, and the block-scope static's data
-// image is already in .data. Moved from sema at A8.1; the VLA half
-// came over at A7.1, when the size slots did.
+// 把类型涉及 VLA 的声明记录展开成它所代表的语句, 并说明它原先
+// 所在的链位置是否保留一条语句. 不涉及 VLA 的声明留在链里, 由
+// 发射器在发射时展开 (PLAN B1.2b) - 只有运行时大小槽必须在分配
+// 帧布局之前存在, 而这正是本函数这一半产生的东西. 记录到达时与
+// 解析器写下的完全一致: sema 已跑过检查, 初始化记录保持已解析,
+// 块作用域 static 的数据镜像已在 .data 中. A8.1 从 sema 移来;
+// VLA 这一半在 A7.1 随大小槽一起移来.
 static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
   LibcpObj* var   = node->var;
   LibcpToken* tok = node->tok;
 
-  // A block-scope static produces no statement: its data image was
-  // serialized by the annotation pass.
+  // 块作用域 static 不产生语句: 其数据镜像已由标注 pass 序列化.
   if (node->attr.is_static)
     return false;
 
   LibcpNode* vla_size = NULL;
   for (LibcpType* t = var->ty; t; t = t->base) {
     if (t->kind == TY_VLA) {
-      // The dimensions the size computation embeds have never been
-      // through this pass - the type is their only reference. Shape
-      // them first, innermost first, the order the computation walks;
-      // a type that already has its size computed has been here
-      // through an earlier declaration of the same type (a typedef
-      // shared by two objects), and its dimensions were shaped then.
+      // 大小计算嵌入的维度表达式从未经过本 pass - 类型是它们唯一
+      // 的引用. 先整形它们, 最内层在前, 即计算遍历的顺序; 已经
+      // 算过大小的类型在同类更早的声明里到过这里 (两个对象共享
+      // 的 typedef), 其维度当时已整形.
       if (!cg_type(var->ty)->vla_size)
         shape_node(ctx, t->vla_len);
       vla_size = compute_vla_size(ctx, var->ty, tok);
@@ -2037,7 +1929,7 @@ static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
   LibcpNode* lowered = NULL;
 
   if (var->ty->kind == TY_VLA) {
-    // `var = alloca(<size>)`: the size chain computed just above.
+    // `var = alloca(<size>)`: 大小来自上面刚计算的大小链.
     lowered = libcp_new_binary(
         ctx,
         ND_ASSIGN,
@@ -2045,19 +1937,17 @@ static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
         libcp_new_alloca(ctx, libcp_new_var_node(ctx, cg_type(var->ty)->vla_size, tok)),
         tok);
   } else if (node->init_resolved) {
-    // The initializer comma; a pointer to a VLA reaches here too,
-    // with the size chain sequenced in front of the assignments.
+    // 初始化器逗号链; 指向 VLA 的指针也走到这里, 大小链排在
+    // 赋值之前.
     lowered         = lvar_init_comma(ctx, var, node->init_resolved, node->decl_init->tok);
     node->decl_init = NULL;
-    // The initializer expressions have never been through this pass
-    // and nothing else in the tree references them; the size chain
-    // and the designator targets are already lowered form and are
-    // not touched again.
+    // 初始化器表达式从未经过本 pass, 树中也没有别处引用它们;
+    // 大小链与指定初始化器目标已是降级形态, 不再触碰.
     shape_init_exprs(ctx, node->init_resolved);
     node->init_resolved = NULL;
   }
 
-  // A fixed-size object with no initializer produces no statement.
+  // 没有初始化器的固定大小对象不产生语句.
   if (!vla_size && !lowered)
     return false;
 
@@ -2068,17 +1958,14 @@ static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
   return true;
 }
 
-// Builds the `lhs op rhs` combination a compound assignment or an
-// atomic retry loop needs, given an operand whose pointer scaling has
-// already been applied. An additive operator goes through libcp_new_arith,
-// which is the shape `+`/`-` produce; the others are handed to libcp_add_type,
-// which converts the multiplicative and bitwise ones and leaves the
-// shifts alone.
+// 在操作数的指针缩放已应用的前提下, 构建复合赋值或原子重试循环
+// 所需的 `lhs op rhs` 组合. 加法运算符走 libcp_new_arith, 即
+// `+`/`-` 产生的形状; 其余交给 libcp_add_type, 它对乘除与位运算
+// 做转换, 移位保持不变.
 static LibcpNode*
     combine(LibcpContext* ctx, LibcpNodeKind op, LibcpNode* lhs, LibcpNode* rhs, LibcpToken* tok) {
-  // The additive case takes operands that already went through
-  // new_add/new_sub (this combines a read-modify-write value with its
-  // scaled operand), so it is a plain machine arithmetic node too.
+  // 加法情形收到的操作数已经过 new_add/new_sub (这里把读-改-写
+  // 的值与它缩放后的操作数组合), 所以也只是普通的机器算术节点.
   if (op == ND_ADD || op == ND_SUB)
     return mark_lowered(libcp_new_arith(ctx, op, lhs, rhs, tok));
 
@@ -2087,15 +1974,13 @@ static LibcpNode*
   return node;
 }
 
-// Build the `lhs op rhs` operand expression for a compound assignment
-// driven by node->op.
+// 为由 node->op 驱动的复合赋值构建 `lhs op rhs` 操作数表达式.
 static LibcpNode* compound_op(LibcpContext* ctx, LibcpNode* node, LibcpNode* lhs, LibcpToken* tok) {
   LibcpNode* rhs = node->rhs;
 
-  // `+=`/`-=` are routed through new_add/new_sub so that the operand
-  // checks run and the pointer arithmetic is scaled exactly as for
-  // plain `+`/`-`; the operand they settle on is the one the rebuilt
-  // expression combines with `lhs`.
+  // `+=`/`-=` 走 new_add/new_sub, 好让操作数检查运行, 指针算术也
+  // 像普通 `+`/`-` 那样精确缩放; 它们最终选定的操作数就是重建
+  // 表达式与 `lhs` 组合所用的那个.
   if (node->op == ND_ADD || node->op == ND_SUB) {
     LibcpNode* scaled = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok) :
                                              new_sub(ctx, node->lhs, node->rhs, tok);
@@ -2105,29 +1990,24 @@ static LibcpNode* compound_op(LibcpContext* ctx, LibcpNode* node, LibcpNode* lhs
   return combine(ctx, node->op, lhs, rhs, tok);
 }
 
-// Convert op= operators to expressions containing an assignment.
+// 把 op= 运算符转换成包含赋值的表达式.
 //
-// `node` is an ND_ASSIGN whose `op` holds the compound assignment
-// operator. In general, `A op= C` is converted to
-// ``tmp = &A, *tmp = *tmp op C`.
-// However, if a given expression is of form `A.x op= C`, the input is
-// converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
-// to bitfields.
+// `node` 是 ND_ASSIGN, 其 `op` 保存复合赋值运算符. 一般情况下,
+// `A op= C` 转换成 `tmp = &A, *tmp = *tmp op C`.
+// 但若给定表达式形如 `A.x op= C`, 输入转换成
+// `tmp = &A, (*tmp).x = (*tmp).x op C`, 以处理对位域的赋值.
 static LibcpNode* to_assign(LibcpContext* ctx, LibcpNode* node) {
   libcp_add_type(ctx, node->lhs);
   libcp_add_type(ctx, node->rhs);
   LibcpToken* tok = node->tok;
 
-  // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
-  // The member keeps its marker now (PLAN B1.1b), so the address of
-  // the object the member lives in is read off the marker: a member
-  // that is itself the innermost link of an arrow access takes the
-  // pointer operand's value (its pointee is the object), every other
-  // member - a plain `.` access, or an arrow access buried deeper in
-  // a flattened anonymous chain - takes the operand's address. The
-  // temporary holds that object either way, so expr2/expr3 can name
-  // the member on it; the slot and the built shapes are the ones the
-  // pre-B lowering produced.
+  // 把 `A.x op= C` 转换成 `tmp = &A, (*tmp).x = (*tmp).x op C`.
+  // 成员现在保留其标记 (PLAN B1.1b), 所以成员所属对象的地址从
+  // 标记读出: 本身是箭头访问最内层链节的成员, 取指针操作数的值
+  // (其指向的对象就是该对象); 其他每个成员 - 普通 `.` 访问, 或
+  // 埋在展平匿名链更深处的箭头访问 - 取操作数的地址. 两种情形
+  // 下临时变量都持有该对象, 所以 expr2/expr3 能在它上面指名
+  // 成员; 槽位与构建出的形状就是 pre-B 降级产生的那些.
   if (node->lhs->kind == ND_MEMBER) {
     LibcpNode* operand = node->lhs->lhs;
     bool arrow         = node->lhs->arrow_tok;
@@ -2157,7 +2037,7 @@ static LibcpNode* to_assign(LibcpContext* ctx, LibcpNode* node) {
     return libcp_new_binary(ctx, ND_COMMA, expr1, expr4, tok);
   }
 
-  // If A is an atomic type, Convert `A op= B` to
+  // 若 A 是原子类型, 把 `A op= B` 转换成
   //
   // ({
   //   T1 *addr = &A; T2 val = (B); T1 old = *addr; T1 new;
@@ -2167,9 +2047,9 @@ static LibcpNode* to_assign(LibcpContext* ctx, LibcpNode* node) {
   //   new;
   // })
   if (node->lhs->ty->is_atomic) {
-    // The `val` temporary holds the operand as `op` would have it, so
-    // for `+=`/`-=` the scaling is computed eagerly here - through
-    // new_add/new_sub, which is also what runs the operand checks.
+    // `val` 临时变量持有按 `op` 要求处理过的操作数, 因此
+    // `+=`/`-=` 的缩放在这里提前算出 - 通过 new_add/new_sub 完成,
+    // 操作数检查也在那里运行.
     LibcpNode* rhs = node->rhs;
     if (node->op == ND_ADD || node->op == ND_SUB) {
       LibcpNode* operand = node->op == ND_ADD ? new_add(ctx, node->lhs, node->rhs, tok) :
@@ -2214,21 +2094,17 @@ static LibcpNode* to_assign(LibcpContext* ctx, LibcpNode* node) {
 
     LibcpNode* loop = libcp_new_node(ctx, ND_DO, tok);
 
-    // The retry loop takes its labels here rather than through a
-    // shape_node descent: its interior is codegen-built lowered form
-    // with no control flow to shape (no loops, switches, breaks or
-    // labels inside), and a descent would re-run the expression cases
-    // over nodes this pass just built (contract 3(d) - the snapshot
-    // caught exactly that as a double conversion of the loop body's
-    // operands). The allocation order - break before continue, at the
-    // point the enclosing statement was reached - matches what the
-    // whole-tree descent would have produced.
+    // 重试循环在这里取自己的标签, 而不经过 shape_node 下潜: 它
+    // 的内部是 codegen 构建的降级形态, 没有需要整形的控制流 (内部
+    // 没有循环, switch, break 或标签), 而下潜会对本 pass 刚构建的
+    // 节点重复执行表达式分支 (contract 3(d) - 快照正好抓到这一点:
+    // 循环体的操作数被转换了两次). 分配顺序 - 先 break 后 continue,
+    // 且在到达外层语句的那个时点 - 与整树下潜会产生的顺序一致.
     cg(loop)->brk_label  = new_label(ctx);
     cg(loop)->cont_label = new_label(ctx);
 
-    // `val` already holds the operand as `op` would have it - scaled
-    // for an additive operator on a pointer - so the retry loop
-    // combines it with the old value without scaling again.
+    // `val` 已持有按 `op` 处理好的操作数 - 若 `op` 是指针上的加法
+    // 运算符, 缩放已做 - 所以重试循环把它与旧值组合时不再缩放.
     LibcpNode* body = libcp_new_binary(ctx,
                                        ND_ASSIGN,
                                        libcp_new_var_node(ctx, new, tok),
@@ -2256,7 +2132,7 @@ static LibcpNode* to_assign(LibcpContext* ctx, LibcpNode* node) {
     return stmt_expr;
   }
 
-  // Convert `A op= B` to ``tmp = &A, *tmp = *tmp op B`.
+  // 把 `A op= B` 转换成 `tmp = &A, *tmp = *tmp op B`.
   LibcpObj* var = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
 
   LibcpNode* expr1 = libcp_new_binary(ctx,
@@ -2278,7 +2154,7 @@ static LibcpNode* to_assign(LibcpContext* ctx, LibcpNode* node) {
   return libcp_new_binary(ctx, ND_COMMA, expr1, expr2, tok);
 }
 
-// Convert A++ to `(typeof A)((A += 1) - 1)`. Moved from parse.c.
+// 把 A++ 转换成 `(typeof A)((A += 1) - 1)`. 从 parse.c 移来.
 static LibcpNode* new_inc_dec(LibcpContext* ctx, LibcpNode* node, LibcpToken* tok, int addend) {
   libcp_add_type(ctx, node);
   LibcpNode* expr = libcp_new_binary(ctx, ND_ASSIGN, node, libcp_new_num(ctx, addend, tok), tok);
@@ -2287,11 +2163,9 @@ static LibcpNode* new_inc_dec(LibcpContext* ctx, LibcpNode* node, LibcpToken* to
   return libcp_new_cast(ctx, sub, node->ty);
 }
 
-// The descent is pre-order: a loop or a switch owns its labels before
-// its body is visited. The labels are stored on the node and the
-// emitter resolves a break or a continue against the innermost one at
-// emission time (PLAN B1.2a); the descent here only makes sure every
-// loop has them.
+// 下潜是前序的: 循环或 switch 在访问其主体之前先取得自己的标签.
+// 标签存在节点上, 发射器在发射时针对最内层标签解析 break 或
+// continue (PLAN B1.2a); 这里的下潜只保证每个循环都有它们.
 static void shape_node(LibcpContext* ctx, LibcpNode* node) {
   if (!node)
     return;
@@ -2305,12 +2179,12 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
 
       shape_children(ctx, node);
 
-      // gen_stmt's `for` has a single-statement init slot, so an init
-      // chain the expansion left with more than one statement - or none
-      // at all - is reduced here (PLAN A8.1, moved from sema).
+      // gen_stmt 的 `for` 只有一个 init 语句槽, 所以展开留下多于
+      // 一条语句的 init 链在这里归约成一个块; 没有 init 时无事可做
+      // (PLAN A8.1, 从 sema 移来).
       if (node->kind == ND_FOR) {
         if (!node->init) {
-          // nothing to do
+          // 无需处理
         } else if (node->init->next) {
           LibcpNode* blk = libcp_new_node(ctx, ND_BLOCK, node->init->tok);
           blk->body      = node->init;
@@ -2332,10 +2206,9 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
       cg(node)->unique_label = new_label(ctx);
       shape_node(ctx, node->lhs);
 
-      // Linked after the body: a case label may sit inside the statement
-      // of an earlier one (`case 0: while (..) { .. case 1: .. }`), and
-      // the chain is prepended, so this order is what puts the outer case
-      // ahead of the buried one in the comparison chain below.
+      // 在主体之后链接: 一个 case 标签可能位于更早 case 的语句内
+      // (`case 0: while (..) { .. case 1: .. }`), 而链是前插的, 所以
+      // 正是这个顺序让外层 case 在下面的比较链中排在埋入的那个之前.
       if (node->is_default) {
         cg(current_switch)->default_case = node;
       } else {
@@ -2344,9 +2217,8 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
       }
       return;
     case ND_GOTO:
-      // Resolved with the function's collected references below, not
-      // here: sema stashed the goto and label-value population on the
-      // LibcpObj, because a label value can sit outside the statement tree.
+      // 与函数收集的引用一起在下面解析, 不在这里: sema 把 goto 与
+      // 标签值的收集放在 LibcpObj 上, 因为标签值可能位于语句树之外.
       return;
     case ND_LABEL:
       cg(node)->unique_label = new_label(ctx);
@@ -2356,11 +2228,9 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
     case ND_ASSIGN:
       shape_children(ctx, node);
       if (node->op) {
-        // A compound assignment as the parser recorded it: rewrite to
-        // the read-modify-write form (handling the member and atomic
-        // cases), then type the result afresh. The rewrite takes the
-        // whole node, because the atomic form becomes a statement
-        // expression, which carries its body outside lhs/rhs.
+        // 解析器记录的复合赋值: 改写成读-改-写形态 (处理成员与原子
+        // 情形), 然后重新给结果定型. 改写替换整个节点, 因为原子形态
+        // 变成语句表达式, 它的主体在 lhs/rhs 之外.
         LibcpNode* result = to_assign(ctx, node);
         LibcpNode* nxt    = node->next;
         *node             = *result;
@@ -2369,16 +2239,14 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
       }
       return;
     case ND_INCDEC: {
-      // Lower `++i`/`i--` to the compound-assignment form, rewriting
-      // the node in place.
+      // 把 `++i`/`i--` 降级成复合赋值形态, 原地改写节点.
       shape_children(ctx, node);
       LibcpNode* operand = node->lhs;
       LibcpToken* tok    = node->tok;
 
       if (node->is_post) {
-        // The result is the implicit cast restoring the operand's type
-        // around `(A += 1) - 1`, so its marking has to travel with the
-        // shape it contributes.
+        // 结果是包在 `(A += 1) - 1` 外面并恢复操作数类型的隐式转换,
+        // 所以它的标记必须随它贡献的形状一起传递.
         LibcpNode* result = new_inc_dec(ctx, operand, tok, node->addend);
         node->kind        = result->kind;
         node->lhs         = result->lhs;
@@ -2397,37 +2265,32 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
       return;
     }
     case ND_FUNCALL:
-      // The caller's return buffer is a slot of the consumer (PLAN
-      // A6.1): sema checked the callee, converted the arguments and
-      // recorded the return type; a struct or union one means the call
-      // needs a buffer, created here so it lands in the frame before
-      // assign_lvar_offsets runs.
+      // 调用者的返回缓冲区是消费者的一个槽 (PLAN A6.1): sema 已检查
+      // 被调者, 转换实参并记录返回类型; 返回类型为 struct 或 union 时,
+      // 该调用需要缓冲区, 在此创建, 使其在 assign_lvar_offsets 运行前
+      // 落入栈帧.
       shape_children(ctx, node);
       if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
         cg(node)->ret_buffer = new_lvar("", node->ty);
       return;
     case ND_COND:
-      // Both spellings keep their shape: the GNU `a ?: b` is emitted
-      // slot-free from its own fields (PLAN B1.1e, in gen_expr), and
-      // the ordinary conditional's arms were converted by sema.
+      // 两种写法都保持自己的形态: GNU 的 `a ?: b` 在 gen_expr 中直接
+      // 由自身字段无槽发射 (PLAN B1.1e), 普通条件表达式的分支已由
+      // sema 转换.
       shape_children(ctx, node);
       return;
     case ND_SIZEOF: {
-      // A sizeof of a VLA is the one conclusion that is a runtime
-      // value: lower it to the comma that computes and reads the size
-      // variable. Every other sizeof arrives concluded in `val`, and no
-      // form evaluates its operand, so there is nothing below to shape
-      // either way.
+      // VLA 的 sizeof 是唯一结论为运行期值的情形: 把它降级为计算并
+      // 读取尺寸变量的逗号表达式. 其它 sizeof 都以 `val` 中已得出的
+      // 结论到达, 且任何形式都不求值其操作数, 所以两种情况都没有需要
+      // 继续整形的下层.
       LibcpType* ty = node->ty_op ? node->ty_op : node->lhs->ty;
       if (ty->kind == TY_VLA) {
-        // A type-name operand carries a fresh type, and the dimension
-        // expressions the chain is about to embed have never been
-        // through this pass - no statement tree reaches them. Shape
-        // them first, innermost first, the order the size computation
-        // walks. A declaration's type is left alone: its dimensions
-        // sit in the declaration's own lowered chain and the descent
-        // reaches them there (the declaration annotation set vla_size
-        // on exactly those types, which is how the two cases differ).
+        // 类型名操作数携带一个新造的类型, 而链马上要嵌入的维度表达式
+        // 从未经过这个遍 - 没有语句树能抵达它们. 先整形它们, 从最内层
+        // 开始, 即尺寸计算遍历的顺序. 声明的类型不动: 其维度位于该声明
+        // 自己的已降级链中, 下潜会在那里抵达它们 (声明标注恰好给这些
+        // 类型设置了 vla_size, 这就是两种情形的区别).
         if (!cg_type(ty)->vla_size)
           for (LibcpType* t = ty; t; t = t->base)
             if (t->kind == TY_VLA)
@@ -2442,17 +2305,15 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
       return;
     }
     case ND_GENERIC:
-      // Only the selected association's expression reaches the
-      // emission; the controlling expression and the unselected arms
-      // are typed but produce no code, so only the selection is shaped.
+      // 只有被选中关联的表达式会进入发射; 控制表达式与未选中的分支只
+      // 被定型, 不产生代码, 所以只整形选中的那一项.
       shape_node(ctx, node->generic_sel);
       return;
     case ND_COMPOUND_LITERAL:
-      // A block-scope compound literal: the initializer comma and the
-      // reference to the hidden object (PLAN A8.1; the object itself
-      // was created by sema's resolve pass, where the language says it
-      // exists). The file-scope case becomes a plain reference in sema,
-      // whose serializer owns the data.
+      // 块作用域的复合字面量: 初始化器逗号链加对隐藏对象的引用
+      // (PLAN A8.1; 对象本身由 sema 的 resolve pass 创建, 语言规定它
+      // 在那里存在). 文件作用域的情形在 sema 中变成普通引用, 其数据由
+      // sema 的序列化器负责.
       {
         LibcpObj* var = node->var;
 
@@ -2473,10 +2334,9 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
   }
 }
 
-// Pairs the function's collected references (sema's check pass parked
-// them in the context) with the labels the descent above allocated,
-// writing the name each one jumps to. The undeclared-label check
-// already ran in sema, so every reference here matched there.
+// 把函数收集的引用 (sema 的检查遍把它们存放在 context 中) 与上面下潜
+// 分配的标签配对, 写入每个引用要跳转到的名字. 未声明标签的检查已在
+// sema 中运行, 所以这里的每个引用都在那里匹配上了.
 static void resolve_label_refs(LibcpContext* ctx, LibcpObj* fn) {
   LibcpNodeArray* refs = libcp_sema_label_gotos(ctx, fn);
   if (!refs)
@@ -2494,37 +2354,35 @@ static void resolve_label_refs(LibcpContext* ctx, LibcpObj* fn) {
   cg_labels.len = 0;
 }
 
-// Shapes every defined function's body. The walk follows prog, so a
-// [GNU] nested function's body - which also hangs inside its host's
-// body before sema's type_chain takes the record off the chain - is
-// visited exactly once, through its own entry here.
+// 整形每个已定义函数的函数体. 遍历沿 prog 进行, 因此 [GNU] 嵌套函数的
+// 函数体 - 它也挂在宿主函数体内, 直到本遍的 shape_chain 把该记录摘除 -
+// 恰好被访问一次, 即通过这里它自己的条目.
 static void shape(LibcpContext* ctx, LibcpObj* prog) {
   for (LibcpObj* fn = prog; fn; fn = fn->next) {
     if (!fn->is_function || !fn->is_definition)
       continue;
-    // The rewrite temporaries created below enter this function's
-    // frame, so the slot factory needs to know where to append.
+    // 下面创建的改写临时变量进入该函数的栈帧, 所以槽工厂需要知道
+    // 追加到哪里.
     current_fn = fn;
     shape_chain(ctx, &fn->body);
     resolve_label_refs(ctx, fn);
   }
 }
 
-// Assign offsets to local variables.
+// 给局部变量分配偏移.
 static void assign_lvar_offsets(LibcpObj* prog) {
   for (LibcpObj* fn = prog; fn; fn = fn->next) {
     if (!fn->is_function)
       continue;
 
-    // If a function has many parameters, some parameters are
-    // inevitably passed by stack rather than by register.
-    // The first passed-by-stack parameter resides at RBP+16.
+    // 函数的参数很多时, 有些参数不可避免地通过栈而非寄存器传递.
+    // 第一个通过栈传递的参数位于 RBP+16.
     int top    = 16;
     int bottom = 0;
 
     int gp = 0, fp = 0;
 
-    // Assign offsets to pass-by-stack parameters.
+    // 给通过栈传递的参数分配偏移.
     for (LibcpObj* var = fn->params; var; var = var->next) {
       LibcpType* ty = var->ty;
 
@@ -2557,15 +2415,14 @@ static void assign_lvar_offsets(LibcpObj* prog) {
       top += var->ty->size;
     }
 
-    // Assign offsets to pass-by-register parameters and local variables.
+    // 给通过寄存器传递的参数与局部变量分配偏移.
     for (LibcpObj* var = fn->locals; var; var = var->next) {
       if (obj_offset(var))
         continue;
 
-      // AMD64 System V ABI has a special alignment rule for an array of
-      // length at least 16 bytes. We need to align such array to at least
-      // 16-byte boundaries. See p.14 of
-      // https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-draft.pdf.
+      // AMD64 System V ABI 对长度至少 16 字节的数组有特殊对齐规则:
+      // 这类数组至少要对齐到 16 字节边界. 见第 14 页:
+      // https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-draft.pdf
       int align =
           (var->ty->kind == TY_ARRAY && var->ty->size >= 16) ? MAX(16, var->align) : var->align;
 
@@ -2591,13 +2448,13 @@ static void emit_data(LibcpObj* prog) {
     int align =
         (var->ty->kind == TY_ARRAY && var->ty->size >= 16) ? MAX(16, var->align) : var->align;
 
-    // Common symbol
+    // common 符号
     if (opt_fcommon && var->is_tentative) {
       println("  .comm %s, %d, %d", var->name, var->ty->size, align);
       continue;
     }
 
-    // .data or .tdata
+    // .data 或 .tdata
     if (var->init_data) {
       if (var->is_tls)
         println("  .section .tdata,\"awT\",@progbits");
@@ -2621,10 +2478,9 @@ static void emit_data(LibcpObj* prog) {
           continue;
         }
 
-        // Emit a run of plain bytes in the widest directive that fits,
-        // stopping at the next relocation. The only target is
-        // little-endian x86-64, so a run packs into the directive's
-        // value byte by byte (C7; this used to be one .byte per byte).
+        // 用能容纳的最宽伪指令发射一段普通字节, 在下一个重定位处停下.
+        // 唯一目标是 little-endian x86-64, 所以一段字节按字节打包进
+        // 该伪指令的值 (C7; 以前是每个字节一条 .byte).
         int len      = (rel ? rel->offset : var->ty->size) - pos;
         uint64_t val = 0;
 
@@ -2651,7 +2507,7 @@ static void emit_data(LibcpObj* prog) {
       continue;
     }
 
-    // .bss or .tbss
+    // .bss 或 .tbss
     if (var->is_tls)
       println("  .section .tbss,\"awT\",@nobits");
     else
@@ -2691,8 +2547,7 @@ static void emit_text(LibcpContext* ctx, LibcpObj* prog) {
     if (!fn->is_function || !fn->is_definition)
       continue;
 
-    // No code is emitted for "static inline" functions
-    // if no one is referencing them.
+    // 没有人引用的 "static inline" 函数不发射代码.
     if (!fn->is_live)
       continue;
 
@@ -2706,13 +2561,13 @@ static void emit_text(LibcpContext* ctx, LibcpObj* prog) {
     println("%s:", fn->name);
     current_fn = fn;
 
-    // Prologue
+    // 序言
     println("  push %%rbp");
     println("  mov %%rsp, %%rbp");
     println("  sub $%d, %%rsp", obj_stack_size(fn));
     println("  mov %%rsp, %d(%%rbp)", obj_offset(fn->alloca_bottom));
 
-    // Save arg registers if function is variadic
+    // 函数为可变参数时保存参数寄存器
     if (fn->va_area) {
       int gp = 0, fp = 0;
       for (LibcpObj* var = fn->params; var; var = var->next) {
@@ -2749,7 +2604,7 @@ static void emit_text(LibcpContext* ctx, LibcpObj* prog) {
       println("  movsd %%xmm7, %d(%%rbp)", off + 128);
     }
 
-    // Save passed-by-register arguments to the stack
+    // 把通过寄存器传递的参数保存到栈上
     int gp = 0, fp = 0;
     for (LibcpObj* var = fn->params; var; var = var->next) {
       if (obj_offset(var) > 0)
@@ -2779,18 +2634,17 @@ static void emit_text(LibcpContext* ctx, LibcpObj* prog) {
       }
     }
 
-    // Emit code
+    // 发射代码
     gen_stmt(ctx, fn->body);
     assert(depth == 0);
 
-    // [https://www.sigbus.info/n1570#5.1.2.2.3p1] The C spec defines
-    // a special rule for the main function. Reaching the end of the
-    // main function is equivalent to returning 0, even though the
-    // behavior is undefined for the other functions.
+    // [https://www.sigbus.info/n1570#5.1.2.2.3p1] C 标准为 main 函数
+    // 定义了特殊规则: 到达 main 函数末尾等价于返回 0, 尽管其它函数
+    // 的同样行为是未定义的.
     if (strcmp(fn->name, "main") == 0)
       println("  mov $0, %%rax");
 
-    // Epilogue
+    // 尾声
     println(".L.return.%s:", fn->name);
     println("  mov %%rbp, %%rsp");
     println("  pop %%rbp");
@@ -2805,9 +2659,8 @@ void codegen(LibcpContext* ctx, LibcpObj* prog, FILE* out) {
   for (int i = 0; files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
 
-  // The shaping pass runs first: it is what fills the label fields
-  // gen_stmt reads and resolves the goto references, and nothing may
-  // be assigned or emitted before it (PLAN contract 3).
+  // 整形遍最先运行: 它填充 gen_stmt 读取的标签字段并解析 goto 引用,
+  // 在它之前不得进行任何分配或发射 (PLAN 契约 3).
   label_base = libcp_unique_name_next(ctx);
   shape(ctx, prog);
 

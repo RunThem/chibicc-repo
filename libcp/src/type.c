@@ -4,11 +4,6 @@
 // 类型是共享单例.
 #include "libcp.h"
 
-// The built-in types are shared by every context and are read-only: a
-// declarator never writes its name into a type record (parse.c keeps
-// the name in a per-declaration carrier), so two contexts parsing in
-// different threads never write the same record.
-//
 // 内建类型由所有 context 共享且只读: 声明符从不把名字写进类型记录
 // (parse.c 把名字留在每次声明的载体里), 因此在不同线程里解析的两个
 // context 不会写同一条记录.
@@ -117,9 +112,6 @@ LibcpType* libcp_pointer_to(LibcpContext* ctx, LibcpType* base) {
 }
 
 LibcpType* libcp_func_type(LibcpContext* ctx, LibcpType* return_ty) {
-  // The C spec disallows sizeof(<function type>), but
-  // GCC allows that and the expression is evaluated to 1.
-  //
   // C 标准不允许 sizeof(<函数类型>), 但 GCC 允许, 且该表达式的值为 1,
   // 因此函数类型的大小与对齐都记作 1 而不是 0.
   LibcpType* ty = new_type(ctx, TY_FUNC, 1, 1);
@@ -128,12 +120,6 @@ LibcpType* libcp_func_type(LibcpContext* ctx, LibcpType* return_ty) {
 }
 
 LibcpType* libcp_array_of(LibcpContext* ctx, LibcpType* base, int len) {
-  // A negative length asks for an incomplete array, and a negative base
-  // size means the element type has no size yet - a dimension the parser
-  // left for sema to decide is one way to get there. The product of the
-  // two would look like a complete type, so an array built on an element
-  // it cannot measure stays unmeasurable.
-  //
   // 负长度表示不完整数组; 元素类型的 size 为负则说明它还没有大小 -
   // 解析器把某个维度留给 sema 决定就会走到这类情况. 两者相乘可能看起来
   // 像一个完整类型, 因此建立在无法度量元素之上的数组保持不可度量.
@@ -156,10 +142,6 @@ LibcpType* libcp_vla_of(LibcpContext* ctx, LibcpType* base, LibcpNode* len) {
   return ty;
 }
 
-// An array whose dimension the parser could not decide: `dim` is the
-// length expression, which sema evaluates into a length - or, when it is
-// not a constant expression, turns the type into a VLA.
-//
 // 维度尚未由解析器决定的数组: `dim` 是长度表达式, sema 会把它求值成
 // 长度; 当它不是常量表达式时, sema 把该类型改判为 VLA.
 LibcpType* libcp_array_of_dim(LibcpContext* ctx, LibcpType* base, LibcpNode* dim) {
@@ -168,10 +150,6 @@ LibcpType* libcp_array_of_dim(LibcpContext* ctx, LibcpType* base, LibcpNode* dim
   return ty;
 }
 
-// The type of a `typeof(expr)`, until sema annotates the operand and
-// fills this record in. Its size is negative like an incomplete type's,
-// so that a record nobody completed is rejected rather than measured.
-//
 // `typeof(expr)` 的类型占位, 等待 sema 标注其操作数并补全这条记录.
 // 它的大小为负, 和不完整类型一样, 这样没人补全的记录会被拒绝, 而不会
 // 被当作可度量的类型.

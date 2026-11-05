@@ -71,16 +71,15 @@ static bool take_arg(char* arg) {
 }
 
 static void add_default_include_paths(char* argv0) {
-  // We expect that chibicc-specific include files are installed
-  // to ./include relative to argv[0].
+  // 假定 chibicc 专用的 include 文件安装在相对于 argv[0] 的 ./include 下.
   libcp_context_add_include_path(ctx, libcp_format(ctx, "%s/include", dirname(strdup(argv0))));
 
-  // Add standard include paths.
+  // 添加标准 include 路径.
   libcp_context_add_include_path(ctx, "/usr/local/include");
   libcp_context_add_include_path(ctx, "/usr/include/x86_64-linux-gnu");
   libcp_context_add_include_path(ctx, "/usr/include");
 
-  // Keep a copy of the standard include paths for -MMD option.
+  // 为 -MMD 选项保留一份当前 include 路径的副本.
   for (int i = 0; i < ctx->include_paths_len; i++)
     libcp_strarray_push(ctx, &std_include_paths, ctx->include_paths[i]);
 }
@@ -132,8 +131,7 @@ static char* quote_makefile(char* s) {
 }
 
 static void parse_args(int argc, char** argv) {
-  // Make sure that all command line options that take an argument
-  // have an argument.
+  // 确保所有带参数的命令行选项都有参数.
   for (int i = 1; i < argc; i++)
     if (take_arg(argv[i]))
       if (!argv[++i])
@@ -370,7 +368,7 @@ static void parse_args(int argc, char** argv) {
       continue;
     }
 
-    // These options are ignored for now.
+    // 这些选项目前被忽略.
     if (!strncmp(argv[i], "-O", 2) || !strncmp(argv[i], "-W", 2) || !strncmp(argv[i], "-g", 2) ||
         !strncmp(argv[i], "-std=", 5) || !strcmp(argv[i], "-ffreestanding") ||
         !strcmp(argv[i], "-fno-builtin") || !strcmp(argv[i], "-fno-omit-frame-pointer") ||
@@ -390,7 +388,7 @@ static void parse_args(int argc, char** argv) {
   if (input_paths.len == 0)
     libcp_error(ctx, "no input files");
 
-  // -E implies that the input is the C macro language.
+  // -E 意味着输入是 C 宏语言, 因此按 C 源文件处理.
   if (opt_E)
     opt_x = FILE_C;
 }
@@ -411,7 +409,7 @@ static bool endswith(char* p, char* q) {
   return (len1 >= len2) && !strcmp(p + len1 - len2, q);
 }
 
-// Replace file extension
+// 替换文件扩展名.
 static char* replace_extn(char* tmpl, char* extn) {
   char* filename = basename(strdup(tmpl));
   char* dot      = strrchr(filename, '.');
@@ -437,7 +435,7 @@ static char* create_tmpfile(void) {
 }
 
 static void run_subprocess(char** argv) {
-  // If -### is given, dump the subprocess's command line.
+  // 若给出 -###, 则打印子进程的命令行.
   if (opt_hash_hash_hash) {
     fprintf(stderr, "%s", argv[0]);
     for (int i = 1; argv[i]; i++)
@@ -450,23 +448,22 @@ static void run_subprocess(char** argv) {
     libcp_error(ctx, "fork failed: %s", strerror(errno));
 
   if (pid == 0) {
-    // Child process. Run a new command.
+    // 子进程: 运行新命令.
     execvp(argv[0], argv);
     fprintf(stderr, "exec failed: %s: %s\n", argv[0], strerror(errno));
     _exit(1);
   }
 
-  // Wait for this child only - another child of the host must not be
-  // reaped here - and decode the status instead of treating the raw
-  // wait word as an exit code (C11). EINTR is retried, not mistaken for
-  // the end of the wait.
+  // 只等待这个子进程 - 宿主进程的其它子进程不能在这里被回收 - 并解码
+  // 状态, 而不是把原始的 wait 状态字当作退出码 (C11). EINTR 会重试,
+  // 不会被误认为等待结束.
   int status;
   while (waitpid(pid, &status, 0) == -1) {
     if (errno != EINTR)
       libcp_error(ctx, "waitpid failed: %s", strerror(errno));
   }
 
-  // A signal death is a failure just like a nonzero exit status.
+  // 被信号终止和退出状态非零一样算失败.
   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
     exit(1);
 }
@@ -489,7 +486,7 @@ static void run_cc1(int argc, char** argv, char* input, char* output) {
   run_subprocess(args);
 }
 
-// Print tokens to stdout. Used for -E.
+// 打印 token, 默认写到 stdout, 给出 -o 时写该文件. 供 -E 使用.
 static void print_tokens(LibcpToken* tok) {
   FILE* out = open_file(opt_o ? opt_o : "-");
 
@@ -505,10 +502,9 @@ static void print_tokens(LibcpToken* tok) {
   fprintf(out, "\n");
 }
 
-// Print bytes in C literal style: the escapes \n, \t, \r and \\, and
-// Print one line of the token dump: a tag, the line number, the byte
-// offset into the file, the kind, and the text (omitted for a token
-// without a spelling, i.e. EOF).
+// 字节按 C 字面量风格转义: \n, \t, \r 与 \\.
+// 打印 token dump 的一行: 标签, 行号, 文件内字节偏移, 种类以及文本
+// (对没有拼写的 token, 即 EOF, 省略文本).
 static void
     print_dump_line(FILE* out, char* tag, int line, int offset, char* kind, char* text, int len) {
   fprintf(out, "%s %d %d %s", tag, line, offset, kind);
@@ -519,22 +515,19 @@ static void
   fputc('\n', out);
 }
 
-// The raw position after any backslash-continuations starting at p (a
-// no-op when there is none).
+// 返回从 p 开始跳过所有反斜杠续行之后的原始位置 (没有续行时返回 p).
 static char* skip_conts(char* p, char* end) {
   while (p + 1 < end && p[0] == '\\' && libcp_is_line_break(p + 1))
     p += 1 + libcp_line_break_len(p + 1);
   return p;
 }
 
-// Print the raw token stream with the bytes that were skipped between
-// the tokens (plain spaces are dumped as \x20, so the texts stay one
-// column each). "T" lines are tokens, "R" lines are the runs in front of
-// a token, split into the pieces the lexer passed over: a line comment
-// (lc), a block comment (bc), a line break (nl), a run of whitespace
-// (ws), a backslash-continuation (cont) or the leading BOM (bom). All of
-// a token's pieces come before its "T" line. Both are in raw
-// coordinates, so the dumped bytes tile the file. Used by test/trivia.sh.
+// 打印原始 token 流, 以及 token 之间被跳过的字节 (普通空格 dump 为 \x20,
+// 使每段文本各占一列). "T" 行是 token, "R" 行是 token 前面的一段字节,
+// 按词法分析器跳过的片段拆分: 行注释 (lc), 块注释 (bc), 换行 (nl),
+// 一段空白 (ws), 反斜杠续行 (cont) 或文件开头的 BOM (bom). 一个 token 的
+// 所有片段都在它的 "T" 行之前. 两者都用原始坐标, 因此 dump 出的字节正好
+// 平铺整个文件. 由 test/trivia.sh 使用.
 static void print_token_dump(LibcpToken* tok) {
   FILE* out = open_file(opt_o ? opt_o : "-");
 
@@ -554,8 +547,7 @@ static void print_token_dump(LibcpToken* tok) {
         q    = p + libcp_line_break_len(p);
         kind = "nl";
       } else if (p[0] == '/' && p + 1 < end && p[1] == '/') {
-        // The comment runs to the next break that a continuation does
-        // not join over.
+        // 行注释一直延伸到下一个不被续行连接的换行.
         for (q = p + 2; q < end;) {
           q = skip_conts(q, end);
           if (q >= end)
@@ -566,7 +558,7 @@ static void print_token_dump(LibcpToken* tok) {
         }
         kind = "lc";
       } else if (p[0] == '/' && p + 1 < end && p[1] == '*') {
-        // The comment is closed (libcp_tokenize() rejects an unclosed one).
+        // 块注释是闭合的 (未闭合的块注释会被 libcp_tokenize() 拒绝).
         q = p + 2;
         for (;;) {
           q = skip_conts(q, end);
@@ -618,9 +610,8 @@ static bool in_std_include_path(char* path) {
   return false;
 }
 
-// If -M options is given, the compiler write a list of input files to
-// stdout in a format that "make" command can read. This feature is
-// used to automate file dependency management.
+// 给出 -M 或 -MD 时, 编译器按 make 能读的格式输出输入文件列表, 用于自动
+// 管理文件依赖. 输出位置按 -MF, -MD 时的 .d 文件, -o, stdout 的顺序选择.
 static void print_dependencies(void) {
   char* path;
   if (opt_MF)
@@ -673,14 +664,12 @@ static LibcpToken* append_tokens(LibcpToken* tok1, LibcpToken* tok2) {
 }
 
 //
-// -dump-ast: the faithful syntax tree, before sema sees it.
+// -dump-ast: 忠实反映源码的语法树, 在 sema 看到它之前输出.
 //
-// A read-only driver channel (PLAN-pratt-parse 4.5). The text is
-// deterministic: no addresses, no map iteration and a fixed field
-// order, so two builds that parse the same source to the same shape
-// print byte-for-byte identical dumps. A token a macro expansion
-// produced prints as @synth: its location is the macro body or a
-// synthesized buffer, not the source position of the expression.
+// 只读的驱动器通道 (PLAN-pratt-parse 4.5). 文本是确定性的: 不打印地址,
+// 不遍历 map, 字段顺序固定, 因此只要两次构建把同一份源码解析成同一形状,
+// 打印的 dump 就逐字节相同. 宏展开产生的 token 打印为 @synth: 它的位置是
+// 宏体或合成缓冲区, 而不是表达式的源码位置.
 //
 
 static char* ast_node_kind_name(LibcpNodeKind kind) {
@@ -781,9 +770,8 @@ static char* ast_type_kind_name(LibcpTypeKind kind) {
   return "type?";
 }
 
-// The source-written part of a type: its kind, the base/return chain and,
-// for an array, the declared length. Sizes, offsets and addresses are
-// sema/codegen conclusions and are deliberately not printed.
+// 类型中源码写出的部分: 种类, 基类型/返回类型链, 数组还包含声明的长度.
+// 大小, 偏移和地址是 sema/codegen 的结论, 故意不打印.
 static void ast_type_sig(FILE* out, LibcpType* ty) {
   if (!ty) {
     fputc('-', out);
@@ -937,8 +925,8 @@ static void ast_fields(FILE* out, LibcpNode* node) {
     ast_quoted(out, node->name_tok->loc, node->name_tok->len);
   }
 
-  // The declaration attributes the parser read. Frozen into the dump so
-  // a storage-class or alignment drift is visible without sema.
+  // 解析器读到的声明属性. 固化进 dump, 使存储类或对齐的偏差无需 sema
+  // 就能看出来.
   if (node->kind == ND_DECL || node->kind == ND_GVAR_DECL || node->kind == ND_FUNCDEF) {
     char* sep = "";
     fputs(" attr=", out);
@@ -1103,9 +1091,9 @@ static void print_ast_dump(LibcpNode* node) {
 }
 
 static int cc1(void) {
-  // -dump-tokens, -reconstruct and the CST channels work on the raw stream
-  // of the base file: the trivia contract, and the CST built on it, cover
-  // libcp_tokenize()'s direct output, before preprocessing (plans/PLAN.md 判据 3).
+  // -dump-tokens, -reconstruct 和 CST 通道都作用于基文件的原始流:
+  // trivia 契约以及建在它上面的 CST 都作用于 libcp_tokenize() 的直接
+  // 输出, 即预处理之前的内容 (plans/PLAN.md 判据 3).
   if (opt_dump_tokens || opt_reconstruct || opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
     LibcpToken* tok = must_tokenize_file(base_file);
     if (!tok)
@@ -1130,7 +1118,7 @@ static int cc1(void) {
 
   LibcpToken* tok = NULL;
 
-  // Process -include option
+  // 处理 -include 选项.
   for (int i = 0; i < opt_include.len; i++) {
     char* incl = opt_include.data[i];
 
@@ -1149,7 +1137,7 @@ static int cc1(void) {
     tok = append_tokens(tok, tok2);
   }
 
-  // Tokenize and parse.
+  // 词法分析并预处理.
   LibcpToken* tok2 = must_tokenize_file(base_file);
   if (!tok2)
     return 1;
@@ -1158,8 +1146,8 @@ static int cc1(void) {
   if (ctx->failed)
     return 1;
 
-  // The provenance channels read the preprocessed stream and stop there:
-  // no object file, no assembler, no linker (plans/PLAN.md 判据 5).
+  // provenance 通道读取预处理后的流并在此停止: 不生成目标文件, 不调用
+  // 汇编器, 不调用链接器 (plans/PLAN.md 判据 5).
   if (opt_dump_expansions || opt_verify_expansions) {
     if (opt_dump_expansions)
       libcp_expansion_dump(ctx, tok, open_file(opt_o ? opt_o : "-"));
@@ -1168,14 +1156,14 @@ static int cc1(void) {
     return 0;
   }
 
-  // If -M or -MD are given, print file dependencies.
+  // 给出 -M 或 -MD 时, 打印文件依赖.
   if (opt_M || opt_MD) {
     print_dependencies();
     if (opt_M)
       return 0;
   }
 
-  // If -E is given, print out preprocessed C code as a result.
+  // 给出 -E 时, 输出预处理后的 C 代码作为结果.
   if (opt_E) {
     print_tokens(tok);
     return 0;
@@ -1185,8 +1173,8 @@ static int cc1(void) {
   if (ctx->failed)
     return 1;
 
-  // The AST shape channel stops between layer 3 and layer 4: no sema,
-  // no object file, no assembler.
+  // AST 形状通道停在第 3 层与第 4 层之间: 不做 sema, 不生成目标文件,
+  // 不调用汇编器.
   if (opt_dump_ast) {
     print_ast_dump(ast);
     return 0;
@@ -1196,16 +1184,16 @@ static int cc1(void) {
   if (ctx->failed)
     return 1;
 
-  // Open a temporary output buffer.
+  // 打开临时输出缓冲区.
   char* buf;
   size_t buflen;
   FILE* output_buf = open_memstream(&buf, &buflen);
 
-  // Traverse the AST to emit assembly.
+  // 遍历 AST, 发射汇编.
   codegen(ctx, prog, output_buf);
   fclose(output_buf);
 
-  // Write the asembly text to a file.
+  // 把汇编文本写入文件.
   FILE* out = open_file(output_file);
   fwrite(buf, buflen, 1, out);
   fclose(out);
@@ -1238,8 +1226,8 @@ static char* find_libpath(void) {
 static char* find_gcc_libpath(void) {
   char* paths[] = {
       "/usr/lib/gcc/x86_64-linux-gnu/*/crtbegin.o",
-      "/usr/lib/gcc/x86_64-pc-linux-gnu/*/crtbegin.o",  // For Gentoo
-      "/usr/lib/gcc/x86_64-redhat-linux/*/crtbegin.o",  // For Fedora
+      "/usr/lib/gcc/x86_64-pc-linux-gnu/*/crtbegin.o",  // 用于 Gentoo.
+      "/usr/lib/gcc/x86_64-redhat-linux/*/crtbegin.o",  // 用于 Fedora.
   };
 
   for (int i = 0; i < sizeof(paths) / sizeof(*paths); i++) {
@@ -1340,8 +1328,8 @@ int main(int argc, char** argv) {
   atexit(cleanup);
   ctx = libcp_context_new();
   parse_args(argc, argv);
-  // A malformed -D body no longer exits from inside the library; the
-  // diagnostic has already been printed, so stop here as before.
+  // -D 宏体格式错误时不再由库内退出; 诊断已经打印, 因此像以前一样
+  // 在这里停止.
   if (libcp_context_failed(ctx))
     exit(1);
   if (base_file)
@@ -1385,13 +1373,13 @@ int main(int argc, char** argv) {
 
     FileType type = get_file_type(input);
 
-    // Handle .o or .a
+    // 处理 .o, .a 或 .so.
     if (type == FILE_OBJ || type == FILE_AR || type == FILE_DSO) {
       libcp_strarray_push(ctx, &ld_args, input);
       continue;
     }
 
-    // Handle .s
+    // 处理 .s.
     if (type == FILE_ASM) {
       if (!opt_S)
         assemble(input, output);
@@ -1400,8 +1388,8 @@ int main(int argc, char** argv) {
 
     assert(type == FILE_C);
 
-    // Just libcp_preprocess (or dump/reconstruct the raw token or CST stream,
-    // or run a provenance channel)
+    // 只运行 libcp_preprocess (或 dump/reconstruct 原始 token 流或 CST 流,
+    // 或运行 provenance 通道).
     if (opt_E || opt_M || opt_dump_tokens || opt_reconstruct || opt_dump_cst ||
         opt_reconstruct_cst || opt_verify_cst || opt_dump_expansions || opt_verify_expansions ||
         opt_dump_ast) {
@@ -1409,13 +1397,13 @@ int main(int argc, char** argv) {
       continue;
     }
 
-    // Compile
+    // 编译.
     if (opt_S) {
       run_cc1(argc, argv, input, output);
       continue;
     }
 
-    // Compile and assemble
+    // 编译并汇编.
     if (opt_c) {
       char* tmp = create_tmpfile();
       run_cc1(argc, argv, input, tmp);
@@ -1423,7 +1411,7 @@ int main(int argc, char** argv) {
       continue;
     }
 
-    // Compile, assemble and link
+    // 编译, 汇编并链接.
     char* tmp1 = create_tmpfile();
     char* tmp2 = create_tmpfile();
     run_cc1(argc, argv, input, tmp1);

@@ -1,20 +1,9 @@
-// The library facade (PLAN L2): the context object, the arena, and the
-// public entry points. The phases themselves stay in their own files;
-// everything here is the boundary the library promises.
-//
 // 库的 facade (PLAN L2): context 对象, arena 以及公共入口. 各阶段实现
 // 留在各自的文件里; 这里是库对外承诺的边界. 主要内容: context 的
 // new / free / reset 三态, arena 分配与字符串复制, 诊断边界与输入入口.
 
 #include "libcp.h"
 
-// Every public entry is an error boundary: an error_* longjmps to the
-// innermost frame, and the entry returns its failure value. The frame
-// belongs to the context in hand; no other state is saved or restored.
-// The ENTER/LEAVE macros live in libcp.h; the merged entries (the phase
-// functions that carry their public name directly) use them from their
-// own translation units.
-//
 // 每个公共入口都是一个错误边界: error_* 会 longjmp 到最内层 frame,
 // 入口随后返回自己的失败值. frame 属于当前 context; 不保存或恢复
 // 任何其他状态. ENTER/LEAVE 宏定义在 libcp.h 中; 直接携带公共名的
@@ -28,10 +17,6 @@ const char* libcp_version(void) {
 #define ARENA_BLOCK_SIZE (64 * 1024)
 
 #ifdef LIBCP_DEBUG_ARENA
-// One allocation per object for the sanitizer gate: the bump arena hides
-// intra-block overflows from AddressSanitizer's redzones. test/library.sh
-// enables this in its ASan round.
-//
 // 为 sanitizer 闸门改为每次分配一个对象: bump arena 会让块内溢出
 // 落在 AddressSanitizer 红区之外, 从而被漏掉. test/library.sh 的
 // ASan 轮次会打开这个开关.
@@ -67,10 +52,6 @@ static void* arena_alloc(LibcpContext* ctx, size_t size, size_t align) {
 
   LibcpArenaBlock* b = ctx->arena;
   size_t start       = b ? (b->used + align - 1) / align * align : 0;
-  // Overflow-safe form of start + size > b->cap. start may round past
-  // cap (used can sit on cap with a custom-sized block), and cap - start
-  // would then wrap, so that case is decided first.
-  //
   // start + size > b->cap 的防溢出写法. start 可能对齐到 cap 之后
   // (自定义大小的块能让 used 正好落在 cap 上), 此时 cap - start 会
   // 回绕, 所以先单独判断这种情况.
@@ -98,17 +79,11 @@ void* libcp_arena_alloc(LibcpContext* ctx, size_t size, size_t align) {
 }
 
 void* libcp_arena_calloc(LibcpContext* ctx, size_t count, size_t size) {
-  // The arena path multiplies by hand; fail instead of wrapping to a
-  // small allocation that memset would then overflow.
-  //
   // arena 路径自行做乘法; 溢出时返回失败, 而不是回绕成一个小块再让
   // 随后的 memset 越界.
   if (size && count > SIZE_MAX / size)
     return NULL;
   size_t n = count * size;
-  // 16, not 8: LibcpToken and LibcpNode embed a long double, which needs 16-byte
-  // alignment on x86-64 (UBSan found this in L3.4c).
-  //
   // 用 16 而不是 8: LibcpToken 与 LibcpNode 内嵌 long double, 在 x86-64
   // 上需要 16 字节对齐 (UBSan 在 L3.4c 发现了这一点).
   void* p  = arena_alloc(ctx, n, 16);
@@ -133,12 +108,6 @@ char* libcp_arena_strndup(LibcpContext* ctx, char* s, size_t n) {
   return p;
 }
 
-// Reallocate in the arena. The old block is not reclaimed - the arena
-// frees only when the context is reset - so a geometric growth keeps
-// the dead capacity alive and peaks at about twice the final size; that
-// is the arena trade-off, not a leak. Every byte past `old_size` in the
-// returned block is zeroed, so a caller may rely on a clean tail (C9).
-//
 // 在 arena 中重新分配. 旧块不会被回收 - arena 只在 context reset 时
 // 释放 - 所以几何式增长会让已死的容量继续存活, 峰值约为最终大小的
 // 两倍; 这是 arena 的取舍, 不是泄漏. 返回块中超过 `old_size` 的每个
@@ -154,9 +123,6 @@ void* libcp_arena_realloc(LibcpContext* ctx, void* old, size_t old_size, size_t 
   return p;
 }
 
-// strdup would take the C library's allocator, but the context frees
-// these blocks through LIBCP_FREE; a replaced allocator must own them.
-//
 // strdup 会使用 C 库的分配器, 但 context 通过 LIBCP_FREE 释放这些块;
 // 被替换的分配器必须拥有它们, 否则 free 与分配会对不上.
 static char* config_strdup(char* s) {
@@ -173,9 +139,6 @@ static void config_push(char*** arr, int* len, int* cap, char* s) {
   if (*len + 1 >= *cap) {
     int ncap = *cap ? *cap * 2 : 8;
     char** n = LIBCP_REALLOC(*arr, sizeof(char*) * ncap);
-    // On OOM keep the old array and capacity; the caller's string is
-    // not stored. A void configuration setter has no report path.
-    //
     // 内存不足时保留旧数组与旧容量, 调用方的字符串不会被存下.
     // 这类 void 配置 setter 没有上报路径.
     if (!n)
@@ -196,10 +159,6 @@ void libcp_context_add_include_path(LibcpContext* ctx, char* path) {
               config_strdup(path));
 }
 
-// PLAN-l5 W2: a typedef name provided by an included header is invisible
-// to the CST's pre-preprocess scan; the consumer, which knows its target
-// headers, seeds those names instead of the library guessing.
-//
 // PLAN-l5 W2: 由被包含头文件提供的 typedef 名对 CST 的预处理前扫描
 // 不可见; 消费者知道自己的目标头文件, 因此由它预置这些名字, 而不是
 // 让库去猜.
@@ -237,13 +196,6 @@ void libcp_context_define(LibcpContext* ctx, char* name, char* buf) {
   char* s  = LIBCP_CALLOC(1, n);
   snprintf(s, n, "D:%s=%s", name, buf);
 
-  // Its own error boundary: a malformed body raises through
-  // tokenize_nested instead of exiting the host process. The frame is
-  // hand-written (not ENTER_VOID) so the op string is freed on the way
-  // out, and the op is applied before it is recorded because
-  // apply_macro_op leaves its '=' NULed when it raises - a half-applied
-  // op must not reach the reset replay.
-  //
   // 自成一体的错误边界: 非法的宏体会经 tokenize_nested 抛出, 而不是让
   // 宿主进程退出. 这个 frame 是手写的 (不用 ENTER_VOID), 以便返回时
   // 释放 op 字符串; 并且先执行 op 再记录它, 因为 apply_macro_op 抛出时
@@ -378,10 +330,6 @@ LibcpToken* libcp_tokenize_file(LibcpContext* ctx, char* path) {
   if (!ctx->base_file)
     ctx->base_file = libcp_arena_strdup(ctx, path);
   LibcpToken* tok = libcp_tokenize_file_impl(ctx, path);
-  // libcp_tokenize_file_impl returns NULL only when the file cannot be opened; the
-  // facades report it, so a library consumer never sees a silent NULL
-  // (PLAN D4/L3.4b).
-  //
   // libcp_tokenize_file_impl 只在文件无法打开时返回 NULL; facade 在这里
   // 上报它, 因此库的消费者不会遇到静默的 NULL (PLAN D4/L3.4b).
   if (!tok)

@@ -1,20 +1,13 @@
 // 第 1 层词法分析: 把扫描缓冲区切分成 token 流.
 // 原始文本 (raw) 与扫描文本 (contents) 双缓冲并行, 由 map / lines 两张
-// 表互相映射; 每个 token 携带 trivia 与 raw 坐标, 因此该流可以逐字节
-// 重建输入文件. 本文件同时提供诊断入口与 token 比较等共用设施.
+// 表建立扫描偏移到 raw 偏移, raw 偏移到行号的映射; 每个 token 携带 trivia
+// 与 raw 坐标, 因此该流可以逐字节重建输入文件. 本文件同时提供诊断入口与
+// token 比较等共用设施.
 #include "libcp.h"
 
-// The input file, the input file list and the current position flags
-// live in LibcpContext (PLAN L2.2). The lexer reads them through the
-// active context like every other phase.
-//
 // 输入文件, 输入文件列表与当前位置标志都存放在 LibcpContext 中
 // (PLAN L2.2). 与其它阶段一样, 词法分析器通过当前活动的 context 读取它们.
 
-// The raw offset of a position in the scan buffer (PLAN T2.1): the two
-// texts differ where a continuation, a '\r' or a universal character
-// name was rewritten. They coincide for synthetic buffers.
-//
 // 扫描缓冲区中某个位置的 raw 偏移 (PLAN T2.1): 在续行, '\r' 或
 // universal character name 被改写的地方, 两份文本并不相同.
 // 对合成缓冲区来说两者完全一致.
@@ -22,9 +15,6 @@ static int raw_off(LibcpFile* file, char* p) {
   return file->map[p - file->contents];
 }
 
-// The raw offset just after a token's spelling: the bytes skipped in
-// front of the next token start there.
-//
 // token 拼写结束之后的 raw 偏移: 下一个 token 前面被跳过的字节
 // 从这里开始.
 static int raw_end(LibcpToken* tok) {
@@ -51,10 +41,6 @@ static uint32_t read_universal_char(char* p, int len) {
   return c;
 }
 
-// The raw offset just after the bytes that scan offset `off` was produced
-// from: a line break and a universal character name stand for more than
-// one raw byte, everything else for one.
-//
 // 产生扫描偏移 `off` 的那些 raw 字节之后的 raw 偏移: 换行与
 // universal character name 对应多个 raw 字节, 其余情况只对应一个.
 static int raw_end_of(LibcpFile* file, int off) {
@@ -72,10 +58,7 @@ static int raw_end_of(LibcpFile* file, int off) {
   return lo + 1;
 }
 
-// Formats a diagnostic message into the arena (or malloc before a
-// context exists).
-//
-// 把诊断消息格式化进 arena (context 尚不存在时退回 malloc).
+// 把诊断消息格式化进 arena.
 static char* vformat(LibcpContext* ctx, char* fmt, va_list ap) {
   va_list ap2;
   va_copy(ap2, ap);
@@ -86,9 +69,6 @@ static char* vformat(LibcpContext* ctx, char* fmt, va_list ap) {
   return buf;
 }
 
-// Unwinds to the innermost public-entry frame; without one (the
-// driver's pre-cc1 paths), exits as before.
-//
 // 回退到最内层的公共入口栈帧; 没有这样的栈帧时 (驱动器在 cc1 之前的
 // 路径), 与以前一样直接退出.
 static noreturn void raise_error(LibcpContext* ctx) {
@@ -99,15 +79,10 @@ static noreturn void raise_error(LibcpContext* ctx) {
   exit(1);
 }
 
-// Reports an error message in the following format.
+// 按以下格式报告错误消息.
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
-//
-// A registered callback gets the structured form instead; the default
-// path below is byte-for-byte what the compiler printed before L2.6.
-//
-// 按以上格式报告错误消息.
 //
 // 注册过回调时改走结构化形式; 未注册时的默认路径与 L2.6 之前编译器
 // 的输出逐字节一致.
@@ -121,7 +96,6 @@ static void verror_at(LibcpContext* ctx,
                       char* fmt,
                       va_list ap) {
 
-  // Find a line containing `loc`.
   // 找到包含 `loc` 的那一行.
   char* line = loc;
   while (input < line && line[-1] != '\n')
@@ -144,25 +118,19 @@ static void verror_at(LibcpContext* ctx,
   while (*end && *end != '\n')
     end++;
 
-  // Print out the line.
   // 打印出这一行源码.
   int indent = fprintf(stderr, "%s:%d: ", filename, line_no);
   fprintf(stderr, "%.*s\n", (int)(end - line), line);
 
-  // Show the error message.
   // 显示错误消息.
   int pos = libcp_display_width(ctx, line, loc - line) + indent;
 
-  fprintf(stderr, "%*s", pos, "");  // print pos spaces.
-                                    // 打印 pos 个空格.
+  fprintf(stderr, "%*s", pos, "");  // 打印 pos 个空格.
   fprintf(stderr, "^ ");
   vfprintf(stderr, fmt, ap);
   fprintf(stderr, "\n");
 }
 
-// Reports an error; unwinds to the current public entry, or exits when
-// the driver is outside one.
-//
 // 报告错误; 回退到当前公共入口, 若驱动器不在任何公共入口内则直接退出.
 void libcp_error(LibcpContext* ctx, char* fmt, ...) {
   va_list ap;
@@ -230,9 +198,6 @@ void libcp_warn_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...) {
   va_end(ap);
 }
 
-// The dump name of a token kind. Lives here, not in the driver, so the
-// provenance channel can use it without main.c.
-//
 // token 种类的 dump 名称. 放在这里而不是驱动器里, 这样 provenance 通道
 // 无需 main.c 就能使用它.
 char* libcp_token_kind_name(LibcpContext* ctx, LibcpTokenKind kind) {
@@ -248,18 +213,13 @@ char* libcp_token_kind_name(LibcpContext* ctx, LibcpTokenKind kind) {
   unreachable();
 }
 
-// Consumes the current token if it matches `op`.
-// 若当前 token 与 `op` 匹配则消耗它.
+// 若 token 的拼写等于 `op` 则返回 true.
 bool libcp_equal(LibcpToken* tok, char* op) {
-  // The length check comes first: a token longer than `op` must not make
-  // memcmp read past the end of `op` (ASan found this in L3.4c).
-  //
   // 先比较长度: 比 `op` 更长的 token 不得让 memcmp 读过 `op` 的末尾
   // (L3.4c 中由 ASan 发现).
   return (int)strlen(op) == tok->len && memcmp(tok->loc, op, tok->len) == 0;
 }
 
-// Ensure that the current token is `op`.
 // 确保当前 token 是 `op`, 否则报错.
 LibcpToken* libcp_skip(LibcpContext* ctx, LibcpToken* tok, char* op) {
   if (!libcp_equal(tok, op))
@@ -276,9 +236,6 @@ bool libcp_consume(LibcpToken** rest, LibcpToken* tok, char* str) {
   return false;
 }
 
-// Create a new token. `raw_trivia` is the raw offset where the bytes
-// skipped in front of this token start (see LibcpToken.trivia).
-//
 // 新建一个 token. `raw_trivia` 是本 token 前面被跳过的字节起始处的
 // raw 偏移 (见 LibcpToken.trivia).
 static LibcpToken*
@@ -310,9 +267,6 @@ static bool startswith(char* p, char* q) {
   return strncmp(p, q, strlen(q)) == 0;
 }
 
-// Read an identifier and returns the length of it.
-// If p does not point to a valid identifier, 0 is returned.
-//
 // 读一个标识符并返回它的长度. 若 p 不指向合法标识符, 返回 0.
 static int read_ident(LibcpContext* ctx, char* start) {
   char* p    = start;
@@ -329,7 +283,6 @@ static int read_ident(LibcpContext* ctx, char* start) {
   }
 }
 
-// Read a punctuator token from p and returns its length.
 // 从 p 读一个标点 token 并返回它的长度.
 static int read_punct(char* p) {
   static char* kw[] = {
@@ -377,7 +330,6 @@ static bool is_keyword(LibcpContext* ctx, LibcpToken* tok) {
 // 解析并返回 p 处的一个转义序列, 同时把 *new_pos 推进到序列之后.
 static int read_escaped_char(LibcpContext* ctx, char** new_pos, char* p) {
   if ('0' <= *p && *p <= '7') {
-    // Read an octal number.
     // 读一个八进制数.
     int c = *p++ - '0';
     if ('0' <= *p && *p <= '7') {
@@ -390,7 +342,6 @@ static int read_escaped_char(LibcpContext* ctx, char** new_pos, char* p) {
   }
 
   if (*p == 'x') {
-    // Read a hexadecimal number.
     // 读一个十六进制数.
     p++;
     if (!isxdigit((unsigned char)*p))
@@ -405,25 +356,14 @@ static int read_escaped_char(LibcpContext* ctx, char** new_pos, char* p) {
 
   *new_pos = p + 1;
 
-  // Escape sequences are defined using themselves here. E.g.
-  // '\n' is implemented using '\n'. This tautological definition
-  // works because the compiler that compiles our compiler knows
-  // what '\n' actually is. In other words, we "inherit" the ASCII
-  // code of '\n' from the compiler that compiles our compiler,
-  // so we don't have to teach the actual code here.
-  //
-  // This fact has huge implications not only for the correctness
-  // of the compiler but also for the security of the generated code.
-  // For more info, read "Reflections on Trusting Trust" by Ken Thompson.
-  // https://github.com/rui314/chibicc/wiki/thompson1984.pdf
-  //
   // 这里的转义序列用它们自身来定义. 例如 '\n' 就是用 '\n' 实现的.
   // 这个同义反复的定义能成立, 是因为编译我们编译器的那个编译器知道
   // '\n' 到底是什么. 换句话说, 我们从编译我们编译器的编译器那里
   // "继承" 了 '\n' 的 ASCII 码, 因此不必在这里重新教实际代码.
   //
   // 这一事实不仅影响编译器的正确性, 也深刻影响生成代码的安全性.
-  // 更多信息见 Ken Thompson 的 "Reflections on Trusting Trust" 一文.
+  // 更多信息见 Ken Thompson 的 "Reflections on Trusting Trust" 一文:
+  // https://github.com/rui314/chibicc/wiki/thompson1984.pdf
   switch (*p) {
     case 'a': return '\a';
     case 'b': return '\b';
@@ -432,14 +372,12 @@ static int read_escaped_char(LibcpContext* ctx, char** new_pos, char* p) {
     case 'v': return '\v';
     case 'f': return '\f';
     case 'r': return '\r';
-    // [GNU] \e for the ASCII escape character is a GNU C extension.
     // [GNU] \e 表示 ASCII 转义字符, 这是 GNU C 的扩展.
     case 'e': return 27;
     default: return *p;
   }
 }
 
-// Find a closing double-quote.
 // 找到收尾的双引号.
 static char* string_literal_end(LibcpContext* ctx, char* p) {
   char* start = p;
@@ -471,14 +409,6 @@ static LibcpToken*
   return tok;
 }
 
-// Read a UTF-8-encoded string literal and transcode it in UTF-16.
-//
-// UTF-16 is yet another variable-width encoding for Unicode. Code
-// points smaller than U+10000 are encoded in 2 bytes. Code points
-// equal to or larger than that are encoded in 4 bytes. Each 2 bytes
-// in the 4 byte sequence is called "surrogate", and a 4 byte sequence
-// is called a "surrogate pair".
-//
 // 读一个 UTF-8 编码的字符串字面量, 并把它转码为 UTF-16.
 //
 // UTF-16 是 Unicode 的另一种变长编码. 小于 U+10000 的码点用 2 字节
@@ -498,11 +428,9 @@ static LibcpToken*
 
     uint32_t c = libcp_decode_utf8(ctx, &p, p);
     if (c < 0x10000) {
-      // Encode a code point in 2 bytes.
       // 把码点编码为 2 字节.
       buf[len++] = c;
     } else {
-      // Encode a code point in 4 bytes.
       // 把码点编码为 4 字节.
       c -= 0x10000;
       buf[len++] = 0xd800 + ((c >> 10) & 0x3ff);
@@ -516,11 +444,6 @@ static LibcpToken*
   return tok;
 }
 
-// Read a UTF-8-encoded string literal and transcode it in UTF-32.
-//
-// UTF-32 is a fixed-width encoding for Unicode. Each code point is
-// encoded in 4 bytes.
-//
 // 读一个 UTF-8 编码的字符串字面量, 并把它转码为 UTF-32.
 //
 // UTF-32 是 Unicode 的定长编码. 每个码点占 4 字节.
@@ -574,7 +497,6 @@ static LibcpToken*
 static bool convert_pp_int(LibcpContext* ctx, LibcpToken* tok) {
   char* p = tok->loc;
 
-  // Read a binary, octal, decimal or hexadecimal number.
   // 读一个二进制, 八进制, 十进制或十六进制数.
   int base = 10;
   if (!strncasecmp(p, "0x", 2) && isxdigit((unsigned char)p[2])) {
@@ -587,13 +509,6 @@ static bool convert_pp_int(LibcpContext* ctx, LibcpToken* tok) {
     base = 8;
   }
 
-  // strtoul saturates at ULONG_MAX and sets ERANGE on overflow; do not
-  // let an unrepresentable literal silently become ULONG_MAX. Remember the
-  // overflow and only diagnose it once the whole token is known to be an
-  // integer constant: with a trailing '.' or exponent the token is a
-  // floating constant whose integer part merely exceeds the range, and the
-  // float branch below must handle it.
-  //
   // strtoul 在溢出时会饱和到 ULONG_MAX 并设置 ERANGE; 不能让无法表示的
   // 整数字面量悄悄变成 ULONG_MAX. 先记住溢出, 等确认整个 token 是整数常量
   // 后再报错: 若后面还有 '.' 或指数, 它其实是整数部分超出范围的浮点常量,
@@ -602,7 +517,6 @@ static bool convert_pp_int(LibcpContext* ctx, LibcpToken* tok) {
   int64_t val   = strtoul(p, &p, base);
   bool overflow = errno == ERANGE;
 
-  // Read U, L or LL suffixes.
   // 读 U, L 或 LL 后缀.
   bool l = false;
   bool u = false;
@@ -632,7 +546,6 @@ static bool convert_pp_int(LibcpContext* ctx, LibcpToken* tok) {
   if (overflow)
     libcp_error_tok(ctx, tok, "integer literal is too large");
 
-  // Infer a type.
   // 推断类型.
   LibcpType* ty;
   if (base == 10) {
@@ -667,26 +580,16 @@ static bool convert_pp_int(LibcpContext* ctx, LibcpToken* tok) {
   return true;
 }
 
-// The definition of the numeric literal at the preprocessing stage
-// is more relaxed than the definition of that at the later stages.
-// In order to handle that, a numeric literal is tokenized as a
-// "pp-number" token first and then converted to a regular number
-// token after preprocessing.
-//
-// This function converts a pp-number token to a regular number token.
-//
 // 预处理阶段对数值字面量的定义比后续阶段宽松. 为了处理这一点,
 // 数值字面量先被 tokenize 成 "pp-number" token, 预处理之后再转换成
 // 普通的数值 token.
 //
 // 本函数把一个 pp-number token 转换成普通数值 token.
 static void convert_pp_number(LibcpContext* ctx, LibcpToken* tok) {
-  // Try to parse as an integer constant.
   // 先尝试按整数常量解析.
   if (convert_pp_int(ctx, tok))
     return;
 
-  // If it's not an integer, it must be a floating point constant.
   // 若不是整数, 那就必须是浮点常量.
   char* end;
   long double val = strtold(tok->loc, &end);
@@ -720,7 +623,6 @@ void libcp_convert_pp_tokens(LibcpContext* ctx, LibcpToken* tok) {
   }
 }
 
-// Initialize line info for all tokens.
 // 为所有 token 填上行号信息.
 static void add_line_numbers(LibcpToken* tok) {
   for (; tok; tok = tok->next)
@@ -728,15 +630,10 @@ static void add_line_numbers(LibcpToken* tok) {
 }
 
 LibcpToken* libcp_tokenize_string_literal(LibcpContext* ctx, LibcpToken* tok, LibcpType* basety) {
-  // The re-scan needs the raw coordinates of the token it replaces, so
-  // scan against the file that token belongs to (the running
-  // `current_file` is whichever file was tokenized last). The `file` and
-  // `filename` fields are restored afterwards: they used to be the stale
-  // ones, and that pre-existing behavior is kept for now.
-  //
   // 重新扫描需要被替换 token 的 raw 坐标, 因此要对它所属的文件扫描
-  // (当前的 `current_file` 是最后被 tokenize 的那个文件). 事后再恢复
-  // `file` 与 `filename` 字段: 它们以前是陈旧的值, 这一既有行为暂时保留.
+  // (当前的 `current_file` 是最后被 tokenize 的那个文件). 扫描结束后恢复
+  // `current_file`, 新 token 的 `file` 与 `filename` 则设为 `save` 与
+  // `save->display_name`: 它们可能是陈旧的值, 这一既有行为暂时保留.
   LibcpFile* save   = ctx->current_file;
   ctx->current_file = tok->file;
 
@@ -753,17 +650,12 @@ LibcpToken* libcp_tokenize_string_literal(LibcpContext* ctx, LibcpToken* tok, Li
   return t;
 }
 
-// Tokenize a given string and returns new tokens.
 // 对给定的文本做词法分析, 返回新的 token 流.
 LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
   ctx->current_file = file;
 
   char* p = file->contents;
 
-  // The raw offset where the bytes skipped in front of the next token
-  // start. The four skip loops below only advance `p`; the bytes they
-  // pass over are recorded as the trivia slice of the next token.
-  //
   // 下一个 token 前面被跳过的字节起始处的 raw 偏移. 下面四个跳过循环
   // 只推进 `p`; 它们越过的字节会记录为下一个 token 的 trivia 片段.
   int raw_trivia = 0;
@@ -775,7 +667,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
   ctx->has_space = false;
 
   while (*p) {
-    // Skip line comments.
     // 跳过行注释.
     if (startswith(p, "//")) {
       p += 2;
@@ -785,7 +676,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // Skip block comments.
     // 跳过块注释.
     if (startswith(p, "/*")) {
       char* q = strstr(p + 2, "*/");
@@ -796,7 +686,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // Skip newline.
     // 跳过换行.
     if (*p == '\n') {
       p++;
@@ -805,7 +694,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // Skip whitespace characters.
     // 跳过空白字符.
     if (isspace((unsigned char)*p)) {
       p++;
@@ -813,7 +701,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // Numeric literal
     // 数值字面量
     if (isdigit((unsigned char)*p) || (*p == '.' && isdigit((unsigned char)p[1]))) {
       char* q = p++;
@@ -830,7 +717,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // String literal
     // 字符串字面量
     if (*p == '"') {
       cur = cur->next = read_string_literal(ctx, p, p, raw_trivia);
@@ -839,7 +725,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // UTF-8 string literal
     // UTF-8 字符串字面量
     if (startswith(p, "u8\"")) {
       cur = cur->next = read_string_literal(ctx, p, p + 2, raw_trivia);
@@ -848,7 +733,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // UTF-16 string literal
     // UTF-16 字符串字面量
     if (startswith(p, "u\"")) {
       cur = cur->next = read_utf16_string_literal(ctx, p, p + 1, raw_trivia);
@@ -857,7 +741,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // Wide string literal
     // 宽字符串字面量
     if (startswith(p, "L\"")) {
       cur = cur->next = read_utf32_string_literal(ctx, p, p + 1, libcp_ty_int, raw_trivia);
@@ -866,7 +749,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // UTF-32 string literal
     // UTF-32 字符串字面量
     if (startswith(p, "U\"")) {
       cur = cur->next = read_utf32_string_literal(ctx, p, p + 1, libcp_ty_uint, raw_trivia);
@@ -875,7 +757,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // Character literal
     // 字符字面量
     if (*p == '\'') {
       cur = cur->next = read_char_literal(ctx, p, p, libcp_ty_int, raw_trivia);
@@ -885,7 +766,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // UTF-16 character literal
     // UTF-16 字符字面量
     if (startswith(p, "u'")) {
       cur = cur->next = read_char_literal(ctx, p, p + 1, libcp_ty_ushort, raw_trivia);
@@ -895,7 +775,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // Wide character literal
     // 宽字符字面量
     if (startswith(p, "L'")) {
       cur = cur->next = read_char_literal(ctx, p, p + 1, libcp_ty_int, raw_trivia);
@@ -904,7 +783,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // UTF-32 character literal
     // UTF-32 字符字面量
     if (startswith(p, "U'")) {
       cur = cur->next = read_char_literal(ctx, p, p + 1, libcp_ty_uint, raw_trivia);
@@ -913,7 +791,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // Identifier or keyword
     // 标识符或关键字
     int ident_len = read_ident(ctx, p);
     if (ident_len) {
@@ -923,7 +800,6 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       continue;
     }
 
-    // Punctuators
     // 标点
     int punct_len = read_punct(p);
     if (punct_len) {
@@ -936,18 +812,12 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
     libcp_error_at(ctx, p, "invalid token");
   }
 
-  // The trailing trivia of the file belongs to the EOF token.
   // 文件末尾的 trivia 归属于 EOF token.
   cur = cur->next = new_token(ctx, TK_EOF, p, p, raw_trivia);
   add_line_numbers(head.next);
   return head.next;
 }
 
-// Returns the contents of a given file, and its length in *len. The
-// text is returned exactly as it is on disk: the rewrites that used to
-// happen here (a synthesized final newline, the BOM skip) moved into
-// make_scan_buffer, which can remember them in raw coordinates.
-//
 // 返回给定文件的内容, 并通过 *len 返回它的长度. 文本按磁盘上的原样返回:
 // 过去在这里做的改写 (合成末尾换行, 跳过 BOM) 已移入 make_scan_buffer,
 // 由它用 raw 坐标记住这些改写.
@@ -955,11 +825,6 @@ static char* read_file(LibcpContext* ctx, char* path, size_t* len) {
   FILE* fp;
 
   if (strcmp(path, "-") == 0) {
-    // By convention, read from stdin if a given filename is "-". stdin
-    // cannot be rewound and its EOF flag is sticky, so the first read is
-    // cached in the context: a second tokenize of the same stream then
-    // sees the same text instead of a silently empty one (C12).
-    //
     // 按惯例, 文件名为 "-" 时从 stdin 读取. stdin 无法回退, 且其 EOF
     // 标志是粘滞的, 因此第一次读取的结果缓存在 context 里: 再次 tokenize
     // 同一流时会看到相同的文本, 而不是静默地读到空内容 (C12).
@@ -978,7 +843,6 @@ static char* read_file(LibcpContext* ctx, char* path, size_t* len) {
   size_t buflen;
   FILE* out = open_memstream(&buf, &buflen);
 
-  // Read the entire file.
   // 读取整个文件.
   for (;;) {
     char buf2[4096];
@@ -993,9 +857,6 @@ static char* read_file(LibcpContext* ctx, char* path, size_t* len) {
 
   fflush(out);
 
-  // The lexer keeps offsets in int; a larger file would be truncated
-  // silently, so refuse it instead (C12).
-  //
   // 词法分析器用 int 保存偏移; 更大的文件会被静默截断, 因此直接拒绝 (C12).
   if (buflen > INT32_MAX) {
     fclose(out);
@@ -1003,9 +864,6 @@ static char* read_file(LibcpContext* ctx, char* path, size_t* len) {
     libcp_error(ctx, "file too large: %s", path);
   }
 
-  // fputc below grows the memstream's length by the terminator; keep the
-  // text length itself for the callers and the stdin cache.
-  //
   // 下面的 fputc 会让 memstream 的长度把终止符也算进去; 这里先保留纯文本
   // 长度, 供调用方与 stdin 缓存使用.
   size_t data_len = buflen;
@@ -1013,10 +871,6 @@ static char* read_file(LibcpContext* ctx, char* path, size_t* len) {
   fputc('\0', out);
   fclose(out);
 
-  // The memstream buffer belongs to the C library's malloc, not to
-  // LIBCP_MALLOC, so it is released with free(); the text is moved
-  // into the arena so a context reset releases it with everything else.
-  //
   // memstream 的缓冲区属于 C 库的 malloc, 而不是 LIBCP_MALLOC, 因此用
   // free() 释放; 文本随后搬进 arena, 这样 context reset 时会连同其它
   // per-TU 内存一起释放.
@@ -1044,11 +898,6 @@ LibcpFile* libcp_new_file_len(LibcpContext* ctx, char* name, int file_no, char* 
   file->file_no      = file_no;
   file->contents     = contents;
 
-  // A synthetic buffer is scanned as it is: it is its own raw text, the
-  // map is the identity and the line numbers are the plain newline
-  // count. (libcp_tokenize_file_impl replaces these tables with the ones
-  // make_scan_buffer builds.)
-  //
   // 合成缓冲区按原样扫描: 它自身就是 raw 文本, map 是恒等映射, 行号就是
   // 简单的换行计数. (libcp_tokenize_file_impl 会用 make_scan_buffer 建出的
   // 表替换这些表.)
@@ -1070,32 +919,16 @@ LibcpFile* libcp_new_file(LibcpContext* ctx, char* name, int file_no, char* cont
   return libcp_new_file_len(ctx, name, file_no, contents, strlen(contents));
 }
 
-// True if p starts a line break: '\n', '\r\n' or '\r'.
 // 若 p 处是一个换行则为 true: '\n', '\r\n' 或 '\r'.
 bool libcp_is_line_break(char* p) {
   return *p == '\n' || *p == '\r';
 }
 
-// The length of the line break at p.
 // p 处换行的长度.
 int libcp_line_break_len(char* p) {
   return (*p == '\r' && p[1] == '\n') ? 2 : 1;
 }
 
-// Build the buffer the lexer scans for a real file, out of the raw text
-// (PLAN T2.1). The scan text is the one the three former pre-passes
-// produced - line breaks canonicalized to '\n', a backslash before a
-// line break removed together with it, universal character names
-// rewritten to UTF-8, a leading BOM skipped and a final newline
-// guaranteed - so every consumer still sees the text it always saw. The
-// `map` records, for every scan offset, the raw offset it came from, and
-// `lines` the line number of every raw offset: the two together keep the
-// raw coordinates reachable from the token stream. The line numbers are
-// the one observable of those passes and are reproduced exactly - a
-// break inside a continuation counts at the next real break (the removed
-// pass moved those newlines down) and the synthesized final newline
-// counts at the end.
-//
 // 由 raw 文本为真实文件构建词法分析器扫描的缓冲区 (PLAN T2.1). 扫描文本
 // 与过去三个前置 pass 的产物一致 - 换行规范化为 '\n', 换行前的反斜杠连同
 // 换行一起删除, universal character name 改写为 UTF-8, 跳过开头的 BOM,
@@ -1110,64 +943,42 @@ static char*
   int* lines = libcp_arena_calloc(ctx, len + 2, sizeof(int));
   char* buf  = libcp_arena_calloc(ctx, 1, len + 2);
 
-  // The text the pre-passes used to see: the raw text plus the final
-  // newline for a text that does not end in one.
-  //
   // 前置 pass 过去看到的文本: raw 文本, 若不以换行结尾则补一个末尾换行.
   char* text = libcp_arena_calloc(ctx, 1, len + 2);
   memcpy(text, raw, len);
   if (len == 0 || raw[len - 1] != '\n')
     text[len] = '\n';
-  // The raw length, plus the synthesized final newline. Never strlen:
-  // the raw text may contain a NUL, which libcp_tokenize_file_impl diagnoses.
-  //
   // raw 长度, 再加上合成的末尾换行. 绝不能用 strlen: raw 文本可能含有 NUL,
   // 这种情况由 libcp_tokenize_file_impl 诊断.
   int n = len;
   if (len == 0 || raw[len - 1] != '\n')
     n++;
 
-  int i       = 0;  // position in `text`
-                    // `text` 中的位置
-  int j       = 0;  // position in `buf`
-                    // `buf` 中的位置
-  int mark    = 0;  // first raw offset without a line number
-                    // 第一个还没有行号的 raw 偏移
-  int line    = 1;  // the line number at `i`
-                    // `i` 处的行号
-  int pending = 0;  // continuation breaks not credited yet
-                    // 尚未计入的续行换行数
+  int i       = 0;  // `text` 中的位置
+  int j       = 0;  // `buf` 中的位置
+  int mark    = 0;  // 第一个还没有行号的 raw 偏移
+  int line    = 1;  // `i` 处的行号
+  int pending = 0;  // 尚未计入的续行换行数
 
-  // A BOM at the very start is skipped and becomes part of the leading
-  // trivia of the first token.
-  //
   // 开头的 BOM 会被跳过, 并成为第一个 token 的前导 trivia 的一部分.
   if (!strncmp(text, "\xef\xbb\xbf", 3))
     i = 3;
   map[0] = i;
 
   while (i < n) {
-    // Every raw offset the walk passes gets the line number of its
-    // position; the offsets inside a continuation belong to the line
-    // they are on.
-    //
     // 遍历经过的每个 raw 偏移都取它所在位置的行号; 续行内部的偏移属于
     // 它们所在的那一行.
     for (; mark <= i && mark <= len; mark++)
       lines[mark] = line;
 
-    // A backslash before a line break joins the lines: both bytes are
-    // dropped, and the break is not a break for the lexer.
-    //
-    // 换行前的反斜杠让两行连接起来: 两个字节都被丢弃, 该换行对词法
-    // 分析器来说不算换行.
+    // 换行前的反斜杠让两行连接起来: 反斜杠与换行一起被丢弃, 该换行对
+    // 词法分析器来说不算换行.
     if (text[i] == '\\' && i + 1 < n && libcp_is_line_break(text + i + 1)) {
       pending++;
       i += 1 + libcp_line_break_len(text + i + 1);
       continue;
     }
 
-    // A line break becomes a single '\n'.
     // 换行被规范化为单个 '\n'.
     if (libcp_is_line_break(text + i)) {
       map[j]   = i;
@@ -1178,7 +989,6 @@ static char*
       continue;
     }
 
-    // A universal character name becomes UTF-8; `raw` keeps the escape.
     // universal character name 被改写为 UTF-8; `raw` 中保留原来的转义写法.
     if (text[i] == '\\' && (text[i + 1] == 'u' || text[i + 1] == 'U')) {
       int digs   = text[i + 1] == 'u' ? 4 : 8;
@@ -1193,9 +1003,6 @@ static char*
       }
     }
 
-    // Any other backslash is copied together with the byte after it, so
-    // that the "u" of an escaped "\\u" is not taken for an escape.
-    //
     // 其它反斜杠与它后面的一个字节一起原样复制, 以免把 "\\u" 中转义过的
     // "u" 当成转义序列的开头.
     if (text[i] == '\\' && i + 1 < len) {
@@ -1207,11 +1014,6 @@ static char*
     buf[j++] = text[i++];
   }
 
-  // The lexer needs the buffer to end in a newline: a line comment runs
-  // to the next one. The old passes kept the synthesized newline when a
-  // trailing continuation swallowed it, by materializing the pending
-  // breaks at the end.
-  //
   // 词法分析器要求缓冲区以换行结尾: 行注释要一直跑到下一个换行. 过去的
   // pass 在末尾续行吞掉合成换行时会保留它, 办法就是在最后补出尚未计入的
   // 换行.
@@ -1220,10 +1022,6 @@ static char*
     buf[j++] = '\n';
   }
 
-  // Credit the continuation breaks that never saw a real break after
-  // them, and give the file end (where the EOF token sits) the final
-  // number.
-  //
   // 计入那些后面从未遇到真实换行的续行, 并给文件末尾 (EOF token 所在处)
   // 赋上最终的行号.
   line += pending;
@@ -1247,21 +1045,15 @@ LibcpToken* libcp_tokenize_file_impl(LibcpContext* ctx, char* path) {
   int *map, *lines;
   char* contents = make_scan_buffer(ctx, raw, (int)raw_len, &map, &lines);
 
-  // Save the filename for assembler .file directive.
   // 为汇编器的 .file 指令保存文件名.
   int file_no     = ctx->next_file_no++;
   LibcpFile* file = libcp_new_file(ctx, path, file_no + 1, contents);
 
-  // The scan buffer replaces the identity tables new_file built.
   // 扫描缓冲区替换掉 new_file 建出的恒等映射表.
   file->raw   = raw;
   file->map   = map;
   file->lines = lines;
 
-  // A NUL byte would silently end the token stream. The scan buffer now
-  // contains it (make_scan_buffer no longer stops at strlen), so report
-  // the first one before tokenizing.
-  //
   // NUL 字节会让 token 流静默结束. 扫描缓冲区现在会包含它 (make_scan_buffer
   // 不再在 strlen 处停下), 因此在 tokenize 之前先报告第一个 NUL.
   if (memchr(raw, 0, raw_len)) {
@@ -1269,7 +1061,6 @@ LibcpToken* libcp_tokenize_file_impl(LibcpContext* ctx, char* path) {
     libcp_error_at(ctx, memchr(contents, 0, raw_len + 2), "NUL byte in source file");
   }
 
-  // Save the filename for assembler .file directive.
   // 为汇编器的 .file 指令保存文件名.
   if (ctx->input_files_cap < file_no + 2) {
     size_t old       = sizeof(LibcpFile*) * ctx->input_files_cap;
