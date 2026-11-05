@@ -3680,21 +3680,21 @@ static void resolve_node(LibcpContext* ctx, LibcpNode* node) {
     case ND_CASE:
       // The value(s) a case label stands for: the parser recorded the
       // operands unevaluated, because whether an expression is a
-      // constant is not a syntax question. They are truncated to `int`,
-      // as they were when the parser wrote `begin`/`end` on its way past
-      // them. `:` is where the range check is anchored.
+      // constant is not a syntax question. They keep their full value;
+      // codegen narrows them to the controlling expression's width.
+      // `:` is where the range check is anchored.
       //
       // case 标签代表的值: 解析器记录未求值的操作数, 因为表达式是否
-      // 为常量不是语法问题. 它们被截断为 `int`, 与解析器经过时写入
-      // `begin`/`end` 的做法一致. 范围检查的锚点在 `:` 处.
+      // 为常量不是语法问题. 它们保留完整取值, 由 codegen 按控制表达式的
+      // 宽度收窄. 范围检查的锚点在 `:` 处.
       resolve_node(ctx, node->begin_expr);
       resolve_node(ctx, node->end_expr);
       if (node->begin_expr) {
-        int begin = (int)eval(ctx, node->begin_expr);
-        int end   = begin;
+        long begin = eval(ctx, node->begin_expr);
+        long end   = begin;
 
         if (node->end_expr) {
-          end = (int)eval(ctx, node->end_expr);
+          end = eval(ctx, node->end_expr);
           if (end < begin)
             libcp_error_tok(ctx, node->colon_tok, "empty case range specified");
         }

@@ -1515,19 +1515,45 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
       gen_expr(ctx, node->cond);
 
       for (LibcpNode* n = cg(node)->case_next; n; n = cg(n)->case_next) {
-        char* ax = (node->cond->ty->size == 8) ? "%rax" : "%eax";
-        char* di = (node->cond->ty->size == 8) ? "%rdi" : "%edi";
+        bool wide = node->cond->ty->size == 8;
+        char* ax  = wide ? "%rax" : "%eax";
+        char* di  = wide ? "%rdi" : "%edi";
+
+        // A 32-bit switch narrows its labels to int, as the controlling
+        // expression is; a 64-bit one compares the full value. `cmp` takes
+        // only a sign-extended imm32, so a wide label that does not fit
+        // goes through %rdi (and %rsi for the range bound).
+        //
+        // 32 位 switch 的标签按控制表达式的宽度收窄为 int; 64 位 switch
+        // 比较完整取值. `cmp` 只接受符号扩展的 imm32, 因此放不下的 64 位
+        // 标签先装入 %rdi (范围上界用 %rsi).
+        long begin    = wide ? n->begin : (long)(int)n->begin;
+        long span     = wide ? n->end - n->begin : (long)(int)n->end - (long)(int)n->begin;
+        bool wide_imm = wide && (begin < INT32_MIN || begin > INT32_MAX || span < INT32_MIN ||
+                                 span > INT32_MAX);
 
         if (n->begin == n->end) {
-          println("  cmp $%ld, %s", n->begin, ax);
+          if (begin < INT32_MIN || begin > INT32_MAX) {
+            println("  mov $%ld, %s", begin, di);
+            println("  cmp %s, %s", di, ax);
+          } else {
+            println("  cmp $%ld, %s", begin, ax);
+          }
           println("  je %s", cg(n)->unique_label);
           continue;
         }
 
         // [GNU] Case ranges
         println("  mov %s, %s", ax, di);
-        println("  sub $%ld, %s", n->begin, di);
-        println("  cmp $%ld, %s", n->end - n->begin, di);
+        if (wide_imm) {
+          println("  mov $%ld, %%rsi", begin);
+          println("  sub %%rsi, %s", di);
+          println("  mov $%ld, %%rsi", span);
+          println("  cmp %%rsi, %s", di);
+        } else {
+          println("  sub $%ld, %s", begin, di);
+          println("  cmp $%ld, %s", span, di);
+        }
         println("  jbe %s", cg(n)->unique_label);
       }
 
