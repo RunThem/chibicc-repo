@@ -54,19 +54,22 @@
 - `make test-stage2` - 自举检查: 用 chibicc 编译它自己, 再重跑全部测试.
 - `make test-all` - 以上两项合计. `make clean` 用于清理.
 - 单独运行某个特性测试: `make test/sizeof.exe && ./test/sizeof.exe`(模式规则会自动处理).
-- 只验证前端(本机无 Linux 后端): `-E`(预处理), `-S`(汇编文本), `-dump-tokens` / `-reconstruct`(第 1 层), `-dump-cst` / `-reconstruct-cst` / `-verify-cst`(第 2 层), `-dump-expansions` / `-verify-expansions`(provenance), `-dump-ast`(第 3 层, parse 后 sema 前早退).
+- 只验证前端(非 x86-64 Linux 宿主不能在本机汇编/运行): `-E`(预处理), `-S`(汇编文本), `-dump-tokens` / `-reconstruct`(第 1 层), `-dump-cst` / `-reconstruct-cst` / `-verify-cst`(第 2 层), `-dump-expansions` / `-verify-expansions`(provenance), `-dump-ast`(第 3 层, parse 后 sema 前早退).
 - 库构建: `make libcp.a`; Linux 下 `make` 也产 `libcp.so`(PIC, 只导出 D7, SONAME `libcp.so.0`; macOS 只承诺 `.a`), `chibicc` 链接静态库; `make install PREFIX=... [DESTDIR=...]` 装 10 个公共头, 库与 `libcp.pc`, `pkg-config --cflags --libs libcp` 可用; `LIBCP_VERSION` / `libcp_version()` 为 `0.1.0`. `make test-stage2` 用 chibicc 重编库对象(`stage2/libcp.a`). `make check-library` 跑 library / allocator / public-api / install 四个脚本(头文件自包含, 消费者只依赖 D7, `.a` 的 D7 齐全, `.so` 只导出 D7, install / pkg-config 布局); `test/library.sh` 最后一轮用 ASan+UBSan 重编库对象, 查 UB 与 reset 后活字节归零.
-- 每次改动必须过三道闸门: `make docker-test`(含自举), 汇编等价性 diff(`make docker-snapshot-diff`), 该改动新增的针对性测试. 行为变化必须单独提交.
+- 每次改动必须过三道闸门: 全量测试含自举(x86-64 Linux 宿主原生跑 `make test-all`, 其它宿主用 `make docker-test`), 汇编等价性 diff(`make docker-snapshot-diff`; 该目标只生成快照做逐字节比较, 基线固定在 amd64 Ubuntu 容器内, 各宿主保持一致), 该改动新增的针对性测试. 行为变化必须单独提交.
 
-## 平台陷阱与 Docker 测试环境(本工作区为 macOS ARM64)
+## 平台陷阱与测试环境(先按宿主选路径)
 
-chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码了 Linux 路径(`/usr/include/x86_64-linux-gnu` 等)与 gcc/`ld` 调用. 编译器本体在本机**可以构建**, 但它生成的代码无法在本机汇编或运行, 直接跑 `make test` 会在汇编阶段失败.
+chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码了 Linux 路径(`/usr/include/x86_64-linux-gnu` 等)与 gcc/`ld` 调用. 先确认宿主, 再选测试路径:
 
-完整测试通过 Docker 运行(OrbStack, amd64 容器走 Rosetta, 本机已具备):
+- **x86-64 Linux 宿主**(`uname -s` 为 `Linux`, `uname -m` 为 `x86_64`; 含 devcontainer 与 CI): 生成物可直接由本机 `as` / `ld` 消费, 直接跑 `make test-all`, 不要再用 Docker - 容器只增加启动开销, 测试结果与本机一致. 第三方脚本用 `make test-thirdparty`(仅 x86-64 Linux 可用, 不要加 `test/thirdparty` 的 make shim).
+- **其它宿主**(macOS ARM64 / Intel macOS / Linux arm64 等): 编译器本体仍可构建, 但生成的代码无法在本机汇编或运行, 直接跑 `make test` 会在汇编阶段失败; 完整测试走下面的 Docker 路径.
+
+非 x86-64 Linux 宿主通过 Docker 运行完整测试(macOS 上用 OrbStack, amd64 容器走 Rosetta):
 
 - `make docker-image` - 构建依赖镜像 `chibicc:amd64`(ubuntu:22.04, amd64, 一次性约 90 s).
-- `make docker-test` - 自研测试集 + 自举, 分钟级; 仓库只读挂载, 构建与测试在容器可写层, 本机构建产物不受影响.
-- `make docker-test-thirdparty` - 五个第三方脚本(tinycc libpng git sqlite cpython, 由小到大); `THIRDPARTY=git` 可单跑; 很慢且首次需要网络; clone 缓存在 `thirdparty/`(.gitignore, 损坏就删).
+- `make docker-test` - 自研测试集 + 自举, 分钟级; 仅非 x86-64 Linux 宿主需要; 仓库只读挂载, 构建与测试在容器可写层, 本机构建产物不受影响.
+- `make docker-test-thirdparty` - 五个第三方脚本(tinycc libpng git sqlite cpython, 由小到大); 仅非 x86-64 Linux 宿主需要; `THIRDPARTY=git` 可单跑; 很慢且首次需要网络; clone 缓存在 `thirdparty/`(.gitignore, 损坏就删).
 - Rosetta 下 tcc 的 106_pthread / 112_backtrace / 113_btdll 会不稳定 SIGSEGV, 与 chibicc 无关; `test/thirdparty/make` 是 PATH shim(文件名必须是 make), 测试前移除这三个用例; 真 x86-64 Linux 不需要.
 - 构建与测试必须在容器可写层(/work): tcc 的 `-run`/bcheck 只认 overlayfs, virtiofs 或 docker volume 上确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存, 也避免 darwin/linux 产物互相污染.
 - 镜像内 `git@github.com:` 已重写为 HTTPS; chibicc 只调用 `as` / `ld` 并按 Ubuntu 路径找 crt/libgcc.
