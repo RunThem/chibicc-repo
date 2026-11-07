@@ -47,13 +47,13 @@
 
 - Dockerfile 构建 `chibicc:amd64`, 基于 ubuntu:22.04.
 - 仓库只读挂载, 源码复制到容器可写层 `/work`.
-- `snapshot-normalize.awk` 归一化时间宏和不稳定标签编号.
+- `snapshot-normalize.awk` 归一化时间宏和不稳定标签编号 (随放宽闸门线收官退役; 现行闸门是逐字节 diff).
 - `make docker-snapshot-diff` 输出 `snapshot diff: empty` 才算通过.
 
 ### 产物
 
 - 汇编快照基线.
-- 归一化脚本.
+- 归一化脚本 (已退役).
 - Docker 测试环境.
 
 ### 产物可以干什么

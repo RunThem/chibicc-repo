@@ -132,7 +132,7 @@ void codegen(Obj *prog, FILE *out) {
 - 第 4 层物化匿名对象时用这个计数器, 例如字符串全局.
 - 第 5 层整形时从 `unique_name_next()` 接着用.
 
-格式是 load-bearing 的: 快照归一化脚本会重编号后缀为 `.<数字>` 的标签. 改前缀会让所有快照 diff.
+格式是 load-bearing 的: 快照闸门是逐字节 diff, 改前缀或编号规则会让所有相关快照非空.
 
 ### 8.5.5 私有状态
 
