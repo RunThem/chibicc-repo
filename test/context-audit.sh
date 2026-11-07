@@ -4,31 +4,26 @@
 # `LibcpContext *ctx` as its first parameter; there is no thread-local
 # accessor, and codegen receives the driver's ctx explicitly.
 #
-# Report mode (default) prints what it finds and exits 0, so the gate can
-# land before the line is converted. `--strict` turns every finding into
-# a failure; `make check-context` runs the strict form. LIBCP_LIB selects
-# the archive to inspect.
+# Every finding fails the gate. The conversion this gate accompanied is
+# complete, so the old report mode (print findings, exit 0) is gone.
+# LIBCP_LIB selects the archive to inspect.
+#
+# Usage: test/context-audit.sh --strict
 
 set -u
 
-root=$(cd "$(dirname "$0")/.." && pwd)
-lib=${LIBCP_LIB:-$root/libcp.a}
-mode=${1:-report}
-rc=0
-
-if [ "$mode" = "--strict" ]; then
-  strict=1
-else
-  strict=0
+if [ "${1:-}" != "--strict" ]; then
+  echo "usage: $0 --strict" >&2
+  exit 2
 fi
 
+root=$(cd "$(dirname "$0")/.." && pwd)
+lib=${LIBCP_LIB:-$root/libcp.a}
+rc=0
+
 note() {
-  if [ "$strict" -eq 1 ]; then
-    echo "context-audit: $1" >&2
-    rc=1
-  else
-    echo "context-audit: $1"
-  fi
+  echo "context-audit: $1" >&2
+  rc=1
 }
 
 # 1. The accessor names must not exist in the library sources or headers.

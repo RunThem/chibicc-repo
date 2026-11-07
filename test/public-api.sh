@@ -2,8 +2,8 @@
 # The public-API gate (PLAN L3.1d): every public header compiles on its
 # own, a consumer that sees nothing but the public include tree links
 # against libcp.a and runs, and the consumer object references no
-# internal symbol. The full nm whitelist for the library itself arrives
-# in L3.2b, after the .a symbol policy is decided.
+# internal symbol. It also checks that every D7 function is present in
+# libcp.a (L3.2b) and that libcp.so exports exactly D7 (L3.3b).
 
 set -eu
 
