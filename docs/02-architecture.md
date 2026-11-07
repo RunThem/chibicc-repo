@@ -53,7 +53,7 @@
 | 第 2 层 | `libcp_cst_parse` | 第 1 层的 token 链, 预处理之前 | `LibcpCstNode` 树 | 是 |
 | 第 3 层 | `libcp_parse` | 预处理后的 token 链 | `LibcpNode` 树 | 是 |
 | 第 4 层 | `libcp_sema` | 第 3 层的树 | 原地标注的同一棵树 + `LibcpObj` 链 | 是 |
-| 第 5 层 | `codegen()` | 第 4 层的树和 `Obj` 链 | x86-64 GAS 汇编 | 否 |
+| 第 5 层 | `codegen()` | 第 4 层的树和 `LibcpObj` 链 | x86-64 GAS 汇编 | 否 |
 
 每一层的"产物"不是抽象概念, 而是具体的内存结构: token 链, CST 树, AST 树, 标注树和全局对象链. 这些结构体在公共头里定义, 字段直接可读.
 
@@ -88,9 +88,9 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 ### 2.4.1 第 1 层的契约
 
 - 对 `libcp_tokenize_file()` 和 `libcp_tokenize_buffer_len()` 的直接输出, 每个 token 的 `trivia` 加 `raw_loc` 按序覆盖 raw 文本的每一个字节. 唯一的例外是 `make_scan_buffer` 为保证扫描缓冲以换行结束而合成的那个换行, 它不属于文件, 不出现在 raw 坐标里.
-- 文件输入时, 第一个 token 的前置 trivia 包含 BOM, 如果文件有 BOM. `libcp_tokenize_buffer*` 不做过改写, BOM 会留在第一个 token 的拼写里, 调用者应自己剥离.
+- 文件输入时, 第一个 token 的前置 trivia 包含 BOM, 如果文件有 BOM. `libcp_tokenize_buffer*` 不做改写, BOM 会留在第一个 token 的拼写里, 调用者应自己剥离.
 - 最后一个 token 的尾部 trivia 挂在 `TK_EOF` 上.
-- token 的 `line_no` 是显示行号, 已经叠加 `#line` 的偏移; `file->lines` 给出物理行号.
+- `tokenize_*` 直接输出中的 `line_no` 是物理行号; 只有 `libcp_preprocess` 返回的流会叠加 `#line` 偏移. `file->lines` 始终给出物理行号.
 - 词法错误经诊断回调报告, 公共入口返回 NULL.
 
 契约只覆盖 `tokenize` 的直接输出. 宏粘贴, 字符串化, 内建宏产生的 token 是合成 token, 它们的 `trivia` / `raw_loc` 指向派生来源或合成缓冲, 不参与逐字节重建.
@@ -99,7 +99,7 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 
 - 输入是一条 token 链, 输出是另一条 token 链.
 - 输入链会被原地改写: `next` 指针被拼接, 展开产物插入其中. 需要原始流或 CST 的消费者必须先取走.
-- 输出的每个非 EOF token 都带 `prov` 链, 源 token 的 `prov` 为 NULL.
+- 输出的每个宏展开产物 token 都带 `prov` 链; 直接来自源码的 token (包括非 EOF token) 的 `prov` 为 NULL.
 - 宏展开遵循 hideset 规则, 保证递归宏一定停止.
 - 条件编译的未选中分支被丢弃, 不进入输出.
 - `#include` 通过文件系统读取, 搜索路径来自 context 配置.
@@ -130,7 +130,7 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 - 输入是第 3 层的树, 原地标注.
 - 输出是全局对象链 `LibcpObj *`, 每个函数和全局变量一项, 包含 `extern` 声明与 `__func__` 一类匿名对象.
 - 树上的每个表达式节点都有 `ty`.
-- `ND_IDENT` 被绑定成 `ND_VAR` 或 `ND_NUM`. `ND_STRING` 被改写成指向匿名全局的 `ND_VAR`. 这是第 4 层仅有的节点种类改写.
+- `ND_IDENT` 被绑定成 `ND_VAR` 或 `ND_NUM`. 源码表达式位置的 `ND_STRING` 被改写成指向匿名全局的 `ND_VAR`; 第 4 层物化字符串 (例如 `INIT_STR` 初始化器) 时仍会创建保持 `ND_STRING` 种类的节点, 两者都通过 `var` 指向匿名全局. 这是第 4 层仅有的节点种类改写.
 - 声明记录保留在语句链里, 供消费者决定怎么展开. sema 不把记录变成语句.
 - 编译期结论记录在节点字段上: `ND_SIZEOF` / `ND_ALIGNOF` 的 `val`, `ND_GENERIC` 的 `generic_sel`, 内建类型谓词的 `val`.
 - 隐式 cast 由 sema 插入, 带 `is_implicit = true`.
@@ -159,7 +159,7 @@ libcp_context_free(ctx);                     /* 销毁 */
 
 ### 2.5.2 指针失效规则
 
-**reset 之后, 该 context 返回过的所有指针立即失效**, 包括 token, file, AST 节点, 类型, Obj, CST 节点, 诊断消息字符串, 宏名字字符串.
+**reset 之后, 该 context 返回过的所有指针立即失效**, 包括 token, file, AST 节点, 类型, Obj, CST 节点, 诊断消息字符串, 以及 arena 分配的宏名字字符串. 例外是 `libcp_version` 的字符串字面量与预定义宏表中的静态 `name` / 固定 `value`, 它们不随 reset 失效.
 
 库不做悬垂指针检测. 消费者要么在 reset 前用完, 要么自己复制需要保留的数据. 诊断回调收到的 `filename` 和 `message` 也只保证到下一次 reset.
 
@@ -178,7 +178,7 @@ libcp_context_free(ctx);                     /* 销毁 */
 
 - 块大小 64 KiB, 按需追加. 块本身从 `<libcp/allocator.h>` 的 `LIBCP_*` 宏取得, 默认是 libc, 可在重编库时替换.
 - `calloc` 语义, 返回的内存零初始化.
-- 对齐至少 8 字节; 零初始化分配用 16 字节, 因为 `Token` 和 `Node` 内含 `long double`.
+- 对齐至少 8 字节; 零初始化分配用 16 字节, 因为 `LibcpToken` 和 `LibcpNode` 内含 `long double`.
 - `realloc` 复制到新块, 旧块不回收. 因此扩容的峰值约为最终大小的两倍.
 - 不提供逐对象 free. 不做 per-phase arena.
 
@@ -195,10 +195,14 @@ typedef struct libcp_diagnostic {
   int column;             /* 可能为 0 */
   LibcpDiagnosticSeverity severity;
   const char *message;
+  const struct libcp_token *tok;       /* 锚点 token; 无位置错误为 NULL */
+  const struct libcp_macro_prov *prov; /* 该 token 的宏展开链; 源 token 为 NULL */
 } LibcpDiagnostic;
 
 typedef void (*LibcpDiagnosticFn)(void *user, const LibcpDiagnostic *);
 ```
+
+`tok` / `prov` 只在 token 锚定的诊断上有意义; 默认处理器忽略它们, 打印结果不变.
 
 注册方式:
 
@@ -224,7 +228,7 @@ libcp_context_set_diagnostic(ctx, on_diagnostic, user);
 
 ### 2.6.3 警告
 
-警告走同一个回调, `severity` 为 `LIBCP_DIAG_WARNING`. 警告不中断流程, 不设置 `failed`. 目前只有数组初始化器 excess elements 一类警告.
+警告走同一个回调, `severity` 为 `LIBCP_DIAG_WARNING`. 警告不中断流程, 不设置 `failed`. 当前包括数组初始化器的 excess elements, 预处理指令行尾的多余 token, 以及被忽略的 `cleanup` 属性等.
 
 ## 2.7 线程模型
 
@@ -270,8 +274,8 @@ libcp_context_set_diagnostic(ctx, on_diagnostic, user);
 
 - **只想拿 token**: 第 1 层. 不要预处理, 否则宏会消失.
 - **想重排空白但保留注释**: 第 2 层. 不要用第 3 层, 第 3 层没有注释.
-- **想改写某个函数体但保留其他字节**: 第 2 层定位 span, 再手工替换. 第 3 层没有源码范围.
-- **想知道一个表达式的类型**: 第 4 层. 但注意第 4 层会改写 `ND_IDENT` / `ND_STRING`, 需要原始形状就先复制或先 dump.
+- **想改写某个函数体但保留其他字节**: 第 2 层定位 span, 再手工替换. 第 3 层可以用 `libcp_node_source_range` 取子树锚点 token 的起止, 但 CST 节点本身仍没有 `start` / `end` 字段.
+- **想知道一个表达式的类型**: 第 4 层. 但注意第 4 层会改写源码表达式位置的 `ND_IDENT` / `ND_STRING`, 需要原始形状就先复制或先 dump.
 - **想追踪宏**: 预处理 + provenance. 不要指望语法树上有宏调用节点.
 
 ## 2.9 参考消费者
@@ -314,13 +318,14 @@ codegen(ctx, prog, out);
 libcp/
   include/libcp/
     libcp.h        伞头, 唯一需要 include 的文件
+    allocator.h     可替换的分配器宏 LIBCP_MALLOC / CALLOC / REALLOC / FREE
     context.h        context, 诊断回调, 配置, 预定义宏
     diagnostic.h     LibcpDiagnostic 与 severity
     token.h          LibcpToken, LibcpFile, 第 1 层入口
     preprocess.h     libcp_preprocess
     provenance.h     宏展开访问器与两个只读通道
     cst.h            第 2 层: LibcpCstKind, LibcpCstNode
-    ast.h            第 3/4 层: Node, Type, Obj, 初始化器, 类型种类
+    ast.h            第 3/4 层: LibcpNode, LibcpType, LibcpObj, 初始化器, 类型种类
     sema.h           libcp_sema
   src/
     tokenize.c       词法, trivia, raw 坐标, 诊断格式化
@@ -329,15 +334,18 @@ libcp/
     cst.c            lossless CST 的建树, dump, verify
     parse.c          递归下降解析器
     sema.c           名字解析, 类型标注, 常量求值, 布局, 初始化器
+    range.c          libcp_node_source_range: AST 子树锚点 token 范围
     type.c           类型构造器与谓词
     lib.c            facade, context, arena, 诊断边界
-    hashmap.c        字符串驻留哈希表
+    hashmap.c        开放寻址的字节串键哈希表 (宏表 / pragma once / include guard)
     strings.c        字符串辅助
     unicode.c        UTF 编码
     libcp.h        内部伞头, 不对外
 main.c               驱动器, 参考消费者
 codegen.c            x86-64 代码生成器, 参考消费者
 driver.h             驱动器内部头
+tools/fmt.c          CST formatter MVP (make fmt-tool, 不安装)
+tools/c2c.c          C 转 C 打印器 (make c2c, 仅测试回归闸门)
 test/                测试, 见第 10 章
 plans/               历史计划与执行记录
 include/             chibicc 自举头文件, 通过 -Iinclude 使用

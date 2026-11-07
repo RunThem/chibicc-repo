@@ -41,8 +41,8 @@
 - `node->var`: 绑定结果.
 - `node->val`: 常量结论.
 - `node->generic_sel`: `_Generic` 选择的结果表达式.
-- `Type.size` / `align` / `members` / `offset` / `bit_offset`: 布局结论.
-- `Obj.init_data` / `rel`: 全局初始化数据与重定位.
+- `LibcpType.size` / `align` / `members` / `offset` / `bit_offset`: 布局结论.
+- `LibcpObj.init_data` / `rel`: 全局初始化数据与重定位.
 
 源码写法保留.
 
@@ -59,21 +59,23 @@
 - 补全类型记录: 数组维度, `typeof` 操作数, 对齐, 位域宽度, case 值.
 - 布局聚合类型.
 - 解析初始化器记录, 建 `LibcpInitTree`.
-- 物化语言规定存在的对象: 字符串字面量的匿名全局, 复合字面量的隐藏对象, 块域 static 的数据镜像.
+- 物化语言规定存在的对象: 字符串字面量的匿名全局, 复合字面量的隐藏对象, 块域 static 的匿名全局对象 (其数据镜像在标注遍序列化).
 
 **第二遍: 标注**
 
-- `add_type` / `type_chain` 给每个节点定型.
-- 插入标准要求的隐式转换, 全部经 `new_cast`, 带 `is_implicit = true`.
+- `libcp_add_type` / `type_chain` 给每个节点定型.
+- 插入标准要求的隐式转换, 全部经 `libcp_new_cast`, 带 `is_implicit = true`.
 - 跑需要类型的检查: 左值性, 实参个数, 位域取地址, VLA 初始化, 不完整类型等.
 - 记录编译期结论.
 - 标注初始化器表达式. 声明记录的初始化器不会被普通遍历到达, 所以单独走 `init_resolved`.
+
+在标注之后, `analyze_function` 还调用 `check_control_flow` 做一次独立的控制流检查: `break` / `continue` / `case` / `default` 的位置, 以及 `goto` / label 配对. 这些检查不在 `libcp_add_type` 里.
 
 两遍分开的原因是: 第一遍建立名字和类型, 第二遍才能定型. 例如 `a + b` 的类型取决于 `a` 和 `b` 的声明, 而声明可能写在后面.
 
 ### 7.2.3 结论记录在节点上
 
-第 4 层不把 `sizeof` 折成数字节点, 而是保留 `ND_SIZEOF`, 把值写在 `val`:
+第 4 层不把 `sizeof` 折成数字节点, 而是保留 `ND_SIZEOF`, 把结论写在 `val`:
 
 ```c
 case ND_SIZEOF:
@@ -82,7 +84,7 @@ case ND_SIZEOF:
   return;
 ```
 
-`ND_GENERIC` 同理: 节点保持 `ND_GENERIC`, 选择结果写在 `generic_sel`. `ND_TYPES_COMPATIBLE` 和 `ND_REG_CLASS` 保持种类, 结论写在 `val`.
+`sizeof(VLA)` 是例外: 它是运行时值, 这个分支在写 `val` 之前提前返回, 由第 5 层构造运行时大小表达式. `ND_GENERIC` 同理: 节点保持 `ND_GENERIC`, 选择结果写在 `generic_sel`. `ND_TYPES_COMPATIBLE` 和 `ND_REG_CLASS` 保持种类, 结论写在 `val`.
 
 这样做的好处:
 
@@ -96,7 +98,7 @@ case ND_SIZEOF:
 
 - `ND_IDENT` 指向变量或函数: 变成 `ND_VAR`, 填 `var` 和 `ty`.
 - `ND_IDENT` 指向枚举常量: 变成 `ND_NUM`, 填 `val` 和 `ty`.
-- `ND_STRING`: 变成 `ND_VAR`, 指向一个匿名全局, 该全局的 `init_data` 是字符串内容.
+- 源码表达式位置的 `ND_STRING`: 变成 `ND_VAR`, 指向一个匿名全局, 该全局的 `init_data` 是字符串内容. 第 4 层为 `INIT_STR` 初始化器物化字符串时, `materialize_str` 仍创建保持 `ND_STRING` 种类的节点; 两种节点都通过 `var` 指向匿名全局.
 
 这是第 4 层仅有的节点种类改写.
 
@@ -104,7 +106,7 @@ case ND_SIZEOF:
 
 - 字符串字面量: 一个匿名全局, 名字形如 `.L..N`.
 - 复合字面量: 文件作用域下是匿名全局, 函数内是隐藏局部.
-- 块域 static: 一个匿名全局, 数据镜像由初始化器序列化产生.
+- 块域 static: 一个匿名全局, 数据镜像由第 4 层的初始化器序列化产生.
 - `__func__` / `__FUNCTION__`: 每个函数两个匿名字符串全局.
 - 变参函数: `__va_area__` 局部, 136 字节.
 - 每个函数: `__alloca_size__` 局部.
@@ -121,7 +123,7 @@ case ND_SIZEOF:
 - `eval_rval`: 地址常量.
 - `eval_double`: 浮点常量.
 - `is_const_expr`: 判断是不是常量表达式.
-- `const_expr`: 解析并求值, 供预处理器 `#if` 使用.
+- `libcp_const_expr`: 解析并求值, 供预处理器 `#if` 使用.
 
 用途:
 
@@ -153,7 +155,7 @@ case ND_SIZEOF:
 | 标签 | 检查配对 | 分配名字 |
 | 临时槽 | 不建 | 建 |
 | 声明记录 | 保留 | 按需展开或摘除 |
-| 初始化器链 | 只解析成树 | 展开成语句或数据 |
+| 初始化器 | 解析成树; 全局与块域 static 的数据在这里序列化 | 把局部初始化器展开成语句; 数据只负责发射 |
 
 这条分界有逐项审计, 见 `plans/RESULT-codegen-direct.md` 的 A9.2 一节.
 
@@ -251,7 +253,7 @@ for (LibcpObj *o = prog; o; o = o->next) {
 - `is_bitfield`, `bit_offset`, `bit_width`.
 - `align_ty`, `align_expr`: `_Alignas`.
 
-类型记录上的 `name` / `name_pos` 只在函数参数的 per-parameter 副本上填写. 共享类型单例不写名字. 要拿声明的名字, 用 `Obj.name` 或 `Node.name_tok`.
+类型记录上的 `name_pos` 只在函数参数的 per-parameter 副本上填写; `name` 还会由 sema 的 `named_type` 写到每个具名对象的类型副本上. 共享类型单例不写名字. 要拿声明的名字, 用 `LibcpObj.name` 或 `LibcpNode.name_tok`.
 
 ### 7.3.3 初始化树
 
@@ -274,7 +276,7 @@ struct libcp_init_tree {
 - 大括号省略.
 - 灵活数组成员定尺寸.
 
-指针放在 `Node.init_resolved`. 这个字段是 sema 私有载荷, 消费者不得读写. 需要初始化数据时, 用 `Obj.init_data` (全局) 或自己从 `Node.decl_init` 重新解析 (局部).
+指针放在 `LibcpNode.init_resolved`. 这个字段是 sema 私有载荷, 消费者不得读写. 需要初始化数据时, 用 `LibcpObj.init_data` (全局) 或自己从 `LibcpNode.decl_init` 重新解析 (局部).
 
 `LibcpInitPath` 是局部初始化器展开时的指示符路径, 供消费者建目标表达式:
 
@@ -293,7 +295,7 @@ struct libcp_init_path {
 
 - 每个表达式节点有 `ty`.
 - `ND_IDENT` 已变成 `ND_VAR` 或 `ND_NUM`.
-- `ND_STRING` 已变成 `ND_VAR`.
+- 源码表达式位置的 `ND_STRING` 已变成 `ND_VAR`; 物化字符串时创建的 `ND_STRING` 节点保持原 kind.
 - 隐式 cast 已插入, 带 `is_implicit`.
 - 声明记录仍在语句链上.
 - 初始化器树在 `init_resolved`.
@@ -306,31 +308,31 @@ struct libcp_init_path {
 ### 7.4.1 入口
 
 ```c
-Obj *sema(Node *toplevel) {
-  sema_init();
-  declare_builtin_functions();
+LibcpObj *libcp_sema(LibcpContext *ctx, LibcpNode *toplevel) {
+  sema_init(ctx);
+  declare_builtin_functions(ctx);
 
-  for (Node *n = toplevel; n; n = n->next) {
+  for (LibcpNode *n = toplevel; n; n = n->next) {
     switch (n->kind) {
     case ND_TYPEDEF:
     case ND_ENUM_CONST:
-      resolve_node(n);
+      resolve_node(ctx, n);
       break;
     case ND_GVAR_DECL:
-      resolve_node(n);
-      serialize_gvar(n);
+      resolve_node(ctx, n);
+      serialize_gvar(ctx, n);
       break;
     case ND_FUNCDEF:
-      resolve_function(n);
+      resolve_function(ctx, n);
       if (n->body)
-        analyze_function(n->var);
+        analyze_function(ctx, n->var);
       break;
     default:
       unreachable();
     }
   }
 
-  finalize_globals();
+  finalize_globals(ctx);
   return globals;
 }
 ```
@@ -355,12 +357,13 @@ Obj *sema(Node *toplevel) {
 `bind_ident` 处理 `ND_IDENT`:
 
 ```c
-static void bind_ident(Node *node) {
-  Token *tok = node->tok;
-  VarScope *sc = find_var(tok);
-  Obj *var = sc ? sc->var : NULL;
+static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
+  LibcpToken *tok = node->tok;
+  LibcpVarScope *sc = find_var(ctx, tok);
+  LibcpObj *var = sc ? sc->var : NULL;
 
   if (var) {
+    /* static inline 引用记录 (简化) */
     node->kind = ND_VAR;
     node->var = var;
     node->ty = var->ty;
@@ -370,13 +373,13 @@ static void bind_ident(Node *node) {
   if (sc && sc->enum_ty) {
     node->kind = ND_NUM;
     node->val = sc->enum_val;
-    node->ty = ty_int;
+    node->ty = libcp_ty_int;
     return;
   }
 
-  if (equal(tok->next, "("))
-    error_tok(tok, "implicit declaration of a function");
-  error_tok(tok, "undefined variable");
+  if (libcp_equal(tok->next, "("))
+    libcp_error_tok(ctx, tok, "implicit declaration of a function");
+  libcp_error_tok(ctx, tok, "undefined variable");
 }
 ```
 
@@ -386,7 +389,7 @@ static void bind_ident(Node *node) {
 
 1. 补全 `ty_op`.
 2. 检查 `void` 变量.
-3. 建 `Obj`: 普通局部用 `new_lvar`; static 用 `new_anon_gvar`.
+3. 建 `LibcpObj`: 普通局部用 `new_lvar`; static 用 `new_anon_gvar`.
 4. 把名字登记进当前作用域.
 5. 解析初始化器记录, 建 `init_resolved`, 可能补全数组类型.
 6. 第二遍标注初始化器表达式.
@@ -394,7 +397,7 @@ static void bind_ident(Node *node) {
 `ND_GVAR_DECL` (全局变量):
 
 1. 补全 `ty_op`.
-2. 建 `Obj`, 设置 `is_definition`, `is_static`, `is_tls`, `is_tentative`, `align`.
+2. 建 `LibcpObj`, 设置 `is_definition`, `is_static`, `is_tls`, `is_tentative`, `align`.
 3. 解析初始化器.
 4. `serialize_gvar` 写 `init_data` 和 `rel`.
 
@@ -405,7 +408,7 @@ static void bind_ident(Node *node) {
 3. 建参数局部, 隐藏返回缓冲, `__va_area__`, `__alloca_size__`, `__func__`, `__FUNCTION__`.
 4. 有函数体时 `analyze_function`.
 
-`ND_TYPEDEF`: 补全类型, 登记名字.
+`ND_TYPEDEF`: 只补全类型; typedef 名的作用域由解析器的 typedef 表维护, sema 不登记 typedef 名.
 
 `ND_ENUM_CONST`: 求值, 登记名字. 枚举常量在表达式位置出现时, 记录在 `spec_decls` 里, 由 `resolve_enum_records` 处理.
 
@@ -429,7 +432,7 @@ static void bind_ident(Node *node) {
 
 ### 7.4.5 标注与检查
 
-`add_type` 是一个大 switch, 按节点种类定型. 它:
+`libcp_add_type` 是一个大 switch, 按节点种类定型. 它:
 
 - 递归标注子节点.
 - 计算节点类型.
@@ -437,19 +440,22 @@ static void bind_ident(Node *node) {
 - 跑检查.
 - 记录结论.
 
-`add_type` 的每个分支都在 A9.2 里逐项审计过, 确认全部是纯标注, 没有形状改写. 例外是 `ND_IDENT` 和 `ND_STRING` 的绑定改写, 以及显式 cast 的定型.
+`libcp_add_type` 的每个分支都在 A9.2 里逐项审计过, 确认全部是纯标注, 没有形状改写. 例外是 `ND_IDENT` 和 `ND_STRING` 的绑定改写, 以及显式 cast 的定型.
 
-检查包括:
+`libcp_add_type` 中的检查包括:
 
 - 赋值目标的左值性.
 - 函数实参个数与类型.
 - 位域取地址.
 - VLA 不得初始化.
 - 不完整类型.
-- `break` / `continue` / `case` / `default` 的位置.
-- `goto` / label 配对.
 - 返回值类型转换.
 - `_Generic` 的控制表达式类型.
+
+`check_control_flow` 另行检查:
+
+- `break` / `continue` / `case` / `default` 的位置.
+- `goto` / label 配对.
 
 诊断文案与插入符锚点由 `test/diagnostic.sh` 逐字节锁定, 68 例.
 
@@ -493,23 +499,23 @@ struct libcp_relocation {
 此外:
 
 - 每个聚合类型的成员布局已算好.
-- 每个初始化器已解析成 `LibcpInitTree`, 指针在 `init_resolved`.
+- 局部声明的初始化器已解析成 `LibcpInitTree`, 指针在 `init_resolved`, 供第 5 层展开; 全局变量与块域 static 在序列化后清空 `decl_init` / `init_resolved`, 字节从 `Obj.init_data` 读取.
 - 每个 static inline 函数的活跃性已标记.
 - goto / label 引用已收集在 context 里, 交给 codegen 配对.
 
 ## 7.6 产物可以做什么
 
-- **语义级 linter**: 检查未使用变量, 危险的隐式转换, 返回类型不一致, 等. 需要自己遍历 `Obj.locals` 和标注树.
-- **符号表与调用图**: `globals` 链给出全局符号; `ND_FUNCALL` 节点给出调用. `Obj.refs` 记录 static inline 引用.
-- **数据布局分析**: `Type.size`, `Member.offset`, `bit_offset` 可以直接用于 ABI 检查, 序列化, 调试器.
+- **语义级 linter**: 检查未使用变量, 危险的隐式转换, 返回类型不一致, 等. 需要自己遍历 `LibcpObj.locals` 和标注树.
+- **符号表与调用图**: `globals` 链给出全局符号; `ND_FUNCALL` 节点给出调用. `LibcpObj.refs` 记录 static inline 引用.
+- **数据布局分析**: `LibcpType.size`, `LibcpMember.offset`, `bit_offset` 可以直接用于 ABI 检查, 序列化, 调试器.
 - **常量折叠展示**: `ND_SIZEOF.val`, `ND_GENERIC.generic_sel`, 枚举值.
 - **类型感知的源到源**: 保留写法, 同时知道每个表达式的类型, 可以做类型驱动的重写.
-- **初始化数据检查**: `Obj.init_data` 是最终字节, 可以比较, 校验.
-- **自己的后端**: 第 4 层的树和 `Obj` 链足够支撑一个代码生成器. 仓库里的 `codegen.c` 就是例子.
+- **初始化数据检查**: `LibcpObj.init_data` 是最终字节, 可以比较, 校验.
+- **自己的后端**: 第 4 层的树和 `LibcpObj` 链足够支撑一个代码生成器. 仓库里的 `codegen.c` 就是例子.
 
 不能做:
 
-- 不能恢复第 3 层的原始 `ND_IDENT` / `ND_STRING` 形态. 它们已经被改写.
+- 不能恢复第 3 层源码表达式位置的 `ND_IDENT` / `ND_STRING` 形态. 它们已经被改写; 物化字符串产生的 `ND_STRING` 节点仍然存在, 但已经是第 4 层物化的引用.
 - 不能读 `init_resolved` 的内部结构. 它是私有载荷.
 - 不能做跨翻译单元分析. 只有当前 TU 的 `globals`.
 - 不能拿到 const / volatile / restrict 限定符. 它们被解析后丢弃, 见第 11 章.
@@ -526,7 +532,7 @@ if (!prog && libcp_context_failed(ctx)) {
 }
 ```
 
-注意: `ast` 被原地标注. `prog` 为 NULL 且 `failed` 为 false 的情况是空翻译单元.
+注意: `ast` 被原地标注. `prog` 为 NULL 且 `failed` 为 false 表示没有产生任何全局对象: 既可能是空文件, 也可能只含 typedef / 枚举常量等不创建对象的声明.
 
 ### 7.7.2 遍历全局对象
 
@@ -593,16 +599,16 @@ if (!o->is_function && o->is_definition && o->init_data) {
 
 ## 7.8 边界与已知限制
 
-- **原地改写**. `ND_IDENT` 变成 `ND_VAR` / `ND_NUM`, `ND_STRING` 变成 `ND_VAR`. 原始形态在 sema 后不再存在.
-- **`init_resolved` 是私有字段**. 消费者不能读它的结构. 需要初始化数据时用 `Obj.init_data` 或自己解析 `decl_init`.
+- **原地改写**. `ND_IDENT` 变成 `ND_VAR` / `ND_NUM`, 源码表达式位置的 `ND_STRING` 变成 `ND_VAR`; 第 4 层物化字符串时创建的 `ND_STRING` 节点保留原 kind. 源码表达式位置的原始形态在 sema 后不再存在.
+- **`init_resolved` 是私有字段**. 消费者不能读它的结构. 需要初始化数据时用 `LibcpObj.init_data` 或自己解析 `decl_init`.
 - **限定符丢失**. `const`, `volatile`, `restrict` 在解析时被消费, 不进入类型记录. `_Atomic` 有 `is_atomic`. 依赖限定符的工具需要自己从 token 或 CST 读.
-- **没有源码范围**. 节点只有代表 token.
+- **没有 `LibcpObj` 链的范围 API**. 节点只有代表 token; 第 3 层树可以用 `libcp_node_source_range` 取子树锚点范围, 但 sema 返回的全局对象链没有等价的接口.
 - **没有跨 TU 信息**. 只有当前 TU.
 - **没有错误恢复**. 第一个语义错误就返回.
-- **诊断位置有限**. 宏内错误可能指向宏定义而不是调用点. `#line` 改行号但不改文件名.
+- **诊断位置有限**. 宏内错误可能指向宏定义而不是调用点. `#line` 改显示名与行号, 但诊断文件名仍用物理路径.
 - **`globals` 链包含声明和匿名对象**. 不过滤 `is_definition` 会看到 `extern` 声明和 `__func__` 字符串.
 - **`globals` 顺序是创建顺序的逆序**. 不要依赖.
 - **`alloca` 不在 `globals` 里**. 它单独登记, 只用于 VLA 降级.
 - **布局规则不是平台无关的**. `long double`, 位域, 对齐按 x86-64 System V 实现. 做跨平台分析要注意.
 - **常量求值有平台假设**. 整数宽度, `long double` 格式, 指针大小按 LP64.
-- **静态 inline 活跃性**. `is_live` 只对 static inline 函数有意义, 其他函数不保证被标记.
+- **静态 inline 活跃性**. 只有未被引用的 static inline 函数可能保持 `is_live == false`; 其他函数都由 `finalize_globals` 标记为 live.

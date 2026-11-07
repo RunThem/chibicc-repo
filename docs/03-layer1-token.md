@@ -267,7 +267,7 @@ char *src = "int x = 1; /* comment */\n";
 LibcpToken *tok = libcp_tokenize_buffer(ctx, "<memory>", src);
 ```
 
-`libcp_tokenize_buffer` 用 `strlen` 求长度, 不能包含 NUL. 已知长度时用:
+`libcp_tokenize_buffer` 用 `strlen` 求长度, 不能包含 NUL. 已知长度时用 `_len` 版本 (它仍然拒绝 NUL):
 
 ```c
 LibcpToken *tok = libcp_tokenize_buffer_len(ctx, "<memory>", buf, len);
@@ -302,7 +302,7 @@ fclose(out);
 cmp input.c rebuilt.c
 ```
 
-`-dump-tokens` 的格式是每个 token 一行, 带 T (trivia) 和 R (raw spelling) 信息. 具体形状由 `test/trivia.sh` 锁定.
+`-dump-tokens` 对每个 token 打印一行 T(行号, raw 偏移, 种类, 拼写); 在该 T 行之前, 按 trivia 片段打印零或多行 R(bom / lc / bc / nl / ws / cont). R 行与 T 行合起来逐字节平铺原始文件. 具体形状由 `test/trivia.sh` 锁定.
 
 ## 3.8 边界与已知限制
 
@@ -310,7 +310,7 @@ cmp input.c rebuilt.c
 - **关键字后置分类**. 原始流里 `TK_IDENT` 包含关键字. 只用第 1/2 层时要按拼写判断.
 - **注释没有分类**. trivia 是原始字节. 库不告诉你"这是文档注释"或"这是行尾注释". 需要的话自己解析 trivia.
 - **`loc` 不是 C 字符串**. 它是扫描缓冲里的切片, 可能没有 NUL. 用 `len` 限界, 或复制出来.
-- **`#line` 只影响行号, 不影响 `file->name`**. 诊断显示的文件名仍是物理路径, 行号可能已被 `#line` 偏移. 见第 11 章.
+- **`#line` 不修改 `file->name`, 但会改显示名**. 它设置 `file->display_name`, 预处理后的 token 的 `filename` 与 `__FILE__` 随之改变; 诊断仍使用物理路径 `file->name`, 行号叠加 `#line` 偏移. 见第 11 章.
 - **内存中的输入被复制**. `tokenize_buffer` 会把字节复制进 arena, 调用者的缓冲区可以立即释放. 代价是同一份源码在内存里有两份.
 - **内存输入不经过扫描缓冲改写**. `libcp_tokenize_buffer*` 按字节扫描: 不跳过 BOM, 不删除反斜杠续行, 不把 `\uXXXX` 改写成 UTF-8, 不做换行归一 (CRLF 仍能扫描, 孤立 CR 的行号会错), 不补末尾换行. 反斜杠续行会变成一个 `\` token, `\u00e9` 会变成 `\` 加 `u00e9`. 真实源码优先用 `libcp_tokenize_file`; 内存输入应当是已经处于"扫描缓冲形态"的文本.
 - **文件大小上限**. 超过 `INT32_MAX` 字节的文件被拒绝, 不是分块处理.

@@ -8,7 +8,7 @@
 - 完整测试需要 Linux x86-64. 生成的目标代码是 x86-64 System V, 在 macOS ARM64 上不能汇编或运行.
 - 可选: Docker 或 OrbStack, 用于跑 amd64 容器里的完整闸门.
 
-库本身没有第三方依赖. 它只链接 C 标准库.
+库本身没有第三方依赖. 它只依赖 libc, 其中包括 POSIX.1-2008 扩展 (`open_memstream`, `localtime_r`, `strnlen`, `dirname` 等).
 
 ## 10.2 构建
 
@@ -25,14 +25,15 @@ make libcp.a   # 只构建静态库
 | `libcp.so.0` | 共享库, 仅 Linux |
 | `libcp.so` | 指向 `libcp.so.0` 的符号链接, 仅 Linux |
 | `chibicc` | 参考编译器, 链接 `libcp.a` |
-| `libcp.pc` | pkg-config 文件, 仅由 `make libcp.pc` / `make check-library` / `make install` 生成, `make`(all)不构建它 |
+| `libcp.pc` | 仓库根的 pkg-config 文件, 仅由 `make libcp.pc` / `make check-library` 生成, `make`(all) 不构建它; `make install` 直接把生成结果装进 `$PREFIX/lib/pkgconfig/libcp.pc` |
 | `stage2/libcp.a` | 自举构建的静态库 |
 
 编译选项在 Makefile 顶部:
 
 ```make
+ALLOCATOR_CFLAGS ?= -DLIBCP_DEFAULT_ALLOCATOR
 CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch \
-       -Ilibcp/include -Ilibcp/src
+       $(ALLOCATOR_CFLAGS) -Ilibcp/include -Ilibcp/src
 ```
 
 ## 10.3 目标一览
@@ -44,17 +45,21 @@ CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch \
 | `libcp.a` | 静态库 |
 | `libcp.so` | 共享库, 仅 Linux |
 | `fmt-tool` | CST formatter MVP(`tools/fmt.c`), 链接 `libcp.a` |
-| `format` | 用 `.clang-format` 格式化 `libcp/` 与驱动器源码(不涉及测试, 需要 clang-format 20) |
-| `format-check` | 只读格式闸门, 检查是否已按 clang-format 20 格式化 |
+| `c2c` | C 转 C 打印器(`tools/c2c.c`), 仅测试回归闸门, 不安装 |
+| `format` | 用 `.clang-format` 格式化 `libcp/` 与驱动器源码(不涉及测试, 需要 clang-format 20 或更新版本; 缺失时跳过) |
+| `format-check` | 只读格式闸门, 检查是否已按 clang-format 20+ 格式化(缺失或版本过低时失败) |
 | `test` | 完整测试套件 |
+| `test-all` | `test` + `test-stage2` |
 | `test-stage2` | 自举测试 |
+| `test-thirdparty` | 本机真实项目构建(仅 x86-64 Linux) |
 | `check-library` | 公共面与打包闸门 |
 | `check-context` | 隐式上下文审计 |
 | `install` | 安装头文件, 库, pkg-config 文件与 LICENSE |
 | `clean` | 清理构建产物 |
 | `docker-image` | 构建 amd64 测试镜像 |
-| `docker-test` | 容器内完整测试与自举 |
-| `docker-snapshot-diff` | 汇编快照零 diff |
+| `docker-test` | 容器内 `make test-all` |
+| `docker-snapshot` | 生成汇编快照基线 |
+| `docker-snapshot-diff` | `test/*.c` 的汇编快照零 diff |
 | `docker-test-thirdparty` | 真实项目构建 |
 
 ## 10.4 安装
@@ -135,8 +140,8 @@ pkg-config --modversion libcp   # 0.1.0
 
 ### 10.6.1 静态库
 
-- 归档内全部外部符号统一 `libcp_` 前缀(2026-10-25 起, 128 个).
-- 公共头只声明 36 个 D7 函数.
+- 归档内全部外部符号统一 `libcp_` 前缀(2026-10-25 起; 当前 130 个, 其中 38 个是公共函数).
+- 公共头只声明 38 个 D7 函数.
 - 消费者**不得调用**未声明的内部函数. 它们在 `.a` 里可见, 但不是 API.
 - 前缀统一后与宿主符号碰撞的风险基本消除; 内外的判据是"公共头是否声明".
 
@@ -179,7 +184,7 @@ make test-stage2
 1. 用宿主 `cc` 构建 `chibicc`.
 2. 用 `chibicc` 编译库源码, 产出 `stage2/libcp.a`.
 3. 用 `chibicc` 编译驱动器和测试.
-4. 跑全部测试, 包括 `test/library.sh` 链接 `stage2/libcp.a`.
+4. 跑 `test-stage2` 的行为测试套件, 包括 `test/library.sh` 链接 `stage2/libcp.a`, 以及 `stage2/fmt` / `stage2/c2c`. 它不跑 `test/allocator.sh` 与打包闸门 `public-api.sh` / `install.sh`.
 
 自举证明库代码能被自己编译. `setjmp` 与 `va_copy` 都在这条路径上被验证.
 
@@ -196,13 +201,17 @@ make test-stage2
 | `test/shape.sh` | 34 段发射形状回归 |
 | `test/ast.sh` | 85 例第 3 层 AST 形态逐字节 |
 | `test/trivia.sh` | token / trivia / 重建 / `-E` 锚点 |
-| `test/cst.sh` | 305 项 CST 断言与 61 个 dump 样本 |
+| `test/cst.sh` | 48 个文件 round-trip / 48 个 verify / 15 个边界样本 / 65 个 dump 样本 |
+| `test/cst-stats.sh` | CST `UNPARSED` 计数与 `test/cst-stats.golden` 逐行比对 |
 | `test/expand.sh` | 29 个 provenance dump 样本, 3 个链形状样本, 17 个 verify 样本, 全量语料 |
 | `test/library.sh` | 公共面消费者, 错误路径, 双 context, ASan/UBSan |
 | `test/allocator.sh` | 用替换分配器重编库, 活块归零 |
 | `test/self-test.sh` | 库内自测: hashmap / arena / sema 状态重置 |
+| `test/context-audit.sh` | 隐式 context 审计 (`--strict`, 由 `make test` 调用) |
+| `test/fmt.sh` | formatter 幂等 / 行数 / 注释数量 / 容器内 `-S` 等价 (`make fmt-tool` 构建) |
+| `test/c2c.sh` | C 转 C 打印回归 (`make c2c` 构建) |
 
-`make test` 需要能汇编和运行 x86-64 Linux 目标. 在 macOS 上会在汇编阶段失败. 本机只做前端检查:
+`make test` 需要能汇编和运行 x86-64 Linux 目标. 在非 x86-64 Linux 宿主上会在汇编阶段失败. 这些宿主只做前端检查:
 
 ```sh
 ./chibicc -E input.c
@@ -234,7 +243,7 @@ make check-library
    - 错误返回.
    - reset 复用.
    - 同线程双 context 与跨线程双 context.
-   - ASan + UBSan 重编库对象, 检查零 UB, 活字节上界, free 后回基线.
+   - ASan + UBSan 重编库对象, 检查零 UB, 活字节上界, free 后回到基线附近 (允许 4 KiB 容差).
 2. `test/allocator.sh`: 用 `LIBCP_MALLOC` / `LIBCP_CALLOC` / `LIBCP_REALLOC` / `LIBCP_FREE` 的计数替换版重编整个库, 验证替换分配器确实被调用, 且 `libcp_context_free` 后活块归零.
 3. `test/public-api.sh`: 验证:
    - 每个公共头单独 `-fsyntax-only -Wall -Wextra`.
@@ -242,11 +251,11 @@ make check-library
    - 消费者对象不引用内部符号.
    - `.a` 中 D7 全部存在.
    - Linux `.so` 只导出 D7.
-4. `test/install.sh`: 验证安装布局与 pkg-config.
+4. `test/install.sh`: 验证安装布局与 pkg-config; 没有 `pkg-config` 时跳过 `.pc` 版本与消费者检查并成功返回.
 
 ## 10.10 Docker 闸门
 
-本机是 macOS ARM64, 完整测试必须进 Linux 容器.
+非 x86-64 Linux 宿主 (例如 macOS ARM64 / Intel macOS / Linux arm64) 上, 完整测试必须进 Linux 容器; x86-64 Linux 宿主直接跑 `make test-all`.
 
 ```sh
 make docker-image
@@ -254,8 +263,8 @@ make docker-test
 make docker-snapshot-diff
 ```
 
-- `docker-test` 在 amd64 容器里跑完整测试, 自举, 全部只读通道和库闸门.
-- `docker-snapshot-diff` 对全部语料和自举产物比较汇编快照, 必须输出 `snapshot diff: empty`.
+- `docker-test` 在 amd64 容器里运行 `make test-all`(即 `test` + `test-stage2`), 包括全部只读通道, 但不运行 `make check-library` 的打包闸门.
+- `docker-snapshot-diff` 对 `test/*.c` 的全部语料比较 stage1 `chibicc` 的汇编快照, 必须输出 `snapshot diff: empty`; 当前不包含自举产物.
 - 仓库只读挂载, 源码复制到容器可写层 `/work` 后构建, 本机产物不受影响.
 - 首次 `docker-image` 约 90 秒.
 
@@ -332,9 +341,9 @@ make ALLOCATOR_CFLAGS='-include mimalloc.h -DLIBCP_MALLOC=mi_malloc -DLIBCP_CALL
 
 ## 10.12 常见问题
 
-**`make test` 在 macOS 上失败, `as` 报错.**
+**`make test` 在非 x86-64 Linux 宿主上失败, `as` 报错.**
 
-这是预期的. chibicc 生成 x86-64 ELF 汇编, Apple 的 `as` 不接受. 用 Docker, 或只跑前端通道.
+这是预期的. chibicc 生成 x86-64 ELF 汇编, 其他宿主 (包括 macOS) 的汇编器不接受. 用 Docker, 或只跑前端通道.
 
 **找不到 `<libcp/libcp.h>`.**
 
@@ -356,9 +365,9 @@ make ALLOCATOR_CFLAGS='-include mimalloc.h -DLIBCP_MALLOC=mi_malloc -DLIBCP_CALL
 
 库不安装系统 include 路径. 消费者要自己 `libcp_context_add_include_path(ctx, "/usr/include")`, 以及目标平台需要的其他路径. 参考驱动器的 `add_default_include_paths`.
 
-**`make check-library` 在 macOS 上通过吗.**
+**`make check-library` 在非 Linux 宿主上通过吗.**
 
-通过. `test/install.sh` 在非 Linux 上跳过 `.so` 检查. `test/library.sh` 用宿主 `cc` 编译和运行, 不需要 x86-64 目标代码.
+通过. `test/install.sh` 在非 Linux 上跳过 `.so` 检查; 没有 `pkg-config` 时跳过 `.pc` 版本与消费者检查并成功返回. `test/library.sh` 用宿主 `cc` 编译和运行, 不需要 x86-64 目标代码.
 
 **如何只构建库, 不构建编译器.**
 

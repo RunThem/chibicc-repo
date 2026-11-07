@@ -7,7 +7,7 @@
 - 为什么 `parse.c` 保留 typedef oracle, 而不是彻底不做语义.
 - 为什么 `sema.c` 不做降级, 而 `codegen.c` 里有一个整形遍.
 - 为什么 CST 单独一棵树, 不复用语法树.
-- 为什么公共 `Node` 里没有 codegen 字段.
+- 为什么公共 `LibcpNode` 里没有 codegen 字段.
 - 为什么 `#if` 的分支在 CST 里保留, 而在预处理后消失.
 
 每一节讲一个阶段: 问题, 设计, 实现, 产物, 产物能干什么, 终态提交.
@@ -29,7 +29,6 @@
 | 2026-10-23 | 库改名 libcp | `3a46b6c` 完成 |
 | 2026-10-25 | Pratt 单一路径与内部符号前缀 | `ab6106f` 完成 |
 | 2026-10-25 | L5 产品化验证 (formatter / 覆盖 / source mapping) | `plans/RESULT-l5.md` |
-| 未开始 | L5 产品化验证 (原阶段 6) | - |
 
 日期是终态提交的日期, 不是开工日期. 每个阶段的详细执行记录在 `plans/` 下.
 
@@ -41,7 +40,7 @@
 
 ### 设计
 
-在 Linux amd64 容器里, 对全部 `test/*.c` 和自举产物运行 `./chibicc -S`, 保存汇编文本. 每个阶段结束时逐字节 diff. 任何指令序列变化都视为回归, 除非该阶段明确要改变它.
+在 Linux amd64 容器里, 对全部 `test/*.c` 运行 `./chibicc -S`, 保存汇编文本 (当前快照不包含自举产物). 每个阶段结束时逐字节 diff. 任何指令序列变化都视为回归, 除非该阶段明确要改变它.
 
 ### 实现
 
@@ -241,7 +240,7 @@
 
 - 第 1 层.
 - `test/trivia.sh`.
-- 48 个语料文件与 15 个边界样本的逐字节重建.
+- 48 个语料文件与 12 个边界样本的逐字节重建.
 
 ### 产物可以干什么
 
@@ -269,12 +268,12 @@ trivia 只保留了 token 之间的字节, 没有语法结构. 格式化器还�
 
 ### 实现
 
-- `libcp/src/cst.c`, 55 种 `CstKind`.
+- `libcp/src/cst.c`, 当时 55 种 `LibcpCstKind` (L5 增加了 `CST_STMT_EXPR` 与 `CST_GENERIC_ASSOC`, 当前 57 种).
 - 括号分组, 声明, 语句, 表达式, 初始化器, 指示符.
 - 指令节点: `#define`, `#undef`, `#include`, `#line`, `#pragma`, `#error`, 空指令, `#if` 分支.
 - 文件内 typedef 预扫描作为 cast/声明 oracle.
 - 三个只读通道: `-dump-cst`, `-reconstruct-cst`, `-verify-cst`.
-- 305 项断言, 61 个 dump 样本, 48 个语料文件加 15 个边界样本 round-trip.
+- 当时代码锁定 305 项断言 (当前 309 项), 当时 61 个 dump 样本 (当前 65 个), 48 个语料文件加 15 个边界样本 round-trip.
 
 ### 产物
 
@@ -345,13 +344,13 @@ trivia 只保留了 token 之间的字节, 没有语法结构. 格式化器还�
 - 库名 `libcp`, 公共头 `<libcp/...>`, 符号 `libcp_` / `Libcp` 前缀.
 - 只承诺源码兼容, 不承诺 ABI.
 - 一个 context 一个翻译单元.
-- 公共 `Node` / `Obj` 只保留第 3/4 层字段.
+- 公共 `LibcpNode` / `LibcpObj` 只保留第 3/4 层字段.
 
 ### 实现
 
 L0 到 L4, 每步一提交:
 
-- L1: codegen 字段移出公共 `Node` / `Type` / `Obj`, 进 codegen 私有表.
+- L1: codegen 字段移出公共 `LibcpNode` / `LibcpType` / `LibcpObj`, 进 codegen 私有表.
 - L2: `LibcpContext`, arena, 诊断回调 + longjmp, 19 个文件域 static 收进 context.
 - L3.0: CST children 进 arena, reset 活字节闸门.
 - L3.1: 9 个公共头, context 不透明, 头文件卫生.
@@ -369,7 +368,7 @@ L0 到 L4, 每步一提交:
 ### 产物
 
 - `libcp.a`, Linux `libcp.so.0`.
-- 9 个公共头, 36 个公共函数.
+- 9 个公共头, 36 个公共函数 (L5 之后为 10 个头, 38 个函数, 见 12.14).
 - `LibcpContext` 三态.
 - `test/library.sh`, `test/public-api.sh`, `test/install.sh`.
 - `make check-library`.
@@ -390,7 +389,7 @@ L0 到 L4, 每步一提交:
 
 ### 设计
 
-- 增加一个只读绑定力表 `InfixOp`.
+- 增加一个只读绑定力表 `LibcpInfixOp`.
 - 用一个 `expr_bp` 循环处理前缀, cast, 后缀, 二元, 赋值, `?:`, 逗号.
 - 通过 `LIBCP_PRATT_PARSE_FEATURE` 编译期开关控制.
 - 默认构建保持不变.
@@ -464,7 +463,7 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 | `parse.c` 保留声明记录 | 忠实层 | 语义层消费记录, 语法层不建对象 |
 | `sema.c` 没有降级 | codegen 直连 | 第 4 层只做标注 |
 | `codegen.c` 有整形遍 | codegen 直连 | 需要槽/语句/标签的改写归后端 |
-| 公共 `Node` 没有 codegen 字段 | 库边界 L1 | 公共 IR 只留源码和语义字段 |
+| 公共 `LibcpNode` 没有 codegen 字段 | 库边界 L1 | 公共 IR 只留源码和语义字段 |
 | CST 单独一棵树 | CST 线 | 预处理不可逆 |
 | `#if` 分支全保留 | CST 线 | 格式化需要未选中分支 |
 | token 有 trivia 和 raw 坐标 | trivia 线 | 逐字节重建 |

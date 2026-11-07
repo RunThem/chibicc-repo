@@ -71,7 +71,7 @@ provenance 记录每次宏展开:
 
 ### 4.3.1 私有类型
 
-`Macro`, `MacroParam`, `MacroArg` 只在 `libcp/src/preprocess.c` 内部使用, 不出现在公共头. 公共面只有两个不透明类型和访问器:
+`LibcpMacro`, `LibcpMacroParam`, `LibcpMacroArg` 只在 `libcp/src/preprocess.c` 内部使用, 不出现在公共头. 公共面只有两个不透明类型和访问器:
 
 ```c
 typedef struct libcp_macro_expansion LibcpMacroExpansion;
@@ -82,12 +82,12 @@ typedef struct libcp_macro_expansion LibcpMacroExpansion;
 
 ```c
 struct libcp_macro_expansion {
-  Token *name;      /* 调用点的宏名 token */
-  Token *rparen;    /* function-like 的右括号, 否则 NULL */
-  Macro *macro;     /* 展开时生效的宏定义 */
-  MacroArg *args;   /* 实参, 对象宏和内建宏为 NULL */
+  LibcpToken *name;      /* 调用点的宏名 token */
+  LibcpToken *rparen;    /* function-like 的右括号, 否则 NULL */
+  LibcpMacro *macro;     /* 展开时生效的宏定义 */
+  LibcpMacroArg *args;   /* 实参, 对象宏和内建宏为 NULL */
   int arg_count;
-  bool is_builtin;  /* 由 handler 产生, 例如 __LINE__ */
+  bool is_builtin;       /* 由 handler 产生, 例如 __LINE__ */
 };
 ```
 
@@ -95,9 +95,9 @@ struct libcp_macro_expansion {
 
 ```c
 struct libcp_macro_prov {
-  MacroExpansion *exp;
-  int arg_index;    /* -1 表示宏体, >= 0 表示实参序号, 0 起 */
-  MacroProv *next;  /* 调用本身所在的上下文 */
+  LibcpMacroExpansion *exp;
+  int arg_index;              /* -1 表示宏体, >= 0 表示实参序号, 0 起 */
+  LibcpMacroProv *next;       /* 调用本身所在的上下文 */
 };
 ```
 
@@ -151,7 +151,7 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 | `#include_next` | 从当前 include 路径的下一个位置继续查 |
 | `#define` | 对象宏, 函数宏, 变参宏; 记录宏体和 `#define` 名 token |
 | `#undef` | 删除宏 |
-| `#if` | 用 `const_expr` 求值, 未选中分支跳过 |
+| `#if` | 用 `libcp_const_expr` 求值, 未选中分支跳过 |
 | `#ifdef` / `#ifndef` | 检查宏是否存在 |
 | `#elif` / `#else` / `#endif` | 条件栈 |
 | `#line` | 设置 `line_delta` 和 `display_name` |
@@ -210,7 +210,7 @@ libcp_context_undef(ctx, "NAME");
 
 两个函数都立即生效, 并把操作记录在 context 的配置里. reset 后重新按顺序应用. 因此 `-D` / `-U` 的顺序对最终宏表有影响.
 
-`define` 的第二个参数是替换文本, 不是值. 写 `"1"` 得到 `#define NAME 1`; 写 `"foo(x)"` 会按函数宏定义解析.
+`define` 的第二个参数始终是**对象式宏**的替换文本, 不是值, 也不解析形参表. 写 `"1"` 得到 `#define NAME 1`; 写 `"foo(x)"` 得到替换文本为 `foo ( x )` 的对象宏, 而不是函数式宏. 函数式宏只能通过源码里的 `#define` 定义.
 
 ## 4.5 阶段产物
 
@@ -260,7 +260,7 @@ T m.c:2 punct } -
 
 - **编译路径的输入**: 解析器只接受预处理后的 token 链.
 - **宏展开检查**: 判断某个 token 是不是宏产生的, 来自哪个宏, 哪一层, 哪个实参.
-- **诊断定位**: 结合 token 的物理位置和 provenance, 把错误映射回调用点. 库目前没有把这个映射封装成 API, 但访问器足够自己实现, 见第 11 章.
+- **诊断定位**: 诊断回调直接收到锚点 token 与该 token 的 `prov` 链 (`LibcpDiagnostic.tok` / `.prov`), 可以沿链走到最外层调用点. AST 子树范围另由 `libcp_node_source_range` 提供.
 - **宏使用统计**: 统计每个宏被展开多少次, 哪些实参产生了哪些代码.
 - **源码浏览器**: 展示宏调用与展开产物的对应关系.
 - **预处理结果导出**: 消费者可以自己遍历 token 链, 用 `loc` / `len` 输出展开后的文本.

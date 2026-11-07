@@ -52,7 +52,7 @@
 入口:
 
 ```c
-void codegen(Obj *prog, FILE *out);
+void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out);
 ```
 
 `codegen` 不是公共 API. 它声明在驱动器内部头 `driver.h`, 只被 `main.c` 使用.
@@ -62,19 +62,19 @@ void codegen(Obj *prog, FILE *out);
 `codegen` 分两步:
 
 ```c
-void codegen(Obj *prog, FILE *out) {
+void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
   output_file = out;
 
-  File **files = get_input_files();
+  LibcpFile **files = libcp_get_input_files(ctx);
   for (int i = 0; files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
 
-  label_base = unique_name_next();
-  shape(prog);
+  label_base = libcp_unique_name_next(ctx);
+  shape(ctx, prog);
 
   assign_lvar_offsets(prog);
   emit_data(prog);
-  emit_text(prog);
+  emit_text(ctx, prog);
 }
 ```
 
@@ -127,10 +127,10 @@ void codegen(Obj *prog, FILE *out) {
 
 ### 8.5.4 标签命名
 
-标签名形如 `.L..N`. 编号来自一个全局计数器:
+标签名形如 `.L..N`. 编号来自 `LibcpContext` 里的 `unique_name_id` 计数器 (不是全局变量):
 
 - 第 4 层物化匿名对象时用这个计数器, 例如字符串全局.
-- 第 5 层整形时从 `unique_name_next()` 接着用.
+- 第 5 层整形时从 `libcp_unique_name_next(ctx)` 接着用.
 
 格式是 load-bearing 的: 快照闸门是逐字节 diff, 改前缀或编号规则会让所有相关快照非空.
 
@@ -143,15 +143,15 @@ void codegen(Obj *prog, FILE *out) {
 - `pass_by_stack`.
 - `ret_buffer`.
 - case 链.
-- `Obj.offset`.
-- `stack_size`.
-- `Type.vla_size`.
+- `CgObj.offset`.
+- `CgObj.stack_size`.
+- `CgType.vla_size`.
 
 这些字段不在公共 `LibcpNode` / `LibcpObj` / `LibcpType` 里, 而是保存在 `codegen.c` 的私有指针键表:
 
-- `CgNode`: 按 `Node *` 查.
-- `ObjInfo`: 按 `Obj *` 查.
-- 类型槽: 按 `Type *` 查.
+- `CgNode`: 按 `LibcpNode *` 查.
+- `CgObj`: 按 `LibcpObj *` 查.
+- `CgType`: 按 `LibcpType *` 查.
 
 这是库化线 L1 的成果: 公共 IR 只保留源码和语义字段. 消费者不会看到后端状态.
 
@@ -162,7 +162,8 @@ void codegen(Obj *prog, FILE *out) {
 `emit_data` 遍历 `prog`:
 
 - 跳过非定义和函数.
-- 对每个全局变量输出 `.data` / `.bss` / `.tdata` / `.tbss`, 对齐, 标签, 初始化字节.
+- 暂定定义在默认 `-fcommon` 下输出 `.comm`; 有初始化器时输出 `.data` / `.tdata`, 否则输出 `.bss` / `.tbss`.
+- 对每个全局变量输出对齐, 标签, 初始化字节.
 - 处理 `init_data` 和 `rel`.
 
 ### 8.6.2 文本
@@ -173,7 +174,7 @@ void codegen(Obj *prog, FILE *out) {
 - 对每个函数输出序言, 栈帧, 参数保存, 函数体, 尾声.
 - 函数体由 `gen_stmt` / `gen_expr` 递归发射.
 
-`gen_expr` 在入口把忠实的 `ND_ADD` / `ND_SUB` 替换成 `new_add` / `new_sub` 的产物. 这三个降级工厂:
+`gen_expr` 在入口把忠实的 `ND_ADD` / `ND_SUB` 替换成 `new_add` / `new_sub` 的产物. 这两个工厂做三件事:
 
 - 做指针缩放.
 - 把 `num + ptr` 规范化为 `ptr + num`.
@@ -201,10 +202,10 @@ void codegen(Obj *prog, FILE *out) {
 - ELF 目标.
 - Linux 路径: 驱动器硬编码 `/usr/lib/x86_64-linux-gnu`, `/usr/include/x86_64-linux-gnu` 等.
 - 调用 `as` 和 `ld`.
-- 不生成调试信息.
+- 不支持 `-g` 一类的调试选项, 但总会发射 `.file` / `.loc` 行号信息, 因此汇编与目标文件带行号节.
 - 不做优化.
 
-在 macOS 上可以构建 `chibicc`, 也能输出汇编文本 (`-S`), 但生成的汇编不能在本机汇编或运行. 完整测试在 Linux 容器里跑.
+在非 x86-64 Linux 宿主 (例如 macOS) 上可以构建 `chibicc`, 也能输出汇编文本 (`-S`), 但生成的汇编不能在本机汇编或运行. 完整测试在 Linux 容器里跑.
 
 ## 8.7 阶段产物与用途
 
@@ -224,7 +225,7 @@ void codegen(Obj *prog, FILE *out) {
 
 - 不能作为公共 API 被第三方链接.
 - 不能生成非 x86-64 目标.
-- 不能提供优化, 调试信息或稳定输出.
+- 不能提供优化选项或完整的调试信息 (只发射 `.file` / `.loc` 行号信息), 也不保证稳定输出.
 - 不能保证汇编形状在版本间不变.
 
 ## 8.8 对第三方开发者的含义
@@ -235,17 +236,17 @@ void codegen(Obj *prog, FILE *out) {
 
 - `LibcpObj` 链, 过滤 `is_definition`.
 - 声明记录 `ND_DECL` / `ND_GVAR_DECL` / `ND_FUNCDEF` / `ND_TYPEDEF` / `ND_ENUM_CONST` 仍在语句链上.
-- 忠实节点: `ND_SUBSCRIPT`, `ND_WHILE`, `ND_GT`, `ND_GE`, `ND_INCDEC`, 带 `op` 的 `ND_ASSIGN`, `ND_STRING` 已变成 `ND_VAR`, `ND_COMPOUND_LITERAL` 带隐藏对象.
+- 忠实节点: `ND_SUBSCRIPT`, `ND_WHILE`, `ND_GT`, `ND_GE`, `ND_INCDEC`, 带 `op` 的 `ND_ASSIGN`, `ND_COMPOUND_LITERAL` 带隐藏对象. 字符串必须同时处理源码表达式改写后的 `ND_VAR` 与物化时保留的 `ND_STRING`, 两者都通过 `node->var` 指向匿名全局对象.
 - 需要自己决定: 指针缩放, 复合赋值展开, 自增自减, 控制流标签, 临时槽, 初始化器展开.
-- 初始化数据: `Obj.init_data` / `rel`.
-- 函数体: `Obj.body`.
-- 局部对象: `Obj.locals`.
+- 初始化数据: `LibcpObj.init_data` / `rel`.
+- 函数体: `LibcpObj.body`.
+- 局部对象: `LibcpObj.locals`.
 
 仓库的 `codegen.c` 是一个完整例子, 但它不是 API. 读它可以, 链接它不行.
 
 ### 8.8.2 不要依赖的字段
 
-- `Node` / `Obj` / `Type` 上的后端字段已经移走. 不要试图在公共结构里找 `offset`, `stack_size`, `brk_label`, `unique_label`, `vla_size`.
+- `LibcpNode` / `LibcpObj` / `LibcpType` 上的后端字段已经移走. 不要试图在公共结构里找 `offset`, `stack_size`, `brk_label`, `unique_label`, `vla_size`.
 - 不要依赖 `.L..N` 的编号.
 - 不要依赖汇编的具体形状. 快照测试锁定的是仓库自己的行为, 不是库的承诺.
 
@@ -257,13 +258,13 @@ void codegen(Obj *prog, FILE *out) {
 ./chibicc -S input.c -o input.s
 ```
 
-`-S` 只做前端加代码生成, 不调用 `as` / `ld`, 在 macOS 上也能跑. 生成的汇编不能在 macOS 上汇编.
+`-S` 只做前端加代码生成, 不调用 `as` / `ld`, 在非 x86-64 Linux 宿主上也能跑 (前提是预处理能找到所需头文件). 生成的汇编不能在该宿主上汇编.
 
 ## 8.9 边界与已知限制
 
 - **不是库的一部分**. 不导出, 不稳定, 不支持非 x86-64.
 - **没有优化**. 生成的代码比 GCC 慢, 这是设计选择.
-- **没有调试信息**.
+- **没有 `-g` 调试选项**. 仍会发射 `.file` / `.loc` 行号信息, 但不是完整的调试信息.
 - **只支持 x86-64 Linux**. 其他目标要自己写后端.
 - **依赖驱动器路径**. 汇编器和链接器路径硬编码.
 - **快照测试锁定内部形状**. 修改发射顺序会破坏快照, 这是有意的回归保护.

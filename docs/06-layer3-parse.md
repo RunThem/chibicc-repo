@@ -85,7 +85,7 @@ C 文法不是上下文无关的. 最典型的例子:
 
 解析器会构造 `LibcpType`, 但有些部分它不完成:
 
-- 数组维度: `array_len` 可能是 0, 维度表达式放在 `dim_len`, 等第 4 层求值.
+- 数组维度: 未定长度在解析器里记为 `array_len = -1`, 维度表达式放在 `dim_len`, 等第 4 层求值后写回真实长度.
 - `typeof(expr)`: 操作数放在 `typeof_expr`, 等第 4 层标注.
 - `_Alignas(<type>)`: 对齐类型放在 `align_expr` / `align_ty`, 等第 4 层计算.
 - 位域宽度: 表达式放在 `Member.width_expr`, 等第 4 层求值.
@@ -124,7 +124,7 @@ C 文法不是上下文无关的. 最典型的例子:
 第 3 层的解析器实际产出 66 种. 不产出的三种:
 
 - `ND_VAR`: 第 4 层绑定名字时产生.
-- `ND_VLA_PTR`: 第 4 层处理 VLA 时产生.
+- `ND_VLA_PTR`: 第 5 层整形遍展开 VLA 声明时产生; `sema.c` 只提供构造器 `libcp_new_vla_ptr`, 不在第 4 层生成该节点.
 - `ND_MEMZERO`: 第 5 层展开初始化器时产生.
 
 ### 6.3.2 LibcpNode
@@ -195,7 +195,7 @@ struct libcp_node {
 第 3 层会建 `LibcpType`:
 
 - 基本类型是共享单例.
-- 指针, 数组, 函数类型由 `type_suffix` 构造.
+- 指针类型由 `pointers()` 构造; `type_suffix` 只解析函数参数表和数组后缀.
 - 结构体/联合/枚举的成员列表在解析时收集, 布局留给第 4 层.
 - 数组维度, typeof 操作数, 对齐, 位域宽度可能未完成.
 
@@ -227,19 +227,21 @@ struct libcp_initializer {
 `parse.c` 是一个递归下降解析器. 每个函数对应一条产生式, 以 `LibcpContext *ctx` 为首参, 通过 `rest` 出参返回剩余 token 链:
 
 ```c
-static Node *stmt(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *declaration(LibcpContext *ctx, Token **rest, Token *tok, Type *basety, VarAttr *attr);
-static Node *assign(LibcpContext *ctx, Token **rest, Token *tok);
-static Node *expr(LibcpContext *ctx, Token **rest, Token *tok);
+static LibcpNode *stmt(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok);
+static LibcpNode *
+    declaration(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok, LibcpType *basety,
+                LibcpVarAttr *attr);
+static LibcpNode *assign(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok);
+static LibcpNode *expr(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok);
 ```
 
 声明层:
 
 - `declspec`: 解析类型说明符和存储类, 填 `LibcpVarAttr`.
-- `declarator`: 解析声明符, 用 `DeclName` 载体携带标识符, 不写进共享类型记录.
+- `declarator`: 解析声明符, 用 `LibcpDeclName` 载体携带标识符, 不写进共享类型记录.
 - `type_suffix`: 解析数组和函数后缀.
 - `struct_decl` / `union_decl` / `enum_specifier`: 解析聚合类型和枚举.
-- `initializer` / `init_record`: 解析初始化器记录.
+- `init_record` / `init_record1`: 解析初始化器记录.
 
 语句层:
 
@@ -252,10 +254,10 @@ static Node *expr(LibcpContext *ctx, Token **rest, Token *tok);
 
 表达式层由一个 `expr_bp` 绑定力循环构成, 覆盖前缀, cast, 后缀, 二元, 赋值, `?:` 和逗号:
 
-- `infix_bp()` 把当前 token 翻译成操作符与绑定力(只读 `InfixOp` 表 + 线性查找).
+- `infix_bp()` 把当前 token 翻译成操作符与绑定力(只读 `LibcpInfixOp` 表 `infix_ops` + 线性查找).
 - 左结合 `rbp == lbp`, 右结合 `rbp == lbp - 1`; 具名 `BP_*` 常量.
 - 前缀形式在 `expr_nud`, 后缀形式是主循环的 led 段.
-- 三个入口保持名字与语义: `expr` 允许逗号, `assign` 允许赋值, `conditional` 两者都不允许.
+- 三个入口保持名字与语义: `expr` 允许逗号, `assign` 允许赋值, `libcp_conditional` 两者都不允许.
 
 历史上这里曾是与 C 优先级级联(每优先级一个函数)并存的双路径
 (`LIBCP_PRATT_PARSE_FEATURE` 开关, 见 `docs/12` §12.11 与
@@ -282,12 +284,12 @@ tinycc 真实构建曾由 `test/pratt-ab.sh` 锁定两路径 `-dump-ast` 与 `-S
 
 一个历史问题是: 声明符把名字写进共享的类型记录, 会污染基本类型单例和 typedef 类型. 修复后的做法是:
 
-- 声明符把名字放在 `DeclName` 载体里.
+- 声明符把名字放在 `LibcpDeclName` 载体里.
 - 声明记录节点保存 `name_tok`.
 - 类型记录上的 `name` / `name_pos` 只在函数参数的 per-parameter 副本上填写, 供 sema 读.
 - 共享类型记录永远不写名字.
 
-这条规则对消费者很重要: 不要指望 `Node.ty->name` 是声明的名字. 用 `Node.name_tok`, 或第 4 层 `Obj.name`.
+这条规则对消费者很重要: 不要指望 `LibcpNode.ty->name` 是声明的名字. 用 `LibcpNode.name_tok`, 或第 4 层 `LibcpObj.name`.
 
 ### 6.4.5 错误与深度
 
@@ -306,7 +308,7 @@ tinycc 真实构建曾由 `test/pratt-ab.sh` 锁定两路径 `-dump-ast` 与 `-S
 - 函数体是 `ND_BLOCK`, 内含语句链.
 - 表达式节点不做类型计算, 名字没有绑定, 常量没有求值.
 - 声明记录保留, 初始化器是记录而不是树.
-- 每个节点有代表 token, 但没有完整源码范围.
+- 每个节点有代表 token; 子树范围可用 `libcp_node_source_range` 取锚点 token 的极值, 但它不跟随 `next` 兄弟链, 也不深入初始化器树.
 
 调试通道:
 
@@ -425,16 +427,16 @@ if (n->kind == ND_DECL && n->decl_init) {
 
 ### 6.7.5 配置参数
 
-`libcp_parse` 没有额外参数. 解析深度和作用域状态都在 context 里, 每次调用前由 `parse_init` 重建.
+`libcp_parse` 没有额外参数. `libcp_parse_init` 每次调用前重建解析器的作用域栈; `parse_depth` 也存放在 context 里, 但它只在 `libcp_context_reset` 的 `clear_state` 中清零. 解析出错后要复用 context 必须先 `libcp_context_reset`.
 
 ## 6.8 边界与已知限制
 
-- **没有类型计算**. 大多数 `Node.ty` 在第 3 层为 NULL. 例外: `ND_NUM` 带词法类型, `ND_TYPEDEF` 带声明类型. 显式 cast 和声明记录的目标类型在 `ty_op`.
+- **没有类型计算**. 大多数 `LibcpNode.ty` 在第 3 层为 NULL. 例外: `ND_NUM` 带词法类型, `ND_TYPEDEF` 带声明类型. 显式 cast 和声明记录的目标类型在 `ty_op`.
 - **没有名字绑定**. `ND_IDENT.var` 为 NULL. 第 4 层才绑定.
 - **没有常量求值**. `sizeof` / `_Alignof` / `_Generic` 只有形式, 没有结论.
 - **声明记录不是语句**. 消费者必须处理 `ND_DECL` / `ND_GVAR_DECL` / `ND_FUNCDEF` / `ND_TYPEDEF` / `ND_ENUM_CONST`. 第 4 层保留它们, 第 5 层摘除.
 - **初始化器是记录, 不是树**. 指示符未求值, 大括号省略未应用, 灵活数组成员未定尺寸.
-- **没有源码范围**. 每个节点只有代表 token. 计算节点的 start / end 要自己遍历. 这是 L5.3 的缺口.
+- **没有完整源码范围**. 每个节点只有代表 token; 需要子树范围时调用 `libcp_node_source_range`, 它按锚点 token 的 (文件, 偏移) 取最小 / 最大值. `next` 链是兄弟节点, 不会被跟随; 初始化器树不会被深入.
 - **没有错误恢复**. 第一个语法错误就返回. 想要"报多个错误"需要自己分段调用.
 - **只接受预处理后的流**. 传原始 token 流会在 `#` 或宏名上报错.
 - **宏调用不可见**. 树上只有展开后的结构. 来源查 provenance.

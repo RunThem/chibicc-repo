@@ -25,7 +25,7 @@
 |---|---|---|---|
 | 第 1 层 | 词法, 保留 trivia | `libcp_tokenize_file` / `_buffer` / `_buffer_len` | `LibcpToken` 链, 可逐字节重建输入 |
 | 预处理 | 宏展开, 条件编译, include | `libcp_preprocess` | 展开后的 token 链 + provenance 链 |
-| 第 2 层 | lossless 具体语法树 | `libcp_cst_parse` | `LibcpCstNode` 树, `CST_*` 55 种节点 |
+| 第 2 层 | lossless 具体语法树 | `libcp_cst_parse` | `LibcpCstNode` 树, `CST_*` 57 种节点 |
 | 第 3 层 | 忠实语法 AST | `libcp_parse` | `LibcpNode` 树, `ND_*` 69 种节点 |
 | 第 4 层 | 语义标注 | `libcp_sema` | 原地标注的树 + `LibcpObj` 全局对象链 |
 
@@ -37,7 +37,7 @@
 - 一套可替换的分配器宏 (`<libcp/allocator.h>`).
 - 10 个公共头, 38 个公共函数(L5 起含 `libcp_cst_seed_typedef` 与 `libcp_node_source_range`). 公共符号一律 `libcp_` / `Libcp` 前缀.
 
-库的实现约 1.2 万行 C, 公共头约 2.3 千行. 它没有外部依赖, 除 C 标准库外只要求 POSIX 的文件与线程基础能力.
+库的实现约 1.1 万行 C, 公共头约 950 行(10 个头文件). 它没有外部依赖, 除 C 标准库外只要求 POSIX 的文件与线程基础能力.
 
 ## 1.4 这个库不是什么
 
@@ -103,7 +103,7 @@ CST 进一步把每个标点变成叶子, 保证叶子按序重建等于输入. 
 
 - 解析器里的重复是有意的, 不用高阶函数或宏去消.
 - 用链表当集合, 查找 O(n), 因为 n 通常很小.
-- 一个 `Node` 结构体容纳所有节点类型的字段, 不做 union.
+- 一个 `LibcpNode` 结构体容纳所有节点类型的字段, 不做 union.
 - 内存一律零初始化分配, 从不逐对象释放.
 
 在这个库里, 这些选择还多了一层理由: 代码要被第三方阅读和修改. 聪明的抽象会提高修改门槛.
@@ -178,13 +178,14 @@ CST 进一步把每个标点变成叶子, 保证叶子按序重建等于输入. 
 **已经做到的部分**:
 
 - 阶段 5 的闸门全绿: Docker 内完整测试与自举, 汇编快照零 diff, 公共头独立编译, 符号白名单, ASan/UBSan 无报告, install 与 pkg-config 可用.
-- 第 1 层到第 4 层的产物有逐字节或结构级锁定: trivia 48 个语料文件重建, CST 305 项断言, AST 85 例, 诊断 68 例, 形状 34 段.
+- 第 1 层到第 4 层的产物有逐字节或结构级锁定: trivia 48 个语料文件重建, CST 覆盖 48 个文件 round-trip / 48 个 verify / 15 个边界样本 / 65 个 dump 样本 (共 309 次 check), AST 85 例, 诊断 68 例, 形状 34 段.
+- L5 产品化验证已完成 (2026-10-25): `tools/fmt.c` 是真实 formatter 消费者, AST 源码范围由 `libcp_node_source_range` 提供, `LibcpDiagnostic` 带 `tok` / `prov` 诊断展开点.
 - Pratt 表达式解析在成为唯一路径之前, 与旧级联的 AST 与汇编在 41 个语料文件和 tinycc 真实构建上逐字节一致 (PLAN-pratt-parse); 单一路径化后由汇编快照基线继续锁定.
 
 **还没做到的部分**:
 
-- L5 产品化验证未开工: 没有真实 formatter 消费者, 没有 AST 源码范围, 没有诊断展开点. 这意味着 API 的"手感"还没有被一个真实工具检验过.
-- CST 的结构覆盖率不完整: 部分语料包含 `CST_UNPARSED`, GNU 语句表达式是主要来源. 重建不受影响, 但依赖结构的工具会退化.
+- 第三方真实消费者验证仍然缺; `fmt` 与 `c2c` 都只作为仓库内测试消费者, 不随 `make install` 发布.
+- CST 的结构覆盖率不完整: 当前 48 个语料文件中 7 个含 `CST_UNPARSED`, 共 45 个 span, 由 `test/cst-stats.golden` 逐文件锁定; GNU 语句表达式已由 `CST_STMT_EXPR` 结构化. 重建不受影响, 但依赖结构的工具会退化.
 - 公共结构体字段直接暴露, 版本升级可能破坏源码兼容.
 - 性能没有优化, 大文件的内存峰值约为最终数据的两倍, 因为 arena 的 realloc 不回收旧块.
 

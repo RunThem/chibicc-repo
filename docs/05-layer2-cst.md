@@ -85,14 +85,14 @@ struct libcp_cst_node {
 
 叶子节点的 `tok` 直接指向第 1 层的 token. **CST 不复制 token**. 因此 `libcp_cst_verify` 可以用指针相等比较叶子序列和 token 流.
 
-### 5.3.2 55 种节点
+### 5.3.2 57 种节点
 
 按用途分组:
 
 | 组 | 节点 |
 |---|---|
 | 结构与叶子 | `CST_TRANSLATION_UNIT`, `CST_TOKEN`, `CST_EOF`, `CST_GROUP_PAREN`, `CST_GROUP_BRACKET`, `CST_GROUP_BRACE`, `CST_BLOCK`, `CST_NULL_STMT`, `CST_UNPARSED` |
-| 表达式 | `CST_EXPR_STMT`, `CST_BINARY`, `CST_UNARY`, `CST_POSTFIX`, `CST_CAST`, `CST_COND`, `CST_ASSIGN`, `CST_COMMA`, `CST_PAREN`, `CST_PRIMARY`, `CST_ARG_LIST`, `CST_INIT_LIST`, `CST_COMPOUND_LITERAL` |
+| 表达式 | `CST_EXPR_STMT`, `CST_BINARY`, `CST_UNARY`, `CST_POSTFIX`, `CST_CAST`, `CST_COND`, `CST_ASSIGN`, `CST_COMMA`, `CST_PAREN`, `CST_PRIMARY`, `CST_ARG_LIST`, `CST_INIT_LIST`, `CST_COMPOUND_LITERAL`, `CST_STMT_EXPR`, `CST_GENERIC_ASSOC` |
 | 声明 | `CST_DECL`, `CST_DECL_SPECS`, `CST_DECLARATOR`, `CST_INIT_DECLARATOR`, `CST_FUNC_DEF`, `CST_PARAM_LIST`, `CST_PARAM`, `CST_TYPE_NAME`, `CST_INITIALIZER`, `CST_DESIGNATOR` |
 | 语句 | `CST_IF`, `CST_SWITCH`, `CST_WHILE`, `CST_DO`, `CST_FOR`, `CST_CASE`, `CST_DEFAULT`, `CST_LABEL`, `CST_GOTO`, `CST_BREAK`, `CST_CONTINUE`, `CST_RETURN`, `CST_ASM` |
 | 预处理 | `CST_PP_DIRECTIVE`, `CST_PP_DEFINE`, `CST_PP_UNDEF`, `CST_PP_INCLUDE`, `CST_PP_LINE`, `CST_PP_PRAGMA`, `CST_PP_ERROR`, `CST_PP_NULL`, `CST_PP_IF`, `CST_PP_BRANCH` |
@@ -102,6 +102,7 @@ struct libcp_cst_node {
 - `CST_GROUP_PAREN` / `CST_GROUP_BRACKET` / `CST_GROUP_BRACE` 是按括号分组的最小单元, 不声明它是什么语法.
 - `CST_BLOCK` 是语句块, 与 `CST_GROUP_BRACE` 区分.
 - `CST_UNPARSED` 的子节点是已经切好的 token 和嵌套 group, 不复制 token.
+- `CST_STMT_EXPR` 是 GNU 语句表达式 `({ ... })`, `CST_GENERIC_ASSOC` 是 `_Generic` 的一个 `type: expr` / `default: expr` 关联.
 - `CST_PP_IF` 下面每个分支是一个 `CST_PP_BRANCH`. 分支体内的声明和语句用正常文法建树.
 - 每个关键字, 运算符, 括号, 分号都是 `CST_TOKEN` 叶子, 没有"隐含标点".
 
@@ -139,12 +140,12 @@ TU
 ### 5.4.1 入口
 
 ```c
-CstNode *cst_parse(LibcpContext *ctx, Token *tok) {
-  CstContext cst = {};
+LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok) {
+  LibcpCstContext cst = {};       /* cst.c 私有类型 */
   cst_collect_typedefs(ctx, &cst, tok);
 
-  CstParser p = {tok, true, &cst};
-  CstNode *root = new_cst_node(ctx, CST_TRANSLATION_UNIT);
+  LibcpCstParser p = {tok, true, &cst};  /* cst.c 私有类型 */
+  LibcpCstNode *root = new_cst_node(ctx, CST_TRANSLATION_UNIT);
   cst_parse_items(ctx, root, &p);
 
   if (p.tok && p.tok->kind == TK_EOF)
@@ -152,6 +153,7 @@ CstNode *cst_parse(LibcpContext *ctx, Token *tok) {
   return root;
 }
 ```
+(省略 `ENTER_RET` / `LEAVE` 错误边界, 以及先放入 `libcp_cst_seed_typedef` 名字的循环.)
 
 步骤:
 
@@ -321,8 +323,8 @@ if (node->kind == CST_UNPARSED) {
 - **必须在预处理之前建树**. 预处理会改写输入链. 同一份文件 tokenize 两次也可以, 但要接受两份内存.
 - **不做预处理**. 指令不求值, 宏不展开, include 不跟随. `#if 0` 的分支也在树里.
 - **typedef oracle 是启发式**. 只认文件内的几种 typedef 写法. include 来的 typedef 未知, 局部 typedef 被当作全局可见. 判断错误时树形退化, 字节不丢.
-- **`CST_UNPARSED` 的覆盖面**. 截至本文档写作时实测: 48 个语料文件中 29 个含 `UNPARSED`, 共 764 个 span, 主要来源是 GNU 语句表达式 `({ ... })` 和头文件 typedef 导致的声明回退. 依赖结构的工具必须处理 `UNPARSED`.
-- **没有源码范围字段**. 内部节点只有 children, 没有 `start` / `end`. 要算一个节点的字节范围, 得递归到首叶子和末叶子. 这是 L5.1 formatter 需要补的能力, 目前由消费者自己做.
+- **`CST_UNPARSED` 的覆盖面**. 当前基线 (`test/cst-stats.golden`): 48 个语料文件中 7 个含 `UNPARSED`, 共 45 个 span, 主要来源是宏形状残骸, 属性内嵌 struct 与 `_Atomic`. GNU 语句表达式已经由 `CST_STMT_EXPR` 结构化. 依赖结构的工具必须处理 `UNPARSED`.
+- **没有源码范围字段**. CST 内部节点只有 children, 没有 `start` / `end`. 要算一个节点的字节范围, 得递归到首叶子和末叶子. L5 的 formatter MVP (`tools/fmt.c`) 已交付, 它按树发射而不依赖该字段; AST 子树范围由 `libcp_node_source_range` 提供.
 - **指令在 `UNPARSED` 跨度内不独立成 PP 节点**. 重建不受影响, 结构查询会漏.
 - **深度上限 512**. 更深的嵌套变成扁平 unparsed group. 每个 token 仍在, 但嵌套结构丢失.
 - **不解释语言方言**. `asm`, `typeof`, 语句表达式等 GNU 扩展有节点或回退, 但不是完整支持.

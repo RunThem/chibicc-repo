@@ -41,7 +41,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 
 - 函数一律 `libcp_` 前缀.
 - 类型一律 `Libcp` 前缀.
-- 结构体 tag 是 `struct libcp_*`.
+- 公开数据结构的 tag 是 `struct libcp_*`; 不透明的 `LibcpContext` 例外, tag 是 `struct LibcpContext`.
 - 枚举常量保留层前缀: `TK_` (token), `ND_` (node), `TY_` (type), `CST_` (CST), `INIT_` (initializer).
 - 宏是 `LIBCP_*`.
 
@@ -93,8 +93,8 @@ void libcp_context_free(LibcpContext *ctx);
 销毁 context:
 
 - 释放 arena 中的全部对象.
-- 释放 include 路径和 `-D` / `-U` 配置数组.
-- 清除 active context 指针.
+- 释放 include 路径, `-D` / `-U` 配置数组与 CST typedef 种子.
+- 释放 context 本身; 库没有全局或线程局部的 active context 指针需要清除.
 
 `ctx` 为 NULL 时安全返回. 调用后所有指针失效.
 
@@ -205,7 +205,7 @@ void libcp_context_set_predefined_macros(LibcpContext *ctx, bool enabled);
 打开或关闭预定义宏集.
 
 - 默认打开.
-- 设置在**下一次 reset** 生效.
+- 设置在**下一次 reset** 生效; setter 本身不改当前 TU 已安装的集合.
 - 关闭后, 预定义宏不安装, 但 `-D` / `-U` 仍然应用.
 
 ### 9.3.10 libcp_context_predefined_count / _at
@@ -226,9 +226,9 @@ typedef struct libcp_predefined_macro {
 ```
 
 - `value` 是替换文本. 内建宏和动态宏为 NULL.
-- 字符串由 context 拥有, reset 后失效.
+- `name` 与固定 `value` 可能指向静态表, 不随 reset 失效; 由 context 在 arena 中构造的条目在 reset 后失效. 返回的指针都不要 `free`.
 - 越界返回 `{NULL, NULL}`.
-- 关闭预定义宏后 count 为 0.
+- 关闭预定义宏并 reset 之后 count 为 0; 只调用 setter 而未 reset 时, 当前 TU 的集合仍在.
 
 ### 9.3.11 分配器宏
 
@@ -247,7 +247,7 @@ typedef struct libcp_predefined_macro {
 - 默认构建在 Makefile 里定义 `LIBCP_DEFAULT_ALLOCATOR`(`ALLOCATOR_CFLAGS`); 自定义构建覆盖 `ALLOCATOR_CFLAGS`, 只给四个宏, 见 10.11.5 的 mimalloc 例子.
 - 库拥有的每个块 - context 对象, 配置数组与字符串, arena 块及其头部 - 都从这四个宏取得, 并通过 `LIBCP_FREE` 归还.
 - 它们是编译期配置: 在编译 libcp 时定义, 不是在消费者里定义. 链接预编译库时重新定义不会改变已经编译好的库.
-- 替换实现必须满足 libc 的语义: 返回满足任意类型对齐的内存(x86-64 上 `Token` / `Node` 内嵌 `long double`, 需要 16 字节), `LIBCP_CALLOC` 清零, `LIBCP_REALLOC` 失败时返回 NULL 且保留原块, `LIBCP_FREE` 接受 NULL.
+- 替换实现必须满足 libc 的语义: 返回满足任意类型对齐的内存(x86-64 上 `LibcpToken` / `LibcpNode` 内嵌 `long double`, 需要 16 字节), `LIBCP_CALLOC` 清零, `LIBCP_REALLOC` 失败时返回 NULL 且保留原块, `LIBCP_FREE` 接受 NULL.
 - 宏不产生符号, D7 与 `.so` 导出不变.
 - 例外: 读文件时 `open_memstream` 的缓冲区由 libc 的 `malloc` 分配并用 `free` 释放, 不属于库的自有内存.
 - `test/allocator.sh` 在不定义 `LIBCP_DEFAULT_ALLOCATOR` 的前提下用计数分配器重编整个库, 锁定"替换确实被调用", "缺宏会被诊断"与 `libcp_context_free` 后活块归零.
@@ -265,7 +265,7 @@ LibcpToken *libcp_tokenize_file(LibcpContext *ctx, char *path);
 - `path` 是文件系统路径.
 - `-` 表示 stdin. 内容只读一次, 同一 context 内第二次 tokenize `-` 会拿到缓存.
 - 返回以 `TK_EOF` 结尾的链.
-- 失败返回 NULL 并报告诊断. 失败原因: 打不开, 读失败, 文件过大, 含 NUL, 非法 token.
+- 失败返回 NULL 并报告诊断. 失败原因: 打不开, 文件过大, 含 NUL, 非法 token.
 - 第一次调用会设置 `__BASE_FILE__` 的文件名.
 
 ### 9.4.2 libcp_tokenize_buffer
@@ -279,7 +279,7 @@ tokenize 一个 NUL 结尾的内存字符串.
 
 - `name` 是显示文件名, 用于诊断.
 - 输入被复制进 arena.
-- 不能用包含 NUL 的二进制块; 用 `_len` 版本.
+- 输入不能包含 NUL; 发现 NUL 会报 `NUL byte in source file` 并返回 NULL.
 - 不做扫描缓冲改写: 不跳 BOM, 不删续行, 不改写 universal char. 见第 11.5.3 节.
 
 ### 9.4.3 libcp_tokenize_buffer_len
@@ -291,7 +291,7 @@ LibcpToken *libcp_tokenize_buffer_len(LibcpContext *ctx, char *name,
 
 tokenize 恰好 `len` 字节.
 
-- 缓冲区可以包含 NUL. 出现 NUL 会报 `NUL byte in source file`, 返回 NULL.
+- 按恰好 `len` 字节读取; `len` 范围内出现 NUL 会报 `NUL byte in source file`, 返回 NULL. `_len` 不是"允许 NUL"的版本, 只是已知长度.
 - `len` 为负报 `invalid buffer length`.
 - 用于从文件映射, 网络缓冲等已知长度的输入.
 - 与 `tokenize_buffer` 一样, 不做扫描缓冲改写: BOM, 续行, universal char 都按原字节处理.
@@ -414,8 +414,10 @@ span 的最小接口. 注意事项:
 
 - `next` 链是兄弟, 不被跟随; 初始化器树不被下降.
 - 极值取自各节点的代表 token: 例如 `ND_FUNCDEF` 的代表 token 是函数体的
-  `{`, 所以整个函数定义的 range 从它的名字 token 开始, 不从声明说明符
-  开始 - 需要更早边界时要自己看 `spec_decls`.
+  `{`, 但 `range.c` 还会收集 `name_tok`, 所以整个函数定义的 range 从它的名字
+  token 开始, 不从声明说明符开始. `spec_decls` 只保存 declspec 中产生的声明
+  记录 (如 enum 常量), 不是说明符 token, 不能用来取得更早边界; 需要更早边界
+  时请回到 token / CST.
 - 宏展开产物 token 的坐标在合成缓冲里, 跨文件比较按文件指针先序, 稳定
   但无语义.
 
@@ -433,7 +435,7 @@ LibcpObj *libcp_sema(LibcpContext *ctx, LibcpNode *toplevel);
 - 返回全局对象链, 包含函数, 全局变量, 匿名全局, 以及 `extern` 声明.
 - 空输入返回 NULL, `failed` 为 false.
 - 语义错误返回 NULL, `failed` 为 true.
-- `ND_IDENT` 和 `ND_STRING` 会被改写.
+- 源码表达式位置的 `ND_IDENT` 和 `ND_STRING` 会被改写; 物化字符串时创建的 `ND_STRING` 节点保留原 kind.
 - 声明记录保留在语句链上.
 
 消费者通常过滤 `is_definition` 来拿真正的定义.
@@ -508,7 +510,7 @@ const char *libcp_version(void);
 | `libcp_cst_parse` | 树 | NULL + `failed` |
 | `libcp_cst_verify` | true | false (或 false + `failed`) |
 | `libcp_parse` | 树 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
-| `libcp_sema` | `Obj` 链 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
+| `libcp_sema` | `LibcpObj` 链 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
 | `libcp_expansion_verify` | true | false |
 | `libcp_reconstruct` / `_cst_reconstruct` / `_cst_dump` / `_expansion_dump` | 返回 | 提前返回 |
 | `libcp_context_*` 配置 | 返回 | 无返回; 分配失败时配置可能未生效 |
@@ -529,7 +531,7 @@ if (!ast) {
 
 ## 9.12 所有权与失效规则
 
-- 库返回的所有指针由 context 拥有, 不要 `free`.
+- 库返回的所有指针由 context 拥有, 不要 `free`; `libcp_version` 返回字符串字面量, 预定义宏表里的静态 `name` 与固定 `value` 也不属于 per-TU arena, 不随 reset 失效.
 - 输入参数:
   - `tokenize_buffer*`: 复制输入字节, 调用者可以立即释放.
   - `add_include_path`: 复制路径.
@@ -702,7 +704,7 @@ for (LibcpObj *o = prog; o; o = o->next) {
 }
 ```
 
-用第 3 层也可以, 但参数名在类型记录的 per-parameter 副本上, 且没有 `Obj` 方便.
+用第 3 层也可以, 但参数名在类型记录的 per-parameter 副本上, 且没有 `LibcpObj` 方便.
 
 ### 9.14.4 追踪宏展开
 
@@ -770,9 +772,9 @@ extern "C" {
 ## 9.15 API 的边界
 
 - 没有深拷贝树的 API. 第 4 层原地改写.
-- 没有源码范围 API. 只有代表 token.
-- 没有 formatter API. 第 2 层是数据, 排版要自己写.
-- 没有诊断展开点字段. provenance 访问器可以自己映射.
+- 第 3 层有 `libcp_node_source_range` 取子树锚点范围; CST 节点仍没有 `start` / `end`, sema 的 `LibcpObj` 链也没有等价范围 API.
+- 没有公共 formatter API. `tools/fmt.c` 是仓库内的测试消费者, 不随 `make install` 发布; 第 2 层本身是数据.
+- 诊断已有 `tok` / `prov` 字段; 库不替消费者把整条链归结为单个"调用点位置".
 - 没有虚拟文件系统. include 只走磁盘.
 - 没有增量 API. 每次从头构建.
 - 没有 ABI 承诺.

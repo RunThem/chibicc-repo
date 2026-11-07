@@ -7,10 +7,10 @@
 ## 版本与状态
 
 - 库版本: `0.1.0` (`LIBCP_VERSION`, `libcp_version()`).
-- 文档对应的代码基线: `main` 分支 2026-10-23 的 libcp 改名提交.
+- 文档对应的代码基线: `main` 分支 2026-11-07 的提交 `9b06d35`.
 - 2026-10-23 库从 `libchibicc` 改名为 `libcp`: 包名, 头路径 (`<libcp/...>`) 与符号前缀 (`libcp_` / `Libcp` / `LIBCP_`) 一起改; 二进制仍叫 `chibicc`, `__chibicc__` 预定义宏不变, 行为零变化. 记录见 `plans/RESULT-rename-libcp.md`.
-- 路线图阶段 5, 即库边界固化, 已完成: 公共头拆分, 不透明 context, arena 生命周期, 诊断回调, `libcp.a`, Linux 下的 `libcp.so`, install 与 pkg-config, 以及 36 个公共函数的白名单, 都有测试闸门.
-- 阶段 6, 即 L5 产品化验证, **尚未开工**. 目前没有随库发布的 formatter, 没有 AST 到源码的映射 API, 没有诊断展开点字段. 第 11 章会逐项说明这些缺口对使用者的影响.
+- 路线图阶段 5, 即库边界固化, 已完成: 公共头拆分, 不透明 context, arena 生命周期, 诊断回调, `libcp.a`, Linux 下的 `libcp.so`, install 与 pkg-config, 以及 38 个公共函数的白名单, 都有测试闸门.
+- 阶段 6, 即 L5 产品化验证, 已于 2026-10-25 完成: `tools/fmt.c` 是库的第一个真实消费者 (仅由 `make fmt-tool` 构建, 不安装), AST 源码范围由 `libcp_node_source_range` 提供, `LibcpDiagnostic` 带 `tok` / `prov` 诊断展开点. 第 11 章列出仍然存在的边界, 例如 CST 内部节点没有 `start` / `end`, 以及没有随安装发布的 formatter 或 C 转 C 工具.
 - 只承诺源码兼容, 不承诺 ABI. 公共结构体字段直接暴露, 换字段就是换版本.
 - 演进约定: 文档与代码同一个提交更新 - 改到公共 API, 安装布局或可观察行为时, 同一提交改对应章节; `LIBCP_VERSION` 提升时做一次全量校对并刷新上面的基线行. 基线行记录的是最后一次校对的提交, 不是文档的唯一适用版本.
 
