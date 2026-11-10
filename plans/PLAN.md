@@ -165,7 +165,7 @@
   `make bench-tool` 只构建; `make bench` 构建并运行 `bench/run.sh`.
   验收: `make bench-tool` 零告警; `make bench` 能跑完至少一个组.
 
-- [ ] **B3.2 clean / gitignore / CI**:
+- [x] **B3.2 clean / gitignore / CI**:
   `make clean` 删除 bench 产物; `.gitignore` 忽略 `bench/obj/`,
   `bench/libcp_bench.a`, `bench/libcp-bench`; Linux CI job 加 `make bench-tool`.
   验收: `make clean` 后无残留; CI 构建步骤通过.

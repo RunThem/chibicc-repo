@@ -19,4 +19,7 @@
 /.zcodeignore
 /fmt
 /c2c
+/bench/obj/
+/bench/libcp_bench.a
+/bench/libcp-bench
 *.dSYM

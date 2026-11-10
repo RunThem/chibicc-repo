@@ -21,6 +21,8 @@ jobs:
         run: make -j"$(nproc)" test-all
       - name: Library surface gates
         run: make check-library
+      - name: Benchmark tool build
+        run: make bench-tool
 
   # Real projects compiled by chibicc and run through their own test
   # suites. The job waits for the unit gates first, so a broken tree does

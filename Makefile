@@ -257,7 +257,7 @@ endif
 # Misc.
 
 clean:
-	rm -rf chibicc fmt c2c libcp.a libcp.so libcp.so.0 libcp.pc libcp.pc.tmp tmp* $(TESTS) test/*.s test/*.exe stage2
+	rm -rf chibicc fmt c2c libcp.a libcp.so libcp.so.0 libcp.pc libcp.pc.tmp tmp* $(TESTS) test/*.s test/*.exe stage2 bench/obj bench/libcp_bench.a bench/libcp-bench
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 # Docker (amd64 Linux) 测试环境: 本机是 macOS ARM64, chibicc 生成的 x86-64 代码

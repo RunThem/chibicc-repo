@@ -154,3 +154,15 @@
   成功; `BENCH_REPEAT=1 make bench` 退出码 0, 输出四组标题, 环境块的
   `bench_cflags` 显示上面那串 flags, `tests` 组包含 `test/common`.
 - 偏差: 无.
+
+### B3.2 clean / gitignore / CI
+
+- 改动: `make clean` 删除 `bench/obj`, `bench/libcp_bench.a`,
+  `bench/libcp-bench`; `.gitignore` 忽略这三个产物; Linux CI job 在
+  `check-library` 之后新增 `Benchmark tool build: make bench-tool`(只编译,
+  不计时).
+- 验收: `make clean` 后 `bench/` 只剩 `bench.c`, `run.sh`, `alloc_shim.h`,
+  `alloc_shim.c` 四个源文件, `git status` 不显示任何 bench 产物; 重新
+  `make bench-tool` 退出码 0, 再次 `make clean` 后同样干净, 工作树只有本步
+  的三个修改文件.
+- 偏差: 无.
