@@ -123,7 +123,7 @@
 
 ## 阶段 B1: shim 与 harness
 
-- [ ] **B1.1 allocator shim**:
+- [x] **B1.1 allocator shim**:
   新增 `bench/alloc_shim.h` / `bench/alloc_shim.c`; 四个 `LIBCP_*` 宏指向
   `bench_alloc_*`; header 保存请求大小并保持 16 字节对齐; 计数器覆盖 bytes / count /
   live / peak.

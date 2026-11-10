@@ -45,3 +45,16 @@
 - 偏差: B0.1 的"更新 AGENTS.md 的最小条目"按归档语境解释为新增计划 / 记录约定;
   `bench` 的 `make bench` / `make bench-tool` 条目留到 B3.3, 避免提前写入尚不存在的
   目标.
+
+### B1.1 allocator shim
+
+- 改动: 新增 `bench/alloc_shim.h` / `bench/alloc_shim.c`. 四个 `LIBCP_*` 宏指向
+  `bench_alloc_*`; 每次分配带一个由 `long double` 联合体构成 16 字节 header, 记录
+  请求大小; payload 与 header 同对齐. 计数为 `bytes` / `count` / `live` / `peak`,
+  用 `bench_alloc_reset_counters` / `bench_alloc_reset_peak` 分段,
+  `bench_alloc_snapshot` 取值. 分配器本身用 C 库作后端, 不递归.
+- 验收: `cc -std=c11 -Wall -Wextra` 编译零告警; 临时自测(不提交)验证
+  `malloc` / `calloc` 指针 16 字节对齐, `calloc` 清零, 一次分配释放序列后
+  `bytes=110 count=2 live=110 peak=110`, `realloc` 后 `bytes=1000 count=1
+  live=1100`, 全部释放后 `live=0`; 断言全过.
+- 偏差: 无.
