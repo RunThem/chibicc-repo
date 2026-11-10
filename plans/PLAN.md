@@ -130,13 +130,13 @@
   验收: 单独编译通过; 一个最小分配/释放循环的 bytes 与 live 计数正确; 指针对齐满足
   `LibcpToken` / `LibcpNode` 的 `long double` 要求.
 
-- [ ] **B1.2 harness 核心**:
+- [x] **B1.2 harness 核心**:
   新增 `bench/bench.c`; 解析 `--group` / `--file` / `--include` / `--define` /
   `--repeat`; 建立 context, 逐文件执行预热与计时轮; 计时四阶段与 reset; 输出固定列宽
   表格.
   验收: 对单个 `test/*.c` 与 sqlite 都能跑通; `--repeat` 生效; reset 与 total 列出现.
 
-- [ ] **B1.3 统计与内存列**:
+- [x] **B1.3 统计与内存列**:
   记录每阶段的每轮耗时并计算 min / median; 接入 shim 的 `alloc_bytes` /
   `alloc_count` / `peak_live_kb`; 在预热轮统计 bytes / tokens / decls.
   验收: 手算的小样本 min / median 与输出一致; 内存列在 `lib` / `sqlite` 上非零.

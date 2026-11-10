@@ -58,3 +58,40 @@
   `bytes=110 count=2 live=110 peak=110`, `realloc` 后 `bytes=1000 count=1
   live=1100`, 全部释放后 `live=0`; 断言全过.
 - 偏差: 无.
+
+### B1.2 harness 核心
+
+- 改动: 新增 `bench/bench.c`, 只包含公共头. 参数 `--group` / `--file` /
+  `--include` / `--define` / `--repeat`(默认 5), 另有 `--version` / `--help`.
+  每个文件新建 context 并配置 include / define, 预热 1 轮后按 `--repeat` 计时;
+  每轮顺序执行 `libcp_context_reset` / `libcp_tokenize_file` /
+  `libcp_preprocess` / `libcp_parse` / `libcp_sema`, 五个阶段分别计时, total
+  是同一轮五段之和再取 min / median. 输出为固定列宽表格: 每文件每阶段一行,
+  加每文件 total 行与每组 `(sum)` 聚合行. 诊断回调丢弃消息; 失败文件不产生
+  行, 进程退出码 0; 参数错误退出码 2.
+- 验收: 单文件 `test/arith.c`, lib 组的 `libcp/src/preprocess.c`, driver 组的
+  `main.c`, sqlite 组的 `thirdparty/sqlite/sqlite3.c` 均输出完整表格;
+  `--repeat 1/2/4` 生效; reset 与 total 行出现; 不存在的文件不产生行且退出码
+  0; `--repeat 0` 报错退出码 2; `--version` 输出 `libcp 0.1.0`.
+- 偏差: 语料配置需要三处补充(已用于验收, 由 B2.2 固化进 `run.sh`):
+  所有组前置仓库的 `include/`(驱动器为 chibicc 自带头做的同一件事, 否则
+  gcc 内部 `stdarg.h` 会被选中); `lib` / `driver` 组追加
+  `--define LIBCP_DEFAULT_ALLOCATOR`(库源码的 `allocator.h` 在内部构建下要求
+  四宏或默认开关); driver 组除 `-I.` 外还需 `-Ilibcp/src -Ilibcp/include`
+  (`driver.h` 包含内部 umbrella).
+
+### B1.3 统计与内存列
+
+- 改动: 每阶段每轮记录纳秒耗时, min 与 median(偶数轮取中间两轮均值)按
+  微秒截断输出; 分配器数字取第一个计时轮的 shim 采样, 列为
+  `alloc_bytes` / `alloc_calls` / `peak_live_kb`(请求字节峰值向上取整到 KiB);
+  total 行的分配字节与调用次数是五段之和, peak 取五段最大值. 预热轮统计
+  文件字节数, 非 EOF token 数与顶层 AST 声明数, 只填在 tokenize 行.
+  聚合行: 时间是 sum-of-per-file-min, `med_us` 不聚合打印 `-`, 分配字节与
+  调用次数求和, peak 取各文件最大值.
+- 验收: `--repeat 4` 的 `test/arith.c` 两次运行中 reset 为 `15/17` 与
+  `16/20`, total 为 `1735/1782` 与 `1781/1954`, median 均落在中间两轮之间;
+  `lib` 组(`preprocess.c` 峰值约 44 MB)与 sqlite 组(`sqlite3.c`)的内存列
+  非零; tokenize 行给出 bytes / tokens / decls, 其余阶段与(除 tokenize 的)
+  聚合行打印 `-`.
+- 偏差: 无.
