@@ -143,7 +143,7 @@
 
 ## 阶段 B2: 语料与包装
 
-- [ ] **B2.1 平台守卫与 include 发现**:
+- [x] **B2.1 平台守卫与 include 发现**:
   `bench/run.sh` 用 `uname -s` / `uname -m` 守卫为 Linux; 用
   `cc -E -v -x c /dev/null` 提取系统 include 路径; 失败时打印明确原因.
   验收: 在 devcontainer 上路径列表非空; 在非 Linux 宿主上拒绝运行.

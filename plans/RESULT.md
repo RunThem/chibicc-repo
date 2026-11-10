@@ -95,3 +95,15 @@
   非零; tokenize 行给出 bytes / tokens / decls, 其余阶段与(除 tokenize 的)
   聚合行打印 `-`.
 - 偏差: 无.
+
+### B2.1 平台守卫与 include 发现
+
+- 改动: 新增 `bench/run.sh`(可执行). `LC_ALL=C` 固定输出环境, 切到仓库根;
+  `uname -s` 不是 Linux 时报错退出 1; 用 `cc -E -v -x c /dev/null` 的
+  "#include <...> search starts here:" 区块提取系统 include, 去掉行首空格与
+  macOS 的 "(framework directory)" 后缀; 列表为空时明确报错.
+- 验收: devcontainer 上列出 `/usr/lib/gcc/x86_64-linux-gnu/13/include`,
+  `/usr/local/include`, `/usr/include/x86_64-linux-gnu`, `/usr/include` 四条,
+  退出码 0; 用导出的 bash 函数伪造 `uname` 返回 Darwin 时脚本拒绝运行,
+  打印"只支持 Linux", 退出码 1.
+- 偏差: 无.
