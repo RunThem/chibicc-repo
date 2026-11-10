@@ -127,3 +127,17 @@
   含 `test/common` 行. 临时移走 `thirdparty/sqlite/sqlite3.c` 后脚本只跑前三
   组, 退出码 0, 无 sqlite 行; 文件已原位恢复.
 - 偏差: flags 相对 D4 的三处补充见 B1.2 记录的"偏差"段.
+
+### B2.3 环境块与哈希
+
+- 改动: 表格前先打印环境块(git commit 与 dirty 标记, `uname -srm`, CPU model,
+  nproc, `cc --version` 首行, libc 版本, `BENCH_CFLAGS`, `libcp_version()`,
+  repeat)与语料指纹表(每个输入文件的字节数与 SHA-256). 哈希优先
+  `sha256sum`, 缺失时回退 `shasum -a 256`, 两者都没有时写 `unavailable`;
+  全程在 `LC_ALL=C` 下输出.
+- 验收: 两次 `BENCH_REPEAT=1 bash bench/run.sh` 的 `== corpus` 区块逐字节
+  相同, 同一文件的 SHA-256 一致; 环境块在 devcontainer 上给出
+  `855fd69-dirty`, `Linux 6.8.0-1064-azure x86_64`,
+  `AMD EPYC 7763 64-Core Processor`, nproc 2, `cc 13.3.0`,
+  `GLIBC 2.39`, `libcp 0.1.0`.
+- 偏差: 无.

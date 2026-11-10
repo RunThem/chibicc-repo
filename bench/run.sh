@@ -69,6 +69,58 @@ invoke() {
   "$bin" --group "$group" --repeat "$repeat" "$@"
 }
 
+# 环境块: 让保存下来的 stdout 自描述, 相同的绝对数字只在同一宿主可比.
+print_environment() {
+  local commit dirty cpu libc
+  commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    dirty="-dirty"
+  else
+    dirty=""
+  fi
+  cpu=$(awk -F': ' '/^model name/ { print $2; exit }' /proc/cpuinfo 2>/dev/null)
+  [ -n "$cpu" ] || cpu=$(uname -m)
+  libc=$(ldd --version 2>/dev/null | head -n 1)
+  [ -n "$libc" ] || libc=$(getconf GNU_LIBC_VERSION 2>/dev/null || echo unknown)
+
+  echo "== environment"
+  echo "git: $commit$dirty"
+  echo "kernel: $(uname -srm)"
+  echo "cpu: $cpu"
+  echo "nproc: $(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo unknown)"
+  echo "cc: $(cc --version 2>/dev/null | head -n 1)"
+  echo "libc: $libc"
+  echo "bench_cflags: ${BENCH_CFLAGS:-(unset)}"
+  echo "libcp: $("$bin" --version 2>/dev/null || echo unknown)"
+  echo "repeat: $repeat (warmup 1)"
+}
+
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{ print $1 }'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  else
+    echo unavailable
+  fi
+}
+
+# 语料指纹: 每个输入文件的字节数与 SHA-256, 用来确认两次运行读的是同一
+# 份源码.
+print_corpus() {
+  local f size
+  echo
+  echo "== corpus"
+  printf '%-38s %10s  %s\n' "file" "bytes" "sha256"
+  for f in "${tests[@]}" "${lib[@]}" "${driver[@]}" "${sqlite[@]}"; do
+    size=$(wc -c < "$f" | tr -d ' ')
+    printf '%-38s %10s  %s\n' "$f" "$size" "$(hash_file "$f")"
+  done
+}
+
+print_environment
+print_corpus
+
 # 公共 include 前缀: 仓库的 include/ 是 chibicc 自带的自举头(stdarg,
 # stddef, stdbool, ...), 必须排在从 cc 发现的编译器内部 include 之前,
 # 否则 gcc 的 stdarg.h 会被选中(驱动器对 <argv0>/include 做同样的事).
