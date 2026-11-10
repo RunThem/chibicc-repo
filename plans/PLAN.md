@@ -148,7 +148,7 @@
   `cc -E -v -x c /dev/null` 提取系统 include 路径; 失败时打印明确原因.
   验收: 在 devcontainer 上路径列表非空; 在非 Linux 宿主上拒绝运行.
 
-- [ ] **B2.2 语料组与 flags**:
+- [x] **B2.2 语料组与 flags**:
   `run.sh` 持有 `tests` / `lib` / `driver` / `sqlite` 四组的文件数组与 flags; sqlite
   文件不存在时跳过该组; 每组调用 harness 一次.
   验收: 四组都能被枚举; `tests` 包含 `test/common`; sqlite 缺失时其余组仍正常.

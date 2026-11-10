@@ -107,3 +107,23 @@
   退出码 0; 用导出的 bash 函数伪造 `uname` 返回 Darwin 时脚本拒绝运行,
   打印"只支持 Linux", 退出码 1.
 - 偏差: 无.
+
+### B2.2 语料组与 flags
+
+- 改动: `bench/run.sh` 持四组文件数组与 flags, 每组调用 harness 一次:
+  - `tests`: `test/*.c` + `test/common`, `-Iinclude -Itest`;
+  - `lib`: `libcp/src/*.c`, `-Iinclude -Ilibcp/include -Ilibcp/src`,
+    `-DLIBCP_DEFAULT_ALLOCATOR`;
+  - `driver`: `main.c codegen.c`, `-Iinclude -I. -Ilibcp/src -Ilibcp/include`,
+    `-DLIBCP_DEFAULT_ALLOCATOR`;
+  - `sqlite`: `thirdparty/sqlite/sqlite3.c`, `-Iinclude -Ithirdparty/sqlite`,
+    `-D_GNU_SOURCE`, 文件不存在时整组跳过.
+  每组都在组内 flags 之后追加发现到的系统 include; 端口可经 `BENCH_REPEAT`
+  覆盖 `--repeat`(默认 5). 缺少 `bench/libcp-bench` 时提示先跑
+  `make bench-tool`.
+- 验收: `BENCH_REPEAT=1 bash bench/run.sh` 用时约 3.2 s, 退出码 0, 四组
+  `== group:` 标题与 `(sum)` 聚合行齐全; 表格行数 `tests` 258(42 文件 × 6 +
+  6 聚合), `lib` 78(12 文件), `driver` 18(2 文件), `sqlite` 12; `tests` 组
+  含 `test/common` 行. 临时移走 `thirdparty/sqlite/sqlite3.c` 后脚本只跑前三
+  组, 退出码 0, 无 sqlite 行; 文件已原位恢复.
+- 偏差: flags 相对 D4 的三处补充见 B1.2 记录的"偏差"段.
