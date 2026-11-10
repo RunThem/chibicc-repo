@@ -6,9 +6,9 @@
 
 ## 状态
 
-- 本线尚未开工; B0-B4 均为未完成.
+- B0.1 已完成; B1-B4 尚未开工.
 - 计划与归档文件已于 2026-11-10 建立: `PLAN.md` / `RESULT.md`; 旧主线归档为
-  `PLAN-library.md` / `RESULT-library.md`.
+  `PLAN-library.md` / `RESULT-library.md` (提交 `70b8ebf`).
 - 计划: `PLAN.md`.
 
 ## 闸门口径(本线生效)
@@ -31,4 +31,17 @@
 
 ## 执行记录
 
-(待 B0.1 起逐项填写.)
+### B0.1 文档与基线复验
+
+- 改动: `AGENTS.md` 的全局约定新增"计划与记录"条目(现行线 `plans/PLAN.md` /
+  `plans/RESULT.md`, 已完成的线归档为 `PLAN-<主题>.md` / `RESULT-<主题>.md`).
+  `PLAN.md` / `RESULT.md` 的建立与旧线归档已在上一步 `70b8ebf` 完成.
+- 闸门: 本步在 `70b8ebf` 上运行, 工作树只含 `AGENTS.md` 改动.
+  - `make -j2`: 退出码 0, `-Wall` 无告警.
+  - `make test`: 退出码 0; 41 个 `test/*.c` 用例全部运行, 其后各 `test/*.sh`
+    行为锁全绿(`cst-stats` 45 UNPARSED / 48 文件, `library` ok, `allocator` ok,
+    `fmt` 48 文件幂等, `c2c` 81 个 golden 样本).
+  - `make check-context`: 退出码 0 (codegen 无 `cg_ctx`, `.a` 无访问器符号).
+- 偏差: B0.1 的"更新 AGENTS.md 的最小条目"按归档语境解释为新增计划 / 记录约定;
+  `bench` 的 `make bench` / `make bench-tool` 条目留到 B3.3, 避免提前写入尚不存在的
+  目标.

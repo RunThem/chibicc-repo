@@ -114,7 +114,7 @@
 
 ## 阶段 B0: 归档与本线建立
 
-- [ ] **B0.1 文档与基线复验**:
+- [x] **B0.1 文档与基线复验**:
   旧 `PLAN.md` / `RESULT.md` 已 `git mv` 为 `PLAN-library.md` / `RESULT-library.md` 并加
   归档说明; 本文件与新的 `RESULT.md` 建立. 剩余: 更新 `AGENTS.md` 的最小条目; 跑一次
   `make` / `make test` / `make check-context`, 确认工作树只含本步文档改动; 记录到
