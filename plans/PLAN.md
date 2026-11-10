@@ -170,7 +170,7 @@
   `bench/libcp_bench.a`, `bench/libcp-bench`; Linux CI job 加 `make bench-tool`.
   验收: `make clean` 后无残留; CI 构建步骤通过.
 
-- [ ] **B3.3 AGENTS 最小更新**:
+- [x] **B3.3 AGENTS 最小更新**:
   `AGENTS.md` 的构建与测试加 `make bench` / `make bench-tool`; 代码地图加
   `bench/bench.c`, `bench/run.sh`, `bench/alloc_shim.{h,c}`.
   验收: 新会话只读 AGENTS.md 就能找到 benchmark 入口; 不新增 `docs/` 文件.

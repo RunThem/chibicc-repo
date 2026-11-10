@@ -166,3 +166,13 @@
   `make bench-tool` 退出码 0, 再次 `make clean` 后同样干净, 工作树只有本步
   的三个修改文件.
 - 偏差: 无.
+
+### B3.3 AGENTS 最小更新
+
+- 改动: `AGENTS.md` 的"构建与测试"新增 `make bench` / `make bench-tool`
+  条目(仅 Linux, `-O2` + 分配器 shim, 不进入 `all` / `test` / `install`);
+  "代码地图"新增 `bench/bench.c`, `bench/run.sh`, `bench/alloc_shim.{h,c}`.
+  未新增 `docs/` 文件.
+- 验收: 只读 `AGENTS.md` 即可找到 benchmark 的构建与运行入口, 以及
+  `bench/` 的四个文件位置.
+- 偏差: 无.

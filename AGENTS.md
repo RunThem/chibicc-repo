@@ -55,6 +55,7 @@
 - `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 再依次跑 `test/driver.sh`(命令行选项), `test/diagnostic.sh`(诊断逐字节), `test/warning.sh`(警告逐字节), `test/shape.sh`(发射形状), `test/ast.sh`(第 3 层 AST 形态), `test/trivia.sh`(trivia 通道), `test/cst.sh`(CST 通道), `test/expand.sh`(provenance), `test/library.sh`(公共面与 ASan), `test/allocator.sh`(分配器替换), `test/self-test.sh`(库内自测), `test/cst-stats.sh`(UNPARSED golden), 最后 `make fmt-tool` + `test/fmt.sh`(formatter)与 `make c2c` + `test/c2c.sh`(第 3 层回归闸门, 不随 `make` / `make install` 发布).
 - `make test-stage2` - 自举检查: 用 chibicc 编译它自己, 再重跑全部测试.
 - `make test-all` - 以上两项合计. `make clean` 用于清理.
+- `make bench` - 构建并运行前端分阶段 benchmark(`bench/run.sh`, 仅 Linux, 其它宿主由脚本拒绝); 采集 reset / tokenize / preprocess / parse / sema 的时间与分配器统计, 输出环境块, 语料指纹与固定表格. `make bench-tool` 只构建(`-O2` + `bench/alloc_shim.h`, 不进入 `all` / `test` / `install`).
 - 单独运行某个特性测试: `make test/sizeof.exe && ./test/sizeof.exe`(模式规则会自动处理).
 - 只验证前端(非 x86-64 Linux 宿主不能在本机汇编/运行): `-E`(预处理), `-S`(汇编文本), `-dump-tokens` / `-reconstruct`(第 1 层), `-dump-cst` / `-reconstruct-cst` / `-verify-cst`(第 2 层), `-dump-expansions` / `-verify-expansions`(provenance), `-dump-ast`(第 3 层, parse 后 sema 前早退).
 - 库构建: `make libcp.a`; Linux 下 `make` 也产 `libcp.so`(PIC, 只导出 D7, SONAME `libcp.so.0`; macOS 只承诺 `.a`), `chibicc` 链接静态库; `make install PREFIX=... [DESTDIR=...]` 装 10 个公共头, 库与 `libcp.pc`, `pkg-config --cflags --libs libcp` 可用; `LIBCP_VERSION` / `libcp_version()` 为 `0.1.0`. `make test-stage2` 用 chibicc 重编库对象(`stage2/libcp.a`). `make check-library` 跑 library / allocator / public-api / install 四个脚本(头文件自包含, 消费者只依赖 D7, `.a` 的 D7 齐全, `.so` 只导出 D7, install / pkg-config 布局); `test/library.sh` 最后一轮用 ASan+UBSan 重编库对象, 查 UB 与 reset 后活字节归零.
@@ -86,6 +87,7 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 - `main.c`, `driver.h`, `codegen.c` - 驱动器, 驱动器内部头, x86-64 发射(codegen 不属于库).
 - `libcp/src/hashmap.c`, `unicode.c`, `strings.c` - 基础设施.
 - `tools/fmt.c`, `tools/c2c.c` - CST formatter 与第 3 层回归闸门(c2c 不安装).
+- `bench/bench.c`, `bench/run.sh`, `bench/alloc_shim.{h,c}` - 前端分阶段 benchmark(tests / lib / driver / sqlite 四组语料), 不属于库.
 - `include/`, `test/` - 自举头文件; 特性测试与 `test/*.sh` 行为锁.
 
 ## 设计原则
