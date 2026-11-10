@@ -202,3 +202,24 @@
   `tests` 108,108,176 B / 16,799 KiB; `lib` 517,729,440 B / 50,269 KiB;
   `driver` 95,642,129 B / 49,692 KiB; `sqlite` 704,689,969 B / 688,175 KiB.
 - 偏差: 无.
+
+### B4.2 shim 开销对照
+
+- 方法: 同一 `bench/bench.c` 与同一组 flags(`-O2`, `_POSIX_C_SOURCE`)编出
+  两份库, 唯一差别是分配器: 对照版定义 `LIBCP_DEFAULT_ALLOCATOR`(走 C 库
+  `malloc` / `calloc` / `realloc` / `free`), 计时版用
+  `-include bench/alloc_shim.h`. 对照版把 `bench/alloc_shim.c` 一并归档只为
+  满足 harness 的统计符号, 其计数保持 0. 对 sqlite 以 `--repeat 5` 交替运行
+  两组共 6 次, 取每轮 total 的 min.
+- 结果(total min, us): 默认分配器 `620300 / 638046 / 614404` 与
+  `627911 / 621774 / 621191`; shim `529857 / 527715 / 539540` 与
+  `533944 / 531617 / 527127`. 分阶段: tokenize 约 229-234 ms 对 234 ms,
+  preprocess 约 134 ms 对 134 ms(基本一致); parse 137-138 ms 对 96-98 ms,
+  sema 98-101 ms 对 62-64 ms, reset 9.2 ms 对 0.5 ms. 一次 `--repeat 5`
+  运行的 CPU 时间: 默认分配器 user 3.49 s + sys 0.77 s, shim user 3.32 s +
+  sys 0.48 s.
+- 结论: shim 构建比默认分配器构建快约 13-15%, 方向与"shim 抬高计时"相反;
+  差异集中在 parse / sema / reset 与系统时间, 来自两份构建的分配器布局与
+  页错误行为不同, 不是计数的开销. 因此 D3 的"一份构建同时出时间与内存"
+  保持不变, 后续优化决策可用这组数字, 只需知道它相对默认分配器偏保守.
+- 偏差: 无.
