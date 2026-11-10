@@ -177,7 +177,7 @@
 
 ## 阶段 B4: 基线运行与收口
 
-- [ ] **B4.1 全量基线**:
+- [x] **B4.1 全量基线**:
   在 devcontainer 跑 `make bench`; 记录 `tests` / `lib` / `driver` / `sqlite` 四组
   结果到 `RESULT.md`; 附环境块与 stdout 存档路径.
   验收: 表格包含四阶段, reset 与 total; sqlite 组出现; 表格行数与预期语料数一致,

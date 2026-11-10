@@ -176,3 +176,29 @@
 - 验收: 只读 `AGENTS.md` 即可找到 benchmark 的构建与运行入口, 以及
   `bench/` 的四个文件位置.
 - 偏差: 无.
+
+### B4.1 全量基线
+
+- 运行: `make bench`(默认 `--repeat 5`), 退出码 0, 用时约 8.6 s; 完整 stdout
+  存档在 `.cache/bench/2026-11-10.txt`(449 行, `.cache/` 不进版本库).
+- 环境块: `git 7e4600c`(干净), `Linux 6.8.0-1064-azure x86_64`,
+  `AMD EPYC 7763 64-Core Processor`, nproc 2, `cc 13.3.0`,
+  `GLIBC 2.39`, `libcp 0.1.0`, BENCH_CFLAGS 为
+  `-std=c11 -O2 -g -fno-common -Wall -Wno-switch -D_POSIX_C_SOURCE=200809L
+  -Ilibcp/include -Ilibcp/src -include bench/alloc_shim.h`.
+- 行数核对: `tests` 42 个文件(含 `test/common`)258 行, `lib` 12 个文件 78 行,
+  `driver` 2 个文件 18 行, `sqlite` 1 个文件 12 行; 四组都有 `(sum)` 聚合行,
+  无空组.
+- 组聚合(`(sum)` 行, 时间单位 us, sum-of-per-file-min):
+
+  | group  | reset | tokenize | preprocess | parse | sema  | total  |
+  |--------|-------|----------|------------|-------|-------|--------|
+  | tests  | 3204  | 9862     | 52275      | 12249 | 4363  | 84000  |
+  | lib    | 19724 | 14413    | 344206     | 49673 | 18816 | 448641 |
+  | driver | 4376  | 4947     | 60937      | 11652 | 5848  | 88126  |
+  | sqlite | 499   | 230104   | 131969     | 96690 | 63663 | 545318 |
+
+- 组 total 的分配器采样(请求字节总和 / live 峰值):
+  `tests` 108,108,176 B / 16,799 KiB; `lib` 517,729,440 B / 50,269 KiB;
+  `driver` 95,642,129 B / 49,692 KiB; `sqlite` 704,689,969 B / 688,175 KiB.
+- 偏差: 无.
