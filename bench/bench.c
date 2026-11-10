@@ -47,15 +47,17 @@ typedef struct {
   int repeat;
 } Options;
 
-// 一个文件的结果: 每阶段的 min / median 耗时与第一轮计时轮的分配器
-// 采样, 以及预热轮统计的规模计数.
+// 一个文件的结果: 每阶段的 min / median 纳秒耗时与第一轮计时轮的
+// 分配器采样, 以及预热轮统计的规模计数. 输出时时间按 ns -> us -> ms
+// -> s -> m 自动选单位, 内存与文件大小按 B -> KB -> MB -> GB 自动选
+// 单位, 都保留两位小数并把单位打印在单元格里.
 typedef struct {
   const char* file;
   unsigned long long bytes;
   long tokens;
   long decls;
-  unsigned long long min_us[ST_COUNT];
-  unsigned long long med_us[ST_COUNT];
+  uint64_t min_ns[ST_COUNT];
+  uint64_t med_ns[ST_COUNT];
   BenchAllocStats mem[ST_COUNT];
 } FileResult;
 
@@ -263,8 +265,8 @@ static bool measure_file(const Options* opt, const char* path, FileResult* out) 
       uint64_t med = repeat % 2 ? tmp[repeat / 2]
                                 : (tmp[repeat / 2 - 1] + tmp[repeat / 2]) / 2;
 
-      out->min_us[s] = lo / 1000;
-      out->med_us[s] = med / 1000;
+      out->min_ns[s] = lo;
+      out->med_ns[s] = med;
     }
 
     for (int s = 0; s < ST_TOTAL; s++) {
@@ -282,16 +284,16 @@ static bool measure_file(const Options* opt, const char* path, FileResult* out) 
 }
 
 static void print_header(void) {
-  printf("%-8s %-34s %-10s %10s %10s %13s %11s %13s %10s %9s %7s\n",
+  printf("%-8s %-34s %-10s %11s %11s %11s %11s %11s %11s %9s %7s\n",
          "group",
          "file",
          "stage",
-         "min_us",
-         "med_us",
-         "alloc_bytes",
-         "alloc_calls",
-         "peak_live_kb",
-         "bytes",
+         "min",
+         "med",
+         "alloc",
+         "calls",
+         "peak",
+         "size",
          "tokens",
          "decls");
 }
@@ -303,33 +305,75 @@ static void fmt_number(char* buf, size_t size, bool present, unsigned long long 
     snprintf(buf, size, "-");
 }
 
+// 时间: ns 起步, 每 1000 升一档(ns -> us -> ms -> s), 到 s 后按 60
+// 升到 m.
+static void fmt_time(char* buf, size_t size, bool present, double ns) {
+  if (!present) {
+    snprintf(buf, size, "-");
+    return;
+  }
+
+  static const char* units[] = {"ns", "us", "ms", "s", "m"};
+  int unit                   = 0;
+  while (ns >= 1000.0 && unit < 3) {
+    ns /= 1000.0;
+    unit++;
+  }
+  if (unit == 3 && ns >= 60.0) {
+    ns /= 60.0;
+    unit = 4;
+  }
+  snprintf(buf, size, "%.2f %s", ns, units[unit]);
+}
+
+// 大小: B 起步, 每 1024 升一档.
+static void fmt_size(char* buf, size_t size, bool present, double bytes) {
+  if (!present) {
+    snprintf(buf, size, "-");
+    return;
+  }
+
+  static const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+  int unit                   = 0;
+  while (bytes >= 1024.0 && unit < 4) {
+    bytes /= 1024.0;
+    unit++;
+  }
+  snprintf(buf, size, "%.2f %s", bytes, units[unit]);
+}
+
 static void print_row(const Options* opt,
                       const char* file,
                       int stage,
-                      unsigned long long min_us,
+                      uint64_t min_ns,
                       bool has_med,
-                      unsigned long long med_us,
+                      uint64_t med_ns,
                       const BenchAllocStats* mem,
                       bool has_scale,
                       unsigned long long bytes,
                       long tokens,
                       long decls) {
-  char med[32], byte_buf[32], token_buf[32], decl_buf[32];
-  fmt_number(med, sizeof med, has_med, med_us);
-  fmt_number(byte_buf, sizeof byte_buf, has_scale, bytes);
+  char min_buf[32], med_buf[32], alloc_buf[32], calls_buf[32], peak_buf[32];
+  char size_buf[32], token_buf[32], decl_buf[32];
+  fmt_time(min_buf, sizeof min_buf, true, (double)min_ns);
+  fmt_time(med_buf, sizeof med_buf, has_med, (double)med_ns);
+  fmt_size(alloc_buf, sizeof alloc_buf, true, (double)mem->bytes);
+  fmt_number(calls_buf, sizeof calls_buf, true, mem->count);
+  fmt_size(peak_buf, sizeof peak_buf, true, (double)mem->peak);
+  fmt_size(size_buf, sizeof size_buf, has_scale, (double)bytes);
   fmt_number(token_buf, sizeof token_buf, has_scale, (unsigned long long)tokens);
   fmt_number(decl_buf, sizeof decl_buf, has_scale, (unsigned long long)decls);
 
-  printf("%-8s %-34s %-10s %10llu %10s %13zu %11zu %13llu %10s %9s %7s\n",
+  printf("%-8s %-34s %-10s %11s %11s %11s %11s %11s %11s %9s %7s\n",
          opt->group,
          file,
          stage_names[stage],
-         min_us,
-         med,
-         mem->bytes,
-         mem->count,
-         (unsigned long long)(mem->peak + 1023) / 1024,
-         byte_buf,
+         min_buf,
+         med_buf,
+         alloc_buf,
+         calls_buf,
+         peak_buf,
+         size_buf,
          token_buf,
          decl_buf);
 }
@@ -339,9 +383,9 @@ static void print_file(const Options* opt, const FileResult* r) {
     print_row(opt,
               r->file,
               s,
-              r->min_us[s],
+              r->min_ns[s],
               true,
-              r->med_us[s],
+              r->med_ns[s],
               &r->mem[s],
               s == ST_TOKENIZE,
               r->bytes,
@@ -351,9 +395,9 @@ static void print_file(const Options* opt, const FileResult* r) {
   print_row(opt,
             r->file,
             ST_TOTAL,
-            r->min_us[ST_TOTAL],
+            r->min_ns[ST_TOTAL],
             true,
-            r->med_us[ST_TOTAL],
+            r->med_ns[ST_TOTAL],
             &r->mem[ST_TOTAL],
             false,
             0,
@@ -361,10 +405,10 @@ static void print_file(const Options* opt, const FileResult* r) {
             0);
 }
 
-// 每组收尾的聚合行: 时间是 sum-of-per-file-min; 分配字节与调用次数是
-// 求和; peak_live_kb 取各文件峰值的最大值; med_us 不聚合, 打印 "-".
+// 每组收尾的聚合行: 时间是 sum-of-per-file-min; 分配字节与调用次数
+// 是求和; peak 取各文件峰值的最大值; med 不聚合, 打印 "-".
 static void print_aggregate(const Options* opt, const FileResult* results, int n) {
-  unsigned long long min_us[ST_COUNT] = {0};
+  uint64_t min_ns[ST_COUNT] = {0};
   BenchAllocStats mem[ST_COUNT];
   memset(mem, 0, sizeof mem);
   unsigned long long bytes = 0;
@@ -374,7 +418,7 @@ static void print_aggregate(const Options* opt, const FileResult* results, int n
   for (int i = 0; i < n; i++) {
     const FileResult* r = &results[i];
     for (int s = 0; s < ST_COUNT; s++) {
-      min_us[s] += r->min_us[s];
+      min_ns[s] += r->min_ns[s];
       mem[s].bytes += r->mem[s].bytes;
       mem[s].count += r->mem[s].count;
       if (mem[s].peak < r->mem[s].peak)
@@ -389,7 +433,7 @@ static void print_aggregate(const Options* opt, const FileResult* results, int n
     print_row(opt,
               "(sum)",
               s,
-              min_us[s],
+              min_ns[s],
               false,
               0,
               &mem[s],
