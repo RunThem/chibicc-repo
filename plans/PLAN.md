@@ -188,7 +188,7 @@
   记录并回到 D3 重议.
   验收: `RESULT.md` 写明对照数字与结论.
 
-- [ ] **B4.3 终态闸门**:
+- [x] **B4.3 终态闸门**:
   `make bench-tool`, `make bench`, `make test`, `make check-context`, `make clean`;
   确认 `libcp/`, `main.c`, `codegen.c` 零 diff; 提交全部 bench 改动.
   验收: 全部命令退出码 0; 工作树干净; 无行为变化提交.

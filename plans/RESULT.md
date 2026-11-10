@@ -6,7 +6,7 @@
 
 ## 状态
 
-- B0.1 已完成; B1-B4 尚未开工.
+- B0.1 至 B4.3 全部完成, 本线收官; benchmark 工具与基线已就位.
 - 计划与归档文件已于 2026-11-10 建立: `PLAN.md` / `RESULT.md`; 旧主线归档为
   `PLAN-library.md` / `RESULT-library.md` (提交 `70b8ebf`).
 - 计划: `PLAN.md`.
@@ -222,4 +222,19 @@
   差异集中在 parse / sema / reset 与系统时间, 来自两份构建的分配器布局与
   页错误行为不同, 不是计数的开销. 因此 D3 的"一份构建同时出时间与内存"
   保持不变, 后续优化决策可用这组数字, 只需知道它相对默认分配器偏保守.
+- 偏差: 无.
+
+### B4.3 终态闸门
+
+- 闸门: `make bench-tool` 退出码 0; `make bench`(默认 repeat 5)退出码 0,
+  输出四组; `make test` 退出码 0(41 个 `test/*.c` 用例与全部行为锁, 结尾
+  `c2c` 81 个 golden 样本全过); `make check-context` 退出码 0; `make clean`
+  退出码 0.
+- 终态: `bench/` 只剩 `bench.c`, `run.sh`, `alloc_shim.h`, `alloc_shim.c`;
+  `git status` 为空. `git diff --stat 70b8ebf -- libcp main.c codegen.c`
+  为空, 本线对库与驱动器零 diff, 未新增 `exit()` 或库内静态全局.
+- 提交: 本线按步提交 `ee0f1ca`(B0.1), `c55b55d`(B1.1), `cd00568`(B1.2+B1.3),
+  `7811df2`(B2.1), `855fd69`(B2.2), `9897703`(B2.3), `d421571`(B3.1),
+  `00bea18`(B3.2), `7e4600c`(B3.3), `a3c1dc8`(B4.1), `914e74d`(B4.2), 以及
+  本记录所在的收尾提交.
 - 偏差: 无.
