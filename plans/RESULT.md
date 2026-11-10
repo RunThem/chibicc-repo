@@ -141,3 +141,16 @@
   `AMD EPYC 7763 64-Core Processor`, nproc 2, `cc 13.3.0`,
   `GLIBC 2.39`, `libcp 0.1.0`.
 - 偏差: 无.
+
+### B3.1 Makefile 目标
+
+- 改动: `Makefile` 新增 `BENCH_CFLAGS`(独立 `-O2` 构建, 加
+  `-D_POSIX_C_SOURCE=200809L` 与 `-include bench/alloc_shim.h`, 刻意不含
+  `ALLOCATOR_CFLAGS`), `bench/obj/*.o` 规则, `bench/libcp_bench.a`,
+  `bench/libcp-bench`, 目标 `bench-tool`(只构建)与 `bench`(构建后带
+  `BENCH_CFLAGS` 环境变量运行 `bench/run.sh`), 并把两个目标加入 `.PHONY`.
+  默认 `all` / `test` / `install` 不受影响.
+- 验收: `make bench-tool` 退出码 0, 构建日志 0 处 warning; 删掉产物后重建
+  成功; `BENCH_REPEAT=1 make bench` 退出码 0, 输出四组标题, 环境块的
+  `bench_cflags` 显示上面那串 flags, `tests` 组包含 `test/common`.
+- 偏差: 无.

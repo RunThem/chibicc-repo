@@ -26,6 +26,14 @@ FMT_SRCS=$(LIB_SRCS) $(LIB_HDR) $(PUBLIC_HDRS) $(DRIVER_SRCS)
 TEST_SRCS=$(wildcard test/*.c)
 TESTS=$(TEST_SRCS:.c=.exe)
 
+# 前端 benchmark (plans/PLAN.md): 独立 -O2 构建与分配器 shim, 不进入
+# all / test / install. BENCH_CFLAGS 刻意不含 ALLOCATOR_CFLAGS: 库对象
+# 必须走 bench/alloc_shim.h 的四个宏, 而不是 LIBCP_DEFAULT_ALLOCATOR.
+BENCH_CFLAGS=-std=c11 -O2 -g -fno-common -Wall -Wno-switch \
+  -D_POSIX_C_SOURCE=200809L -Ilibcp/include -Ilibcp/src \
+  -include bench/alloc_shim.h
+BENCH_OBJS=$(LIB_SRCS:$(LIB_DIR)/%.c=bench/obj/%.o)
+
 # Linux also builds the shared library (PLAN L3.3b); macOS only promises
 # the archive.
 ifeq ($(shell uname -s),Linux)
@@ -116,6 +124,28 @@ format-check:
 # compilable TU (golden bytes, normalized AST, byte-identical -S).
 c2c: libcp.a tools/c2c.c
 	$(CC) $(CFLAGS) -o $@ tools/c2c.c libcp.a
+
+# 前端 benchmark: bench-tool 只构建, bench 构建并运行 bench/run.sh(仅
+# Linux, 由脚本自己守卫). 库对象编到 bench/obj, 归档为
+# bench/libcp_bench.a; harness 链接 bench/libcp-bench.
+bench/obj/%.o: $(LIB_DIR)/%.c $(LIB_HDR) $(PUBLIC_HDRS) bench/alloc_shim.h
+	mkdir -p $(@D)
+	$(CC) $(BENCH_CFLAGS) -c -o $@ $<
+
+bench/obj/alloc_shim.o: bench/alloc_shim.c bench/alloc_shim.h
+	mkdir -p $(@D)
+	$(CC) $(BENCH_CFLAGS) -c -o $@ $<
+
+bench/libcp_bench.a: $(BENCH_OBJS) bench/obj/alloc_shim.o
+	$(AR) rcs $@ $^
+
+bench/libcp-bench: bench/bench.c bench/libcp_bench.a
+	$(CC) $(BENCH_CFLAGS) -o $@ bench/bench.c bench/libcp_bench.a
+
+bench-tool: bench/libcp-bench
+
+bench: bench-tool
+	BENCH_CFLAGS='$(BENCH_CFLAGS)' bench/run.sh
 
 test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
@@ -310,4 +340,4 @@ docker-snapshot-diff: docker-image
 	@rc=0; diff -ru .cache/snapshot .cache/snapshot.new || rc=1; rm -rf .cache/snapshot.new; \
 	  [ $$rc -eq 0 ] && echo "snapshot diff: empty" || { echo "snapshot diff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: all fmt-tool format test clean test-stage2 test-all test-thirdparty check-library check-context install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff
+.PHONY: all fmt-tool format test clean test-stage2 test-all test-thirdparty check-library check-context install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff bench bench-tool

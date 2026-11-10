@@ -160,7 +160,7 @@
 
 ## 阶段 B3: 构建与仓库接入
 
-- [ ] **B3.1 Makefile 目标**:
+- [x] **B3.1 Makefile 目标**:
   加 `BENCH_CFLAGS`, `bench/obj` 规则, `bench/libcp_bench.a`, `bench/libcp-bench`;
   `make bench-tool` 只构建; `make bench` 构建并运行 `bench/run.sh`.
   验收: `make bench-tool` 零告警; `make bench` 能跑完至少一个组.
