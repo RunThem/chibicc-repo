@@ -154,18 +154,18 @@ libcp_context_free(ctx);                     /* 销毁 */
 ```
 
 - `libcp_context_new` 创建一个空 context. 默认安装预定义宏集. **不安装任何 include 搜索路径**, 系统头路径由消费者自己加.
-- `libcp_context_reset` 释放 arena 中的全部 per-TU 对象, 清空文件表, 宏表, 条件栈, 作用域和语义状态, 重新安装预定义宏, 重新应用记录下来的 `-D` / `-U` 操作. 保留 include 路径, 诊断回调和"是否启用预定义宏"的设置.
+- `libcp_context_reset` 逐个归还全部 per-TU 分配, 清空文件表, 宏表, 条件栈, 作用域和语义状态, 重新安装预定义宏, 重新应用记录下来的 `-D` / `-U` 操作. 保留 include 路径, 诊断回调和"是否启用预定义宏"的设置.
 - `libcp_context_free` 在 reset 的基础上释放配置数组和 context 本身.
 
 ### 2.5.2 指针失效规则
 
-**reset 之后, 该 context 返回过的所有指针立即失效**, 包括 token, file, AST 节点, 类型, Obj, CST 节点, 诊断消息字符串, 以及 arena 分配的宏名字字符串. 例外是 `libcp_version` 的字符串字面量与预定义宏表中的静态 `name` / 固定 `value`, 它们不随 reset 失效.
+**reset 之后, 该 context 返回过的所有指针立即失效**, 包括 token, file, AST 节点, 类型, Obj, CST 节点, 诊断消息字符串, 以及 per-TU 分配的宏名字字符串. 例外是 `libcp_version` 的字符串字面量与预定义宏表中的静态 `name` / 固定 `value`, 它们不随 reset 失效.
 
 库不做悬垂指针检测. 消费者要么在 reset 前用完, 要么自己复制需要保留的数据. 诊断回调收到的 `filename` 和 `message` 也只保证到下一次 reset.
 
-### 2.5.3 arena
+### 2.5.3 per-TU 分配与释放
 
-一个 context 一个块链 arena. 所有 per-TU 对象从 arena 分配:
+一个 context 的每个 per-TU 对象都是一次独立的分配, 直接来自 `<libcp/allocator.h>` 的 `LIBCP_*` 宏:
 
 - token, file, 各种数组
 - AST 节点, 类型, 成员, 对象
@@ -174,15 +174,15 @@ libcp_context_free(ctx);                     /* 销毁 */
 - 宏展开记录与 provenance 节点
 - 诊断消息, 中间字符串
 
-分配策略:
+分配与释放:
 
-- 块大小 64 KiB, 按需追加. 块本身从 `<libcp/allocator.h>` 的 `LIBCP_*` 宏取得, 默认是 libc, 可在重编库时替换.
-- `calloc` 语义, 返回的内存零初始化.
-- 对齐至少 8 字节; 零初始化分配用 16 字节, 因为 `LibcpToken` 和 `LibcpNode` 内含 `long double`.
-- `realloc` 复制到新块, 旧块不回收. 因此扩容的峰值约为最终大小的两倍.
-- 不提供逐对象 free. 不做 per-phase arena.
+- 每个块前有一个只含 `next` / `prev` 的链头部, 把块挂进 context 的登记链. 这不是池化: 库不做块切分, 不批量预分配, 嵌入方的分配器 (包括 arena) 是唯一的分配策略层.
+- 分配器负责对齐; 头部尺寸按 `_Alignof(max_align_t)` 取整, 因此返回给调用方的指针对任意类型都对得上. `LibcpToken` 与 `LibcpNode` 内含 `long double`, 在 x86-64 上需要 16 字节对齐.
+- `libcp_tu_calloc` 返回零初始化内存; `libcp_tu_realloc` 使用 `LIBCP_REALLOC`, 保留旧字节并清零超过 `old_size` 的尾部.
+- 解析, 预处理, CST, parse, sema 期间不做任何释放. `libcp_context_reset` 与 `libcp_context_free` 沿登记链逐块 `LIBCP_FREE`, 因此一个 TU 的分配仍然"一起活, 一起死".
+- 不提供逐对象 free 的公共 API. 不做 per-phase arena.
 
-这条设计是刻意的: 库的调用者不需要追踪每个对象的生命周期, 只需要在 TU 边界 reset. 代价是内存峰值和"不能只释放一半"的限制.
+这条设计是刻意的: 库的调用者不需要追踪每个对象的生命周期, 只需要在 TU 边界 reset; 嵌入方也不必面对库内 arena 与其自有 arena 的嵌套.
 
 ## 2.6 错误模型
 
@@ -238,7 +238,7 @@ libcp_context_set_diagnostic(ctx, on_diagnostic, user);
 2. **不同 context 可以在不同线程并存**.
 3. **同一线程可以嵌套调用公共入口**.
 
-实现方式是显式传参: 每个直接或传递地触碰 arena, 诊断, 格式化, 容器分配或 context 字段的内部函数都以 `LibcpContext *ctx` 作为首参, 由公共入口把自己的 context 传下去. 库层没有线程局部指针, 也没有 `libcp_ctx()` 访问器; `make check-context` (即 `test/context-audit.sh --strict`) 在源码与 `.a` 符号两层锁定这一点.
+实现方式是显式传参: 每个直接或传递地触碰 per-TU 分配, 诊断, 格式化, 容器分配或 context 字段的内部函数都以 `LibcpContext *ctx` 作为首参, 由公共入口把自己的 context 传下去. 库层没有线程局部指针, 也没有 `libcp_ctx()` 访问器; `make check-context` (即 `test/context-audit.sh --strict`) 在源码与 `.a` 符号两层锁定这一点.
 
 这意味着:
 
@@ -336,7 +336,7 @@ libcp/
     sema.c           名字解析, 类型标注, 常量求值, 布局, 初始化器
     range.c          libcp_node_source_range: AST 子树锚点 token 范围
     type.c           类型构造器与谓词
-    lib.c            facade, context, arena, 诊断边界
+    lib.c            facade, context, per-TU 分配, 诊断边界
     hashmap.c        开放寻址的字节串键哈希表 (宏表 / pragma once / include guard)
     strings.c        字符串辅助
     unicode.c        UTF 编码

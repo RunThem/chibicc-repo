@@ -206,7 +206,7 @@ make test-stage2
 | `test/expand.sh` | 29 个 provenance dump 样本, 3 个链形状样本, 17 个 verify 样本, 全量语料 |
 | `test/library.sh` | 公共面消费者, 错误路径, 双 context, ASan/UBSan |
 | `test/allocator.sh` | 用替换分配器重编库, 活块归零 |
-| `test/self-test.sh` | 库内自测: hashmap / arena / sema 状态重置 |
+| `test/self-test.sh` | 库内自测: hashmap / per-TU 分配 / sema 状态重置 |
 | `test/context-audit.sh` | 隐式 context 审计 (`--strict`, 由 `make test` 调用) |
 | `test/fmt.sh` | formatter 幂等 / 行数 / 注释数量 / 容器内 `-S` 等价 (`make fmt-tool` 构建) |
 | `test/c2c.sh` | C 转 C 打印回归 (`make c2c` 构建) |
@@ -244,7 +244,7 @@ make check-library
    - reset 复用.
    - 同线程双 context 与跨线程双 context.
    - ASan + UBSan 重编库对象, 检查零 UB, 活字节上界, free 后回到基线附近 (允许 4 KiB 容差).
-2. `test/allocator.sh`: 用 `LIBCP_MALLOC` / `LIBCP_CALLOC` / `LIBCP_REALLOC` / `LIBCP_FREE` 的计数替换版重编整个库, 验证替换分配器确实被调用, 且 `libcp_context_free` 后活块归零.
+2. `test/allocator.sh`: 用 `LIBCP_MALLOC` / `LIBCP_CALLOC` / `LIBCP_REALLOC` / `LIBCP_FREE` 的计数替换版重编整个库, 验证替换分配器确实被调用, 每个 per-TU 对象是一次独立分配, reset 后活块回到基线, 且 `libcp_context_free` 后活块归零.
 3. `test/public-api.sh`: 验证:
    - 每个公共头单独 `-fsyntax-only -Wall -Wextra`.
    - 只看到公共头的消费者能编译链接.

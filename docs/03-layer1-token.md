@@ -163,7 +163,7 @@ struct libcp_file {
 3. 检查 NUL 字节. 源文件里出现 NUL 是诊断, 不是静默截断.
 4. 分配 `LibcpFile`, 编号并登记到 context 的输入文件表.
 
-`tokenize_buffer(name, contents)` 走另一条路: 把传入的字节复制进 arena, 直接构造一个没有改写的 `LibcpFile`. 内存中的输入不经过 `make_scan_buffer`.
+`tokenize_buffer(name, contents)` 走另一条路: 把传入的字节复制进 per-TU 分配, 直接构造一个没有改写的 `LibcpFile`. 内存中的输入不经过 `make_scan_buffer`.
 
 ### 3.4.2 构造扫描缓冲
 
@@ -311,7 +311,7 @@ cmp input.c rebuilt.c
 - **注释没有分类**. trivia 是原始字节. 库不告诉你"这是文档注释"或"这是行尾注释". 需要的话自己解析 trivia.
 - **`loc` 不是 C 字符串**. 它是扫描缓冲里的切片, 可能没有 NUL. 用 `len` 限界, 或复制出来.
 - **`#line` 不修改 `file->name`, 但会改显示名**. 它设置 `file->display_name`, 预处理后的 token 的 `filename` 与 `__FILE__` 随之改变; 诊断仍使用物理路径 `file->name`, 行号叠加 `#line` 偏移. 见第 11 章.
-- **内存中的输入被复制**. `tokenize_buffer` 会把字节复制进 arena, 调用者的缓冲区可以立即释放. 代价是同一份源码在内存里有两份.
+- **内存中的输入被复制**. `tokenize_buffer` 会把字节复制进 per-TU 分配, 调用者的缓冲区可以立即释放. 代价是同一份源码在内存里有两份.
 - **内存输入不经过扫描缓冲改写**. `libcp_tokenize_buffer*` 按字节扫描: 不跳过 BOM, 不删除反斜杠续行, 不把 `\uXXXX` 改写成 UTF-8, 不做换行归一 (CRLF 仍能扫描, 孤立 CR 的行号会错), 不补末尾换行. 反斜杠续行会变成一个 `\` token, `\u00e9` 会变成 `\` 加 `u00e9`. 真实源码优先用 `libcp_tokenize_file`; 内存输入应当是已经处于"扫描缓冲形态"的文本.
 - **文件大小上限**. 超过 `INT32_MAX` 字节的文件被拒绝, 不是分块处理.
 - **没有字符集转换**. 文件按字节读入, 标识符支持 UTF-8. 其他编码需要调用者先转成 UTF-8.

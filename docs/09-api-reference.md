@@ -77,7 +77,7 @@ LibcpContext *libcp_context_new(void);
 
 行为:
 
-- 初始化 arena 和全部 per-TU 状态.
+- 初始化全部 per-TU 状态和分配登记链.
 - 安装 47 个预定义宏.
 - 不添加任何 include 搜索路径.
 - 不注册诊断回调, 默认为"按驱动器格式打印到 stderr".
@@ -92,7 +92,7 @@ void libcp_context_free(LibcpContext *ctx);
 
 销毁 context:
 
-- 释放 arena 中的全部对象.
+- 归还登记链上的全部 per-TU 分配.
 - 释放 include 路径, `-D` / `-U` 配置数组与 CST typedef 种子.
 - 释放 context 本身; 库没有全局或线程局部的 active context 指针需要清除.
 
@@ -106,7 +106,7 @@ void libcp_context_reset(LibcpContext *ctx);
 
 重置 per-TU 状态, 保留配置:
 
-- 释放整个 arena.
+- 归还全部 per-TU 分配.
 - 清空文件表, 宏表, 条件编译栈, 作用域, 语义状态.
 - 清除 `failed`.
 - 重新安装预定义宏.
@@ -226,7 +226,7 @@ typedef struct libcp_predefined_macro {
 ```
 
 - `value` 是替换文本. 内建宏和动态宏为 NULL.
-- `name` 与固定 `value` 可能指向静态表, 不随 reset 失效; 由 context 在 arena 中构造的条目在 reset 后失效. 返回的指针都不要 `free`.
+- `name` 与固定 `value` 可能指向静态表, 不随 reset 失效; 由 context 在 per-TU 分配中构造的条目在 reset 后失效. 返回的指针都不要 `free`.
 - 越界返回 `{NULL, NULL}`.
 - 关闭预定义宏并 reset 之后 count 为 0; 只调用 setter 而未 reset 时, 当前 TU 的集合仍在.
 
@@ -245,7 +245,7 @@ typedef struct libcp_predefined_macro {
 - `LIBCP_DEFAULT_ALLOCATOR` 定义时使用 C 库分配器, 四个宏全部展开为 libc 同名函数, 不做逐个宏的回退.
 - 未定义时, 嵌入方必须自己提供全部四个宏, 通常通过 `-include` shim 头. 校验只在构建 libcp 时进行(`LIBCP_INTERNAL`), 缺少任一个宏会在包含处 `#error`; 只 include 公共头的消费者不需要选择分配器.
 - 默认构建在 Makefile 里定义 `LIBCP_DEFAULT_ALLOCATOR`(`ALLOCATOR_CFLAGS`); 自定义构建覆盖 `ALLOCATOR_CFLAGS`, 只给四个宏, 见 10.11.5 的 mimalloc 例子.
-- 库拥有的每个块 - context 对象, 配置数组与字符串, arena 块及其头部 - 都从这四个宏取得, 并通过 `LIBCP_FREE` 归还.
+- 库拥有的每个块 - context 对象, 配置数组与字符串, 每个 per-TU 对象及其链头部 - 都从这四个宏取得, 并通过 `LIBCP_FREE` 归还.
 - 它们是编译期配置: 在编译 libcp 时定义, 不是在消费者里定义. 链接预编译库时重新定义不会改变已经编译好的库.
 - 替换实现必须满足 libc 的语义: 返回满足任意类型对齐的内存(x86-64 上 `LibcpToken` / `LibcpNode` 内嵌 `long double`, 需要 16 字节), `LIBCP_CALLOC` 清零, `LIBCP_REALLOC` 失败时返回 NULL 且保留原块, `LIBCP_FREE` 接受 NULL.
 - 宏不产生符号, D7 与 `.so` 导出不变.
@@ -278,7 +278,7 @@ LibcpToken *libcp_tokenize_buffer(LibcpContext *ctx, char *name,
 tokenize 一个 NUL 结尾的内存字符串.
 
 - `name` 是显示文件名, 用于诊断.
-- 输入被复制进 arena.
+- 输入被复制进 per-TU 分配.
 - 输入不能包含 NUL; 发现 NUL 会报 `NUL byte in source file` 并返回 NULL.
 - 不做扫描缓冲改写: 不跳 BOM, 不删续行, 不改写 universal char. 见第 11.5.3 节.
 
@@ -531,7 +531,7 @@ if (!ast) {
 
 ## 9.12 所有权与失效规则
 
-- 库返回的所有指针由 context 拥有, 不要 `free`; `libcp_version` 返回字符串字面量, 预定义宏表里的静态 `name` 与固定 `value` 也不属于 per-TU arena, 不随 reset 失效.
+- 库返回的所有指针由 context 拥有, 不要 `free`; `libcp_version` 返回字符串字面量, 预定义宏表里的静态 `name` 与固定 `value` 也不属于 per-TU 分配, 不随 reset 失效.
 - 输入参数:
   - `tokenize_buffer*`: 复制输入字节, 调用者可以立即释放.
   - `add_include_path`: 复制路径.

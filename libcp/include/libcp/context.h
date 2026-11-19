@@ -1,7 +1,7 @@
 // context 对象 (PLAN L2/L3.1b): 一个 context 就是一个翻译单元.
 // context 是不透明的; 它的字段属于实现细节. 不同的 context 可以位于
 // 不同线程; 同一个 context 不得被两个线程并发使用. 在内部, 每个
-// 触碰 arena, 诊断或 context 状态的函数都以 context 作为首参 -
+// 触碰 per-TU 分配, 诊断或 context 状态的函数都以 context 作为首参 -
 // 不存在线程局部的当前 context, 因此诊断回调可以创建, 使用并释放
 // 另一个 context, 而不会干扰外层调用.
 

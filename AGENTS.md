@@ -27,7 +27,7 @@
 
 - 不新增 `exit()`: 库层错误走诊断回调 + longjmp 到公共入口; 默认处理器逐字节复现旧输出; 新代码不得引入新的 exit 点(驱动器与默认处理器路径除外).
 - 不新增静态全局状态: 语义状态全部在 `LibcpContext`(parse.c 只剩只读关键字表缓存); 新代码把状态放进 context.
-- 库层无隐式上下文: 新增或修改的内部函数若直接或传递地触碰 arena, 格式化, 容器, 诊断或 context 字段, 必须以 `LibcpContext *ctx` 作首参. 不得新增 `libcp_ctx()` 或 TLS; `make check-context` 是必跑门; `codegen.c` 不得有 `cg_ctx`.
+- 库层无隐式上下文: 新增或修改的内部函数若直接或传递地触碰 per-TU 分配, 格式化, 容器, 诊断或 context 字段, 必须以 `LibcpContext *ctx` 作首参. 不得新增 `libcp_ctx()` 或 TLS; `make check-context` 是必跑门; `codegen.c` 不得有 `cg_ctx`.
 - API 纪律: 公共头(`libcp/include/libcp/`)与内部头(`libcp/src/libcp.h`)分离, 不泄漏编译器内部假设(Linux 路径, 单次进程生命周期, 直接 exit 等).
 - 后端整形只允许出现在 codegen.c: 指针缩放, 读写回环, 临时槽, 语句重排, 标签与唯一名分配都不是库层的事; 库层只做标注与语义结论.
 - 检查与诊断留在库层: 左值性, 实参个数, 位域取地址, VLA 不得初始化, 不完整类型等检查不得随后端搬走; 文案与锚点以 `test/diagnostic.sh` 为准.
@@ -36,7 +36,7 @@
 
 - 命名: `libcp` / `<libcp/...>` / `libcp_` / `Libcp` / `LIBCP_`; 库内私有类型同样带 `Libcp` / `struct libcp_*`; 二进制 `chibicc`, 预定义宏 `__chibicc__` 与 `plans/**` 的旧名不回溯改写; 只承诺源码兼容.
 - 公共 IR: `LibcpNode` / `LibcpObj` 只保留第 3/4 层字段; codegen 状态在 `codegen.c` 私有表; sema 只标注, 不整形.
-- context: 一个 context 一个翻译单元; `new` / `free` / `reset` 三态; reset 保留配置并释放全部 per-TU 内存; 不做逐对象 free, 不做 per-phase arena.
+- context: 一个 context 一个翻译单元; `new` / `free` / `reset` 三态; reset 保留配置并逐个归还全部 per-TU 分配; 不提供逐对象 free 的公共 API, 不做内部池化, 不做 per-phase arena.
 - 宏保真: 消费展开后的 token 流, 不引入宏调用节点; 宏保真由 CST 与 provenance 承担; 放弃宏展开内部的外科式编辑.
 - CST 只建在预处理之前: 不做展开流 CST, 也不从 CST 反向还原宏展开前的 token 流.
 - 公共面不提供 per-node user data 扩展点, 也不提供 trivia 分段迭代器: 两个消费者(formatter 与 c2c)都只需要只读遍历.
@@ -80,7 +80,7 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 ## 代码地图
 
 - `libcp/include/libcp/` - 10 个公共头; 消费者只 include `<libcp/libcp.h>`.
-- `libcp/src/libcp.h`, `lib.c` - 内部 umbrella 与不透明类型定义; facade(context / arena / 诊断边界 / 公共入口).
+- `libcp/src/libcp.h`, `lib.c` - 内部 umbrella 与不透明类型定义; facade(context / per-TU 分配 / 诊断边界 / 公共入口).
 - `libcp/src/tokenize.c`, `preprocess.c`, `provenance.c` - 第 1 层与预处理; provenance 记录与两个只读通道(不接编译路径).
 - `libcp/src/cst.c` - 第 2 层; 必须在 `libcp_preprocess` 之前建树(预处理会改写输入链).
 - `libcp/src/parse.c`, `sema.c`, `type.c` - 第 3/4 层与类型系统.
@@ -93,7 +93,7 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 ## 设计原则
 
 - 可读性优先于巧妙. 除用户明确要求外不做顺手的"改进", 不重组无关代码, 不用宏/高阶函数合并解析器里有意的重复. 表达式层是唯一豁免: 一个只读绑定力表(`InfixOp`)加一个 `expr_bp` 循环; 前缀/后缀仍是 `if` 分支, 具名 `BP_*`, 不用函数指针数组, 语句与声明层每产生式一个函数.
-- 内存: 整块分配, 从不逐对象 `free`; 一个 context 一个翻译单元一个 arena, 整体 `libcp_context_new/free/reset`; 底层块来自 `<libcp/allocator.h>` 的 `LIBCP_*`; 简单但慢的算法可接受.
+- 内存: 每个 per-TU 对象直接来自 `<libcp/allocator.h>` 的 `LIBCP_*`; context 用一条只含链指针的登记链把它们串起来, `libcp_context_new/free/reset` 在边界批量归还; 解析期间不释放; 库不叠加自己的 arena 或池化, 嵌入方的分配器 (包括 arena) 是唯一的分配策略层; 简单但慢的算法可接受.
 - codegen 没有优化 pass - 故意的, 保留.
 - `include/` 是 chibicc 自带的自举头(`stddef.h`, `stdarg.h`, `stdbool.h`, `float.h`, `stdalign.h`, `stdatomic.h`, `stdnoreturn.h`), 通过 `-Iinclude` 使用.
 

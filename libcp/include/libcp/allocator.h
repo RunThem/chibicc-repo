@@ -2,6 +2,10 @@
 // 并通过 LIBCP_FREE 释放, 因此嵌入方可以把库的内存接到自己的分配器
 // (内存池, 跟踪分配器, freestanding 堆).
 //
+// 库不做内部池化: 每个 per-TU 对象是一次独立的 LIBCP_* 分配, 并在
+// context 的登记链上串起来; reset / free 时逐块 LIBCP_FREE. 因此
+// 嵌入方可以直接把库接到自己的 arena 上, 不需要再套一层库内 arena.
+//
 // 选择由单个构建期开关决定, 不做逐宏回退:
 //  - 定义了 LIBCP_DEFAULT_ALLOCATOR: 安装 C 库分配器,
 //    即四个宏展开为 malloc / calloc / realloc / free.

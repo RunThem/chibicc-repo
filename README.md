@@ -51,7 +51,7 @@ libcp_context_free(ctx);
 ```
 
 One context is one translation unit. `libcp_context_reset` releases all
-per-translation-unit memory (the arena) while keeping the include paths,
+all per-translation-unit allocations while keeping the include paths,
 the command-line macros and the diagnostic callback; every pointer the
 context returned is invalid afterwards. Errors are reported through the
 registered `LibcpDiagnosticFn` and make the entry return NULL (the

@@ -307,7 +307,7 @@ trivia 只保留了 token 之间的字节, 没有语法结构. 格式化器还�
 
 - `MacroExpansion` / `MacroProv` 在 `preprocess.c`.
 - 写入点: 内建宏, 对象宏, 函数宏, `subst` 的宏体与实参分支, 字符串拼接重扫.
-- `prov` 链在 arena 里, 与 token 同生命周期.
+- `prov` 链在 context 的 per-TU 分配里, 与 token 同生命周期.
 - `-dump-expansions` / `-verify-expansions`.
 - 29 个 dump 样本, 3 个链形状样本, 17 个 verify 样本, 全量语料校验.
 

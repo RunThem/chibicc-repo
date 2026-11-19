@@ -1,7 +1,7 @@
 // 宏展开 provenance (plans/PLAN-provenance.md): 预处理器通过展开宏产生的
 // 每个 token 都携带一条 LibcpMacroProv 节点链, 每个展开层一个节点,
 // 最内层在前; 从源码读入的 token 携带 NULL. 链指向的记录在每次展开时
-// 构建一次, 之后不可变, 并与 token 同生命周期 (arena 分配, 从不释放).
+// 构建一次, 之后不可变, 并与 token 同生命周期 (per-TU 分配, reset 时统一释放).
 // LibcpMacro, LibcpMacroArg 与 LibcpMacroParam 保持为 preprocess.c 私有;
 // 这些访问器是它们的公共接口.
 
