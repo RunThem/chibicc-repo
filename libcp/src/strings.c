@@ -1,19 +1,19 @@
 // 通用小工具: 字符串数组与节点数组的增长, 对齐取整, 转义打印,
-// 文件存在性检查, 以及 arena 内的 printf 风格格式化. 这些函数被各层共用.
+// 文件存在性检查, 以及 per-TU 分配内的 printf 风格格式化. 这些函数被各层共用.
 
 #include "libcp.h"
 
 // 向字符串数组追加一项; 首次追加时分配 8 项容量, 满时容量翻倍.
 void libcp_strarray_push(LibcpContext* ctx, LibcpStringArray* arr, char* s) {
   if (!arr->data) {
-    arr->data     = libcp_arena_calloc(ctx, 8, sizeof(char*));
+    arr->data     = libcp_tu_calloc(ctx, 8, sizeof(char*));
     arr->capacity = 8;
   }
 
   if (arr->capacity == arr->len) {
     int oldcap = arr->capacity;
     arr->data =
-        libcp_arena_realloc(ctx, arr->data, sizeof(char*) * oldcap, sizeof(char*) * oldcap * 2);
+        libcp_tu_realloc(ctx, arr->data, sizeof(char*) * oldcap, sizeof(char*) * oldcap * 2);
     arr->capacity = oldcap * 2;
   }
 
@@ -23,16 +23,16 @@ void libcp_strarray_push(LibcpContext* ctx, LibcpStringArray* arr, char* s) {
 // 向节点数组追加一项; 增长策略与 libcp_strarray_push 相同.
 void libcp_nodearray_push(LibcpContext* ctx, LibcpNodeArray* arr, LibcpNode* node) {
   if (!arr->data) {
-    arr->data     = libcp_arena_calloc(ctx, 8, sizeof(LibcpNode*));
+    arr->data     = libcp_tu_calloc(ctx, 8, sizeof(LibcpNode*));
     arr->capacity = 8;
   }
 
   if (arr->capacity == arr->len) {
     int oldcap    = arr->capacity;
-    arr->data     = libcp_arena_realloc(ctx,
-                                    arr->data,
-                                    sizeof(LibcpNode*) * oldcap,
-                                    sizeof(LibcpNode*) * oldcap * 2);
+    arr->data     = libcp_tu_realloc(ctx,
+                                     arr->data,
+                                     sizeof(LibcpNode*) * oldcap,
+                                     sizeof(LibcpNode*) * oldcap * 2);
     arr->capacity = oldcap * 2;
   }
 
@@ -73,7 +73,7 @@ bool libcp_file_exists(char* path) {
   return !stat(path, &st);
 }
 
-// 接受 printf 风格的格式串, 返回分配在 context arena 中的格式化字符串.
+// 接受 printf 风格的格式串, 返回分配在 context per-TU 分配中的格式化字符串.
 char* libcp_format(LibcpContext* ctx, char* fmt, ...) {
   va_list ap;
   va_list ap2;
@@ -82,7 +82,7 @@ char* libcp_format(LibcpContext* ctx, char* fmt, ...) {
   int len = vsnprintf(NULL, 0, fmt, ap2);
   va_end(ap2);
 
-  char* buf = libcp_arena_alloc(ctx, len + 1, 1);
+  char* buf = libcp_tu_alloc(ctx, len + 1);
   vsnprintf(buf, len + 1, fmt, ap);
   va_end(ap);
   return buf;

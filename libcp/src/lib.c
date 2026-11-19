@@ -1,6 +1,6 @@
-// 库的 facade (PLAN L2): context 对象, arena 以及公共入口. 各阶段实现
+// 库的 facade (PLAN L2): context 对象, per-TU 分配以及公共入口. 各阶段实现
 // 留在各自的文件里; 这里是库对外承诺的边界. 主要内容: context 的
-// new / free / reset 三态, arena 分配与字符串复制, 诊断边界与输入入口.
+// new / free / reset 三态, per-TU 分配与字符串复制, 诊断边界与输入入口.
 
 #include "libcp.h"
 
@@ -13,111 +13,105 @@ const char* libcp_version(void) {
   return LIBCP_VERSION;
 }
 
-// arena 常规块的容量: 64 KiB. 请求比它更大时按请求尺寸放大.
-#define ARENA_BLOCK_SIZE (64 * 1024)
+// per-TU 分配头: 每个对象是一次独立的 LIBCP_* 分配, 头里的两个指针
+// 把它挂进 context 的登记链. reset / free 沿链逐块归还; 解析路径不做
+// 任何释放. 头只保存链指针, 不做块切分或池化.
+//
+// 头部尺寸向上取整到 max_align_t 的对齐, 这样分配器返回的指针对任意
+// 类型都对得上, 偏移头部后仍然对得上.
+#define TU_ALLOC_HEADER_SIZE                                                                       \
+  ((sizeof(LibcpTuAlloc) + _Alignof(max_align_t) - 1) / _Alignof(max_align_t) *                    \
+   _Alignof(max_align_t))
 
-#ifdef LIBCP_DEBUG_ARENA
-// 为 sanitizer 闸门改为每次分配一个对象: bump arena 会让块内溢出
-// 落在 AddressSanitizer 红区之外, 从而被漏掉. test/library.sh 的
-// ASan 轮次会打开这个开关.
-static void* arena_alloc(LibcpContext* ctx, size_t size, size_t align) {
-  (void)align;
+static void link_tu_alloc(LibcpContext* ctx, LibcpTuAlloc* a) {
+  a->prev = NULL;
+  a->next = ctx->tu_allocs;
+  if (a->next)
+    a->next->prev = a;
+  ctx->tu_allocs = a;
+}
+
+static void unlink_tu_alloc(LibcpContext* ctx, LibcpTuAlloc* a) {
+  if (a->prev)
+    a->prev->next = a->next;
+  else
+    ctx->tu_allocs = a->next;
+  if (a->next)
+    a->next->prev = a->prev;
+}
+
+// 分配一个 per-TU 块. zero 为真时用 LIBCP_CALLOC 取得零初始化内存.
+// size 为 0 按 1 处理, 与旧实现一致.
+static void* tu_alloc(LibcpContext* ctx, size_t size, bool zero) {
   assert(ctx);
   if (size == 0)
     size = 1;
-
-  LibcpArenaBlock* b = LIBCP_CALLOC(1, sizeof(LibcpArenaBlock));
-  if (!b)
+  if (size > SIZE_MAX - TU_ALLOC_HEADER_SIZE)
     return NULL;
-  b->data = LIBCP_MALLOC(size);
-  if (!b->data) {
-    LIBCP_FREE(b);
+
+  size_t total    = TU_ALLOC_HEADER_SIZE + size;
+  LibcpTuAlloc* a = zero ? LIBCP_CALLOC(1, total) : LIBCP_MALLOC(total);
+  if (!a)
     return NULL;
-  }
-  b->cap     = size;
-  b->used    = size;
-  b->next    = ctx->arena;
-  ctx->arena = b;
-  return b->data;
-}
-#else
-// 默认实现: bump 分配器. 在最新块内把起点向上对齐到 align 后向前
-// 推进; 放不下就挂一个新块, 旧块保留到 reset, 不做回收.
-static void* arena_alloc(LibcpContext* ctx, size_t size, size_t align) {
-  assert(ctx);
-  if (size == 0)
-    size = 1;
-  if (align < 8)
-    align = 8;
-
-  LibcpArenaBlock* b = ctx->arena;
-  size_t start       = b ? (b->used + align - 1) / align * align : 0;
-  // start + size > b->cap 的防溢出写法. start 可能对齐到 cap 之后
-  // (自定义大小的块能让 used 正好落在 cap 上), 此时 cap - start 会
-  // 回绕, 所以先单独判断这种情况.
-  if (!b || start > b->cap || size > b->cap - start) {
-    size_t cap = ARENA_BLOCK_SIZE;
-    if (size > SIZE_MAX - align || cap < size + align)
-      cap = size + align;
-    LibcpArenaBlock* nb = LIBCP_CALLOC(1, sizeof(LibcpArenaBlock));
-    nb->data            = LIBCP_MALLOC(cap);
-    nb->cap             = cap;
-    nb->next            = b;
-    ctx->arena          = nb;
-    b                   = nb;
-    start               = 0;
-  }
-
-  void* p = b->data + start;
-  b->used = start + size;
-  return p;
-}
-#endif
-
-void* libcp_arena_alloc(LibcpContext* ctx, size_t size, size_t align) {
-  return arena_alloc(ctx, size, align);
+  link_tu_alloc(ctx, a);
+  return (char*)a + TU_ALLOC_HEADER_SIZE;
 }
 
-void* libcp_arena_calloc(LibcpContext* ctx, size_t count, size_t size) {
-  // arena 路径自行做乘法; 溢出时返回失败, 而不是回绕成一个小块再让
-  // 随后的 memset 越界.
+void* libcp_tu_alloc(LibcpContext* ctx, size_t size) {
+  return tu_alloc(ctx, size, false);
+}
+
+void* libcp_tu_calloc(LibcpContext* ctx, size_t count, size_t size) {
+  // 分配路径自行做乘法; 溢出时返回失败, 而不是回绕成一个小块.
   if (size && count > SIZE_MAX / size)
     return NULL;
-  size_t n = count * size;
-  // 用 16 而不是 8: LibcpToken 与 LibcpNode 内嵌 long double, 在 x86-64
-  // 上需要 16 字节对齐 (UBSan 在 L3.4c 发现了这一点).
-  void* p  = arena_alloc(ctx, n, 16);
-  memset(p, 0, n);
-  return p;
+  return tu_alloc(ctx, count * size, true);
 }
 
-char* libcp_arena_strdup(LibcpContext* ctx, char* s) {
+char* libcp_tu_strdup(LibcpContext* ctx, char* s) {
   if (!s)
     return NULL;
   size_t n = strlen(s) + 1;
-  char* p  = arena_alloc(ctx, n, 1);
+  char* p  = tu_alloc(ctx, n, false);
   memcpy(p, s, n);
   return p;
 }
 
-char* libcp_arena_strndup(LibcpContext* ctx, char* s, size_t n) {
+char* libcp_tu_strndup(LibcpContext* ctx, char* s, size_t n) {
   size_t len = strnlen(s, n);
-  char* p    = arena_alloc(ctx, len + 1, 1);
+  char* p    = tu_alloc(ctx, len + 1, false);
   memcpy(p, s, len);
   p[len] = '\0';
   return p;
 }
 
-// 在 arena 中重新分配. 旧块不会被回收 - arena 只在 context reset 时
-// 释放 - 所以几何式增长会让已死的容量继续存活, 峰值约为最终大小的
-// 两倍; 这是 arena 的取舍, 不是泄漏. 返回块中超过 `old_size` 的每个
-// 字节都被清零, 因此调用方可以依赖干净的尾部 (C9).
-void* libcp_arena_realloc(LibcpContext* ctx, void* old, size_t old_size, size_t new_size) {
-  size_t kept = old ? (old_size < new_size ? old_size : new_size) : 0;
+// 在登记链中重新分配. 旧块先摘链再交给 LIBCP_REALLOC; 失败时旧块仍然
+// 有效, 重新挂回链上. 返回块中超过 `old_size` 的每个字节都被清零,
+// 因此调用方可以依赖干净的尾部 (C9).
+void* libcp_tu_realloc(LibcpContext* ctx, void* old, size_t old_size, size_t new_size) {
+  if (!old)
+    return tu_alloc(ctx, new_size, true);
 
-  void* p = arena_alloc(ctx, new_size, 8);
-  if (kept)
-    memcpy(p, old, kept);
+  size_t kept = old_size < new_size ? old_size : new_size;
+  if (new_size == 0)
+    new_size = 1;
+
+  LibcpTuAlloc* a = (LibcpTuAlloc*)((char*)old - TU_ALLOC_HEADER_SIZE);
+  unlink_tu_alloc(ctx, a);
+
+  if (new_size > SIZE_MAX - TU_ALLOC_HEADER_SIZE) {
+    link_tu_alloc(ctx, a);
+    return NULL;
+  }
+
+  LibcpTuAlloc* na = LIBCP_REALLOC(a, TU_ALLOC_HEADER_SIZE + new_size);
+  if (!na) {
+    link_tu_alloc(ctx, a);
+    return NULL;
+  }
+  link_tu_alloc(ctx, na);
+
+  void* p = (char*)na + TU_ALLOC_HEADER_SIZE;
   if (new_size > kept)
     memset((char*)p + kept, 0, new_size - kept);
   return p;
@@ -166,10 +160,10 @@ void libcp_cst_seed_typedef(LibcpContext* ctx, char* name) {
   config_push(&ctx->cst_seeds, &ctx->cst_seeds_len, &ctx->cst_seeds_cap, config_strdup(name));
 }
 
-// 设置基础文件名, 供 __BASE_FILE__ 内建宏使用. 字符串复制进 arena,
+// 设置基础文件名, 供 __BASE_FILE__ 内建宏使用. 字符串是 per-TU 分配,
 // 随下一次 reset 失效; 未显式设置时, 第一个被词法分析的输入文件充当它.
 void libcp_context_set_base_file(LibcpContext* ctx, char* path) {
-  ctx->base_file = libcp_arena_strdup(ctx, path);
+  ctx->base_file = libcp_tu_strdup(ctx, path);
 }
 
 // 解析并执行一条记录形式的宏操作: "D:name=body" 定义宏, "U:name"
@@ -240,21 +234,20 @@ bool libcp_context_failed(LibcpContext* ctx) {
   return ctx->failed;
 }
 
-// 释放 arena 的全部块: 每块的 data 与块头都走 LIBCP_FREE, 之后
-// ctx->arena 归为 NULL.
-static void free_arena(LibcpContext* ctx) {
-  for (LibcpArenaBlock* b = ctx->arena; b;) {
-    LibcpArenaBlock* next = b->next;
-    LIBCP_FREE(b->data);
-    LIBCP_FREE(b);
-    b = next;
+// 归还登记链上的全部 per-TU 分配, 之后链头归为 NULL. 只在 reset 与
+// free 边界调用; 解析路径不做任何释放.
+static void free_tu_allocs(LibcpContext* ctx) {
+  for (LibcpTuAlloc* a = ctx->tu_allocs; a;) {
+    LibcpTuAlloc* next = a->next;
+    LIBCP_FREE(a);
+    a = next;
   }
-  ctx->arena = NULL;
+  ctx->tu_allocs = NULL;
 }
 
 // 清空 per-TU 状态, 只保留配置字段 (include 路径, 宏操作, CST 预置的
-// typedef 名, 诊断回调). 必须在 free_arena 之后调用: 这里丢弃的指针
-// 都指向刚释放的 arena.
+// typedef 名, 诊断回调). 必须在 free_tu_allocs 之后调用: 这里丢弃的
+// 指针都指向刚归还的 per-TU 分配.
 static void clear_state(LibcpContext* ctx) {
   ctx->base_file        = NULL;
   ctx->current_file     = NULL;
@@ -298,19 +291,19 @@ LibcpContext* libcp_context_new(void) {
 // 顺序回放 -D/-U. 配置 (include 路径等) 全部保留, 可以接着处理下一个
 // 翻译单元.
 void libcp_context_reset(LibcpContext* ctx) {
-  free_arena(ctx);
+  free_tu_allocs(ctx);
   clear_state(ctx);
   libcp_init_macros(ctx);
   for (int i = 0; i < ctx->macro_ops_len; i++)
     apply_macro_op(ctx, ctx->macro_ops[i]);
 }
 
-// 销毁 context: 先释放 arena, 再逐个释放配置数组 (它们由 malloc 拥有),
-// 最后释放 context 本身. 不做逐对象 free.
+// 销毁 context: 先归还全部 per-TU 分配, 再逐个释放配置数组 (它们由
+// LIBCP_* 拥有), 最后释放 context 本身.
 void libcp_context_free(LibcpContext* ctx) {
   if (!ctx)
     return;
-  free_arena(ctx);
+  free_tu_allocs(ctx);
   for (int i = 0; i < ctx->include_paths_len; i++)
     LIBCP_FREE(ctx->include_paths[i]);
   LIBCP_FREE(ctx->include_paths);
@@ -328,7 +321,7 @@ void libcp_context_free(LibcpContext* ctx) {
 LibcpToken* libcp_tokenize_file(LibcpContext* ctx, char* path) {
   ENTER_RET(ctx, NULL);
   if (!ctx->base_file)
-    ctx->base_file = libcp_arena_strdup(ctx, path);
+    ctx->base_file = libcp_tu_strdup(ctx, path);
   LibcpToken* tok = libcp_tokenize_file_impl(ctx, path);
   // libcp_tokenize_file_impl 只在文件无法打开时返回 NULL; facade 在这里
   // 上报它, 因此库的消费者不会遇到静默的 NULL (PLAN D4/L3.4b).
@@ -338,20 +331,20 @@ LibcpToken* libcp_tokenize_file(LibcpContext* ctx, char* path) {
   return tok;
 }
 
-// 词法分析一段内存缓冲区. 文本被复制进 arena 并补上 NUL 结尾, 因此
-// 调用方的缓冲区之后可以释放.
+// 词法分析一段内存缓冲区. 文本被复制进 per-TU 分配并补上 NUL 结尾,
+// 因此调用方的缓冲区之后可以释放.
 LibcpToken* libcp_tokenize_buffer_len(LibcpContext* ctx, char* name, char* contents, int len) {
   ENTER_RET(ctx, NULL);
   if (len < 0)
     libcp_error(ctx, "invalid buffer length");
   if (!ctx->base_file)
-    ctx->base_file = libcp_arena_strdup(ctx, name);
+    ctx->base_file = libcp_tu_strdup(ctx, name);
 
-  char* copy = libcp_arena_alloc(ctx, (size_t)len + 1, 1);
+  char* copy = libcp_tu_alloc(ctx, (size_t)len + 1);
   memcpy(copy, contents, len);
   copy[len] = '\0';
 
-  LibcpFile* file = libcp_new_file_len(ctx, libcp_arena_strdup(ctx, name), 0, copy, len);
+  LibcpFile* file = libcp_new_file_len(ctx, libcp_tu_strdup(ctx, name), 0, copy, len);
   char* nul       = memchr(copy, 0, len);
   // 内嵌 NUL 视为非法输入, 而不是静默截断; 先设置 current_file 让诊断
   // 能带上文件名与行号.

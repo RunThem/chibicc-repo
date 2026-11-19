@@ -48,7 +48,7 @@ struct libcp_macro {
 // provenance 记录 (plans/PLAN.md): 每次展开生成一个 LibcpMacroExpansion,
 // 只建一次, 由该次展开产出的所有 token 只读共享; 每个 token 的每一层
 // provenance 是一个 LibcpMacroProv, 前插构造, 因此链从头读起是最内层优先.
-// 两者都是 arena 对象, 生命周期与 token 相同. 类型是私有的; libcp.h 只
+// 两者都是 per-TU 对象, 生命周期与 token 相同. 类型是私有的; libcp.h 只
 // 对外暴露访问器.
 struct libcp_macro_expansion {
   LibcpToken* name;     // 调用点处宏名字的 token
@@ -110,7 +110,7 @@ static LibcpToken* skip_line(LibcpContext* ctx, LibcpToken* tok) {
 
 // 复制 token 结构体本身, 并断开 next, 得到可单独挂到新链上的副本.
 static LibcpToken* copy_token(LibcpContext* ctx, LibcpToken* tok) {
-  LibcpToken* t = libcp_arena_calloc(ctx, 1, sizeof(LibcpToken));
+  LibcpToken* t = libcp_tu_calloc(ctx, 1, sizeof(LibcpToken));
   *t            = *tok;
   t->next       = NULL;
   return t;
@@ -128,7 +128,7 @@ static LibcpToken* new_eof(LibcpContext* ctx, LibcpToken* tok) {
 // 前插构造, 共享的尾部从不会被改写 (plans/PLAN.md, "挂接规则").
 static LibcpMacroProv*
     new_prov(LibcpContext* ctx, LibcpMacroExpansion* exp, int arg_index, LibcpMacroProv* next) {
-  LibcpMacroProv* p = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacroProv));
+  LibcpMacroProv* p = libcp_tu_calloc(ctx, 1, sizeof(LibcpMacroProv));
   p->exp            = exp;
   p->arg_index      = arg_index;
   p->next           = next;
@@ -144,7 +144,7 @@ static LibcpMacroExpansion* new_expansion(LibcpContext* ctx,
                                           LibcpMacroArg* args,
                                           int arg_count,
                                           bool is_builtin) {
-  LibcpMacroExpansion* e = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacroExpansion));
+  LibcpMacroExpansion* e = libcp_tu_calloc(ctx, 1, sizeof(LibcpMacroExpansion));
   e->name                = name;
   e->rparen              = rparen;
   e->macro               = macro;
@@ -162,7 +162,7 @@ static int count_macro_args(LibcpMacroArg* args) {
 }
 
 static LibcpHideset* new_hideset(LibcpContext* ctx, char* name) {
-  LibcpHideset* hs = libcp_arena_calloc(ctx, 1, sizeof(LibcpHideset));
+  LibcpHideset* hs = libcp_tu_calloc(ctx, 1, sizeof(LibcpHideset));
   hs->name         = name;
   return hs;
 }
@@ -256,7 +256,7 @@ static LibcpToken* skip_cond_incl(LibcpToken* tok) {
   return tok;
 }
 
-// 给字符串加双引号 (转义其中的反斜杠与双引号), 返回 arena 中的新串.
+// 给字符串加双引号 (转义其中的反斜杠与双引号), 返回 per-TU 分配中的新串.
 static char* quote_string(LibcpContext* ctx, char* str) {
   int bufsize = 3;
   for (int i = 0; str[i]; i++) {
@@ -265,7 +265,7 @@ static char* quote_string(LibcpContext* ctx, char* str) {
     bufsize++;
   }
 
-  char* buf = libcp_arena_calloc(ctx, 1, bufsize);
+  char* buf = libcp_tu_calloc(ctx, 1, bufsize);
   char* p   = buf;
   *p++      = '"';
   for (int i = 0; str[i]; i++) {
@@ -398,7 +398,7 @@ static long eval_const_expr(LibcpContext* ctx, LibcpToken** rest, LibcpToken* to
 
 // 压入一个条件编译栈帧, 初始状态为 IN_THEN.
 static LibcpCondIncl* push_cond_incl(LibcpContext* ctx, LibcpToken* tok, bool included) {
-  LibcpCondIncl* ci = libcp_arena_calloc(ctx, 1, sizeof(LibcpCondIncl));
+  LibcpCondIncl* ci = libcp_tu_calloc(ctx, 1, sizeof(LibcpCondIncl));
   ci->next          = cond_incl;
   ci->ctx           = IN_THEN;
   ci->tok           = tok;
@@ -416,7 +416,7 @@ static LibcpMacro* find_macro(LibcpContext* ctx, LibcpToken* tok) {
 
 // 新建宏记录并登记进宏表; 同名旧宏被覆盖.
 static LibcpMacro* add_macro(LibcpContext* ctx, char* name, bool is_objlike, LibcpToken* body) {
-  LibcpMacro* m = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacro));
+  LibcpMacro* m = libcp_tu_calloc(ctx, 1, sizeof(LibcpMacro));
   m->name       = name;
   m->is_objlike = is_objlike;
   m->body       = body;
@@ -444,13 +444,13 @@ static LibcpMacroParam*
       libcp_error_tok(ctx, tok, "expected an identifier");
 
     if (libcp_equal(tok->next, "...")) {
-      *va_args_name = libcp_arena_strndup(ctx, tok->loc, tok->len);
+      *va_args_name = libcp_tu_strndup(ctx, tok->loc, tok->len);
       *rest         = libcp_skip(ctx, tok->next->next, ")");
       return head.next;
     }
 
-    LibcpMacroParam* m = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacroParam));
-    m->name            = libcp_arena_strndup(ctx, tok->loc, tok->len);
+    LibcpMacroParam* m = libcp_tu_calloc(ctx, 1, sizeof(LibcpMacroParam));
+    m->name            = libcp_tu_strndup(ctx, tok->loc, tok->len);
     cur = cur->next = m;
     tok             = tok->next;
   }
@@ -464,7 +464,7 @@ static void read_macro_definition(LibcpContext* ctx, LibcpToken** rest, LibcpTok
   if (tok->kind != TK_IDENT)
     libcp_error_tok(ctx, tok, "macro name must be an identifier");
   LibcpToken* name_tok = tok;
-  char* name           = libcp_arena_strndup(ctx, tok->loc, tok->len);
+  char* name           = libcp_tu_strndup(ctx, tok->loc, tok->len);
   tok                  = tok->next;
 
   if (!tok->has_space && libcp_equal(tok, "(")) {
@@ -510,7 +510,7 @@ static LibcpMacroArg*
 
   cur->next = new_eof(ctx, tok);
 
-  LibcpMacroArg* arg = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacroArg));
+  LibcpMacroArg* arg = libcp_tu_calloc(ctx, 1, sizeof(LibcpMacroArg));
   arg->tok           = head.next;
   *rest              = tok;
   return arg;
@@ -541,7 +541,7 @@ static LibcpMacroArg* read_macro_args(LibcpContext* ctx,
   if (va_args_name) {
     LibcpMacroArg* arg;
     if (libcp_equal(tok, ")")) {
-      arg      = libcp_arena_calloc(ctx, 1, sizeof(LibcpMacroArg));
+      arg      = libcp_tu_calloc(ctx, 1, sizeof(LibcpMacroArg));
       arg->tok = new_eof(ctx, tok);
     } else {
       if (pp != params)
@@ -580,7 +580,7 @@ static char* join_tokens(LibcpContext* ctx, LibcpToken* tok, LibcpToken* end) {
     len += t->len;
   }
 
-  char* buf = libcp_arena_calloc(ctx, 1, len);
+  char* buf = libcp_tu_calloc(ctx, 1, len);
 
   // 再按同样规则拼接文本; 原 token 之间有空格时补一个空格.
   int pos = 0;
@@ -870,7 +870,7 @@ static char*
     // 因此不能使用 token->str.
     *is_dquote = true;
     *rest      = skip_line(ctx, tok->next);
-    return libcp_arena_strndup(ctx, tok->loc + 1, tok->len - 2);
+    return libcp_tu_strndup(ctx, tok->loc + 1, tok->len - 2);
   }
 
   // 形式 2: 尖括号文件名, 只走 include 路径.
@@ -916,7 +916,7 @@ static char* detect_include_guard(LibcpContext* ctx, LibcpToken* tok) {
   if (tok->kind != TK_IDENT)
     return NULL;
 
-  char* macro = libcp_arena_strndup(ctx, tok->loc, tok->len);
+  char* macro = libcp_tu_strndup(ctx, tok->loc, tok->len);
   tok         = tok->next;
 
   if (!is_hash(tok) || !libcp_equal(tok->next, "define") || !libcp_equal(tok->next->next, macro))
@@ -1028,10 +1028,8 @@ static LibcpToken* preprocess2(LibcpContext* ctx, LibcpToken* tok) {
       char* filename = read_include_filename(ctx, &tok, tok->next, &is_dquote);
 
       if (filename[0] != '/' && is_dquote) {
-        char* path = libcp_format(ctx,
-                                  "%s/%s",
-                                  dirname(libcp_arena_strdup(ctx, start->file->name)),
-                                  filename);
+        char* path =
+            libcp_format(ctx, "%s/%s", dirname(libcp_tu_strdup(ctx, start->file->name)), filename);
         if (libcp_file_exists(path)) {
           tok = include_file(ctx, tok, path, start->next->next, start->file);
           continue;
@@ -1060,7 +1058,7 @@ static LibcpToken* preprocess2(LibcpContext* ctx, LibcpToken* tok) {
       tok = tok->next;
       if (tok->kind != TK_IDENT)
         libcp_error_tok(ctx, tok, "macro name must be an identifier");
-      libcp_undef_macro(ctx, libcp_arena_strndup(ctx, tok->loc, tok->len));
+      libcp_undef_macro(ctx, libcp_tu_strndup(ctx, tok->loc, tok->len));
       tok = skip_line(ctx, tok->next);
       continue;
     }
@@ -1351,7 +1349,7 @@ void libcp_init_macros(LibcpContext* ctx) {
 
   int n               = sizeof(predefined_defs) / sizeof(*predefined_defs);
   ctx->predefined_len = n;
-  ctx->predefined     = libcp_arena_calloc(ctx, n, sizeof(LibcpPredefinedMacro));
+  ctx->predefined     = libcp_tu_calloc(ctx, n, sizeof(LibcpPredefinedMacro));
 
   for (int i = 0; i < n; i++) {
     const LibcpPredefinedDef* d = &predefined_defs[i];
@@ -1474,7 +1472,7 @@ static void join_adjacent_string_literals(LibcpContext* ctx, LibcpToken* tok) {
     for (LibcpToken* t = tok1->next; t != tok2; t = t->next)
       len = len + t->ty->array_len - 1;
 
-    char* buf = libcp_arena_calloc(ctx, tok1->ty->base->size, len);
+    char* buf = libcp_tu_calloc(ctx, tok1->ty->base->size, len);
 
     int i = 0;
     for (LibcpToken* t = tok1; t != tok2; t = t->next) {

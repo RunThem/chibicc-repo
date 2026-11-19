@@ -122,7 +122,7 @@ LibcpNode* libcp_new_ulong(LibcpContext* ctx, long val, LibcpToken* tok) {
 LibcpNode* libcp_new_cast(LibcpContext* ctx, LibcpNode* expr, LibcpType* ty) {
   libcp_add_type(ctx, expr);
 
-  LibcpNode* node   = libcp_arena_calloc(ctx, 1, sizeof(LibcpNode));
+  LibcpNode* node   = libcp_tu_calloc(ctx, 1, sizeof(LibcpNode));
   node->kind        = ND_CAST;
   node->tok         = expr->tok;
   node->lhs         = expr;
@@ -145,7 +145,7 @@ struct libcp_sema_scope {
 };
 
 // 清零 sema 拥有的 context 字段. 它不分配任何内存: context reset 在
-// 释放 arena 之后调用它, sema_init 在创建根作用域之前调用它. 把整组
+// 释放全部 per-TU 分配之后调用它, sema_init 在创建根作用域之前调用它. 把整组
 // 字段放在一处, 才能让未 reset 的重复 libcp_sema 与 reset 过的调用
 // 从相同状态开始 (审计指出的 label_gotos / unique_name_id 遗漏).
 void libcp_sema_state_clear(LibcpContext* ctx) {
@@ -170,7 +170,7 @@ void libcp_sema_state_clear(LibcpContext* ctx) {
 // 每次运行都从清零的字段和一个新的根作用域开始.
 static void sema_init(LibcpContext* ctx) {
   libcp_sema_state_clear(ctx);
-  ctx->sema_scope = libcp_arena_calloc(ctx, 1, sizeof(LibcpSemaScope));
+  ctx->sema_scope = libcp_tu_calloc(ctx, 1, sizeof(LibcpSemaScope));
 }
 
 #define scope          (ctx->sema_scope)
@@ -181,7 +181,7 @@ static void sema_init(LibcpContext* ctx) {
 
 static void enter_scope(LibcpContext* ctx) {
   // 压入一个新的块作用域.
-  LibcpSemaScope* sc = libcp_arena_calloc(ctx, 1, sizeof(LibcpSemaScope));
+  LibcpSemaScope* sc = libcp_tu_calloc(ctx, 1, sizeof(LibcpSemaScope));
   sc->next           = scope;
   scope              = sc;
 }
@@ -203,7 +203,7 @@ static LibcpVarScope* find_var(LibcpContext* ctx, LibcpToken* tok) {
 
 static LibcpVarScope* push_scope(LibcpContext* ctx, char* name) {
   // 在当前作用域登记一个名字, 返回其绑定槽.
-  LibcpVarScope* sc = libcp_arena_calloc(ctx, 1, sizeof(LibcpVarScope));
+  LibcpVarScope* sc = libcp_tu_calloc(ctx, 1, sizeof(LibcpVarScope));
   libcp_hashmap_put(ctx, &scope->vars, name, sc);
   return sc;
 }
@@ -789,7 +789,7 @@ static void bind_ident(LibcpContext* ctx, LibcpNode* node) {
 
 static LibcpObj* new_var(LibcpContext* ctx, char* name, LibcpType* ty) {
   // 创建一个对象, 完成其类型, 并在当前作用域登记名字.
-  LibcpObj* var = libcp_arena_calloc(ctx, 1, sizeof(LibcpObj));
+  LibcpObj* var = libcp_tu_calloc(ctx, 1, sizeof(LibcpObj));
   var->name     = name;
   var->ty       = ty;
   resolve_type(ctx, ty);
@@ -1012,7 +1012,7 @@ static void lower_funcall(LibcpContext* ctx, LibcpNode* node, LibcpToken* tok) {
 static LibcpInitTree* new_resolved_init(LibcpContext* ctx, LibcpType* ty, bool is_flexible) {
   // 按目标类型构建初始化的槽位树: 数组与聚合递归展开, 柔性数组/柔性
   // 成员留下可扩展的叶子.
-  LibcpInitTree* init = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitTree));
+  LibcpInitTree* init = libcp_tu_calloc(ctx, 1, sizeof(LibcpInitTree));
   init->ty            = ty;
 
   if (ty->kind == TY_ARRAY) {
@@ -1021,7 +1021,7 @@ static LibcpInitTree* new_resolved_init(LibcpContext* ctx, LibcpType* ty, bool i
       return init;
     }
 
-    init->children = libcp_arena_calloc(ctx, ty->array_len, sizeof(LibcpInitTree*));
+    init->children = libcp_tu_calloc(ctx, ty->array_len, sizeof(LibcpInitTree*));
     for (int i = 0; i < ty->array_len; i++)
       init->children[i] = new_resolved_init(ctx, ty->base, false);
     return init;
@@ -1033,11 +1033,11 @@ static LibcpInitTree* new_resolved_init(LibcpContext* ctx, LibcpType* ty, bool i
     for (LibcpMember* mem = ty->members; mem; mem = mem->next)
       len++;
 
-    init->children = libcp_arena_calloc(ctx, len, sizeof(LibcpInitTree*));
+    init->children = libcp_tu_calloc(ctx, len, sizeof(LibcpInitTree*));
 
     for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
       if (is_flexible && ty->is_flexible && !mem->next) {
-        LibcpInitTree* child     = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitTree));
+        LibcpInitTree* child     = libcp_tu_calloc(ctx, 1, sizeof(LibcpInitTree));
         child->ty                = mem->ty;
         child->is_flexible       = true;
         init->children[mem->idx] = child;
@@ -1058,7 +1058,7 @@ static LibcpType* copy_struct_type(LibcpContext* ctx, LibcpType* ty) {
   LibcpMember head = {};
   LibcpMember* cur = &head;
   for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
-    LibcpMember* m = libcp_arena_calloc(ctx, 1, sizeof(LibcpMember));
+    LibcpMember* m = libcp_tu_calloc(ctx, 1, sizeof(LibcpMember));
     *m             = *mem;
     cur = cur->next = m;
   }
@@ -1621,7 +1621,7 @@ static LibcpRelocation* write_gvar_data(LibcpContext* ctx,
     return cur;
   }
 
-  LibcpRelocation* rel = libcp_arena_calloc(ctx, 1, sizeof(LibcpRelocation));
+  LibcpRelocation* rel = libcp_tu_calloc(ctx, 1, sizeof(LibcpRelocation));
   rel->offset          = offset;
   rel->label           = label.name;
   rel->label_node      = label.node;
@@ -1633,7 +1633,7 @@ static LibcpRelocation* write_gvar_data(LibcpContext* ctx,
 // 把已解析的初始化器树序列化为全局变量的 .data 数据镜像.
 static void gvar_init_data(LibcpContext* ctx, LibcpObj* var, LibcpInitTree* init) {
   LibcpRelocation head = {};
-  char* buf            = libcp_arena_calloc(ctx, 1, var->ty->size);
+  char* buf            = libcp_tu_calloc(ctx, 1, var->ty->size);
   write_gvar_data(ctx, &head, init, var->ty, buf, 0);
   var->init_data = buf;
   var->rel       = head.next;
@@ -2751,8 +2751,8 @@ static void resolve_node(LibcpContext* ctx, LibcpNode* node) {
       resolve_type(ctx, node->ty_op);
 
       LibcpObj* var      = new_gvar(ctx,
-                               libcp_get_ident(ctx, node->name_tok),
-                               named_type(ctx, node->ty_op, node->name_tok));
+                                    libcp_get_ident(ctx, node->name_tok),
+                                    named_type(ctx, node->ty_op, node->name_tok));
       var->is_definition = !node->attr.is_extern;
       var->is_static     = node->attr.is_static;
       var->is_tls        = node->attr.is_tls;
@@ -2914,7 +2914,7 @@ static void splice_locals(LibcpContext* ctx, LibcpObj* fn) {
 // 它们是 sema 到 codegen 的交接数据, 不是 LibcpObj 的第 3/4 层字段.
 // 参数不命名为 `gotos`, 因为 sema.c 把该名字别名到了 context 槽位.
 void libcp_sema_store_label_gotos(LibcpContext* ctx, LibcpObj* fn, LibcpNodeArray refs) {
-  LibcpLabelGotoList* l = libcp_arena_calloc(ctx, 1, sizeof(LibcpLabelGotoList));
+  LibcpLabelGotoList* l = libcp_tu_calloc(ctx, 1, sizeof(LibcpLabelGotoList));
   l->fn                 = fn;
   l->refs               = refs;
   l->next               = ctx->label_gotos;

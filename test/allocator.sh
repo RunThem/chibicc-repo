@@ -4,9 +4,9 @@
 # macros and releases it through LIBCP_FREE (libcp/allocator.h). The
 # library is rebuilt here without LIBCP_DEFAULT_ALLOCATOR and with
 # replacement macros that count, so the test proves two things: the
-# replacement is actually used for the context, its configuration and the
-# arena, and libcp_context_free returns every block to it (live blocks
-# reach zero). A leaked arena block or a config string freed with the
+# replacement is actually used for the context, its configuration and every
+# per-TU allocation, and libcp_context_free returns every block to it (live
+# blocks reach zero). A leaked per-TU block or a config string freed with the
 # wrong allocator fails the count.
 
 set -eu
@@ -94,8 +94,43 @@ cat > "$tmp/consumer.c" <<'EOF'
 long alloc_test_live(void);
 long alloc_test_allocs(void);
 
-/* Tokenize to sema, build a CST, reset (which must free every arena
- * block) and free the context (which must free the context object and
+/* The library must not pool per-TU objects behind the allocator: one
+ * independent block per object means tokenizing 200 declarations raises
+ * the live count by at least 200. An internal 64 KiB arena would add
+ * only a handful of blocks. */
+static int per_object_check(void) {
+  char src[8192];
+  size_t n = 0;
+  for (int i = 0; i < 200; i++)
+    n += (size_t)snprintf(src + n, sizeof(src) - n, "int v%d;\n", i);
+
+  LibcpContext *ctx = libcp_context_new();
+  if (!ctx)
+    return 1;
+
+  long before = alloc_test_live();
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<per-object>", src);
+  long after = alloc_test_live();
+  if (!tok)
+    return 1;
+  if (after - before < 200) {
+    fprintf(stderr, "allocator: tokenize added only %ld blocks\n", after - before);
+    return 1;
+  }
+
+  libcp_context_reset(ctx);
+  if (alloc_test_live() != before) {
+    fprintf(stderr, "allocator: reset left %ld blocks (baseline %ld)\n",
+            alloc_test_live(), before);
+    return 1;
+  }
+
+  libcp_context_free(ctx);
+  return 0;
+}
+
+/* Tokenize to sema, build a CST, reset (which must free every per-TU
+ * allocation) and free the context (which must free the context object and
  * its configuration). */
 static int one_round(void) {
   char *src = "int g = 1; int f(int a) { return a + g; }\n";
@@ -136,6 +171,9 @@ static int one_round(void) {
 }
 
 int main(void) {
+  if (per_object_check())
+    return 1;
+
   for (int i = 0; i < 3; i++)
     if (one_round())
       return 1;

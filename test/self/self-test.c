@@ -1,7 +1,7 @@
 // The library's unit self-tests, kept out of libcp. They link the
 // archive directly and use its internal symbols (the .a symbol policy:
 // consumers must not call them, but a test may). The compiler driver no
-// longer carries -hashmap-test / -arena-test / -sema-state-test.
+// longer carries -hashmap-test / -alloc-test / -sema-state-test.
 //
 // test/self-test.sh compiles this file with the host cc against
 // LIBCP_LIB and runs it, so the same tests exercise the default and
@@ -11,25 +11,25 @@
 
 // Verifies the realloc contract with an active context: the tail is
 // zeroed and the old bytes are preserved.
-static void arena_test(LibcpContext *ctx) {
-  char *p = libcp_arena_calloc(ctx, 4, 1);
+static void alloc_test(LibcpContext *ctx) {
+  char *p = libcp_tu_calloc(ctx, 4, 1);
   p[0] = 1;
   p[3] = 4;
 
-  char *q = libcp_arena_realloc(ctx, p, 4, 16);
+  char *q = libcp_tu_realloc(ctx, p, 4, 16);
   assert(q[0] == 1 && q[3] == 4);
   for (int i = 4; i < 16; i++)
     assert(q[i] == 0);
 
-  char *r = libcp_arena_realloc(ctx, NULL, 0, 8);
+  char *r = libcp_tu_realloc(ctx, NULL, 0, 8);
   for (int i = 0; i < 8; i++)
     assert(r[i] == 0);
 
-  printf("arena: ok\n");
+  printf("alloc: ok\n");
 }
 
 static void hashmap_test(LibcpContext *ctx) {
-  LibcpHashMap *map = libcp_arena_calloc(ctx, 1, sizeof(LibcpHashMap));
+  LibcpHashMap *map = libcp_tu_calloc(ctx, 1, sizeof(LibcpHashMap));
 
   for (int i = 0; i < 5000; i++)
     libcp_hashmap_put(ctx, map, libcp_format(ctx, "key %d", i), (void *)(size_t)i);
@@ -59,7 +59,7 @@ static void hashmap_test(LibcpContext *ctx) {
 
   // Delete-heavy traffic must not leave tombstones behind: once they
   // outnumber the live entries the table rehashes (C8).
-  LibcpHashMap *tomb = libcp_arena_calloc(ctx, 1, sizeof(LibcpHashMap));
+  LibcpHashMap *tomb = libcp_tu_calloc(ctx, 1, sizeof(LibcpHashMap));
   for (int i = 0; i < 1000; i++)
     libcp_hashmap_put(ctx, tomb, libcp_format(ctx, "t %d", i), (void *)(size_t)i);
   for (int i = 0; i < 900; i++)
@@ -155,7 +155,7 @@ static bool sema_state_test(void) {
 
 int main(void) {
   LibcpContext *ctx = libcp_context_new();
-  arena_test(ctx);
+  alloc_test(ctx);
   hashmap_test(ctx);
   libcp_context_free(ctx);
 

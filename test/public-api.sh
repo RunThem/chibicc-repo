@@ -101,7 +101,7 @@ EOF
 # underscore on Darwin. Since the symbol-prefix line every internal
 # symbol carries the libcp_ prefix too, the deny list is anchored on it.
 nm -u "$tmp/consumer.o" | awk '{print $NF}' > "$tmp/undef"
-bad=$(grep -E '^_?(libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|add_type|new_cast|new_node|new_binary|new_unary|new_num|error|error_at|error_tok|warn_tok|strarray_push|nodearray_push|format|ctx|conditional|context_activate|context_set_base_file)|libcp_(hashmap|arena|sema|ty)_[a-z_0-9]+)$' "$tmp/undef" || true)
+bad=$(grep -E '^_?(libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|add_type|new_cast|new_node|new_binary|new_unary|new_num|error|error_at|error_tok|warn_tok|strarray_push|nodearray_push|format|ctx|conditional|context_activate|context_set_base_file)|libcp_(hashmap|sema|ty|tu)_[a-z_0-9]+)$' "$tmp/undef" || true)
 if [ -n "$bad" ]; then
   echo "public-api: the consumer references internal symbols:" >&2
   echo "$bad" >&2

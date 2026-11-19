@@ -58,13 +58,13 @@ static int raw_end_of(LibcpFile* file, int off) {
   return lo + 1;
 }
 
-// 把诊断消息格式化进 arena.
+// 把诊断消息格式化进 per-TU 分配.
 static char* vformat(LibcpContext* ctx, char* fmt, va_list ap) {
   va_list ap2;
   va_copy(ap2, ap);
   int n = vsnprintf(NULL, 0, fmt, ap2);
   va_end(ap2);
-  char* buf = libcp_arena_alloc(ctx, n + 1, 1);
+  char* buf = libcp_tu_alloc(ctx, n + 1);
   vsnprintf(buf, n + 1, fmt, ap);
   return buf;
 }
@@ -240,7 +240,7 @@ bool libcp_consume(LibcpToken** rest, LibcpToken* tok, char* str) {
 // raw 偏移 (见 LibcpToken.trivia).
 static LibcpToken*
     new_token(LibcpContext* ctx, LibcpTokenKind kind, char* start, char* end, int raw_trivia) {
-  LibcpToken* tok = libcp_arena_calloc(ctx, 1, sizeof(LibcpToken));
+  LibcpToken* tok = libcp_tu_calloc(ctx, 1, sizeof(LibcpToken));
   tok->kind       = kind;
   tok->loc        = start;
   tok->len        = end - start;
@@ -393,7 +393,7 @@ static char* string_literal_end(LibcpContext* ctx, char* p) {
 static LibcpToken*
     read_string_literal(LibcpContext* ctx, char* start, char* quote, int raw_trivia) {
   char* end = string_literal_end(ctx, quote + 1);
-  char* buf = libcp_arena_calloc(ctx, 1, end - quote);
+  char* buf = libcp_tu_calloc(ctx, 1, end - quote);
   int len   = 0;
 
   for (char* p = quote + 1; p < end;) {
@@ -417,7 +417,7 @@ static LibcpToken*
 static LibcpToken*
     read_utf16_string_literal(LibcpContext* ctx, char* start, char* quote, int raw_trivia) {
   char* end     = string_literal_end(ctx, quote + 1);
-  uint16_t* buf = libcp_arena_calloc(ctx, 2, end - start);
+  uint16_t* buf = libcp_tu_calloc(ctx, 2, end - start);
   int len       = 0;
 
   for (char* p = quote + 1; p < end;) {
@@ -453,7 +453,7 @@ static LibcpToken* read_utf32_string_literal(LibcpContext* ctx,
                                              LibcpType* ty,
                                              int raw_trivia) {
   char* end     = string_literal_end(ctx, quote + 1);
-  uint32_t* buf = libcp_arena_calloc(ctx, 4, end - quote);
+  uint32_t* buf = libcp_tu_calloc(ctx, 4, end - quote);
   int len       = 0;
 
   for (char* p = quote + 1; p < end;) {
@@ -872,10 +872,10 @@ static char* read_file(LibcpContext* ctx, char* path, size_t* len) {
   fclose(out);
 
   // memstream 的缓冲区属于 C 库的 malloc, 而不是 LIBCP_MALLOC, 因此用
-  // free() 释放; 文本随后搬进 arena, 这样 context reset 时会连同其它
+  // free() 释放; 文本随后搬进 per-TU 分配, 这样 context reset 时会连同其它
   // per-TU 内存一起释放.
   if (ctx) {
-    char* copy = libcp_arena_alloc(ctx, data_len + 1, 1);
+    char* copy = libcp_tu_alloc(ctx, data_len + 1);
     memcpy(copy, buf, data_len + 1);
     free(buf);
     if (strcmp(path, "-") == 0) {
@@ -892,7 +892,7 @@ LibcpFile** libcp_get_input_files(LibcpContext* ctx) {
 }
 
 LibcpFile* libcp_new_file_len(LibcpContext* ctx, char* name, int file_no, char* contents, int len) {
-  LibcpFile* file    = libcp_arena_calloc(ctx, 1, sizeof(LibcpFile));
+  LibcpFile* file    = libcp_tu_calloc(ctx, 1, sizeof(LibcpFile));
   file->name         = name;
   file->display_name = name;
   file->file_no      = file_no;
@@ -902,8 +902,8 @@ LibcpFile* libcp_new_file_len(LibcpContext* ctx, char* name, int file_no, char* 
   // 简单的换行计数. (libcp_tokenize_file_impl 会用 make_scan_buffer 建出的
   // 表替换这些表.)
   file->raw   = contents;
-  file->map   = libcp_arena_calloc(ctx, len + 2, sizeof(int));
-  file->lines = libcp_arena_calloc(ctx, len + 2, sizeof(int));
+  file->map   = libcp_tu_calloc(ctx, len + 2, sizeof(int));
+  file->lines = libcp_tu_calloc(ctx, len + 2, sizeof(int));
 
   int line = 1;
   for (int i = 0; i <= len; i++) {
@@ -939,12 +939,12 @@ int libcp_line_break_len(char* p) {
 // 换行下移), 合成的末尾换行则记在最后.
 static char*
     make_scan_buffer(LibcpContext* ctx, char* raw, int len, int** map_out, int** lines_out) {
-  int* map   = libcp_arena_calloc(ctx, len + 2, sizeof(int));
-  int* lines = libcp_arena_calloc(ctx, len + 2, sizeof(int));
-  char* buf  = libcp_arena_calloc(ctx, 1, len + 2);
+  int* map   = libcp_tu_calloc(ctx, len + 2, sizeof(int));
+  int* lines = libcp_tu_calloc(ctx, len + 2, sizeof(int));
+  char* buf  = libcp_tu_calloc(ctx, 1, len + 2);
 
   // 前置 pass 过去看到的文本: raw 文本, 若不以换行结尾则补一个末尾换行.
-  char* text = libcp_arena_calloc(ctx, 1, len + 2);
+  char* text = libcp_tu_calloc(ctx, 1, len + 2);
   memcpy(text, raw, len);
   if (len == 0 || raw[len - 1] != '\n')
     text[len] = '\n';
@@ -1063,9 +1063,9 @@ LibcpToken* libcp_tokenize_file_impl(LibcpContext* ctx, char* path) {
 
   // 为汇编器的 .file 指令保存文件名.
   if (ctx->input_files_cap < file_no + 2) {
-    size_t old       = sizeof(LibcpFile*) * ctx->input_files_cap;
-    int cap          = file_no + 2;
-    ctx->input_files = libcp_arena_realloc(ctx, ctx->input_files, old, sizeof(LibcpFile*) * cap);
+    size_t old           = sizeof(LibcpFile*) * ctx->input_files_cap;
+    int cap              = file_no + 2;
+    ctx->input_files     = libcp_tu_realloc(ctx, ctx->input_files, old, sizeof(LibcpFile*) * cap);
     ctx->input_files_cap = cap;
   }
   ctx->input_files[file_no]     = file;

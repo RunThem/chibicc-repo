@@ -1,6 +1,6 @@
 // 内部总头文件 (PLAN L3.1). 公共类型与声明位于 libcp/include/libcp/ 下;
 // 实现包含的是本头文件. 公共 include 之下的一切都是库内部内容:
-// context 布局, arena, 辅助容器, 以及 facade 封装的阶段函数.
+// context 布局, per-TU 分配, 辅助容器, 以及 facade 封装的阶段函数.
 #define LIBCP_INTERNAL 1
 
 #define _POSIX_C_SOURCE 200809L
@@ -14,6 +14,7 @@
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -210,11 +211,11 @@ bool libcp_file_exists(char* path);
 void libcp_print_escaped(FILE* out, char* p, int len);
 char* libcp_token_kind_name(LibcpContext* ctx, LibcpTokenKind kind);
 
-// context / arena / 诊断 (PLAN L2)
+// context / per-TU 分配 / 诊断 (PLAN L2)
 //
 
 typedef struct libcp_jmp_frame LibcpJmpFrame;
-typedef struct libcp_arena_block LibcpArenaBlock;
+typedef struct libcp_tu_alloc LibcpTuAlloc;
 
 // 错误边界: 每个公共入口压入一个, error_* 会 longjmp 到最内层 frame.
 // 驱动器在 codegen 周围也会压入一个.
@@ -249,11 +250,13 @@ struct libcp_jmp_frame {
     (ctx)->jmp_top = _jf.prev;                                                                     \
   } while (0)
 
-struct libcp_arena_block {
-  LibcpArenaBlock* next;
-  size_t used;
-  size_t cap;
-  char* data;
+// 每个 per-TU 对象是一次独立的 LIBCP_* 分配, 前面带一个只含链指针的
+// 头部. reset / free 沿链逐块归还; 解析路径不做任何释放. 这不是
+// 池化: 库不做块切分, 嵌入方提供的分配器 (包括 arena) 仍是唯一的
+// 分配策略层.
+struct libcp_tu_alloc {
+  LibcpTuAlloc* next;
+  LibcpTuAlloc* prev;
 };
 
 // sema 的检查 pass 收集的 goto / 标签值引用, 按其所属函数索引.
@@ -271,10 +274,10 @@ typedef struct libcp_parse_scope LibcpParseScope;
 typedef struct libcp_sema_scope LibcpSemaScope;
 
 struct LibcpContext {
-  // 本翻译单元所有分配所使用的 arena.
-  LibcpArenaBlock* arena;
+  // 本翻译单元所有分配组成的登记链. 链只保存 free 需要的地址.
+  LibcpTuAlloc* tu_allocs;
 
-  // 配置. 跨 reset 保留, 由 malloc 拥有, 由 libcp_context_free 释放.
+  // 配置. 跨 reset 保留, 由 LIBCP_* 拥有, 由 libcp_context_free 释放.
   char** include_paths;
   int include_paths_len;
   int include_paths_cap;
@@ -343,8 +346,8 @@ struct LibcpContext {
 // 并由 reset 清除; 这一点与 include 路径和宏操作不同, 后者跨 reset 保留.
 void libcp_context_set_base_file(LibcpContext* ctx, char* path);
 
-void* libcp_arena_alloc(LibcpContext* ctx, size_t size, size_t align);
-void* libcp_arena_calloc(LibcpContext* ctx, size_t count, size_t size);
-char* libcp_arena_strdup(LibcpContext* ctx, char* s);
-char* libcp_arena_strndup(LibcpContext* ctx, char* s, size_t n);
-void* libcp_arena_realloc(LibcpContext* ctx, void* old, size_t old_size, size_t new_size);
+void* libcp_tu_alloc(LibcpContext* ctx, size_t size);
+void* libcp_tu_calloc(LibcpContext* ctx, size_t count, size_t size);
+char* libcp_tu_strdup(LibcpContext* ctx, char* s);
+char* libcp_tu_strndup(LibcpContext* ctx, char* s, size_t n);
+void* libcp_tu_realloc(LibcpContext* ctx, void* old, size_t old_size, size_t new_size);

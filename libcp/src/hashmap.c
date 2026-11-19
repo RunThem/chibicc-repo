@@ -1,6 +1,6 @@
 // 开放寻址哈希表的基础设施: 键是任意字节串 (key, keylen), 值是 void*.
 // 删除用 tombstone 标记, 使用率超过 70% 时 rehash, 重建后降到 50% 以下.
-// 桶数组来自 context 的 arena, 不逐项释放; 宏表, pragma once 集合与
+// 桶数组来自 context 的 per-TU 分配, 不逐项释放; 宏表, pragma once 集合与
 // include guard 表都建立在它之上.
 
 #include "libcp.h"
@@ -40,9 +40,9 @@ static void rehash(LibcpContext* ctx, LibcpHashMap* map) {
     cap = cap * 2;
   assert(cap > 0);
 
-  // 建一张新表并搬入全部存活键值; 新桶数组来自 arena, 旧数组不做释放.
+  // 建一张新表并搬入全部存活键值; 新桶数组来自 per-TU 分配, 旧数组不做释放.
   LibcpHashMap map2 = {};
-  map2.buckets      = libcp_arena_calloc(ctx, cap, sizeof(LibcpHashEntry));
+  map2.buckets      = libcp_tu_calloc(ctx, cap, sizeof(LibcpHashEntry));
   map2.capacity     = cap;
 
   for (int i = 0; i < map->capacity; i++) {
@@ -83,7 +83,7 @@ static LibcpHashEntry* get_entry(LibcpContext* ctx, LibcpHashMap* map, char* key
 static LibcpHashEntry*
     get_or_insert_entry(LibcpContext* ctx, LibcpHashMap* map, char* key, int keylen) {
   if (!map->buckets) {
-    map->buckets  = libcp_arena_calloc(ctx, INIT_SIZE, sizeof(LibcpHashEntry));
+    map->buckets  = libcp_tu_calloc(ctx, INIT_SIZE, sizeof(LibcpHashEntry));
     map->capacity = INIT_SIZE;
   } else if ((map->used * 100) / map->capacity >= HIGH_WATERMARK) {
     rehash(ctx, map);

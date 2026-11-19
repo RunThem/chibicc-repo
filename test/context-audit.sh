@@ -1,6 +1,6 @@
 #!/bin/sh
 # The implicit-context gate (PLAN-explicit-context). Every internal
-# function that touches the arena, diagnostics, or context state takes
+# function that touches per-TU allocations, diagnostics, or context state takes
 # `LibcpContext *ctx` as its first parameter; there is no thread-local
 # accessor, and codegen receives the driver's ctx explicitly.
 #

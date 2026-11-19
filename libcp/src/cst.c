@@ -37,7 +37,7 @@
 #define MAX_CST_DEPTH 512
 
 static LibcpCstNode* new_cst_node(LibcpContext* ctx, LibcpCstKind kind) {
-  LibcpCstNode* node = libcp_arena_calloc(ctx, 1, sizeof(LibcpCstNode));
+  LibcpCstNode* node = libcp_tu_calloc(ctx, 1, sizeof(LibcpCstNode));
   node->kind         = kind;
   return node;
 }
@@ -49,7 +49,7 @@ static void cst_add_child(LibcpContext* ctx, LibcpCstNode* node, LibcpCstNode* c
   if ((size_t)node->child_count == cap) {
     cap                     = cap ? cap * 2 : 8;
     size_t bytes            = sizeof(size_t) + cap * sizeof(LibcpCstNode*);
-    char* p                 = libcp_arena_alloc(ctx, bytes, 8);
+    char* p                 = libcp_tu_alloc(ctx, bytes);
     *(size_t*)p             = cap;
     LibcpCstNode** children = (LibcpCstNode**)(p + sizeof(size_t));
     if (node->children)
@@ -138,7 +138,7 @@ static LibcpCstNode*
 //
 // 在预处理之前的 token 流上做回溯递归下降. `ok` 在第一次失败时变为 false,
 // 之后的调用者不再查看 `tok`; 语句层随即用原始骨架重建该区间, 因此一次失败
-// 的尝试可能在 arena 里留下不可达的节点, 却不会在树里重复同一个 token.
+// 的尝试可能在 per-TU 分配里留下不可达的节点, 却不会在树里重复同一个 token.
 //
 
 // 表达式解析器的游标: 当前 token, 仍然成功的标志, 以及共享的单文件状态.
@@ -266,7 +266,7 @@ static bool cst_is_decl_start(LibcpToken* tok, LibcpCstContext* cst) {
 }
 
 static void cst_add_typedef(LibcpContext* ctx, LibcpCstContext* cst, LibcpToken* tok) {
-  libcp_strarray_push(ctx, &cst->typedefs, libcp_arena_strndup(ctx, tok->loc, tok->len));
+  libcp_strarray_push(ctx, &cst->typedefs, libcp_tu_strndup(ctx, tok->loc, tok->len));
 }
 
 // 对文件局部 typedef 名的保守预扫描: 收集 `typedef int T;`, `typedef int *T;`,
@@ -2405,7 +2405,7 @@ LibcpCstNode* libcp_cst_parse(LibcpContext* ctx, LibcpToken* tok) {
   // 先放入种子名字: 它们与文件内扫描结果一起参与每一个声明判定
   // (PLAN-l5 W2).
   for (int i = 0; i < ctx->cst_seeds_len; i++)
-    libcp_strarray_push(ctx, &cst.typedefs, libcp_arena_strdup(ctx, ctx->cst_seeds[i]));
+    libcp_strarray_push(ctx, &cst.typedefs, libcp_tu_strdup(ctx, ctx->cst_seeds[i]));
   cst_collect_typedefs(ctx, &cst, tok);
 
   LibcpCstParser p   = {tok, true, &cst};

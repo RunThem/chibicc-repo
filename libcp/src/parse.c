@@ -92,7 +92,7 @@ static LibcpNode* global_variable(LibcpContext* ctx,
                                   LibcpVarAttr* attr);
 
 LibcpNode* libcp_new_node(LibcpContext* ctx, LibcpNodeKind kind, LibcpToken* tok) {
-  LibcpNode* node = libcp_arena_calloc(ctx, 1, sizeof(LibcpNode));
+  LibcpNode* node = libcp_tu_calloc(ctx, 1, sizeof(LibcpNode));
   node->kind      = kind;
   node->tok       = tok;
   return node;
@@ -125,7 +125,7 @@ LibcpNode* libcp_new_num(LibcpContext* ctx, int64_t val, LibcpToken* tok) {
 char* libcp_get_ident(LibcpContext* ctx, LibcpToken* tok) {
   if (tok->kind != TK_IDENT)
     libcp_error_tok(ctx, tok, "expected an identifier");
-  return libcp_arena_strndup(ctx, tok->loc, tok->len);
+  return libcp_tu_strndup(ctx, tok->loc, tok->len);
 }
 
 // 解析器的作用域栈
@@ -152,7 +152,7 @@ struct libcp_parse_scope {
 
 // 初始化解析器的块作用域栈, 每个翻译单位调用一次.
 void libcp_parse_init(LibcpContext* ctx) {
-  ctx->scope = libcp_arena_calloc(ctx, 1, sizeof(LibcpParseScope));
+  ctx->scope = libcp_tu_calloc(ctx, 1, sizeof(LibcpParseScope));
 }
 
 // 解析器的作用域栈存放在 LibcpContext 中 (PLAN L2.4).
@@ -160,7 +160,7 @@ void libcp_parse_init(LibcpContext* ctx) {
 
 // 压入一个新的块作用域; 名字表与 tag 表都是空的 hashmap.
 static void enter_scope(LibcpContext* ctx) {
-  LibcpParseScope* sc = libcp_arena_calloc(ctx, 1, sizeof(LibcpParseScope));
+  LibcpParseScope* sc = libcp_tu_calloc(ctx, 1, sizeof(LibcpParseScope));
   sc->next            = scope;
   scope               = sc;
 }
@@ -188,7 +188,7 @@ static LibcpType* find_typedef(LibcpContext* ctx, LibcpToken* tok) {
 // 下一个标识符分类. sema 走到这次声明同时发出的 ND_TYPEDEF 记录时,
 // 补全类型.
 static void add_typedef(LibcpContext* ctx, LibcpNode* node) {
-  LibcpNameEntry* e = libcp_arena_calloc(ctx, 1, sizeof(LibcpNameEntry));
+  LibcpNameEntry* e = libcp_tu_calloc(ctx, 1, sizeof(LibcpNameEntry));
   e->type_def       = node->ty;
   libcp_hashmap_put(ctx, &scope->names, libcp_get_ident(ctx, node->tok), e);
 }
@@ -199,7 +199,7 @@ static void add_declared_name(LibcpContext* ctx, LibcpToken* tok) {
   libcp_hashmap_put(ctx,
                     &scope->names,
                     libcp_get_ident(ctx, tok),
-                    libcp_arena_calloc(ctx, 1, sizeof(LibcpNameEntry)));
+                    libcp_tu_calloc(ctx, 1, sizeof(LibcpNameEntry)));
 }
 
 // 在所有外层作用域中按名字查找 struct/union/enum tag.
@@ -806,7 +806,7 @@ static LibcpInitDesig* designators(LibcpContext* ctx, LibcpToken** rest, LibcpTo
 
   while (1) {
     if (libcp_equal(tok, "[")) {
-      LibcpInitDesig* desig = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitDesig));
+      LibcpInitDesig* desig = libcp_tu_calloc(ctx, 1, sizeof(LibcpInitDesig));
       desig->tok            = tok;
       desig->begin          = libcp_conditional(ctx, &tok, tok->next);
       desig->after_begin    = tok;
@@ -819,7 +819,7 @@ static LibcpInitDesig* designators(LibcpContext* ctx, LibcpToken** rest, LibcpTo
     }
 
     if (libcp_equal(tok, ".")) {
-      LibcpInitDesig* desig = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitDesig));
+      LibcpInitDesig* desig = libcp_tu_calloc(ctx, 1, sizeof(LibcpInitDesig));
       desig->tok            = tok;
       tok                   = tok->next;
       if (tok->kind != TK_IDENT)
@@ -850,7 +850,7 @@ static LibcpInitializer* init_record(LibcpContext* ctx, LibcpToken** rest, Libcp
 }
 
 static LibcpInitializer* init_record1(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
-  LibcpInitializer* rec = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitializer));
+  LibcpInitializer* rec = libcp_tu_calloc(ctx, 1, sizeof(LibcpInitializer));
   rec->tok              = tok;
 
   if (libcp_equal(tok, "{")) {
@@ -862,7 +862,7 @@ static LibcpInitializer* init_record1(LibcpContext* ctx, LibcpToken** rest, Libc
     bool first         = true;
 
     while (!consume_end(&tok, tok)) {
-      LibcpInitItem* item = libcp_arena_calloc(ctx, 1, sizeof(LibcpInitItem));
+      LibcpInitItem* item = libcp_tu_calloc(ctx, 1, sizeof(LibcpInitItem));
       if (!first) {
         item->comma_tok = tok;
         tok             = libcp_skip(ctx, tok, ",");
@@ -1078,7 +1078,7 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
 
   if (tok->kind == TK_IDENT && libcp_equal(tok->next, ":")) {
     LibcpNode* node = libcp_new_node(ctx, ND_LABEL, tok);
-    node->label     = libcp_arena_strndup(ctx, tok->loc, tok->len);
+    node->label     = libcp_tu_strndup(ctx, tok->loc, tok->len);
     node->lhs       = stmt(ctx, rest, tok->next->next);
     return node;
   }
@@ -1171,7 +1171,7 @@ static void struct_members(LibcpContext* ctx,
     // 因此占位记录也算候选; 若最终不是聚合类型, sema 会拒绝无名成员.
     if ((basety->kind == TY_STRUCT || basety->kind == TY_UNION || basety->kind == TY_TYPEOF) &&
         libcp_consume(&tok, tok, ";")) {
-      LibcpMember* mem = libcp_arena_calloc(ctx, 1, sizeof(LibcpMember));
+      LibcpMember* mem = libcp_tu_calloc(ctx, 1, sizeof(LibcpMember));
       mem->tok         = decl_start;
       mem->ty          = basety;
       mem->idx         = idx++;
@@ -1187,7 +1187,7 @@ static void struct_members(LibcpContext* ctx,
         tok = libcp_skip(ctx, tok, ",");
       first = false;
 
-      LibcpMember* mem   = libcp_arena_calloc(ctx, 1, sizeof(LibcpMember));
+      LibcpMember* mem   = libcp_tu_calloc(ctx, 1, sizeof(LibcpMember));
       mem->tok           = tok;
       LibcpDeclName decl = {};
       mem->ty            = declarator(ctx, &tok, tok, basety, &decl);

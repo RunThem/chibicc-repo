@@ -1,6 +1,6 @@
 // 类型构造与基础查询, 是第 3 层与第 4 层共用的类型系统地基: 内建类型
 // 单例, 整数 / 浮点判定, 类型兼容性比较, 以及指针, 函数, 数组, VLA 与
-// typeof 占位等类型构造. 新类型一律从 context 的 arena 分配, 只有内建
+// typeof 占位等类型构造. 新类型一律从 context 的 per-TU 分配, 只有内建
 // 类型是共享单例.
 #include "libcp.h"
 
@@ -26,7 +26,7 @@ LibcpType* libcp_ty_ldouble = &(LibcpType){TY_LDOUBLE, 16, 16};
 
 // 分配并清零一条类型记录, 填入 kind / size / align; 其余字段交给调用者.
 static LibcpType* new_type(LibcpContext* ctx, LibcpTypeKind kind, int size, int align) {
-  LibcpType* ty = libcp_arena_calloc(ctx, 1, sizeof(LibcpType));
+  LibcpType* ty = libcp_tu_calloc(ctx, 1, sizeof(LibcpType));
   ty->kind      = kind;
   ty->size      = size;
   ty->align     = align;
@@ -97,7 +97,7 @@ bool libcp_is_compatible(LibcpType* t1, LibcpType* t2) {
 
 // 浅拷贝类型记录并记下 origin: 副本可以安全改写, 比较时仍等价于原类型.
 LibcpType* libcp_copy_type(LibcpContext* ctx, LibcpType* ty) {
-  LibcpType* ret = libcp_arena_calloc(ctx, 1, sizeof(LibcpType));
+  LibcpType* ret = libcp_tu_calloc(ctx, 1, sizeof(LibcpType));
   *ret           = *ty;
   ret->origin    = ty;
   return ret;

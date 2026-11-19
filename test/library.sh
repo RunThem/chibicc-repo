@@ -902,7 +902,8 @@ int main(int argc, char **argv) {
   if (!libcp_context_failed(ctx) || errors != 1)
     return 1;
 
-  // Reset releases the arena and the per-TU state; the context is reusable.
+  // Reset releases every per-TU allocation and clears the state; the
+  // context is reusable.
   libcp_context_reset(ctx);
   prog = NULL;
   ast = compile(ctx, src, &prog);
@@ -969,11 +970,11 @@ int main(int argc, char **argv) {
   if (!diag_fields_ok || diag_located == 0)
     return 1;
 
-  // Every CstNode and every children array is arena memory, so a reset
-  // releases the whole tree (PLAN L3.0). Under ASan the live-byte count
-  // must not grow from iteration to iteration: the pre-fix children
+  // Every CstNode and every children array is a per-TU allocation, so a
+  // reset releases the whole tree (PLAN L3.0). Under ASan the live-byte
+  // count must not grow from iteration to iteration: the pre-fix children
   // arrays (a bare realloc) leaked about 1.6 KiB per iteration on this
-  // source, while the arena version ends each iteration empty.
+  // source, while the per-TU version ends each iteration empty.
   libcp_context_reset(ctx);
 #ifdef HAVE_ASAN
   size_t before = __sanitizer_get_current_allocated_bytes();
@@ -1016,7 +1017,7 @@ mkdir -p "$tmp/asan"
 asan_objs=
 for src in "$root"/libcp/src/*.c; do
   base=$(basename "$src" .c)
-  "$cc" -std=c11 -g -Wall -Wno-switch -DLIBCP_DEFAULT_ALLOCATOR -DLIBCP_DEBUG_ARENA -DLIBCP_TEST_BUILTINS -fsanitize=address,undefined -fno-omit-frame-pointer \
+  "$cc" -std=c11 -g -Wall -Wno-switch -DLIBCP_DEFAULT_ALLOCATOR -DLIBCP_TEST_BUILTINS -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$root/libcp/include" -I"$root/libcp/src" -c "$src" -o "$tmp/asan/$base.o"
   asan_objs="$asan_objs $tmp/asan/$base.o"
 done

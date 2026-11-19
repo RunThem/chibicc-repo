@@ -1,6 +1,6 @@
 #!/bin/sh
-# The library's unit self-tests (hashmap, arena realloc contract, sema
-# state reset across two TUs). The test code lives in test/self/self-test.c
+# The library's unit self-tests (hashmap, per-TU allocation realloc
+# contract, sema state reset across two TUs). The test code lives in test/self/self-test.c
 # and links the archive; it is not part of libcp.
 #
 # LIBCP_LIB selects the archive; test-stage2 points it at the stage2
