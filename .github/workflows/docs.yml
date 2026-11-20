@@ -1,0 +1,15 @@
+# 文档链接闸门: 只读检查本地 markdown 链接与 AGENTS.md 的 docs 章节引用.
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check document links
+        run: bash test/docs-links.sh

@@ -148,6 +148,7 @@ bench: bench-tool
 	BENCH_CFLAGS='$(BENCH_CFLAGS)' bench/run.sh
 
 test: $(TESTS)
+	test/docs-links.sh
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./chibicc
 	test/diagnostic.sh ./chibicc

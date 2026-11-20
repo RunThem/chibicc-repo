@@ -18,7 +18,7 @@
 | S3 | 待回填 | Merge the test path, build, and environment sections |
 | S4 | 待回填 | Deduplicate the settled boundaries and declare docs ownership |
 | S5 | 待回填 | Move the plan and result formats into templates |
-| S6 | 待执行 | 待执行 |
+| S6 | 待回填 | Add the document link check to tests and CI |
 | S7 | 待执行 | 待执行 |
 
 ## 各步记录
@@ -60,10 +60,10 @@
 
 ### S6 - 文档链接检查脚本与 CI
 
-- 做了什么: 待执行.
-- 测试: 待执行.
-- 偏差: 待执行.
-- 验收: 待执行.
+- 做了什么: 新增 `test/docs-links.sh`, 检查本地 markdown 链接与 `AGENTS.md` 的文件/章节引用; 加入 `Makefile` 的 `test` 目标; 新增 `.github/workflows/docs.yml`; `docs/10-build-install.md` 10.8 增加一行; `AGENTS.md` 测试约定增加一句.
+- 测试: `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; 临时目录的两个负例均返回非零; `make test-all` 日志第 87-88 行显示脚本被调用且通过, 退出 0; `python3 -c 'import yaml...'` 解析 workflow 通过; 41 份快照 diff 为空; `git diff --check` 通过.
+- 偏差: 无. 链接检查只进 `make test`, 不进 `test-stage2`, 因为脚本不依赖编译器产物; 这一点已写入 `AGENTS.md`.
+- 验收: 当前树通过; 两个负例被检出; `make test` 包含脚本; workflow 在 push main 与 pull request 触发; docs/10 10.8 有对应行; AGENTS 82 行, 小于等于 100; 闸门全绿.
 
 ### S7 - 全线闸门与 RESULT 收尾
 
@@ -129,4 +129,13 @@
 - `grep -n "每步模板" AGENTS.md`: 无命中.
 - 模板字段: PLAN 的六个步骤字段与 RESULT 的六个记录字段全部命中.
 - `make test-all`: 退出 0.
+- 快照: `snapshot diff: empty`.
+
+### S6
+
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- 负例: 临时目录含 `docs/missing.md` 与 `[bad](missing.md)`, 脚本输出 3 条缺失并退出 1.
+- `make test-all` 日志: 第 87 行 `test/docs-links.sh`, 第 88 行 `docs-links: ok (48 references checked)`; 退出 0.
+- `grep -n "test/docs-links.sh"`: `Makefile:151`, `docs/10-build-install.md:211`, `AGENTS.md:81`.
+- `python3 -c 'import yaml; yaml.safe_load(...)'`: `yaml: ok`.
 - 快照: `snapshot diff: empty`.

@@ -208,6 +208,7 @@ make test-stage2
 | `test/allocator.sh` | 用替换分配器重编库, 活块归零 |
 | `test/self-test.sh` | 库内自测: hashmap / per-TU 分配 / sema 状态重置 |
 | `test/context-audit.sh` | 隐式 context 审计 (`--strict`, 由 `make test` 调用) |
+| `test/docs-links.sh` | 本地 markdown 链接与 AGENTS 章节引用 (由 `make test` 调用) |
 | `test/fmt.sh` | formatter 幂等 / 行数 / 注释数量 / 容器内 `-S` 等价 (`make fmt-tool` 构建) |
 | `test/c2c.sh` | C 转 C 打印回归 (`make c2c` 构建) |
 
