@@ -112,15 +112,15 @@ LIBCP_API LibcpNodeFamily libcp_node_family(LibcpNodeKind kind);
 
 ## 步骤
 
-- [ ] A1 归档分配模型线, 建立本线 `PLAN.md` / `RESULT.md`.
-- [ ] A2 删除 `atomic_addr` / `atomic_expr`, 同步删除 `range.c` / `c2c.c` 的读取.
-- [ ] A3 增加 `LibcpNodeFamily` 与 `libcp_node_family`, 在原 fat struct 上把六个
+- [x] A1 归档分配模型线, 建立本线 `PLAN.md` / `RESULT.md`.
+- [x] A2 删除 `atomic_addr` / `atomic_expr`, 同步删除 `range.c` / `c2c.c` 的读取.
+- [x] A3 增加 `LibcpNodeFamily` 与 `libcp_node_family`, 在原 fat struct 上把六个
   通用 walker 改为按族遍历; `ast.sh` 与 `c2c.sh` 输出逐字节不变.
-- [ ] A4 引入十个族 struct 与 union, 迁移约 610 处字段访问; 审计所有非 switch
+- [x] A4 引入十个族 struct 与 union, 迁移约 610 处字段访问; 审计所有非 switch
   的跨族读取; `sizeof(LibcpNode)` 应为 144.
-- [ ] A5 文档与版本: `docs/02`, `docs/06`, `docs/09`, `docs/10`; D7 白名单加
+- [x] A5 文档与版本: `docs/02`, `docs/06`, `docs/09`, `docs/10`; D7 白名单加
   `libcp_node_family`; `LIBCP_VERSION` 与 `Makefile` `VERSION` 升到 `0.2.0`.
-- [ ] A6 闸门: `make format`, `make test-all`, `make docker-snapshot-diff`,
+- [x] A6 闸门: `make format`, `make test-all`, `make docker-snapshot-diff`,
   `make bench`, `make check-context`.
 
 ## 闸门
