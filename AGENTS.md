@@ -4,7 +4,7 @@
 
 **C 前端(tokenize / preprocess / parse / sema)是一个可复用的库**. chibicc 本体退化为"驱动器 + x86-64 codegen", 作为这个库的参考消费者. 上游 README(含 "Design principles" 一节)描述的是上游的教学定位; 与本文件冲突时, 以本文件为准. 库文档在 `docs/`.
 
-库名 `libcp`(展开为 "Library C Parse", 是品牌 token 而不是描述), 二进制仍叫 `chibicc`, 预定义宏 `__chibicc__` 不变; 公共头根 `libcp/include/libcp/`, 公共符号 `libcp_` / `Libcp` 前缀; 库实现全部在 `libcp/src/`(含 facade `lib.c` 与内部 umbrella `libcp.h`), 根目录只保留驱动器 `main.c` 与 `codegen.c`. 只承诺源码兼容, 不承诺 ABI.
+库名 `libcp`(展开为 "Library C Parse", 是品牌 token 而不是描述), 二进制仍叫 `chibicc`, 预定义宏 `__chibicc__` 不变; 公共头根 `libcp/include/libcp/`, 公共符号 `libcp_` / `Libcp` 前缀; 库实现全部在 `libcp/src/`(含 facade `lib.c` 与内部 umbrella `libcp.h`), 根目录只保留驱动器 `main.c`, `codegen.c` 与驱动器内部头 `driver.h`. 只承诺源码兼容, 不承诺 ABI.
 
 ## 全局约定
 
@@ -78,13 +78,7 @@
 
 ## 目标架构与库边界
 
-流水线按"中间表示"划成 5 层; 每层是一个干净的阶段边界, 也是库对外暴露的一种能力:
-
-1. **Token 流(trivia 保留)** - 空白/注释/换行作为 trivia 挂在 token 上; 拼写/位置/编码完整; 预处理前的 token 流可逐字节重建输入文件.
-2. **CST(lossless)** - 建在预处理**之前**的原始文本上: 预处理指令与条件分支都是节点, trivia 挂靠, 逐字节还原源码. 前置位置是边界: 预处理不可逆, 展开后的语法形态归第 3 层, 源码映射归 provenance.
-3. **语法层 AST(忠实, 无类型)** - 从展开流下降, 保留源码写法(如 `a[i]` 不降成 `*(a+i)`, 隐式 cast 有标记); 不降级, 不绑名, 不算类型; 宏调用不建节点, 宏保真归 CST 与 provenance.
-4. **sema 产物(纯标注)** - 名字解析, 类型检查与标注, 常量求值, 布局与语义结论; 语言规定存在的对象在此物化; 不做任何为发射服务的整形.
-5. **汇编(codegen)** - x86-64 System V / GAS / ELF, 不属于库; 消费第 4 层标注树, 自己决定整形与发射.
+流水线按中间表示分 5 层: token 流(保留 trivia), lossless CST, 忠实语法 AST, sema 标注树, x86-64 汇编. 前 4 层属于库; 第 5 层是 `codegen.c`, 不属于库. 设计原则见 `docs/01-overview.md` 1.5, 层间契约见 `docs/02-architecture.md` 2.2, 目录地图见 `docs/02-architecture.md` 2.10.
 
 ## 面向库的硬性规则
 
@@ -148,25 +142,9 @@ chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码�
 - 构建与测试必须在容器可写层(/work): tcc 的 `-run`/bcheck 只认 overlayfs, virtiofs 或 docker volume 上确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存, 也避免 darwin/linux 产物互相污染.
 - 镜像内 `git@github.com:` 已重写为 HTTPS; chibicc 只调用 `as` / `ld` 并按 Ubuntu 路径找 crt/libgcc.
 
-## 代码地图
-
-- `libcp/include/libcp/` - 10 个公共头; 消费者只 include `<libcp/libcp.h>`.
-- `libcp/src/libcp.h`, `lib.c` - 内部 umbrella 与不透明类型定义; facade(context / per-TU 分配 / 诊断边界 / 公共入口).
-- `libcp/src/tokenize.c`, `preprocess.c`, `provenance.c` - 第 1 层与预处理; provenance 记录与两个只读通道(不接编译路径).
-- `libcp/src/cst.c` - 第 2 层; 必须在 `libcp_preprocess` 之前建树(预处理会改写输入链).
-- `libcp/src/parse.c`, `sema.c`, `type.c` - 第 3/4 层与类型系统.
-- `main.c`, `driver.h`, `codegen.c` - 驱动器, 驱动器内部头, x86-64 发射(codegen 不属于库).
-- `libcp/src/hashmap.c`, `unicode.c`, `strings.c` - 基础设施.
-- `tools/fmt.c`, `tools/c2c.c` - CST formatter 与第 3 层回归闸门(c2c 不安装).
-- `bench/bench.c`, `bench/run.sh`, `bench/alloc_shim.{h,c}` - 前端分阶段 benchmark(tests / lib / driver / sqlite 四组语料), 不属于库.
-- `include/`, `test/` - 自举头文件; 特性测试与 `test/*.sh` 行为锁.
-
 ## 设计原则
 
-- 可读性优先于巧妙. 除用户明确要求外不做顺手的"改进", 不重组无关代码, 不用宏/高阶函数合并解析器里有意的重复. 表达式层是唯一豁免: 一个只读绑定力表(`InfixOp`)加一个 `expr_bp` 循环; 前缀/后缀仍是 `if` 分支, 具名 `BP_*`, 不用函数指针数组, 语句与声明层每产生式一个函数.
-- 内存: 每个 per-TU 对象直接来自 `<libcp/allocator.h>` 的 `LIBCP_*`; context 用一条只含链指针的登记链把它们串起来, `libcp_context_new/free/reset` 在边界批量归还; 解析期间不释放; 库不叠加自己的 arena 或池化, 嵌入方的分配器 (包括 arena) 是唯一的分配策略层; 简单但慢的算法可接受.
-- codegen 没有优化 pass - 故意的, 保留.
-- `include/` 是 chibicc 自带的自举头(`stddef.h`, `stdarg.h`, `stdbool.h`, `float.h`, `stdalign.h`, `stdatomic.h`, `stdnoreturn.h`), 通过 `-Iinclude` 使用.
+可读性优先于巧妙, 不做顺手的"改进"; per-TU 内存直接走 `LIBCP_*`, 库不叠加 arena; codegen 没有优化 pass; `include/` 是自举头, 通过 `-Iinclude` 使用. 完整说明见 `docs/01-overview.md` 1.5.
 
 ## 测试约定
 

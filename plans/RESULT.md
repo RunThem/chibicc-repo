@@ -14,7 +14,7 @@
 | 步骤 | hash | subject |
 |---|---|---|
 | S1 | 待回填 | Archive the node field families line and add the dedup plan |
-| S2 | 待执行 | 待执行 |
+| S2 | 待回填 | Replace duplicated architecture sections with docs links |
 | S3 | 待执行 | 待执行 |
 | S4 | 待执行 | 待执行 |
 | S5 | 待执行 | 待执行 |
@@ -32,10 +32,10 @@
 
 ### S2 - 架构, 设计原则与代码地图改为链接
 
-- 做了什么: 待执行.
-- 测试: 待执行.
-- 偏差: 待执行.
-- 验收: 待执行.
+- 做了什么: 把 `目标架构与库边界` 压成一段五层名称与库边界; 删除逐文件代码地图; 把 `设计原则` 压成一段结论; 根目录描述补上 `driver.h`; 章节引用按 D8 写全文件名.
+- 测试: `wc -l AGENTS.md` 为 154; `grep` 命中 `docs/01-overview.md` 与 `docs/02-architecture.md`; `hashmap.c` 与 `range.c` 不再出现; `driver.h` 在开头描述命中; `git diff --check` 通过; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无.
+- 验收: 三节合计 6 行; 三个 docs 引用存在; 代码地图与逐层解释消失; 根目录描述包含 `main.c`, `driver.h`, `codegen.c`; 行数 154, 小于等于 160; 闸门全绿.
 
 ### S3 - 测试路径, 构建测试与平台陷阱合并
 
@@ -93,3 +93,12 @@
 - 基线快照: `1fb97d5` 临时 worktree 生成 41 份 `/tmp/libcp-snapshot-baseline/*.s`.
 - 当前树快照: 41 份 `/tmp/libcp-snapshot-current/*.s`; `diff -ru /tmp/libcp-snapshot-baseline /tmp/libcp-snapshot-current` 无输出, 输出 `snapshot diff: empty`.
 - `git diff --check`: 通过.
+
+### S2
+
+- `wc -l AGENTS.md`: 154.
+- `grep -n "docs/01-overview.md\|docs/02-architecture.md" AGENTS.md`: 命中 `docs/01-overview.md` 1.5, `docs/02-architecture.md` 2.2 与 `docs/02-architecture.md` 2.10.
+- `grep -n "hashmap.c\|range.c" AGENTS.md`: 无命中.
+- `grep -n "driver.h" AGENTS.md`: 命中开头根目录描述.
+- `make test-all`: 退出 0.
+- 快照: `diff -ru /tmp/libcp-snapshot-baseline /tmp/libcp-snapshot-current` 无输出, 输出 `snapshot diff: empty`.
