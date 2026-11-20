@@ -101,46 +101,19 @@
 - 分配器: `<libcp/allocator.h>` 的四个 `LIBCP_*` 宏; 单开关 `LIBCP_DEFAULT_ALLOCATOR`, 未定义时嵌入方必须提供全部四个, 不做逐宏回退; 编译期配置, 只有重编库才生效.
 - 公共面: 10 个公共头只声明 D7; `.a` 的内部符号统一 `libcp_` 前缀但不是 API(消费者不得调用, 不承诺源码兼容); `.so` 只导出 D7.
 
-## 测试路径判定(每次测试前)
+## 测试路径与构建
 
-测试前必须先运行 `uname -s` 与 `uname -m`, 并在汇报中写明宿主与选择的路径; 不得跳过判定直接测试.
+测试前先运行 `uname -s` 与 `uname -m`, 在汇报中写明宿主与选择的路径; 不得跳过判定直接测试.
 
-- `Linux` + `x86_64`: 原生路径. 全量测试用 `make test-all`; 第三方用 `make test-thirdparty`; 汇编等价性用同一 commit 的临时 worktree 生成 `test/*.c` 基线快照并逐字节 diff. 禁止在 x86-64 Linux 上运行 `make docker-image`, `make docker-test`, `make docker-test-thirdparty`, `make docker-snapshot-diff`.
-- 其它宿主: Docker 路径. 全量测试用 `make docker-test`; 第三方用 `make docker-test-thirdparty`; 汇编等价性用 `make docker-snapshot-diff`. 首次需要 `make docker-image`.
-- `make bench` 只在 Linux 原生运行; 其它宿主不做计时.
-
-## 构建与测试
-
-- 修改完代码后必须执行 `make format`(clang-format 20, 见下), 由它统一格式化, 不手工调格式.
-- `make` - 构建 `chibicc` 二进制(纯 C11, 无外部依赖; CFLAGS 定义在 Makefile 中).
-- `make check-context` - 隐式上下文审计(`test/context-audit.sh --strict`): 库层无访问器 / 无 TLS / `.a` 无访问器符号, `codegen.c` 无 `cg_ctx`; 由 `make test` 一并调用.
-- `make fmt-tool` - 构建 CST formatter(`tools/fmt.c`, 产物 `fmt`), 由 `make test` 调用后接 `test/fmt.sh`.
-- `make format` - 用仓库根的 `.clang-format` 格式化 `libcp/`(源码与公共头)以及 `main.c` / `codegen.c`, 不含测试与 `tools/`; 无 clang-format 时打印提示并跳过, 但版本低于 20 时报错退出. 目标名是 `format` 而不是 `fmt`, 因为 `fmt` 是 formatter 二进制.
-- `make format-check` - 只读格式闸门(`clang-format --dry-run --Werror`), 不改文件; CI 由 `.github/workflows/format.yml` 安装固定版本的 clang-format 20 后运行它.
-- `make test` - 用 chibicc 自身编译所有 `test/*.c`, 用 `cc -pthread` 链接 `test/common` 后逐个运行, 再依次跑 `test/driver.sh`(命令行选项), `test/diagnostic.sh`(诊断逐字节), `test/warning.sh`(警告逐字节), `test/shape.sh`(发射形状), `test/ast.sh`(第 3 层 AST 形态), `test/trivia.sh`(trivia 通道), `test/cst.sh`(CST 通道), `test/expand.sh`(provenance), `test/library.sh`(公共面与 ASan), `test/allocator.sh`(分配器替换), `test/self-test.sh`(库内自测), `test/cst-stats.sh`(UNPARSED golden), 最后 `make fmt-tool` + `test/fmt.sh`(formatter)与 `make c2c` + `test/c2c.sh`(第 3 层回归闸门, 不随 `make` / `make install` 发布).
-- `make test-stage2` - 自举检查: 用 chibicc 编译它自己, 再重跑全部测试.
-- `make test-all` - 以上两项合计. `make clean` 用于清理.
-- `make bench` - 构建并运行前端分阶段 benchmark(`bench/run.sh`, 仅 Linux, 其它宿主由脚本拒绝); 采集 reset / tokenize / preprocess / parse / sema 的时间与分配器统计, 输出环境块, 语料指纹与固定表格. `make bench-tool` 只构建(`-O2` + `bench/alloc_shim.h`, 不进入 `all` / `test` / `install`).
-- 单独运行某个特性测试: `make test/sizeof.exe && ./test/sizeof.exe`(模式规则会自动处理).
-- 只验证前端(非 x86-64 Linux 宿主不能在本机汇编/运行): `-E`(预处理), `-S`(汇编文本), `-dump-tokens` / `-reconstruct`(第 1 层), `-dump-cst` / `-reconstruct-cst` / `-verify-cst`(第 2 层), `-dump-expansions` / `-verify-expansions`(provenance), `-dump-ast`(第 3 层, parse 后 sema 前早退).
-- 库构建: `make libcp.a`; Linux 下 `make` 也产 `libcp.so`(PIC, 只导出 D7, SONAME `libcp.so.0`; macOS 只承诺 `.a`), `chibicc` 链接静态库; `make install PREFIX=... [DESTDIR=...]` 装 10 个公共头, 库与 `libcp.pc`, `pkg-config --cflags --libs libcp` 可用; `LIBCP_VERSION` / `libcp_version()` 为 `0.2.0`. `make test-stage2` 用 chibicc 重编库对象(`stage2/libcp.a`). `make check-library` 跑 library / allocator / public-api / install 四个脚本(头文件自包含, 消费者只依赖 D7, `.a` 的 D7 齐全, `.so` 只导出 D7, install / pkg-config 布局); `test/library.sh` 最后一轮用 ASan+UBSan 重编库对象, 查 UB 与 reset 后活字节归零.
-- 每次改动必须过三道闸门: 全量测试含自举(按"测试路径判定"选原生 `make test-all` 或 Docker `make docker-test`), 汇编等价性 diff(x86-64 Linux 用本机基线 worktree 快照, 其它宿主用 `make docker-snapshot-diff`; Docker 基线固定在 amd64 Ubuntu 容器内, 逐字节比较), 该改动新增的针对性测试. 行为变化必须单独提交.
-
-## 平台陷阱与测试环境(先按宿主选路径)
-
-chibicc 生成的是 x86-64 System V / GAS / ELF 汇编, 且 `main.c` 硬编码了 Linux 路径(`/usr/include/x86_64-linux-gnu` 等)与 gcc/`ld` 调用. 先确认宿主, 再选测试路径:
-
-- **x86-64 Linux 宿主**(`uname -s` 为 `Linux`, `uname -m` 为 `x86_64`; 含 devcontainer 与 CI): 生成物可直接由本机 `as` / `ld` 消费, 直接跑 `make test-all`, 不要再用 Docker - 容器只增加启动开销, 测试结果与本机一致. 第三方脚本用 `make test-thirdparty`(仅 x86-64 Linux 可用, 不要加 `test/thirdparty` 的 make shim).
-- **其它宿主**(macOS ARM64 / Intel macOS / Linux arm64 等): 编译器本体仍可构建, 但生成的代码无法在本机汇编或运行, 直接跑 `make test` 会在汇编阶段失败; 完整测试走下面的 Docker 路径.
-
-非 x86-64 Linux 宿主通过 Docker 运行完整测试(macOS 上用 OrbStack, amd64 容器走 Rosetta):
-
-- `make docker-image` - 构建依赖镜像 `chibicc:amd64`(ubuntu:22.04, amd64, 一次性约 90 s).
-- `make docker-test` - 自研测试集 + 自举, 分钟级; 仅非 x86-64 Linux 宿主需要; 仓库只读挂载, 构建与测试在容器可写层, 本机构建产物不受影响.
-- `make docker-test-thirdparty` - 五个第三方脚本(tinycc libpng git sqlite cpython, 由小到大); 仅非 x86-64 Linux 宿主需要; `THIRDPARTY=git` 可单跑; 很慢且首次需要网络; clone 缓存在 `thirdparty/`(.gitignore, 损坏就删).
-- Rosetta 下 tcc 的 106_pthread / 112_backtrace / 113_btdll 会不稳定 SIGSEGV, 与 chibicc 无关; `test/thirdparty/make` 是 PATH shim(文件名必须是 make), 测试前移除这三个用例; 真 x86-64 Linux 不需要.
-- 构建与测试必须在容器可写层(/work): tcc 的 `-run`/bcheck 只认 overlayfs, virtiofs 或 docker volume 上确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存, 也避免 darwin/linux 产物互相污染.
-- 镜像内 `git@github.com:` 已重写为 HTTPS; chibicc 只调用 `as` / `ld` 并按 Ubuntu 路径找 crt/libgcc.
+- `Linux` + `x86_64`: 原生路径. 全量测试用 `make test-all`; 第三方用 `make test-thirdparty`; 汇编等价性用同一 commit 的临时 worktree 生成 `test/*.c` 基线快照并逐字节 diff; `make bench` 只在此路径运行. 禁止在此宿主运行 `make docker-image`, `make docker-test`, `make docker-test-thirdparty`, `make docker-snapshot-diff`.
+- 其它宿主: Docker 路径. 首次 `make docker-image`; 全量测试用 `make docker-test`; 第三方用 `make docker-test-thirdparty`; 汇编等价性用 `make docker-snapshot-diff`. 非 x86-64 宿主可用 `-E` / `-S` / `-dump-*` 只验前端, 见 `docs/10-build-install.md` 10.8.
+- Rosetta 下 tcc 的 106_pthread / 112_backtrace / 113_btdll 会不稳定 SIGSEGV, 与 chibicc 无关; `test/thirdparty/make` 是 PATH shim, 真 x86-64 Linux 不需要.
+- 容器内构建与测试必须在可写层 `/work`: tcc 的 `-run`/bcheck 只认 overlayfs, virtiofs 或 docker volume 上确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存.
+- 构建: `make` 产 `chibicc` 与 Linux 下的 `libcp.so`; `make libcp.a` 只产静态库; `make install PREFIX=... [DESTDIR=...]` 装公共头, 库与 `libcp.pc`; `make check-library` 跑公共面与打包闸门; `make check-context` 跑隐式上下文审计.
+- 格式: 改完代码必须跑 `make format`(clang-format 20), 不手工调格式; 只读闸门 `make format-check`.
+- 每次改动过三道闸门: 全量测试含自举(原生 `make test-all` 或 Docker `make docker-test`), 汇编等价性 diff, 该改动新增的针对性测试. 行为变化单独提交.
+- `make test` 与 `make test-stage2` 的目标, 完整测试矩阵与 Docker 细节见 `docs/10-build-install.md` 10.8, `docs/10-build-install.md` 10.10 与 `docs/10-build-install.md` 10.12.
+- `make bench` 构建并运行前端分阶段 benchmark(`bench/run.sh`, 仅 Linux 原生), 采集 reset / tokenize / preprocess / parse / sema 的时间与分配器统计; `make bench-tool` 只构建, 不进入 `all` / `test` / `install`.
 
 ## 设计原则
 

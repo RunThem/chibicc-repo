@@ -15,7 +15,7 @@
 |---|---|---|
 | S1 | 待回填 | Archive the node field families line and add the dedup plan |
 | S2 | 待回填 | Replace duplicated architecture sections with docs links |
-| S3 | 待执行 | 待执行 |
+| S3 | 待回填 | Merge the test path, build, and environment sections |
 | S4 | 待执行 | 待执行 |
 | S5 | 待执行 | 待执行 |
 | S6 | 待执行 | 待执行 |
@@ -39,10 +39,10 @@
 
 ### S3 - 测试路径, 构建测试与平台陷阱合并
 
-- 做了什么: 待执行.
-- 测试: 待执行.
-- 偏差: 待执行.
-- 验收: 待执行.
+- 做了什么: 把 `测试路径判定`, `构建与测试`, `平台陷阱与测试环境` 合并为 `测试路径与构建`; 删除逐目标说明, 完整测试顺序与重复的 Docker 目标列表; 保留宿主判定, 六个精确命令, 三条闸门, `make bench` 仅原生的限制, Rosetta 下 tcc 三个用例与容器 `/work` 可写层陷阱; 细节链接到 docs/10 10.8, 10.10 与 10.12.
+- 测试: `wc -l AGENTS.md` 为 127; `Rosetta` 与 `/work` 各 1 次; 六个命令全部命中; `test/driver.sh` 不再出现; `git diff --check` 通过; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无. `docs/10` 没有 bench 采集项与 Rosetta 陷阱, 因此这些操作信息留在 `AGENTS.md`, 只把环境细节链接到 docs.
+- 验收: 只剩一个测试路径小节; 六个命令保留; bench 宿主限制保留; Rosetta 与 `/work` 各只出现一次; 完整顺序表消失; 行数 127, 小于等于 140; 闸门全绿.
 
 ### S4 - 已定边界去重与单一事实来源规则
 
@@ -102,3 +102,12 @@
 - `grep -n "driver.h" AGENTS.md`: 命中开头根目录描述.
 - `make test-all`: 退出 0.
 - 快照: `diff -ru /tmp/libcp-snapshot-baseline /tmp/libcp-snapshot-current` 无输出, 输出 `snapshot diff: empty`.
+
+### S3
+
+- `wc -l AGENTS.md`: 127.
+- `grep -c "Rosetta" AGENTS.md`: 1; `grep -c "/work" AGENTS.md`: 1.
+- 命令存在性: `make test-all` 2 行, `make docker-test` 3 行, `make docker-snapshot-diff` 2 行, `make test-thirdparty` 1 行, `make bench` 2 行, `make format` 1 行.
+- `grep -n "test/driver.sh" AGENTS.md`: 无命中.
+- `make test-all`: 退出 0.
+- 快照: `snapshot diff: empty`.
