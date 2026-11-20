@@ -16,7 +16,7 @@
 | S1 | 待回填 | Archive the node field families line and add the dedup plan |
 | S2 | 待回填 | Replace duplicated architecture sections with docs links |
 | S3 | 待回填 | Merge the test path, build, and environment sections |
-| S4 | 待执行 | 待执行 |
+| S4 | 待回填 | Deduplicate the settled boundaries and declare docs ownership |
 | S5 | 待执行 | 待执行 |
 | S6 | 待执行 | 待执行 |
 | S7 | 待执行 | 待执行 |
@@ -46,10 +46,10 @@
 
 ### S4 - 已定边界去重与单一事实来源规则
 
-- 做了什么: 待执行.
-- 测试: 待执行.
-- 偏差: 待执行.
-- 验收: 待执行.
+- 做了什么: 在 `全局约定` 增加 `docs/` 与 `AGENTS.md` 的单一事实来源规则; 删除命名条目末尾重复的 ABI 句; 把公共面条目从"10 个公共头, `.a` 符号, `.so` 导出"收敛为"只暴露 D7, 内部符号不是 API"; 九个关键决策全部保留.
+- 测试: `wc -l AGENTS.md` 为 128; `grep -c "只承诺源码兼容"` 为 1; 九个决策词全部命中; `10 个公共头` 与 `.so 只导出 D7` 不再出现; `git diff --check` 通过; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无.
+- 验收: single-owner 规则存在且指向 `docs/`; 九个关键决策保留; 重复 ABI 句只剩头部; 公共面细节移出; 行数 128, 小于等于 135; 闸门全绿.
 
 ### S5 - 计划与记录格式模板化
 
@@ -109,5 +109,14 @@
 - `grep -c "Rosetta" AGENTS.md`: 1; `grep -c "/work" AGENTS.md`: 1.
 - 命令存在性: `make test-all` 2 行, `make docker-test` 3 行, `make docker-snapshot-diff` 2 行, `make test-thirdparty` 1 行, `make bench` 2 行, `make format` 1 行.
 - `grep -n "test/driver.sh" AGENTS.md`: 无命中.
+- `make test-all`: 退出 0.
+- 快照: `snapshot diff: empty`.
+
+### S4
+
+- `wc -l AGENTS.md`: 128.
+- `grep -c "只承诺源码兼容" AGENTS.md`: 1.
+- 九个决策词: `libcp`, `LibcpNode`, `new` / `free` / `reset`, `宏保真`, `CST 只建在预处理之前`, `per-node user data`, `c2c 只是`, `LIBCP_DEFAULT_ALLOCATOR`, `只承诺源码兼容` 全部命中.
+- `grep -n "10 个公共头\|\.so 只导出 D7" AGENTS.md`: 无命中.
 - `make test-all`: 退出 0.
 - 快照: `snapshot diff: empty`.

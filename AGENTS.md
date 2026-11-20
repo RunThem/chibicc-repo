@@ -12,6 +12,7 @@
 标点: 所有输出(写入文件的注释 / 文档, 以及回显给用户的回复), 无论中文还是英文, 一律使用英文标点(, . : ; ( ) - _ /), 不使用中文标点(如 , 。 ： ； （ ） 、).
 提交信息: 使用英文祈使句(如 `Fix ...`, `Add ...`), 首字母大写, 不加句号; 这是中文输出规则的唯一例外, 与仓库历史保持一致.
 计划与记录: 现行线的计划 / 记录固定在 `plans/PLAN.md` / `plans/RESULT.md`; 已完成的线归档为 `plans/PLAN-<主题>.md` / `plans/RESULT-<主题>.md`, 文件头加归档说明.
+单一事实来源: `docs/` 拥有描述性事实(架构, 目录, 目标, 测试矩阵, 环境细节); 本文件拥有规范性约束与执行流程. 文档与代码冲突时, API 与行为以公共头与测试为准; 流程以本文件为准; 重复内容改为链接.
 
 ## 计划, 执行与提交
 
@@ -91,7 +92,7 @@
 
 ## 已定边界(新决策仍由用户拍板, 不擅自推翻)
 
-- 命名: `libcp` / `<libcp/...>` / `libcp_` / `Libcp` / `LIBCP_`; 库内私有类型同样带 `Libcp` / `struct libcp_*`; 二进制 `chibicc`, 预定义宏 `__chibicc__` 与 `plans/**` 的旧名不回溯改写; 只承诺源码兼容.
+- 命名: `libcp` / `<libcp/...>` / `libcp_` / `Libcp` / `LIBCP_`; 库内私有类型同样带 `Libcp` / `struct libcp_*`; 二进制 `chibicc`, 预定义宏 `__chibicc__` 与 `plans/**` 的旧名不回溯改写.
 - 公共 IR: `LibcpNode` / `LibcpObj` 只保留第 3/4 层字段; codegen 状态在 `codegen.c` 私有表; sema 只标注, 不整形.
 - context: 一个 context 一个翻译单元; `new` / `free` / `reset` 三态; reset 保留配置并逐个归还全部 per-TU 分配; 不提供逐对象 free 的公共 API, 不做内部池化, 不做 per-phase arena.
 - 宏保真: 消费展开后的 token 流, 不引入宏调用节点; 宏保真由 CST 与 provenance 承担; 放弃宏展开内部的外科式编辑.
@@ -99,7 +100,7 @@
 - 公共面不提供 per-node user data 扩展点, 也不提供 trivia 分段迭代器: 两个消费者(formatter 与 c2c)都只需要只读遍历.
 - c2c 只是 `make test` / `make test-stage2` 的回归闸门: 不进入 `all`, 不安装, 不做产品化(改写 / 插桩 / 重构 / 源码回写都不在范围).
 - 分配器: `<libcp/allocator.h>` 的四个 `LIBCP_*` 宏; 单开关 `LIBCP_DEFAULT_ALLOCATOR`, 未定义时嵌入方必须提供全部四个, 不做逐宏回退; 编译期配置, 只有重编库才生效.
-- 公共面: 10 个公共头只声明 D7; `.a` 的内部符号统一 `libcp_` 前缀但不是 API(消费者不得调用, 不承诺源码兼容); `.so` 只导出 D7.
+- 公共面只暴露 D7; `.a` 的内部符号统一 `libcp_` 前缀, 但不是 API, 消费者不得调用.
 
 ## 测试路径与构建
 
