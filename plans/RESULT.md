@@ -17,7 +17,7 @@
 | S2 | 待回填 | Replace duplicated architecture sections with docs links |
 | S3 | 待回填 | Merge the test path, build, and environment sections |
 | S4 | 待回填 | Deduplicate the settled boundaries and declare docs ownership |
-| S5 | 待执行 | 待执行 |
+| S5 | 待回填 | Move the plan and result formats into templates |
 | S6 | 待执行 | 待执行 |
 | S7 | 待执行 | 待执行 |
 
@@ -53,10 +53,10 @@
 
 ### S5 - 计划与记录格式模板化
 
-- 做了什么: 待执行.
-- 测试: 待执行.
-- 偏差: 待执行.
-- 验收: 待执行.
+- 做了什么: 新增 `plans/PLAN-TEMPLATE.md` 与 `plans/RESULT-TEMPLATE.md`, 把 PLAN 的 9 项必含内容, 每步 6 项模板, RESULT 的 8 项必含内容与每步记录模板写成可复制文件; `AGENTS.md` 的 52 行格式正文压成 3 条指针.
+- 测试: 两个模板存在; `grep "PLAN-TEMPLATE"` 与 `grep "RESULT-TEMPLATE"` 在 `AGENTS.md` 命中; `每步模板` 不再出现; 六个 PLAN 字段与六个 RESULT 字段在模板中命中; `wc -l AGENTS.md` 为 81; `git diff --check` 通过; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无.
+- 验收: 两个模板存在且字段完整; `AGENTS.md` 不再有完整格式正文; 固定槽位与批准流程仍在; 行数 81, 小于等于 100; 闸门全绿.
 
 ### S6 - 文档链接检查脚本与 CI
 
@@ -118,5 +118,15 @@
 - `grep -c "只承诺源码兼容" AGENTS.md`: 1.
 - 九个决策词: `libcp`, `LibcpNode`, `new` / `free` / `reset`, `宏保真`, `CST 只建在预处理之前`, `per-node user data`, `c2c 只是`, `LIBCP_DEFAULT_ALLOCATOR`, `只承诺源码兼容` 全部命中.
 - `grep -n "10 个公共头\|\.so 只导出 D7" AGENTS.md`: 无命中.
+- `make test-all`: 退出 0.
+- 快照: `snapshot diff: empty`.
+
+### S5
+
+- `wc -l AGENTS.md`: 81; `plans/PLAN-TEMPLATE.md`: 75; `plans/RESULT-TEMPLATE.md`: 40.
+- `test -f` 两个模板: 通过.
+- `grep -n "PLAN-TEMPLATE\|RESULT-TEMPLATE" AGENTS.md`: 命中第 29 行.
+- `grep -n "每步模板" AGENTS.md`: 无命中.
+- 模板字段: PLAN 的六个步骤字段与 RESULT 的六个记录字段全部命中.
 - `make test-all`: 退出 0.
 - 快照: `snapshot diff: empty`.
