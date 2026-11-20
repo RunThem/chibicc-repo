@@ -224,7 +224,7 @@ static bool is_basic_type(LibcpType *ty) {
 // its name token directly (the parser never sets name_tok there); the
 // other records carry it in name_tok.
 static const LibcpToken *record_name_tok(LibcpNode *node) {
-  return node->kind == ND_TYPEDEF ? node->tok : node->name_tok;
+  return node->kind == ND_TYPEDEF ? node->tok : node->decl.name_tok;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,34 +273,48 @@ static void collect_node(Printer *p, LibcpNode *node) {
     break;
   }
 
+  LibcpNodeFamily fam = libcp_node_family(node->kind);
+
   collect_type(p, node->ty);
   collect_type(p, node->ty_op);
-  collect_type(p, node->ty_op2);
-  collect_type(p, node->func_ty);
-  collect_type(p, node->attr.align_ty);
+  collect_type(p, node->value.ty_op2);
+  if (fam == LIBCP_NF_CTRL)
+    collect_type(p, node->ctrl.func_ty);
+  if (fam == LIBCP_NF_DECL)
+    collect_type(p, node->decl.attr.align_ty);
 
-  if (node->kind == ND_FUNCDEF && node->body)
+  if (node->kind == ND_FUNCDEF && node->decl.body)
     p->body_depth++;
   collect_exprs(p, node->lhs);
   collect_exprs(p, node->rhs);
-  collect_exprs(p, node->cond);
-  collect_exprs(p, node->then);
-  collect_exprs(p, node->els);
-  collect_exprs(p, node->init);
-  collect_exprs(p, node->inc);
-  collect_exprs(p, node->body);
-  collect_exprs(p, node->args);
-  collect_exprs(p, node->generic_sel);
+  if (fam == LIBCP_NF_CTRL) {
+    collect_exprs(p, node->ctrl.cond);
+    collect_exprs(p, node->ctrl.then);
+    collect_exprs(p, node->ctrl.els);
+    collect_exprs(p, node->ctrl.init);
+    collect_exprs(p, node->ctrl.inc);
+  }
+  if (fam == LIBCP_NF_DECL)
+    collect_exprs(p, node->decl.body);
+  if (fam == LIBCP_NF_CTRL) {
+    collect_exprs(p, node->ctrl.args);
+    collect_exprs(p, node->ctrl.generic_sel);
+  }
   collect_exprs(p, node->spec_decls);
-  collect_exprs(p, node->begin_expr);
-  collect_exprs(p, node->end_expr);
-  collect_exprs(p, node->cas_addr);
-  collect_exprs(p, node->cas_old);
-  collect_exprs(p, node->cas_new);
-  collect_exprs(p, node->atomic_expr);
-  collect_exprs(p, node->attr.align_expr);
-  collect_init(p, node->decl_init);
-  if (node->kind == ND_FUNCDEF && node->body)
+  if (fam == LIBCP_NF_CASE) {
+    collect_exprs(p, node->case_.begin_expr);
+    collect_exprs(p, node->case_.end_expr);
+  }
+  if (fam == LIBCP_NF_CAS) {
+    collect_exprs(p, node->cas.cas_addr);
+    collect_exprs(p, node->cas.cas_old);
+    collect_exprs(p, node->cas.cas_new);
+  }
+  if (fam == LIBCP_NF_DECL) {
+    collect_exprs(p, node->decl.attr.align_expr);
+    collect_init(p, node->decl.decl_init);
+  }
+  if (node->kind == ND_FUNCDEF && node->decl.body)
     p->body_depth--;
 }
 
@@ -495,7 +509,7 @@ static int expr_level(LibcpNode *node) {
   case ND_MEMBER:
     return 16;
   case ND_INCDEC:
-    return node->is_post ? 16 : 15;
+    return node->incdec.is_post ? 16 : 15;
   case ND_NEG:
   case ND_NOT:
   case ND_BITNOT:
@@ -559,7 +573,7 @@ static bool is_atom_or_postfix(LibcpNode *node) {
   case ND_MEMBER:
     return true;
   case ND_INCDEC:
-    return node->is_post;
+    return node->incdec.is_post;
   default:
     return false;
   }
@@ -688,7 +702,7 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
     e_str_literal(e, node->tok);
     return;
   case ND_VAR: // sema-bound; defensive at layer 3
-    e_str(e, node->var ? node->var->name : "");
+    e_str(e, node->decl.var ? node->decl.var->name : "");
     return;
   case ND_NULL_EXPR: // sema-built; defensive at layer 3
     e_str(e, "((void)0)");
@@ -724,7 +738,7 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
   case ND_ASSIGN:
     print_expr_ctx(p, e, node->lhs, 15);
     e_str(e, " ");
-    e_op(e, node->op ? compound_assign_str(node->op) : "=");
+    e_op(e, node->assign.op ? compound_assign_str(node->assign.op) : "=");
     e_str(e, " ");
     print_expr_ctx(p, e, node->rhs, 2);
     return;
@@ -737,26 +751,26 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
 
   case ND_COND:
     // The middle is a full expression; the tail recurses to the right.
-    print_expr_ctx(p, e, node->cond, 4);
-    if (node->is_elvis) {
+    print_expr_ctx(p, e, node->ctrl.cond, 4);
+    if (node->ctrl.is_elvis) {
       e_str(e, " ?: ");
-      print_expr_ctx(p, e, node->els, 3);
+      print_expr_ctx(p, e, node->ctrl.els, 3);
       return;
     }
     e_str(e, " ? ");
-    print_expr_ctx(p, e, node->then, 1);
+    print_expr_ctx(p, e, node->ctrl.then, 1);
     e_str(e, " : ");
-    print_expr_ctx(p, e, node->els, 3);
+    print_expr_ctx(p, e, node->ctrl.els, 3);
     return;
 
   case ND_INCDEC:
-    if (node->is_post) {
+    if (node->incdec.is_post) {
       // A postfix on a unary operand parenthesizes: (*p)-- must not
       // re-lex as *p-- (the postfix binds the p).
       print_expr_ctx(p, e, node->lhs, 16);
-      e_op(e, node->addend < 0 ? "--" : "++");
+      e_op(e, node->incdec.addend < 0 ? "--" : "++");
     } else {
-      e_op(e, node->addend < 0 ? "--" : "++");
+      e_op(e, node->incdec.addend < 0 ? "--" : "++");
       print_expr_ctx(p, e, node->lhs, 15);
     }
     return;
@@ -821,14 +835,14 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
 
   case ND_MEMBER:
     print_postfix_base(p, e, node->lhs);
-    if (node->arrow_tok)
+    if (node->access.arrow_tok)
       e_str(e, "->");
     else
       e_str(e, ".");
     // The member name rides the token while unbound (layer 3) and the
     // member record once sema has bound it.
-    if (node->member && node->member->name)
-      e_tok(e, node->member->name);
+    if (node->access.member && node->access.member->name)
+      e_tok(e, node->access.member->name);
     else
       e_tok(e, node->tok);
     return;
@@ -844,7 +858,7 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
     print_postfix_base(p, e, node->lhs);
     e_str(e, "(");
     bool first = true;
-    for (LibcpNode *arg = node->args; arg; arg = arg->next) {
+    for (LibcpNode *arg = node->ctrl.args; arg; arg = arg->next) {
       if (!first)
         e_str(e, ", ");
       first = false;
@@ -855,15 +869,15 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
 
   case ND_LABEL_VAL:
     e_op(e, "&&");
-    e_str(e, node->label);
+    e_str(e, node->jump.label);
     return;
 
   case ND_STMT_EXPR:
     e_str(e, "({");
-    if (node->body) {
+    if (node->decl.body) {
       e_nl(e);
       e->indent++;
-      print_chain(p, node->body);
+      print_chain(p, node->decl.body);
       e->indent--;
     } else {
       e_str(e, " ");
@@ -878,20 +892,20 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
     // The grammar of a compound literal is `( type-name ) { ... }`;
     // a scalar initializer the parser kept as an expression still
     // prints braced.
-    if (node->decl_init && node->decl_init->kind != INIT_LIST) {
+    if (node->decl.decl_init && node->decl.decl_init->kind != INIT_LIST) {
       e_str(e, "{ ");
-      print_init(p, node->decl_init);
+      print_init(p, node->decl.decl_init);
       e_str(e, " }");
       return;
     }
-    print_init(p, node->decl_init);
+    print_init(p, node->decl.decl_init);
     return;
   }
 
   case ND_GENERIC:
     e_str(e, "_Generic(");
-    print_expr_ctx(p, e, node->cond, 2);
-    for (LibcpNode *assoc = node->args; assoc; assoc = assoc->next) {
+    print_expr_ctx(p, e, node->ctrl.cond, 2);
+    for (LibcpNode *assoc = node->ctrl.args; assoc; assoc = assoc->next) {
       e_str(e, ", ");
       if (assoc->ty_op) {
         print_typename_e(p, e, assoc->ty_op);
@@ -908,7 +922,7 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
     e_str(e, "__builtin_types_compatible_p(");
     print_typename_e(p, e, node->ty_op);
     e_str(e, ", ");
-    print_typename_e(p, e, node->ty_op2);
+    print_typename_e(p, e, node->value.ty_op2);
     e_str(e, ")");
     return;
 
@@ -920,11 +934,11 @@ static void print_expr_ctx(Printer *p, E *e, LibcpNode *node, int ctx) {
 
   case ND_CAS:
     e_str(e, "__builtin_compare_and_swap(");
-    print_expr_ctx(p, e, node->cas_addr, 2);
+    print_expr_ctx(p, e, node->cas.cas_addr, 2);
     e_str(e, ", ");
-    print_expr_ctx(p, e, node->cas_old, 2);
+    print_expr_ctx(p, e, node->cas.cas_old, 2);
     e_str(e, ", ");
-    print_expr_ctx(p, e, node->cas_new, 2);
+    print_expr_ctx(p, e, node->cas.cas_new, 2);
     e_str(e, ")");
     return;
 
@@ -1411,7 +1425,7 @@ static void print_declarator(Printer *p, E *e, LibcpType *ty,
 // the keyword comes from the record's kind.
 static void print_attr_prefix(Printer *p, LibcpNode *node) {
   E *e = &p->e;
-  LibcpVarAttr *attr = &node->attr;
+  LibcpVarAttr *attr = &node->decl.attr;
   if (node->kind == ND_TYPEDEF || attr->is_typedef)
     e_str(e, "typedef ");
   if (attr->is_static)
@@ -1519,9 +1533,9 @@ static void print_one_declarator(Printer *p, LibcpNode *node,
   // and later declarators of a grouped typedef statement.
   if (node->kind == ND_TYPEDEF)
     ty_info(p, record_type(node))->tname_emitted = true;
-  if (node->decl_init) {
+  if (node->decl.decl_init) {
     e_str(&p->e, " = ");
-    print_init(p, node->decl_init);
+    print_init(p, node->decl.decl_init);
   }
 }
 
@@ -1555,13 +1569,13 @@ static bool continues_group(Printer *p, LibcpNode *first, LibcpNode *node) {
     return false;
   bool r = node->kind == first->kind &&
            print_start(p, node) == print_start(p, first) &&
-           same_attr(&node->attr, &first->attr);
-  if (getenv("C2C_DBG6") && first->name_tok && node->name_tok &&
-      (strncmp(first->name_tok->loc, "__locale_t", 10) == 0 ||
-       strncmp(first->name_tok->loc, "locale_t", 8) == 0))
+           same_attr(&node->decl.attr, &first->decl.attr);
+  if (getenv("C2C_DBG6") && first->decl.name_tok && node->decl.name_tok &&
+      (strncmp(first->decl.name_tok->loc, "__locale_t", 10) == 0 ||
+       strncmp(first->decl.name_tok->loc, "locale_t", 8) == 0))
     fprintf(stderr, "DBG group %.*s + %.*s -> %d\n",
-            first->name_tok->len, first->name_tok->loc,
-            node->name_tok->len, node->name_tok->loc, r);
+            first->decl.name_tok->len, first->decl.name_tok->loc,
+            node->decl.name_tok->len, node->decl.name_tok->loc, r);
   return r;
 }
 
@@ -1605,9 +1619,9 @@ static LibcpNode *print_decl_head(Printer *p, LibcpNode *node) {
 static LibcpNode *print_record(Printer *p, LibcpNode *node) {
   LibcpNode *last = print_decl_head(p, node);
 
-  if (node->kind == ND_FUNCDEF && node->body) {
+  if (node->kind == ND_FUNCDEF && node->decl.body) {
     e_str(&p->e, " ");
-    print_stmt(p, node->body);
+    print_stmt(p, node->decl.body);
     e_nl(&p->e);
     return last;
   }
@@ -1658,22 +1672,22 @@ static void e_escaped_c_str(E *e, const char *s) {
 // The scopeless block is the empty statement and prints `;` - braces
 // around it would change the tree.
 static void print_block(Printer *p, LibcpNode *node) {
-  if (!node->is_scope_block) {
-    if (!node->body) {
+  if (!node->decl.is_scope_block) {
+    if (!node->decl.body) {
       e_str(&p->e, ";");
       return;
     }
     // Defensive: only sema's folded chains reach here, never a parse
     // tree; print them as a plain block so nothing is lost.
   }
-  if (!node->body) {
+  if (!node->decl.body) {
     e_str(&p->e, "{ }");
     return;
   }
   e_str(&p->e, "{");
   e_nl(&p->e);
   p->e.indent++;
-  print_chain(p, node->body);
+  print_chain(p, node->decl.body);
   p->e.indent--;
   e_str(&p->e, "}");
 }
@@ -1683,7 +1697,7 @@ static void print_block(Printer *p, LibcpNode *node) {
 // moves to the next line one indent deeper. No braces are added - they
 // would grow an ND_BLOCK and change the tree (PLAN-c2c D3).
 static void print_substmt(Printer *p, LibcpNode *node) {
-  if (node && node->kind == ND_BLOCK && node->is_scope_block) {
+  if (node && node->kind == ND_BLOCK && node->decl.is_scope_block) {
     e_str(&p->e, " ");
     print_block(p, node);
     return;
@@ -1719,19 +1733,19 @@ static void print_stmt(Printer *p, LibcpNode *node) {
 
   case ND_IF:
     e_str(&p->e, "if (");
-    print_expr_ctx(p, &p->e, node->cond, 1);
+    print_expr_ctx(p, &p->e, node->ctrl.cond, 1);
     e_str(&p->e, ")");
-    if (node->els && node->then && node->then->kind == ND_IF &&
-        !node->then->els) {
+    if (node->ctrl.els && node->ctrl.then && node->ctrl.then->kind == ND_IF &&
+        !node->ctrl.then->ctrl.els) {
       // A parsed tree never holds this shape (the else would have
       // bound to the inner if); braced so an else can never rebind.
       e_str(&p->e, " { ");
-      print_stmt(p, node->then);
+      print_stmt(p, node->ctrl.then);
       e_str(&p->e, " }");
     } else {
-      print_substmt(p, node->then);
+      print_substmt(p, node->ctrl.then);
     }
-    if (node->els) {
+    if (node->ctrl.els) {
       if (p->e.last == '}') {
         // A braced then-part keeps its else on the same line.
         e_str(&p->e, " else");
@@ -1739,11 +1753,11 @@ static void print_stmt(Printer *p, LibcpNode *node) {
         e_nl(&p->e);
         e_str(&p->e, "else");
       }
-      if (node->els->kind == ND_IF) {
+      if (node->ctrl.els->kind == ND_IF) {
         e_str(&p->e, " ");
-        print_stmt(p, node->els);
+        print_stmt(p, node->ctrl.els);
       } else {
-        print_substmt(p, node->els);
+        print_substmt(p, node->ctrl.els);
       }
     }
     return;
@@ -1754,7 +1768,7 @@ static void print_stmt(Printer *p, LibcpNode *node) {
     // declaration record (`for (enum { E = 2 } i = 0; ...)`), and an
     // expression statement carries its expression in lhs. No
     // terminators here - the `;`s are the for-head's own.
-    for (LibcpNode *n = node->init; n;) {
+    for (LibcpNode *n = node->ctrl.init; n;) {
       if (n->kind == ND_ENUM_CONST) {
         n = print_enum_group(p, n)->next;
         continue;
@@ -1767,56 +1781,56 @@ static void print_stmt(Printer *p, LibcpNode *node) {
       n = n->next;
     }
     e_str(&p->e, ";");
-    if (node->cond) {
+    if (node->ctrl.cond) {
       e_str(&p->e, " ");
-      print_expr_ctx(p, &p->e, node->cond, 1);
+      print_expr_ctx(p, &p->e, node->ctrl.cond, 1);
     }
     e_str(&p->e, ";");
-    if (node->inc) {
+    if (node->ctrl.inc) {
       e_str(&p->e, " ");
-      print_expr_ctx(p, &p->e, node->inc, 1);
+      print_expr_ctx(p, &p->e, node->ctrl.inc, 1);
     }
     e_str(&p->e, ")");
-    print_substmt(p, node->then);
+    print_substmt(p, node->ctrl.then);
     return;
   }
 
   case ND_WHILE:
     e_str(&p->e, "while (");
-    print_expr_ctx(p, &p->e, node->cond, 1);
+    print_expr_ctx(p, &p->e, node->ctrl.cond, 1);
     e_str(&p->e, ")");
-    print_substmt(p, node->then);
+    print_substmt(p, node->ctrl.then);
     return;
 
   case ND_DO:
     e_str(&p->e, "do");
-    print_substmt(p, node->then);
+    print_substmt(p, node->ctrl.then);
     if (p->e.last == '}')
       e_str(&p->e, " while (");
     else {
       e_nl(&p->e);
       e_str(&p->e, "while (");
     }
-    print_expr_ctx(p, &p->e, node->cond, 1);
+    print_expr_ctx(p, &p->e, node->ctrl.cond, 1);
     e_str(&p->e, ");");
     return;
 
   case ND_SWITCH:
     e_str(&p->e, "switch (");
-    print_expr_ctx(p, &p->e, node->cond, 1);
+    print_expr_ctx(p, &p->e, node->ctrl.cond, 1);
     e_str(&p->e, ")");
-    print_substmt(p, node->then);
+    print_substmt(p, node->ctrl.then);
     return;
 
   case ND_CASE:
-    if (node->is_default) {
+    if (node->case_.is_default) {
       e_str(&p->e, "default:");
     } else {
       e_str(&p->e, "case ");
-      print_expr_ctx(p, &p->e, node->begin_expr, 3); // constant-expression
-      if (node->end_expr) {
+      print_expr_ctx(p, &p->e, node->case_.begin_expr, 3); // constant-expression
+      if (node->case_.end_expr) {
         e_str(&p->e, " ... ");
-        print_expr_ctx(p, &p->e, node->end_expr, 3);
+        print_expr_ctx(p, &p->e, node->case_.end_expr, 3);
       }
       e_str(&p->e, ":");
     }
@@ -1824,14 +1838,14 @@ static void print_stmt(Printer *p, LibcpNode *node) {
     return;
 
   case ND_LABEL:
-    e_str(&p->e, node->label);
+    e_str(&p->e, node->jump.label);
     e_str(&p->e, ":");
     print_substmt(p, node->lhs);
     return;
 
   case ND_GOTO:
     e_str(&p->e, "goto ");
-    e_str(&p->e, node->label);
+    e_str(&p->e, node->jump.label);
     e_str(&p->e, ";");
     return;
 
@@ -1854,7 +1868,7 @@ static void print_stmt(Printer *p, LibcpNode *node) {
     // terminator - the empty statement that follows it in the chain
     // carries the `;`, and print_chain merges the two into one line.
     e_str(&p->e, "asm(");
-    e_escaped_c_str(&p->e, node->asm_str);
+    e_escaped_c_str(&p->e, node->asm_.asm_str);
     e_str(&p->e, ")");
     return;
 
@@ -1911,8 +1925,8 @@ static void print_chain(Printer *p, LibcpNode *node) {
     // An asm statement's `;` is the empty statement that follows it;
     // the two merge into one line (see ND_ASM).
     if (node->kind == ND_ASM && node->next &&
-        node->next->kind == ND_BLOCK && !node->next->is_scope_block &&
-        !node->next->body) {
+        node->next->kind == ND_BLOCK && !node->next->decl.is_scope_block &&
+        !node->next->decl.body) {
       print_stmt(p, node);
       e_str(&p->e, ";");
       e_nl(&p->e);

@@ -358,7 +358,105 @@ typedef enum {
   ND_EXCH,              // 原子交换
 } LibcpNodeKind;
 
-// AST 节点类型
+// LibcpNode 的字段族. 每个 kind 只使用一个族, 公共头字段除外.
+// 通用 walker 用族决定下降哪些子节点; 它也是字段族 union 的分组依据.
+typedef enum {
+  LIBCP_NF_NONE = 0,  // 只使用公共头
+  LIBCP_NF_CTRL,      // 控制流, 调用与 _Generic
+  LIBCP_NF_DECL,      // 复合语句与声明记录
+  LIBCP_NF_VALUE,     // 字面量, 类型查询与 cast
+  LIBCP_NF_CASE,      // case 标签
+  LIBCP_NF_ACCESS,    // 成员访问
+  LIBCP_NF_JUMP,      // goto 与标签
+  LIBCP_NF_ASSIGN,    // 复合赋值运算符
+  LIBCP_NF_INCDEC,    // 自增/自减
+  LIBCP_NF_ASM,       // asm
+  LIBCP_NF_CAS,       // 原子 CAS
+} LibcpNodeFamily;
+
+// 返回 kind 所属的字段族. 未列出的 kind 返回 LIBCP_NF_NONE.
+LIBCP_API LibcpNodeFamily libcp_node_family(LibcpNodeKind kind);
+
+// 控制流, 函数调用与 _Generic 的载荷. 条件, 分支, 循环头与实参共享
+// 一组槽位; _Generic 用 cond 保存控制表达式, args 保存关联链.
+typedef struct {
+  LibcpNode* cond;         // if/while/do/for/switch 以及 ?: 的条件
+  LibcpNode* then;         // 真分支或循环体
+  LibcpNode* els;          // else 分支, 没有则为 NULL
+  LibcpNode* init;         // for 的初始化子句
+  LibcpNode* inc;          // for 的递增子句
+  LibcpNode* args;         // 调用实参或 _Generic 的关联链
+  LibcpType* func_ty;      // ND_FUNCALL 已解析的函数类型
+  LibcpNode* generic_sel;  // ND_GENERIC 选中的关联结果
+  bool is_elvis;           // [GNU] a ?: b
+} LibcpNodeCtrl;
+
+// 复合语句与声明记录的载荷. 函数定义同时携带函数体与声明属性, 因此
+// body 与声明字段同族; 块与语句表达式只使用 body 与 is_scope_block.
+typedef struct {
+  LibcpNode* body;              // 复合语句块, 语句表达式或函数体
+  bool is_scope_block;          // ND_BLOCK 是否引入词法作用域
+  LibcpVarAttr attr;            // 存储类与 _Alignas
+  LibcpToken* name_tok;         // 被声明的标识符
+  LibcpInitializer* decl_init;  // 忠实的初始化器记录
+  void* init_resolved;          // sema 私有: 解析后的初始化器树
+  LibcpObj* var;                // sema 绑定的变量/函数对象
+} LibcpNodeDecl;
+
+// 字面量, 类型查询与 cast 的载荷.
+typedef struct {
+  int64_t val;        // 整数字面量或折叠后的 sizeof/_Alignof 值
+  long double fval;   // 浮点字面量
+  LibcpType* ty_op2;  // ND_TYPES_COMPATIBLE 的第二个类型操作数
+  bool is_implicit;   // ND_CAST 是否由 sema 插入
+} LibcpNodeValue;
+
+// case 标签的载荷.
+typedef struct {
+  long begin;             // case 值, 或范围起点
+  long end;               // 范围终点, 普通 case 与 begin 相同
+  bool is_default;        // default: 而不是 case <expr>:
+  LibcpNode* begin_expr;  // 未求值的起点表达式
+  LibcpNode* end_expr;    // 未求值的范围终点
+  LibcpToken* colon_tok;  // 结束标签的 ':'
+} LibcpNodeCase;
+
+// 结构体成员访问.
+typedef struct {
+  LibcpMember* member;
+  LibcpToken* arrow_tok;  // `->`, 普通 `.` 为 NULL
+} LibcpNodeAccess;
+
+// goto 与标签.
+typedef struct {
+  char* label;
+} LibcpNodeJump;
+
+// 复合赋值的运算符, 0 表示普通的 "=".
+typedef struct {
+  LibcpNodeKind op;
+} LibcpNodeAssign;
+
+// 自增/自减.
+typedef struct {
+  bool is_post;  // 后缀 i++ 为 true, 前缀 ++i 为 false
+  int addend;    // +1 或 -1
+} LibcpNodeIncDec;
+
+// asm 字符串字面量.
+typedef struct {
+  char* asm_str;
+} LibcpNodeAsm;
+
+// 原子比较并交换.
+typedef struct {
+  LibcpNode* cas_addr;
+  LibcpNode* cas_old;
+  LibcpNode* cas_new;
+} LibcpNodeCas;
+
+// AST 节点类型. 字段按节点族放进匿名 union: 每个 kind 只使用一个族,
+// 访问形式为 node->ctrl.cond / node->decl.attr. 公共头字段被所有族共享.
 struct libcp_node {
   LibcpNodeKind kind;  // LibcpNode 种类
   LibcpNode* next;     // 下一个节点
@@ -368,138 +466,27 @@ struct libcp_node {
   LibcpNode* lhs;  // 左侧
   LibcpNode* rhs;  // 右侧
 
-  // ND_ASSIGN 的复合赋值运算符 ("+=", "-=", ...).
-  // 0 表示普通的 "=".
-  LibcpNodeKind op;
-
-  // ND_INCDEC 的自增/自减: 后缀 (`i++`) 或前缀 (`++i`), 增量为 +1
-  // 或 -1. 复合赋值重写由消费者的整形 pass 完成.
-  bool is_post;
-  int addend;
-
-  // "if" 或 "for" 语句
-  LibcpNode* cond;
-  LibcpNode* then;
-  LibcpNode* els;
-  LibcpNode* init;
-  LibcpNode* inc;
-
-  // 块或语句表达式
-  LibcpNode* body;
-
-  // ND_BLOCK: 复合语句块为 true, 它是一个词法作用域; 空语句以及消费者
-  // 整形 `for` 初始化声明链时形成的块是不带此标志的 ND_BLOCK 节点.
-  // sema 的 resolve pass 根据该标志推导作用域栈.
-  bool is_scope_block;
-
-  // 结构体成员访问. 解析器不绑定它: 未解析的 ND_MEMBER 在 `tok` 中
-  // 携带成员名, sema 的 add_type 负责查找该名字. `arrow_tok` 是指针
-  // 访问的 `->` token, 普通 `.` 为 NULL; 它是操作数检查的锚点, 因此
-  // 保留该 token. sema 绑定成员, 并把标记留在扁平化链的最内层连接上
-  // (在消解的外层节点上清除); 求值器在常量表达式中读取它, codegen
-  // 的 gen_addr 与 to_assign 把它读作 `->` 所代表的解引用
-  // (PLAN B1.1b - 标记留在节点上, 不会被改写掉).
-  LibcpMember* member;
-  LibcpToken* arrow_tok;
-
-  // 函数调用. func_ty 以及实参上的转换属于 sema (标注). 调用在 codegen
-  // 侧的状态 - 按栈传递标记与调用者拥有的返回缓冲区 - 保存在 codegen
-  // 私有的 per-node 表中 (PLAN L1).
-  LibcpType* func_ty;
-  LibcpNode* args;
-
-  // goto 或带标签语句, 或标签值. `label` 是解析器记录的拼写名字,
-  // goto/label 配对检查会比较它; codegen 为 goto, label 与 case 节点
-  // 分配的 `.L..` 名字保存在其私有的 per-node 表中 (PLAN L1).
-  char* label;
-
-  // [GNU] `a ?: b` 条件表达式. sema 为其定型; gen_expr 直接用自己的
-  // 字段发射, 不使用临时槽 - 测试值留在寄存器中 (PLAN B1.1e) - 求值器
-  // 与 is_const_expr 通过该标志把它当作运行时值.
-  bool is_elvis;
-
-  // ND_SIZEOF/ND_ALIGNOF: `sizeof(type)` 形式的操作数类型.
-  // `sizeof expr` 形式则把未求值的操作数放在 `lhs` 中. sema 把大小或
-  // 对齐值记录到 `val`; VLA 操作数不是常量, codegen 的整形 pass 会为
-  // 它构建运行时大小表达式 (A9.1/A7.1). ND_CAST (来自解析器),
-  // ND_GENERIC_ASSOC, ND_TYPES_COMPATIBLE, ND_REG_CLASS, ND_DECL,
-  // ND_GVAR_DECL, ND_FUNCDEF 与 ND_COMPOUND_LITERAL 也在这里存放
-  // 它们声明的/目标的/操作数的类型.
+  // ND_SIZEOF/ND_ALIGNOF 的目标类型, ND_CAST 的目标类型, 以及声明记录
+  // 声明的类型. 详见上方各族的注释.
   LibcpType* ty_op;
 
-  // ND_TYPES_COMPATIBLE: 第二个类型操作数, 第一个是 ty_op. 类型谓词
-  // 接受两个类型, 不接受子表达式.
-  LibcpType* ty_op2;
-
-  // ND_GENERIC: 控制表达式所选中的关联的结果表达式 - 选择的结论,
-  // 记录在节点上, 消费者可以直接读取, 而不必让节点"变成"它.
-  // 由 sema 的 select_generic 写入; 求值器, gen_expr 与 gen_addr
-  // 读取它 (A9.1). 节点保持自己的种类.
-  LibcpNode* generic_sel;
-
-  // ND_CAST: sema 为执行隐式转换而插入的 cast 为 true, 源码书写的 cast
-  // 为 false. 解析器从不设置它, new_cast 总是设置, 复制节点形状的重写点
-  // 也会一并复制 - 因此源码到源码的工具可以区分这两类 cast.
-  // codegen 不读取该标志.
-  bool is_implicit;
-
-  // 声明记录节点 (ND_DECL, ND_GVAR_DECL, ND_FUNCDEF): 解析器读到的
-  // 存储类与对齐属性.
-  LibcpVarAttr attr;
-
-  // 声明记录节点 (ND_DECL, ND_GVAR_DECL, ND_FUNCDEF): 被声明的标识符.
-  // declarator 也会把它暂存在类型的 `name` 上, 但类型是共享的
-  // (基本类型单例, 标签类型与 typedef 类型), 该槽位会在下一个
-  // declarator 处被覆盖, 远早于 sema 读取记录.
-  LibcpToken* name_tok;
-
   // 在解析表达式上下文中的类型时变得可见的枚举常量声明记录
-  // (例如 `sizeof(enum E { A })`). 由于该记录没有自己的语句链槽位,
-  // sema 的 resolve pass 会在本节点的位置求值并注册它们.
+  // (例如 `sizeof(enum E { A })`). sema 的 resolve pass 会在本节点的
+  // 位置求值并注册它们.
   LibcpNode* spec_decls;
 
-  // ND_DECL: 忠实的初始化器记录, 若 declarator 没有初始化器则为 NULL.
-  // sema 把它解析成 `init_resolved`; 消费者在发射时展开为 MEMZERO +
-  // 赋值逗号链.
-  LibcpInitializer* decl_init;
-
-  // ND_DECL, ND_GVAR_DECL 与 ND_COMPOUND_LITERAL: sema.c 私有的不透明
-  // 载荷. resolve pass 把按声明类型解析后的初始化器记录暂存在这里,
-  // 供标注 pass 使用; 在 sema 运行之外它可能为 NULL, 消费者不得读写它.
-  // 公共树不解释它.
-  void* init_resolved;
-
-  // case 分支
-  long begin;
-  long end;
-  bool is_default;  // `default:` 而不是 `case <expr>:`
-
-  // ND_CASE: `case <expr>:` 以及 [GNU] 范围形式
-  // `case <expr> ... <expr>:` 的操作数, 以未求值形式记录; sema 的
-  // add_type 用它们填充 `begin`/`end`. `colon_tok` 是结束标签的 `:`,
-  // 范围检查锚定在那里.
-  LibcpNode* begin_expr;
-  LibcpNode* end_expr;
-  LibcpToken* colon_tok;
-
-  // "asm" 字符串字面量
-  char* asm_str;
-
-  // 原子比较并交换
-  LibcpNode* cas_addr;
-  LibcpNode* cas_old;
-  LibcpNode* cas_new;
-
-  // 原子 op= 运算符
-  LibcpObj* atomic_addr;
-  LibcpNode* atomic_expr;
-
-  // 变量
-  LibcpObj* var;
-
-  // 数值字面量
-  int64_t val;
-  long double fval;
+  union {
+    LibcpNodeCtrl ctrl;
+    LibcpNodeDecl decl;
+    LibcpNodeValue value;
+    LibcpNodeCase case_;
+    LibcpNodeAccess access;
+    LibcpNodeJump jump;
+    LibcpNodeAssign assign;
+    LibcpNodeIncDec incdec;
+    LibcpNodeAsm asm_;
+    LibcpNodeCas cas;
+  };
 };
 
 // 解析器构建忠实的语法树, 返回顶层声明记录链; 除了 C 语法所需的

@@ -6,7 +6,7 @@ ALLOCATOR_CFLAGS ?= -DLIBCP_DEFAULT_ALLOCATOR
 CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch $(ALLOCATOR_CFLAGS) -Ilibcp/include -Ilibcp/src
 
 # Keep VERSION in sync with LIBCP_VERSION in the public umbrella.
-VERSION=0.1.0
+VERSION=0.2.0
 PREFIX ?= /usr/local
 DESTDIR ?=
 INSTALL ?= install

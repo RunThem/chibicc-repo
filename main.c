@@ -861,50 +861,54 @@ static void ast_indent(FILE* out, int depth) {
 }
 
 static void ast_fields(FILE* out, LibcpNode* node) {
+  LibcpNodeFamily fam = libcp_node_family(node->kind);
+
   switch (node->kind) {
     case ND_ASSIGN:
-      if (node->op)
-        fprintf(out, " op=%s", ast_node_kind_name(node->op));
+      if (node->assign.op)
+        fprintf(out, " op=%s", ast_node_kind_name(node->assign.op));
       break;
-    case ND_INCDEC: fprintf(out, " is_post=%d addend=%d", node->is_post, node->addend); break;
+    case ND_INCDEC:
+      fprintf(out, " is_post=%d addend=%d", node->incdec.is_post, node->incdec.addend);
+      break;
     case ND_COND:
-      if (node->is_elvis)
+      if (node->ctrl.is_elvis)
         fputs(" is_elvis=1", out);
       break;
     case ND_MEMBER:
-      if (node->arrow_tok)
+      if (node->access.arrow_tok)
         fputs(" arrow=1", out);
       break;
     case ND_GOTO:
     case ND_LABEL:
     case ND_LABEL_VAL:
-      if (node->label) {
+      if (node->jump.label) {
         fputs(" label=", out);
-        ast_quoted(out, node->label, strlen(node->label));
+        ast_quoted(out, node->jump.label, strlen(node->jump.label));
       }
       break;
     case ND_BLOCK:
-      if (node->is_scope_block)
+      if (node->decl.is_scope_block)
         fputs(" is_scope_block=1", out);
       break;
     case ND_CAST:
-      if (node->is_implicit)
+      if (node->value.is_implicit)
         fputs(" is_implicit=1", out);
       break;
     case ND_CASE:
-      if (node->is_default)
+      if (node->case_.is_default)
         fputs(" default=1", out);
       break;
     case ND_NUM:
       if (node->ty && libcp_is_flonum(node->ty))
-        fprintf(out, " fval=%La", node->fval);
+        fprintf(out, " fval=%La", node->value.fval);
       else
-        fprintf(out, " val=%lld", (long long)node->val);
+        fprintf(out, " val=%lld", (long long)node->value.val);
       break;
     case ND_ASM:
-      if (node->asm_str) {
+      if (node->asm_.asm_str) {
         fputs(" asm_str=", out);
-        ast_quoted(out, node->asm_str, strlen(node->asm_str));
+        ast_quoted(out, node->asm_.asm_str, strlen(node->asm_.asm_str));
       }
       break;
     default: break;
@@ -915,14 +919,14 @@ static void ast_fields(FILE* out, LibcpNode* node) {
     ast_type_sig(out, node->ty_op);
   }
 
-  if (node->ty_op2) {
+  if (fam == LIBCP_NF_VALUE && node->value.ty_op2) {
     fputs(" ty_op2=", out);
-    ast_type_sig(out, node->ty_op2);
+    ast_type_sig(out, node->value.ty_op2);
   }
 
-  if (node->name_tok) {
+  if (fam == LIBCP_NF_DECL && node->decl.name_tok) {
     fputs(" name=", out);
-    ast_quoted(out, node->name_tok->loc, node->name_tok->len);
+    ast_quoted(out, node->decl.name_tok->loc, node->decl.name_tok->len);
   }
 
   // 解析器读到的声明属性. 固化进 dump, 使存储类或对齐的偏差无需 sema
@@ -930,35 +934,35 @@ static void ast_fields(FILE* out, LibcpNode* node) {
   if (node->kind == ND_DECL || node->kind == ND_GVAR_DECL || node->kind == ND_FUNCDEF) {
     char* sep = "";
     fputs(" attr=", out);
-    if (node->attr.is_typedef) {
+    if (node->decl.attr.is_typedef) {
       fputs("typedef", out);
       sep = ",";
     }
-    if (node->attr.is_static) {
+    if (node->decl.attr.is_static) {
       fprintf(out, "%sstatic", sep);
       sep = ",";
     }
-    if (node->attr.is_extern) {
+    if (node->decl.attr.is_extern) {
       fprintf(out, "%sextern", sep);
       sep = ",";
     }
-    if (node->attr.is_inline) {
+    if (node->decl.attr.is_inline) {
       fprintf(out, "%sinline", sep);
       sep = ",";
     }
-    if (node->attr.is_tls) {
+    if (node->decl.attr.is_tls) {
       fprintf(out, "%stls", sep);
       sep = ",";
     }
     if (!*sep)
       fputs("none", out);
-    if (node->attr.align)
-      fprintf(out, " align=%d", node->attr.align);
-    if (node->attr.align_ty) {
+    if (node->decl.attr.align)
+      fprintf(out, " align=%d", node->decl.attr.align);
+    if (node->decl.attr.align_ty) {
       fputs(" align_ty=", out);
-      ast_type_sig(out, node->attr.align_ty);
+      ast_type_sig(out, node->decl.attr.align_ty);
     }
-    if (node->attr.align_expr)
+    if (node->decl.attr.align_expr)
       fputs(" align=expr", out);
   }
 }
@@ -1049,41 +1053,43 @@ static void ast_node(FILE* out, LibcpNode* node, int depth) {
   ast_fields(out, node);
   fputc('\n', out);
 
+  LibcpNodeFamily fam = libcp_node_family(node->kind);
+
   if (node->lhs)
     ast_node(out, node->lhs, depth + 1);
   if (node->rhs)
     ast_node(out, node->rhs, depth + 1);
-  if (node->cond)
-    ast_node(out, node->cond, depth + 1);
-  if (node->then)
-    ast_node(out, node->then, depth + 1);
-  if (node->els)
-    ast_node(out, node->els, depth + 1);
-  if (node->init)
-    ast_chain(out, node->init, depth + 1);
-  if (node->inc)
-    ast_node(out, node->inc, depth + 1);
-  if (node->body)
-    ast_chain(out, node->body, depth + 1);
-  if (node->args)
-    ast_chain(out, node->args, depth + 1);
+  if (fam == LIBCP_NF_CTRL && node->ctrl.cond)
+    ast_node(out, node->ctrl.cond, depth + 1);
+  if (fam == LIBCP_NF_CTRL && node->ctrl.then)
+    ast_node(out, node->ctrl.then, depth + 1);
+  if (fam == LIBCP_NF_CTRL && node->ctrl.els)
+    ast_node(out, node->ctrl.els, depth + 1);
+  if (fam == LIBCP_NF_CTRL && node->ctrl.init)
+    ast_chain(out, node->ctrl.init, depth + 1);
+  if (fam == LIBCP_NF_CTRL && node->ctrl.inc)
+    ast_node(out, node->ctrl.inc, depth + 1);
+  if (fam == LIBCP_NF_DECL && node->decl.body)
+    ast_chain(out, node->decl.body, depth + 1);
+  if (fam == LIBCP_NF_CTRL && node->ctrl.args)
+    ast_chain(out, node->ctrl.args, depth + 1);
   if (node->spec_decls)
     ast_chain(out, node->spec_decls, depth + 1);
-  if (node->begin_expr)
-    ast_node(out, node->begin_expr, depth + 1);
-  if (node->end_expr)
-    ast_node(out, node->end_expr, depth + 1);
-  if (node->cas_addr)
-    ast_node(out, node->cas_addr, depth + 1);
-  if (node->cas_old)
-    ast_node(out, node->cas_old, depth + 1);
-  if (node->cas_new)
-    ast_node(out, node->cas_new, depth + 1);
-  if (node->decl_init)
-    ast_initializer(out, node->decl_init, depth + 1);
+  if (fam == LIBCP_NF_CASE && node->case_.begin_expr)
+    ast_node(out, node->case_.begin_expr, depth + 1);
+  if (fam == LIBCP_NF_CASE && node->case_.end_expr)
+    ast_node(out, node->case_.end_expr, depth + 1);
+  if (fam == LIBCP_NF_CAS && node->cas.cas_addr)
+    ast_node(out, node->cas.cas_addr, depth + 1);
+  if (fam == LIBCP_NF_CAS && node->cas.cas_old)
+    ast_node(out, node->cas.cas_old, depth + 1);
+  if (fam == LIBCP_NF_CAS && node->cas.cas_new)
+    ast_node(out, node->cas.cas_new, depth + 1);
+  if (fam == LIBCP_NF_DECL && node->decl.decl_init)
+    ast_initializer(out, node->decl.decl_init, depth + 1);
   if ((node->kind == ND_DECL || node->kind == ND_GVAR_DECL || node->kind == ND_FUNCDEF) &&
-      node->attr.align_expr)
-    ast_node(out, node->attr.align_expr, depth + 1);
+      node->decl.attr.align_expr)
+    ast_node(out, node->decl.attr.align_expr, depth + 1);
 }
 
 static void print_ast_dump(LibcpNode* node) {

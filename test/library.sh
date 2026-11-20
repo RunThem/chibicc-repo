@@ -306,7 +306,7 @@ static int check_source_range(LibcpContext *ctx) {
     return 1;
 
   // f's body block -> return stmt -> the "+" node.
-  LibcpNode *ret = prog->body->body;
+  LibcpNode *ret = prog->decl.body->decl.body;
   if (!ret || ret->kind != ND_RETURN)
     return 1;
   LibcpNode *add = ret->lhs;

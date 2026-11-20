@@ -46,27 +46,37 @@ static void walk(const LibcpNode* node, LibcpToken** start, LibcpToken** end) {
     return;
 
   consider(node->tok, start, end);
-  consider(node->name_tok, start, end);
-  consider(node->arrow_tok, start, end);
-  consider(node->colon_tok, start, end);
+  LibcpNodeFamily fam = libcp_node_family(node->kind);
+  if (fam == LIBCP_NF_DECL)
+    consider(node->decl.name_tok, start, end);
+  if (fam == LIBCP_NF_ACCESS)
+    consider(node->access.arrow_tok, start, end);
+  if (fam == LIBCP_NF_CASE)
+    consider(node->case_.colon_tok, start, end);
 
   walk(node->lhs, start, end);
   walk(node->rhs, start, end);
-  walk(node->cond, start, end);
-  walk(node->then, start, end);
-  walk(node->els, start, end);
-  walk(node->init, start, end);
-  walk(node->inc, start, end);
-  walk(node->body, start, end);
-  walk(node->args, start, end);
-  walk(node->generic_sel, start, end);
+  if (fam == LIBCP_NF_CTRL) {
+    walk(node->ctrl.cond, start, end);
+    walk(node->ctrl.then, start, end);
+    walk(node->ctrl.els, start, end);
+    walk(node->ctrl.init, start, end);
+    walk(node->ctrl.inc, start, end);
+    walk(node->ctrl.args, start, end);
+    walk(node->ctrl.generic_sel, start, end);
+  }
+  if (fam == LIBCP_NF_DECL)
+    walk(node->decl.body, start, end);
   walk(node->spec_decls, start, end);
-  walk(node->begin_expr, start, end);
-  walk(node->end_expr, start, end);
-  walk(node->cas_addr, start, end);
-  walk(node->cas_old, start, end);
-  walk(node->cas_new, start, end);
-  walk(node->atomic_expr, start, end);
+  if (fam == LIBCP_NF_CASE) {
+    walk(node->case_.begin_expr, start, end);
+    walk(node->case_.end_expr, start, end);
+  }
+  if (fam == LIBCP_NF_CAS) {
+    walk(node->cas.cas_addr, start, end);
+    walk(node->cas.cas_old, start, end);
+    walk(node->cas.cas_new, start, end);
+  }
 }
 
 // 计算 node 子树的源码范围, 通过 *start / *end 返回首尾锚点 token.
