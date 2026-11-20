@@ -7,19 +7,19 @@
 - 用户要求执行上一轮冗余分析中的去重方向.
 - 未决项"是否把 53 行的 `计划与记录格式` 移到 `plans/` 模板"拍板为"写成模板".
 - 未决项"是否在 CI 增加文档链接检查"拍板为"增加".
-- 计划待批准; 批准后按 S1-S7 一步一提交.
+- 用户于 2026-11-21 批准执行; 按 S1-S7 一步一提交.
 
 ## 提交一览
 
 | 步骤 | hash | subject |
 |---|---|---|
-| S1 | 待回填 | Archive the node field families line and add the dedup plan |
-| S2 | 待回填 | Replace duplicated architecture sections with docs links |
-| S3 | 待回填 | Merge the test path, build, and environment sections |
-| S4 | 待回填 | Deduplicate the settled boundaries and declare docs ownership |
-| S5 | 待回填 | Move the plan and result formats into templates |
-| S6 | 待回填 | Add the document link check to tests and CI |
-| S7 | 待执行 | 待执行 |
+| S1 | `992cc2c` | Archive the node field families line and add the dedup plan |
+| S2 | `f4ef947` | Replace duplicated architecture sections with docs links |
+| S3 | `7abaa5a` | Merge the test path, build, and environment sections |
+| S4 | `43cfb2d` | Deduplicate the settled boundaries and declare docs ownership |
+| S5 | `dc8cf4b` | Move the plan and result formats into templates |
+| S6 | `c76df98` | Add the document link check to tests and CI |
+| S7 | 本记录所在提交 | Record the AGENTS and docs dedup line |
 
 ## 各步记录
 
@@ -67,22 +67,52 @@
 
 ### S7 - 全线闸门与 RESULT 收尾
 
-- 做了什么: 待执行.
-- 测试: 待执行.
-- 偏差: 待执行.
-- 验收: 待执行.
+- 做了什么: 跑全线闸门; 修正 S6 记录中一个被链接检查当成真实链接的示例; 补齐提交表, 各步记录, 验收对照, 偏差与后续影响.
+- 测试: `make format-check` 退出 0; `make check-context` 全 0; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空; `git diff --check` 通过; `git diff --stat 1fb97d5..HEAD` 只含允许文件.
+- 偏差: S6 记录里的示例 markdown 链接被 `test/docs-links.sh` 当成真实链接, S7 改成纯文本描述; 这是闸门按预期工作, 不影响代码或验收.
+- 验收: 全线闸门全绿; `AGENTS.md` 82 行; 48 个引用可达; 九个决策保留; 七步提交与 PLAN 一一对应.
 
 ## 验收
 
-待执行; 收线时逐条对照 `PLAN.md` 的验收标准写通过或不通过及证据.
+逐条对照 `PLAN.md` 的全线闸门:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与 `1fb97d5` 基线 diff 为空 |
+| `make check-context` | 通过 | accessors 0, TLS 0, `cg_ctx` 0, accessor symbols 0 |
+| `make format-check` | 通过 | 退出 0 |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| 改动范围 | 通过 | `git diff --stat 1fb97d5..HEAD` 只含 `AGENTS.md`, `plans/`, `test/docs-links.sh`, `.github/workflows/docs.yml`, `Makefile`, `docs/10-build-install.md` |
+| 最终行数 | 通过 | `AGENTS.md` 82 行, 在 75-100 |
+| docs 引用 | 通过 | 48 个引用全部可达; 6 个章节引用标题存在 |
+| 九个关键决策 | 通过 | 9 个 grep 全部命中 |
+
+各步验收:
+
+| 步骤 | 结果 |
+|---|---|
+| S1 | 通过: 归档与新建计划, 全量测试与快照基线 |
+| S2 | 通过: 三节压到 6 行, 代码地图移除, `driver.h` 修正 |
+| S3 | 通过: 合并测试路径, 保留六个命令与两条 docs 未覆盖的陷阱 |
+| S4 | 通过: single-owner 规则与九个决策 |
+| S5 | 通过: 两个模板与 3 条指针 |
+| S6 | 通过: 链接脚本, 负例, `make test`, CI workflow |
+| S7 | 通过: 全线闸门与记录 |
 
 ## 偏差与原因
 
-待执行.
+- S1: 归档文件在 Git 树中显示为新增, `plans/PLAN.md` 显示为修改, 不是纯 rename. 原因: 归档后立即在固定槽位写入新计划. 影响: 归档正文完整, 只多两行头部; 不阻塞验收.
+- S3: 在 S3 当时 `grep -c "/work"` 为 1; 收线时为 2, 因为 S6 新增的 `.github/workflows/docs.yml` 含 `workflows` 子串. 实际容器 `/work` 陷阱仍只有一处, 不是重复. 影响: 仅影响 grep 计数, 不影响验收.
+- S7: S6 记录里的示例 markdown 链接被 `test/docs-links.sh` 当成真实链接, 首次全线检查失败. 原因: 记录文本使用了真实链接语法. 处理: 改成纯文本描述后通过. 影响: 闸门按预期工作, 不阻塞后续步骤.
+- 无范围变更; 未修改 `PLAN.md`.
 
 ## 后续影响
 
-待执行.
+- `AGENTS.md` 现在 82 行, 描述性事实由 `docs/` 独占, 计划与记录格式由 `plans/PLAN-TEMPLATE.md` 与 `plans/RESULT-TEMPLATE.md` 承载.
+- `test/docs-links.sh` 已进入 `make test` 与 `.github/workflows/docs.yml`; 以后改 `docs/` 章节号或移动文件时, 本地与 CI 会一起报错.
+- 模板文件是长期设施; 新建计划与记录时复制, 不再把格式正文写回 `AGENTS.md`.
+- 本线没有遗留的产品代码改动; 不需要用户再拍板的事项.
 
 ## 闸门实测
 
@@ -134,8 +164,20 @@
 ### S6
 
 - `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
-- 负例: 临时目录含 `docs/missing.md` 与 `[bad](missing.md)`, 脚本输出 3 条缺失并退出 1.
+- 负例: 临时目录含 `docs/missing.md` 与一个指向 `missing.md` 的 markdown 链接, 脚本输出 3 条缺失并退出 1.
 - `make test-all` 日志: 第 87 行 `test/docs-links.sh`, 第 88 行 `docs-links: ok (48 references checked)`; 退出 0.
 - `grep -n "test/docs-links.sh"`: `Makefile:151`, `docs/10-build-install.md:211`, `AGENTS.md:81`.
 - `python3 -c 'import yaml; yaml.safe_load(...)'`: `yaml: ok`.
 - 快照: `snapshot diff: empty`.
+
+### S7
+
+- `make format-check`: 退出 0 (本机 clang-format 22.1.8; CI 固定 20).
+- `make check-context`: 退出 0; accessors 0, TLS 0, `cg_ctx` 0, accessor symbols 0.
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `make test-all`: 退出 0; 日志第 87-88 行 `test/docs-links.sh` 与 `docs-links: ok (48 references checked)`; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --stat 1fb97d5..HEAD`: 11 个文件, 只含 `AGENTS.md`, `plans/`, `test/docs-links.sh`, `.github/workflows/docs.yml`, `Makefile` 与 `docs/10-build-install.md`.
+- `wc -l AGENTS.md`: 82.
+- 九个决策 grep: 9 个全部命中.
+- `git log --oneline 1fb97d5..HEAD`: S1-S6 六个提交; S7 为本记录所在提交.
