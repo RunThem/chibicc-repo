@@ -38,9 +38,9 @@
 所以第 4 层只填字段:
 
 - `node->ty`: 类型.
-- `node->var`: 绑定结果.
-- `node->val`: 常量结论.
-- `node->generic_sel`: `_Generic` 选择的结果表达式.
+- `node->decl.var`: 绑定结果.
+- `node->value.val`: 常量结论.
+- `node->ctrl.generic_sel`: `_Generic` 选择的结果表达式.
 - `LibcpType.size` / `align` / `members` / `offset` / `bit_offset`: 布局结论.
 - `LibcpObj.init_data` / `rel`: 全局初始化数据与重定位.
 
@@ -52,7 +52,7 @@
 
 **第一遍: resolve**
 
-- 从树结构推导作用域. `ND_BLOCK` 的 `is_scope_block` 决定是否开作用域.
+- 从树结构推导作用域. `ND_BLOCK` 的 `decl.is_scope_block` 决定是否开作用域.
 - 声明解析器留下的记录所命名的对象: 局部变量, 全局变量, 函数, typedef, 枚举常量.
 - 绑定每个 `ND_IDENT`: 变量或函数变成 `ND_VAR`, 枚举常量变成 `ND_NUM`.
 - 求值并注册枚举常量.
@@ -64,7 +64,7 @@
 **第二遍: 标注**
 
 - `libcp_add_type` / `type_chain` 给每个节点定型.
-- 插入标准要求的隐式转换, 全部经 `libcp_new_cast`, 带 `is_implicit = true`.
+- 插入标准要求的隐式转换, 全部经 `libcp_new_cast`, 带 `value.is_implicit = true`.
 - 跑需要类型的检查: 左值性, 实参个数, 位域取地址, VLA 初始化, 不完整类型等.
 - 记录编译期结论.
 - 标注初始化器表达式. 声明记录的初始化器不会被普通遍历到达, 所以单独走 `init_resolved`.
@@ -80,7 +80,7 @@
 ```c
 case ND_SIZEOF:
   ...
-  node->val = ty->size;
+  node->value.val = ty->size;
   return;
 ```
 
@@ -253,7 +253,7 @@ for (LibcpObj *o = prog; o; o = o->next) {
 - `is_bitfield`, `bit_offset`, `bit_width`.
 - `align_ty`, `align_expr`: `_Alignas`.
 
-类型记录上的 `name_pos` 只在函数参数的 per-parameter 副本上填写; `name` 还会由 sema 的 `named_type` 写到每个具名对象的类型副本上. 共享类型单例不写名字. 要拿声明的名字, 用 `LibcpObj.name` 或 `LibcpNode.name_tok`.
+类型记录上的 `name_pos` 只在函数参数的 per-parameter 副本上填写; `name` 还会由 sema 的 `named_type` 写到每个具名对象的类型副本上. 共享类型单例不写名字. 要拿声明的名字, 用 `LibcpObj.name` 或 `LibcpNode.decl.name_tok`.
 
 ### 7.3.3 初始化树
 
@@ -276,7 +276,7 @@ struct libcp_init_tree {
 - 大括号省略.
 - 灵活数组成员定尺寸.
 
-指针放在 `LibcpNode.init_resolved`. 这个字段是 sema 私有载荷, 消费者不得读写. 需要初始化数据时, 用 `LibcpObj.init_data` (全局) 或自己从 `LibcpNode.decl_init` 重新解析 (局部).
+指针放在 `LibcpNode.decl.init_resolved`. 这个字段是 sema 私有载荷, 消费者不得读写. 需要初始化数据时, 用 `LibcpObj.init_data` (全局) 或自己从 `LibcpNode.decl.decl_init` 重新解析 (局部).
 
 `LibcpInitPath` 是局部初始化器展开时的指示符路径, 供消费者建目标表达式:
 
@@ -365,14 +365,14 @@ static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
   if (var) {
     /* static inline 引用记录 (简化) */
     node->kind = ND_VAR;
-    node->var = var;
+    node->decl.var = var;
     node->ty = var->ty;
     return;
   }
 
   if (sc && sc->enum_ty) {
     node->kind = ND_NUM;
-    node->val = sc->enum_val;
+    node->value.val = sc->enum_val;
     node->ty = libcp_ty_int;
     return;
   }
@@ -569,11 +569,11 @@ static void print_layout(LibcpType *ty) {
 
 ```c
 if (node->kind == ND_SIZEOF)
-  printf("sizeof = %lld\n", (long long)node->val);
+  printf("sizeof = %lld\n", (long long)node->value.val);
 
-if (node->kind == ND_GENERIC && node->generic_sel)
+if (node->kind == ND_GENERIC && node->ctrl.generic_sel)
   printf("generic selected expression kind = %d\n",
-         (int)node->generic_sel->kind);
+         (int)node->ctrl.generic_sel->kind);
 ```
 
 ### 7.7.5 读初始化数据

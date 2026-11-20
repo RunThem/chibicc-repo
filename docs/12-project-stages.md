@@ -368,7 +368,7 @@ L0 到 L4, 每步一提交:
 ### 产物
 
 - `libcp.a`, Linux `libcp.so.0`.
-- 9 个公共头, 36 个公共函数 (L5 之后为 10 个头, 38 个函数, 见 12.14).
+- 9 个公共头, 36 个公共函数 (L5 之后为 10 个头, 38 个函数, 见 12.14; 0.2.0 追加 `libcp_node_family`, 当前 39 个).
 - `LibcpContext` 三态.
 - `test/library.sh`, `test/public-api.sh`, `test/install.sh`.
 - `make check-library`.
@@ -469,7 +469,7 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 | token 有 trivia 和 raw 坐标 | trivia 线 | 逐字节重建 |
 | provenance 链 | provenance 线 | 宏来源不可从 AST 恢复 |
 | `LibcpContext` 不透明 | 库边界 L3 | 公共面不泄漏内部布局 |
-| 38 个公共函数 | 库边界 D7 + L5 | 唯一的公共 API 清单(L5 追加 seed 与 range) |
+| 39 个公共函数 | 库边界 D7 + L5 | 唯一的公共 API 清单(L5 追加 seed 与 range; 0.2.0 追加 node_family) |
 | 表达式层是一个绑定力循环 | Pratt 线 + Pratt 单一路径线 | 级联已删, Pratt 是唯一实现 |
 
 ## 12.16 读历史文档的注意事项

@@ -236,7 +236,7 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 
 - `LibcpObj` 链, 过滤 `is_definition`.
 - 声明记录 `ND_DECL` / `ND_GVAR_DECL` / `ND_FUNCDEF` / `ND_TYPEDEF` / `ND_ENUM_CONST` 仍在语句链上.
-- 忠实节点: `ND_SUBSCRIPT`, `ND_WHILE`, `ND_GT`, `ND_GE`, `ND_INCDEC`, 带 `op` 的 `ND_ASSIGN`, `ND_COMPOUND_LITERAL` 带隐藏对象. 字符串必须同时处理源码表达式改写后的 `ND_VAR` 与物化时保留的 `ND_STRING`, 两者都通过 `node->var` 指向匿名全局对象.
+- 忠实节点: `ND_SUBSCRIPT`, `ND_WHILE`, `ND_GT`, `ND_GE`, `ND_INCDEC`, 带 `assign.op` 的 `ND_ASSIGN`, `ND_COMPOUND_LITERAL` 带隐藏对象. 字符串必须同时处理源码表达式改写后的 `ND_VAR` 与物化时保留的 `ND_STRING`, 两者都通过 `node->decl.var` 指向匿名全局对象.
 - 需要自己决定: 指针缩放, 复合赋值展开, 自增自减, 控制流标签, 临时槽, 初始化器展开.
 - 初始化数据: `LibcpObj.init_data` / `rel`.
 - 函数体: `LibcpObj.body`.

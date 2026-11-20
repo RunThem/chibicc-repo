@@ -1,6 +1,6 @@
 # 09 API 参考与用法
 
-本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 38 个公共函数与公共宏, 不列内部函数.
+本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 39 个公共函数与公共宏, 不列内部函数.
 
 ## 9.1 头文件, 链接与命名
 
@@ -47,7 +47,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 
 `LIBCP_API` 在 GCC/Clang 下展开为 `__attribute__((visibility("default")))`, 用于共享库导出. 消费者不需要关心它.
 
-`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 38 个函数.
+`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 39 个函数.
 
 ## 9.2 函数总表
 
@@ -58,7 +58,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 | 第 1 层 | `libcp_tokenize_file`, `libcp_tokenize_buffer`, `libcp_tokenize_buffer_len`, `libcp_reconstruct` |
 | 预处理 | `libcp_preprocess` |
 | 第 2 层 | `libcp_cst_parse`, `libcp_cst_seed_typedef`, `libcp_cst_reconstruct`, `libcp_cst_dump`, `libcp_cst_verify` |
-| 第 3 层 | `libcp_parse`, `libcp_node_source_range` |
+| 第 3 层 | `libcp_parse`, `libcp_node_family`, `libcp_node_source_range` |
 | 第 4 层 | `libcp_sema` |
 | provenance | `libcp_token_provenance`, `libcp_macro_prov_next`, `_expansion`, `_arg_index` |
 | provenance | `libcp_macro_expansion_name`, `_end`, `_macro`, `_def`, `_arg`, `_arg_count`, `_is_builtin` |
@@ -421,6 +421,32 @@ span 的最小接口. 注意事项:
 - 宏展开产物 token 的坐标在合成缓冲里, 跨文件比较按文件指针先序, 稳定
   但无语义.
 
+### 9.7.3 libcp_node_family
+
+```c
+typedef enum {
+  LIBCP_NF_NONE = 0,
+  LIBCP_NF_CTRL,
+  LIBCP_NF_DECL,
+  LIBCP_NF_VALUE,
+  LIBCP_NF_CASE,
+  LIBCP_NF_ACCESS,
+  LIBCP_NF_JUMP,
+  LIBCP_NF_ASSIGN,
+  LIBCP_NF_INCDEC,
+  LIBCP_NF_ASM,
+  LIBCP_NF_CAS,
+} LibcpNodeFamily;
+
+LibcpNodeFamily libcp_node_family(LibcpNodeKind kind);
+```
+
+返回 kind 所属的字段族. `LibcpNode` 的公共头字段 (`kind`, `next`, `ty`, `tok`,
+`lhs`, `rhs`, `ty_op`, `spec_decls`) 由所有 kind 共享; 其余字段按族放在匿名
+union 中, 访问形式为 `node->ctrl.cond`, `node->decl.attr`. `LIBCP_NF_NONE` 表示
+该 kind 只使用公共头. 每个 kind 只使用一个族; 读取非活动族是未定义行为.
+族的字段与 kind 对应见 `docs/06-layer3-parse.md` 的 6.3.2.
+
 ## 9.8 第 4 层 API
 
 ### 9.8.1 libcp_sema
@@ -491,7 +517,7 @@ bool libcp_expansion_verify(LibcpContext *ctx, LibcpToken *tok);
 ## 9.10 版本 API
 
 ```c
-#define LIBCP_VERSION "0.1.0"
+#define LIBCP_VERSION "0.2.0"
 const char *libcp_version(void);
 ```
 

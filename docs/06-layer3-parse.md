@@ -129,66 +129,68 @@ C 文法不是上下文无关的. 最典型的例子:
 
 ### 6.3.2 LibcpNode
 
-公共 `LibcpNode` 是一个大结构体, 所有节点共用字段. 不同种类只使用其中一部分. 主要字段:
+公共 `LibcpNode` 由公共头和字段族 union 两部分组成. 所有 kind 共享公共头;
+每个 kind 只使用一个族. 访问形式是 `node->ctrl.cond`, `node->decl.attr`,
+而不是 `node->cond`; `libcp_node_family(kind)` 返回 kind 所属的族.
 
 ```c
 struct libcp_node {
   LibcpNodeKind kind;
   LibcpNode *next;
-  LibcpType *ty;       /* 第 3 层大多为 NULL, 例外见正文 */
-  LibcpToken *tok;     /* 代表 token */
+  LibcpType *ty;         /* 第 3 层大多为 NULL, 例外见正文 */
+  LibcpToken *tok;       /* 代表 token */
 
   LibcpNode *lhs, *rhs;
+  LibcpType *ty_op;      /* sizeof / cast / 声明记录的目标类型 */
+  LibcpNode *spec_decls; /* declspec 中产生的枚举常量记录 */
 
-  LibcpNodeKind op;    /* ND_ASSIGN 的复合运算符, 0 表示 = */
-  bool is_post;          /* ND_INCDEC: 后缀 */
-  int addend;            /* ND_INCDEC: +1 或 -1 */
-
-  LibcpNode *cond, *then, *els, *init, *inc;
-  LibcpNode *body;
-  bool is_scope_block;   /* ND_BLOCK 是否引入作用域 */
-
-  LibcpMember *member;
-  LibcpToken *arrow_tok; /* ND_MEMBER 的 ->, 普通 . 为 NULL */
-
-  LibcpType *func_ty;
-  LibcpNode *args;
-  char *label;           /* goto / label 的名字 */
-  bool is_elvis;
-
-  LibcpType *ty_op;    /* sizeof / cast / 声明记录的目标类型 */
-  LibcpType *ty_op2;
-  LibcpNode *generic_sel;
-  bool is_implicit;      /* ND_CAST 是否是 sema 插入 */
-
-  LibcpVarAttr attr;
-  LibcpToken *name_tok;
-  LibcpNode *spec_decls;
-  LibcpInitializer *decl_init;
-  void *init_resolved;   /* sema 私有, 消费者不要碰 */
-
-  long begin, end;
-  bool is_default;
-  LibcpNode *begin_expr, *end_expr;
-  LibcpToken *colon_tok;
-
-  char *asm_str;
-  LibcpNode *cas_addr, *cas_old, *cas_new;
-  LibcpObj *atomic_addr;
-  LibcpNode *atomic_expr;
-
-  LibcpObj *var;
-  int64_t val;
-  long double fval;
+  union {
+    LibcpNodeCtrl ctrl;
+    LibcpNodeDecl decl;
+    LibcpNodeValue value;
+    LibcpNodeCase case_;
+    LibcpNodeAccess access;
+    LibcpNodeJump jump;
+    LibcpNodeAssign assign;
+    LibcpNodeIncDec incdec;
+    LibcpNodeAsm asm_;
+    LibcpNodeCas cas;
+  };
 };
 ```
 
+族与 kind 的对应:
+
+| 族 | 字段 | kind |
+|---|---|---|
+| `ctrl` | `cond, then, els, init, inc, args, func_ty, generic_sel, is_elvis` | `ND_COND`, `ND_IF`, `ND_FOR`, `ND_WHILE`, `ND_DO`, `ND_SWITCH`, `ND_FUNCALL`, `ND_GENERIC` |
+| `decl` | `body, is_scope_block, attr, name_tok, decl_init, init_resolved, var` | `ND_BLOCK`, `ND_STMT_EXPR`, `ND_FUNCDEF`, `ND_DECL`, `ND_GVAR_DECL`, `ND_COMPOUND_LITERAL`, `ND_VAR`, `ND_VLA_PTR`, `ND_STRING`, `ND_MEMZERO` |
+| `value` | `val, fval, ty_op2, is_implicit` | `ND_NUM`, `ND_SIZEOF`, `ND_ALIGNOF`, `ND_TYPES_COMPATIBLE`, `ND_REG_CLASS`, `ND_CAST`, `ND_ENUM_CONST` |
+| `case_` | `begin, end, is_default, begin_expr, end_expr, colon_tok` | `ND_CASE` |
+| `access` | `member, arrow_tok` | `ND_MEMBER` |
+| `jump` | `label` | `ND_GOTO`, `ND_LABEL`, `ND_LABEL_VAL` |
+| `assign` | `op` | `ND_ASSIGN` |
+| `incdec` | `is_post, addend` | `ND_INCDEC` |
+| `asm_` | `asm_str` | `ND_ASM` |
+| `cas` | `cas_addr, cas_old, cas_new` | `ND_CAS` |
+
+只使用公共头的 kind: 二元/一元/下标/逗号/逻辑运算, `ND_RETURN`,
+`ND_EXPR_STMT`, `ND_GOTO_EXPR`, `ND_NULL_EXPR`, `ND_BREAK`, `ND_CONTINUE`,
+`ND_IDENT`, `ND_TYPEDEF`, `ND_GENERIC_ASSOC`, `ND_EXCH`. 这些节点调用
+`libcp_node_family` 得到 `LIBCP_NF_NONE`.
+
 规则:
 
-- `ty` 在第 3 层大多为 NULL. 不要假设有类型. 例外: `ND_NUM` 带词法类型, `ND_TYPEDEF` 带声明类型.
-- `var` 在第 3 层为 NULL. `ND_IDENT` 只有 `tok` 的拼写.
-- `init_resolved` 是 sema 的私有载荷, 消费者不得读写.
-- `tok` 是代表 token, 不是完整源码范围. 一个节点可能由多个 token 组成, 但只记录一个锚点.
+- 通用 walker 必须先按族判断再下降; 读取非活动族是未定义行为, 不能依赖
+  calloc 的零值.
+- `ty` 在第 3 层大多为 NULL. 不要假设有类型. 例外: `ND_NUM` 带词法类型,
+  `ND_TYPEDEF` 带声明类型.
+- `decl.var` 在第 3 层为 NULL. `ND_IDENT` 只有 `tok` 的拼写.
+- `decl.init_resolved` 是 sema 的私有载荷, 消费者不得读写.
+- `tok` 是代表 token, 不是完整源码范围. 一个节点可能由多个 token 组成,
+  但只记录一个锚点.
+- `sizeof(LibcpNode)` 为 144 字节, 16 字节对齐; 节点仍是一次固定大小分配,
+  `libcp_new_node` 不按 kind 改变分配尺寸.
 
 ### 6.3.3 类型
 
@@ -289,7 +291,7 @@ tinycc 真实构建曾由 `test/pratt-ab.sh` 锁定两路径 `-dump-ast` 与 `-S
 - 类型记录上的 `name` / `name_pos` 只在函数参数的 per-parameter 副本上填写, 供 sema 读.
 - 共享类型记录永远不写名字.
 
-这条规则对消费者很重要: 不要指望 `LibcpNode.ty->name` 是声明的名字. 用 `LibcpNode.name_tok`, 或第 4 层 `LibcpObj.name`.
+这条规则对消费者很重要: 不要指望 `LibcpNode.ty->name` 是声明的名字. 用 `LibcpNode.decl.name_tok`, 或第 4 层 `LibcpObj.name`.
 
 ### 6.4.5 错误与深度
 
