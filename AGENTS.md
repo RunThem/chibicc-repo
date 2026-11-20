@@ -13,6 +13,69 @@
 提交信息: 使用英文祈使句(如 `Fix ...`, `Add ...`), 首字母大写, 不加句号; 这是中文输出规则的唯一例外, 与仓库历史保持一致.
 计划与记录: 现行线的计划 / 记录固定在 `plans/PLAN.md` / `plans/RESULT.md`; 已完成的线归档为 `plans/PLAN-<主题>.md` / `plans/RESULT-<主题>.md`, 文件头加归档说明.
 
+## 计划, 执行与提交
+
+- 用户要求计划书时, 先把完整计划写入 `plans/PLAN.md` 并展示全文; 展示后必须停下等待明确批准, 不得在展示后直接开始执行.
+- 未获批准前只做只读调查与计划写作; 不改代码, 不提交.
+- 批准后严格按 PLAN 的步骤推进, 一步一提交: 每步完成改动与该步闸门后立即单独提交; 禁止把多个步骤合成一个大提交, 禁止整条线一次提交.
+- 每步提交前必须确认该步的测试与验收标准通过; 不通过就留在本步修复, 不进入下一步.
+- 所有修复与特性直接提交到 `main`, 不新开分支, 不走 PR 流程, 除非用户明确要求.
+- 执行中若范围, 设计或验收标准变化, 先更新 `PLAN.md` 说明偏差与原因, 再次请求批准; 不得默默改范围.
+- `plans/RESULT.md` 随每步更新, 记录实际改动, 测试结果与偏差; 收线时补齐验收结论与对后续计划的影响.
+
+## 计划与记录格式
+
+格式从现有 `plans/PLAN-*.md` / `plans/RESULT-*.md` 总结. 两份文件都使用中文与英文标点, 步骤用 `- [ ]` / `- [x]`.
+
+### PLAN.md 必含
+
+1. 标题与状态: `# PLAN.md - <主题>执行计划`; 归档后改为 `PLAN-<主题>.md`, 文件头加归档说明.
+2. 目标与边界: 一句话目标, 允许改动的范围, 非目标.
+3. 用户拍板: 日期与已确认决定; 未决项单独列出.
+4. 现状锚点: 开工 commit, 宿主, 实测命令与数字; 实测与估计分开.
+5. 设计决定: 每条写选择, 理由, 影响.
+6. 步骤: 每步必须写全下面六项; 步骤必须能独立提交并通过该步闸门, 否则说明拆分不够细, 重写计划.
+7. 闸门: 全线闸门与每步闸门.
+8. 风险与回退: 失败模式, 缓解, 回退点.
+9. 执行流程: 等待批准, 一步一提交, 更新 RESULT.
+
+每步模板:
+
+```markdown
+#### S1 - <名称>
+- 改什么: <文件与行为>
+- 为什么: <问题与约束>
+- 目的与效果: <验收时能观察到的结果>
+- 如何测试: <命令, 用例, 快照或 bench>
+- 验收标准: <可判定条件>
+- 提交边界: 本步一个提交
+```
+
+计划书不得把 "优化", "整理", "完善" 这类无法验收的词单独作为一步.
+
+### RESULT.md 必含
+
+1. 标题, 开工 HEAD, 宿主, 日期.
+2. 用户决定.
+3. 提交一览: hash + subject, 与 PLAN 步骤一一对应.
+4. 各步记录: 做了什么, 实际改动, 测试命令与结果, 与计划的偏差.
+5. 验收: 逐条对照 PLAN 的验收标准, 写通过/不通过及证据.
+6. 偏差与原因: 计划 vs 实际; 原因; 对验收的影响.
+7. 后续影响: 遗留项, 风险, 需要用户拍板的事项.
+8. 闸门实测: 完整命令与关键输出/数字.
+
+每步记录模板:
+
+```markdown
+### S1 - <名称> (`<hash>`)
+- 做了什么: ...
+- 测试: ...
+- 偏差: ...
+- 验收: ...
+```
+
+若某步偏差导致验收未通过, 必须写明是否阻塞后续步骤; 影响后续计划的, 在 `PLAN.md` 中同步修订并再次请求批准.
+
 ## 目标架构与库边界
 
 流水线按"中间表示"划成 5 层; 每层是一个干净的阶段边界, 也是库对外暴露的一种能力:
@@ -44,6 +107,14 @@
 - 分配器: `<libcp/allocator.h>` 的四个 `LIBCP_*` 宏; 单开关 `LIBCP_DEFAULT_ALLOCATOR`, 未定义时嵌入方必须提供全部四个, 不做逐宏回退; 编译期配置, 只有重编库才生效.
 - 公共面: 10 个公共头只声明 D7; `.a` 的内部符号统一 `libcp_` 前缀但不是 API(消费者不得调用, 不承诺源码兼容); `.so` 只导出 D7.
 
+## 测试路径判定(每次测试前)
+
+测试前必须先运行 `uname -s` 与 `uname -m`, 并在汇报中写明宿主与选择的路径; 不得跳过判定直接测试.
+
+- `Linux` + `x86_64`: 原生路径. 全量测试用 `make test-all`; 第三方用 `make test-thirdparty`; 汇编等价性用同一 commit 的临时 worktree 生成 `test/*.c` 基线快照并逐字节 diff. 禁止在 x86-64 Linux 上运行 `make docker-image`, `make docker-test`, `make docker-test-thirdparty`, `make docker-snapshot-diff`.
+- 其它宿主: Docker 路径. 全量测试用 `make docker-test`; 第三方用 `make docker-test-thirdparty`; 汇编等价性用 `make docker-snapshot-diff`. 首次需要 `make docker-image`.
+- `make bench` 只在 Linux 原生运行; 其它宿主不做计时.
+
 ## 构建与测试
 
 - 修改完代码后必须执行 `make format`(clang-format 20, 见下), 由它统一格式化, 不手工调格式.
@@ -59,7 +130,7 @@
 - 单独运行某个特性测试: `make test/sizeof.exe && ./test/sizeof.exe`(模式规则会自动处理).
 - 只验证前端(非 x86-64 Linux 宿主不能在本机汇编/运行): `-E`(预处理), `-S`(汇编文本), `-dump-tokens` / `-reconstruct`(第 1 层), `-dump-cst` / `-reconstruct-cst` / `-verify-cst`(第 2 层), `-dump-expansions` / `-verify-expansions`(provenance), `-dump-ast`(第 3 层, parse 后 sema 前早退).
 - 库构建: `make libcp.a`; Linux 下 `make` 也产 `libcp.so`(PIC, 只导出 D7, SONAME `libcp.so.0`; macOS 只承诺 `.a`), `chibicc` 链接静态库; `make install PREFIX=... [DESTDIR=...]` 装 10 个公共头, 库与 `libcp.pc`, `pkg-config --cflags --libs libcp` 可用; `LIBCP_VERSION` / `libcp_version()` 为 `0.2.0`. `make test-stage2` 用 chibicc 重编库对象(`stage2/libcp.a`). `make check-library` 跑 library / allocator / public-api / install 四个脚本(头文件自包含, 消费者只依赖 D7, `.a` 的 D7 齐全, `.so` 只导出 D7, install / pkg-config 布局); `test/library.sh` 最后一轮用 ASan+UBSan 重编库对象, 查 UB 与 reset 后活字节归零.
-- 每次改动必须过三道闸门: 全量测试含自举(x86-64 Linux 宿主原生跑 `make test-all`, 其它宿主用 `make docker-test`), 汇编等价性 diff(`make docker-snapshot-diff`; 该目标只生成快照做逐字节比较, 基线固定在 amd64 Ubuntu 容器内, 各宿主保持一致), 该改动新增的针对性测试. 行为变化必须单独提交.
+- 每次改动必须过三道闸门: 全量测试含自举(按"测试路径判定"选原生 `make test-all` 或 Docker `make docker-test`), 汇编等价性 diff(x86-64 Linux 用本机基线 worktree 快照, 其它宿主用 `make docker-snapshot-diff`; Docker 基线固定在 amd64 Ubuntu 容器内, 逐字节比较), 该改动新增的针对性测试. 行为变化必须单独提交.
 
 ## 平台陷阱与测试环境(先按宿主选路径)
 
