@@ -27,6 +27,9 @@ make libcp.a   # 只构建静态库
 | `chibicc` | 参考编译器, 链接 `libcp.a` |
 | `libcp.pc` | 仓库根的 pkg-config 文件, 仅由 `make libcp.pc` / `make check-library` 生成, `make`(all) 不构建它; `make install` 直接把生成结果装进 `$PREFIX/lib/pkgconfig/libcp.pc` |
 | `stage2/libcp.a` | 自举构建的静态库 |
+| `bench/libcp_bench.a` | benchmark 用的库归档, 独立 `-O2` 构建并接 `bench/alloc_shim.h`; 仅 `make bench-tool` / `make bench` |
+| `bench/libcp-bench` | benchmark harness; 仅 `make bench-tool` / `make bench` |
+| `bench/obj/` | benchmark 的逐编译单元对象; 仅 `make bench-tool` / `make bench` |
 
 编译选项在 Makefile 顶部:
 
@@ -34,7 +37,13 @@ make libcp.a   # 只构建静态库
 ALLOCATOR_CFLAGS ?= -DLIBCP_DEFAULT_ALLOCATOR
 CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch \
        $(ALLOCATOR_CFLAGS) -Ilibcp/include -Ilibcp/src
+
+BENCH_CFLAGS=-std=c11 -O2 -g -fno-common -Wall -Wno-switch \
+  -D_POSIX_C_SOURCE=200809L -Ilibcp/include -Ilibcp/src \
+  -include bench/alloc_shim.h
 ```
+
+`BENCH_CFLAGS` 刻意不含 `ALLOCATOR_CFLAGS`: benchmark 的库对象必须走 `bench/alloc_shim.h` 的四个 `LIBCP_*` 宏, 而不是 `LIBCP_DEFAULT_ALLOCATOR`.
 
 ## 10.3 目标一览
 
@@ -44,11 +53,13 @@ CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch \
 | `chibicc` | 参考编译器 |
 | `libcp.a` | 静态库 |
 | `libcp.so` | 共享库, 仅 Linux |
-| `fmt-tool` | CST formatter MVP(`tools/fmt.c`), 链接 `libcp.a` |
+| `fmt-tool` | 构建 `fmt`, CST formatter MVP(`tools/fmt.c`), 链接 `libcp.a` |
 | `c2c` | C 转 C 打印器(`tools/c2c.c`), 仅测试回归闸门, 不安装 |
-| `format` | 用 `.clang-format` 格式化 `libcp/` 与驱动器源码(不涉及测试, 需要 clang-format 20 或更新版本; 缺失时跳过) |
+| `bench-tool` | 只构建 `bench/libcp-bench`, 不运行也不安装 |
+| `bench` | 构建并运行 `bench/run.sh`, 仅 Linux |
+| `format` | 用 `.clang-format` 格式化 `libcp/` 与驱动器源码(不涉及测试; 需要 clang-format 20 或更新版本, 缺失时跳过, 版本低于 20 时失败) |
 | `format-check` | 只读格式闸门, 检查是否已按 clang-format 20+ 格式化(缺失或版本过低时失败) |
-| `test` | 完整测试套件 |
+| `test` | 完整测试套件, 不含 `check-library` / thirdparty / bench |
 | `test-all` | `test` + `test-stage2` |
 | `test-stage2` | 自举测试 |
 | `test-thirdparty` | 本机真实项目构建(仅 x86-64 Linux) |
@@ -69,7 +80,7 @@ make install PREFIX=/usr/local
 make install PREFIX=/opt/libcp DESTDIR=/tmp/stage
 ```
 
-安装布局:
+安装布局 (以下路径都位于 `$(DESTDIR)$(PREFIX)` 下):
 
 ```text
 $PREFIX/include/libcp/
@@ -140,7 +151,7 @@ pkg-config --modversion libcp   # 0.2.0
 
 ### 10.6.1 静态库
 
-- 归档内全部外部符号统一 `libcp_` 前缀(2026-10-25 起; 当前 131 个, 其中 39 个是公共函数).
+- 归档内全部已定义全局符号统一 `libcp_` 前缀(2026-10-25 起; 当前 131 个, 其中 39 个是公共函数).
 - 公共头只声明 39 个 D7 函数.
 - 消费者**不得调用**未声明的内部函数. 它们在 `.a` 里可见, 但不是 API.
 - 前缀统一后与宿主符号碰撞的风险基本消除; 内外的判据是"公共头是否声明".
@@ -161,7 +172,7 @@ libcp.so.0: $(LIB_SRCS:.c=.pic.o)
 
 - 所有对象用 `-fPIC -fvisibility=hidden` 编译.
 - 只有 D7 函数经 `LIBCP_API` 导出.
-- `nm -D libcp.so` 只含 D7.
+- `nm -D --defined-only libcp.so` 只含 D7.
 - SONAME 是 `libcp.so.0`.
 
 macOS 只承诺 `.a`. 没有 `.dylib` 目标.
@@ -184,13 +195,13 @@ make test-stage2
 1. 用宿主 `cc` 构建 `chibicc`.
 2. 用 `chibicc` 编译库源码, 产出 `stage2/libcp.a`.
 3. 用 `chibicc` 编译驱动器和测试.
-4. 跑 `test-stage2` 的行为测试套件, 包括 `test/library.sh` 链接 `stage2/libcp.a`, 以及 `stage2/fmt` / `stage2/c2c`. 它不跑 `test/allocator.sh` 与打包闸门 `public-api.sh` / `install.sh`.
+4. 跑 `test-stage2` 的行为测试套件, 包括 `test/library.sh` 链接 `stage2/libcp.a`, `test/self-test.sh`, 以及 `stage2/fmt` / `stage2/c2c`; 后两者由宿主 `cc` 链接 `stage2/libcp.a` 构建. 它不跑 `test/allocator.sh`, 打包闸门 `public-api.sh` / `install.sh`, 隐式 context 审计 `test/context-audit.sh` 与 `test/docs-links.sh`.
 
 自举证明库代码能被自己编译. `setjmp` 与 `va_copy` 都在这条路径上被验证.
 
 ## 10.8 测试矩阵
 
-`make test` 依次运行:
+`make test` 覆盖以下类别. 表按类别列出, 不表示执行顺序; 实际第一条是 `test/docs-links.sh`, 随后按 `TESTS` 顺序跑 C 测试, 再跑行为脚本, 其中 `$(MAKE) fmt-tool` 与 `$(MAKE) c2c` 是两个显式构建步骤.
 
 | 测试 | 内容 |
 |---|---|
@@ -209,7 +220,7 @@ make test-stage2
 | `test/self-test.sh` | 库内自测: hashmap / per-TU 分配 / sema 状态重置 |
 | `test/context-audit.sh` | 隐式 context 审计 (`--strict`, 由 `make test` 调用) |
 | `test/docs-links.sh` | 本地 markdown 链接与 AGENTS 章节引用 (由 `make test` 调用) |
-| `test/fmt.sh` | formatter 幂等 / 行数 / 注释数量 / 容器内 `-S` 等价 (`make fmt-tool` 构建) |
+| `test/fmt.sh` | formatter 幂等 / 行数 / 注释数量 / 有系统头时执行 `-S` 等价 (`make fmt-tool` 构建; 容器内为权威, 原生 x86-64 Linux 也执行) |
 | `test/c2c.sh` | C 转 C 打印回归 (`make c2c` 构建) |
 
 `make test` 需要能汇编和运行 x86-64 Linux 目标. 在非 x86-64 Linux 宿主上会在汇编阶段失败. 这些宿主只做前端检查:
@@ -229,13 +240,28 @@ make test-stage2
 
 这些通道不需要运行目标代码.
 
+### 10.8.1 前端 benchmark
+
+```sh
+make bench-tool   # 只构建 bench/libcp-bench
+make bench        # 构建并运行 bench/run.sh, 仅 Linux
+```
+
+- `bench/run.sh` 自己检查 `uname -s`; 非 Linux 直接报错, 不采集计时.
+- `BENCH_REPEAT` 默认 5, 可覆盖; 正式计时前有 1 轮预热.
+- 四组语料: `tests` (`test/*.c` 加 `test/common`), `lib` (`libcp/src/*.c`), `driver` (`main.c` / `codegen.c`), `sqlite` (`thirdparty/sqlite/sqlite3.c`; 该文件不存在时整组跳过).
+- 每组输出每个文件的 reset / tokenize / preprocess / parse / sema / total 的 min 与 median 时间, 以及该阶段的分配字节数, 调用次数与峰值.
+- 输出开头有环境块与语料指纹 (字节数与 SHA-256), 同一份 stdout 可以自描述地比较.
+- 独立 `BENCH_CFLAGS` (`-O2`) 与 `bench/alloc_shim.h`; 不进入 `all` / `test` / `install`.
+- CI 只跑 `make bench-tool` 验证可构建, 不采集计时.
+
 ## 10.9 公共面闸门
 
 ```sh
 make check-library
 ```
 
-运行四个脚本:
+运行四个脚本; 前置构建是 `libcp.a`, Linux 下还有 `libcp.so` 与 `libcp.pc` (目标依赖会先构建它们).
 
 1. `test/library.sh`: 用宿主 `cc` 链接 `libcp.a`, 验证:
    - tokenize / preprocess / parse / sema.
@@ -244,6 +270,8 @@ make check-library
    - 错误返回.
    - reset 复用.
    - 同线程双 context 与跨线程双 context.
+   - 64 次 `CST -> reset` 循环的活字节上界为 32 KiB.
+   - Linux 下若存在 `libcp.so`, 再用共享库链接同一消费者并运行时验证.
    - ASan + UBSan 重编库对象, 检查零 UB, 活字节上界, free 后回到基线附近 (允许 4 KiB 容差).
 2. `test/allocator.sh`: 用 `LIBCP_MALLOC` / `LIBCP_CALLOC` / `LIBCP_REALLOC` / `LIBCP_FREE` 的计数替换版重编整个库, 验证替换分配器确实被调用, 每个 per-TU 对象是一次独立分配, reset 后活块回到基线, 且 `libcp_context_free` 后活块归零.
 3. `test/public-api.sh`: 验证:
@@ -253,6 +281,14 @@ make check-library
    - `.a` 中 D7 全部存在.
    - Linux `.so` 只导出 D7.
 4. `test/install.sh`: 验证安装布局与 pkg-config; 没有 `pkg-config` 时跳过 `.pc` 版本与消费者检查并成功返回.
+
+隐式 context 审计单独运行:
+
+```sh
+make check-context
+```
+
+它先构建 `libcp.a`, 再以 `--strict` 运行 `test/context-audit.sh`: 检查 `codegen.c` / `main.c` 没有 `libcp_ctx()` 访问器与 `cg_ctx`, `.a` 里没有访问器符号. `make test` 也会调用它.
 
 ## 10.10 Docker 闸门
 
@@ -266,7 +302,8 @@ make docker-snapshot-diff
 
 - `docker-test` 在 amd64 容器里运行 `make test-all`(即 `test` + `test-stage2`), 包括全部只读通道, 但不运行 `make check-library` 的打包闸门.
 - `docker-snapshot-diff` 对 `test/*.c` 的全部语料比较 stage1 `chibicc` 的汇编快照, 必须输出 `snapshot diff: empty`; 当前不包含自举产物.
-- 仓库只读挂载, 源码复制到容器可写层 `/work` 后构建, 本机产物不受影响.
+- `docker-test` 与 `docker-snapshot*` 把仓库只读挂载 (`-v $(CURDIR):/src:ro`), 源码复制到容器可写层 `/work` 后构建, 本机产物不受影响.
+- `docker-test-thirdparty` 需要把 clone 缓存写回 `thirdparty/`, 因此用读写挂载 (`-v $(CURDIR):/src`), 并在容器结束后把 `/work/thirdparty` 的新内容同步回仓库.
 - 首次 `docker-image` 约 90 秒.
 
 真实项目:
@@ -277,6 +314,28 @@ THIRDPARTY=tinycc make docker-test-thirdparty
 ```
 
 依次构建 tinycc, libpng, git, sqlite, cpython. 很慢, 不属于 `make test`.
+
+真正的 x86-64 Linux 宿主可以直接跑本地版:
+
+```sh
+make test-thirdparty
+THIRDPARTY="tinycc libpng" make test-thirdparty
+```
+
+本地版不把 `test/thirdparty` 放进 PATH (那个 `make` shim 只为 Rosetta 跳过 tcc 的三个不稳定用例), 也不把源码拷到 `/work`.
+
+### 10.10.1 CI 闸门
+
+`.github/workflows/` 有三个 workflow:
+
+| workflow | job / 命令 | 覆盖 |
+|---|---|---|
+| `test.yml` | `make test-all`, `make check-library`, `make bench-tool` | 原生 x86-64 Linux 的单元, 自举, 公共面与 benchmark 构建 |
+| `test.yml` | `make test-thirdparty THIRDPARTY="tinycc libpng git sqlite"` | 真实项目子集; 依赖前一个 job, 超时 120 分钟, 缓存 `thirdparty/` |
+| `format.yml` | 安装 `clang-format==20.1.8` 后 `make format-check` | 只读格式闸门 |
+| `docs.yml` | `bash test/docs-links.sh` | 文档链接与 AGENTS 章节引用 |
+
+cpython 只在手工 Docker 闸门里跑, 不进 CI. 没有 macOS job.
 
 ## 10.11 在别的项目里使用
 
@@ -302,7 +361,7 @@ cc app.c $(PKG_CONFIG_PATH=/opt/libcp/lib/pkgconfig \
 
 ### 10.11.3 把库源码嵌进项目
 
-不推荐, 但可行. 编译 `libcp/src/*.c`, 加 `-Ilibcp/include -Ilibcp/src`, 不要编译 `main.c` / `codegen.c`. 这样可以只保留需要的层, 但会失去版本管理.
+不推荐, 但可行. 编译 `libcp/src/*.c`, 加 `-Ilibcp/include -Ilibcp/src`, 不要编译 `main.c` / `codegen.c`. `libcp/src/libcp.h` 会定义 `LIBCP_INTERNAL`, 因此还必须给 `-DLIBCP_DEFAULT_ALLOCATOR`, 或提供全部四个 `LIBCP_*` 宏 (见 10.11.5). 这样可以只保留需要的层, 但会失去版本管理.
 
 ### 10.11.4 共享库
 
@@ -337,7 +396,8 @@ make ALLOCATOR_CFLAGS='-include mimalloc.h -DLIBCP_MALLOC=mi_malloc -DLIBCP_CALL
 - 不要同时定义 `LIBCP_DEFAULT_ALLOCATOR`, 否则四个宏会被 libc 版本覆盖(重定义警告), 自定义分配器不会生效.
 - 自定义构建的文件必须是库的每个编译单元都能看到的, 并且链接时提供这四个函数.
 - 替换实现必须满足 libc 的对齐, 清零与 `realloc` 失败语义, 见 9.3.11.
-- `make test-stage2` 的 stage2 规则固定传 `-DLIBCP_DEFAULT_ALLOCATOR`, 即自举检查始终用默认分配器; 自定义分配器用宿主 cc 构建 `libcp.a`, 并可用 `test/allocator.sh` 的计数版验证.
+- `make test-stage2` 的 stage2 规则固定传 `-DLIBCP_DEFAULT_ALLOCATOR`, 即自举检查始终用默认分配器.
+- `test/allocator.sh` 只验证替换机制本身 (四个宏被调用, 每次 per-TU 分配独立, reset 后活块归零); 自定义分配器要让它生效, 仍需自己的 shim 头与链接参数, 不能只靠这个脚本.
 - 只给消费者加宏不会影响预编译的库.
 
 ## 10.12 常见问题

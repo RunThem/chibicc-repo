@@ -21,7 +21,8 @@
 | S7 | `dd5ea36` | Correct the parse node counts and field paths |
 | S8 | `05ed9a4` | Align the sema field paths and serialization docs |
 | S9 | `e0dd3b7` | Document the codegen shaping order and emission branches |
-| S10 | 本记录所在提交 | Correct the public API semantics and examples |
+| S10 | `9c061c8` | Correct the public API semantics and examples |
+| S11 | 本记录所在提交 | Document the build, bench, and CI entry points |
 
 ## 各步记录
 
@@ -94,6 +95,13 @@
 - 测试: `/tmp/define_probe.c` 实测 `context_define("FOO","42")` 的 provenance `macro` 为 `FOO=42`; `/tmp/nul_probe.c` 实测 `tokenize_buffer` 3 个 token 且 `failed=0`, `_len` 返回 NULL 且 `failed=1`; `/tmp/stdin_probe.c` 实测 reset 前 3 个 token, reset 后 0 个; `/tmp/api_example.c` 通过 `cc -fsyntax-only -Wall -Wextra`; `! grep -n "reset 后一切失效"` 通过; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
 - 偏差: 无. 9.4.4 与 9.12 一并修正, 使 byte-exact 与生命周期结论与 03 / 9.3.10 一致.
 - 验收: 09 的每条 API 语义与头文件或实测一致; `tokenize_buffer` NUL 与 stdin 生命周期不再误导; `context_define` 缺陷有链接; `cst_verify` / `context_*` 返回值行正确; source range 锚点完整; 示例可编译; `docs-links` 通过.
+
+### S11 - `docs/10-build-install.md` 构建, 测试, bench 与 CI
+
+- 做了什么: 10.2 补 `BENCH_CFLAGS` 与 `bench/libcp_bench.a` / `bench/libcp-bench` / `bench/obj` 产物; 10.3 补 `bench-tool` / `bench`, `fmt-tool` 注明产出 `fmt`, `format` 注明低于 20 失败, `test` 注明不含 `check-library` / thirdparty / bench; 10.4 注明安装路径都在 `$(DESTDIR)$(PREFIX)` 下; 10.6.1 改为"全部已定义全局符号", 10.6.2 改为 `nm -D --defined-only`; 10.7 补 `test/self-test.sh`, 跳过列表补 `context-audit.sh` / `docs-links.sh`, 说明 `stage2/fmt` / `stage2/c2c` 由宿主 `cc` 链接 `stage2/libcp.a`; 10.8 说明表按类别而非顺序, `docs-links.sh` 第一条, 补 `fmt-tool` / `c2c` 构建步骤与 `fmt.sh` 的 `-S` 条件, 新增 10.8.1 benchmark; 10.9 补 `check-library` 前置构建, `check-context` 段落, `library.sh` 的共享库消费者与 64 次 `CST -> reset` 的 32 KiB 上界; 10.10 区分只读与读写挂载, 补本机 `test-thirdparty`, 新增 10.10.1 CI 闸门; 10.11.3 补分配器开关与 `LIBCP_INTERNAL`; 10.11.5 限定 `test/allocator.sh` 只验证替换机制.
+- 测试: `grep -n "10.8.1\|bench-tool\|check-context\|32 KiB\|--defined-only\|docker-test-thirdparty\|cpython"` 命中; `bash -n bench/run.sh` 通过; `make bench-tool` 退出 0; `nm -D --defined-only libcp.so | wc -l` 为 39; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无. CI 表把 `test.yml` 的两个 job 分成两行, 便于区分单元闸门与 thirdparty 依赖关系.
+- 验收: bench 目标与测量项完整; 10.3 表与 `Makefile` 一致; `check-library` / `check-context` 有前置与正文; Docker 挂载描述分目标; CI 章节存在; 嵌入命令可编译; `docs-links` 通过.
 
 ## 验收
 
@@ -228,6 +236,22 @@ S10 阶段验收:
 | `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
 | 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
 
+S11 阶段验收:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| bench 目标 | 通过 | 10.2 / 10.3 / 10.8.1 含 `bench-tool`, `bench`, 四组语料, 分阶段指标与 `BENCH_REPEAT` 默认 5 |
+| `make bench-tool` | 通过 | 退出 0, 产出 `bench/libcp_bench.a` 与 `bench/libcp-bench` |
+| 10.3 表 | 通过 | 与 `Makefile` 目标一致, 含 bench 与 fmt 产物 |
+| check-library / check-context | 通过 | 前置构建与脚本正文都已写 |
+| Docker 挂载 | 通过 | `docker-test` / `docker-snapshot*` 只读, `docker-test-thirdparty` 读写并回写缓存 |
+| CI 章节 | 通过 | 10.10.1 列出 `test.yml` / `format.yml` / `docs.yml`; cpython 仅手工 Docker |
+| 嵌入命令 | 通过 | 10.11.3 要求 `-DLIBCP_DEFAULT_ALLOCATOR` 或四个宏; `LIBCP_INTERNAL` 来源已写 |
+| 导出符号 | 通过 | `nm -D --defined-only libcp.so | wc -l` 为 39 |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
+
 全线验收待 S14 补齐.
 
 ## 偏差与原因
@@ -243,6 +267,7 @@ S10 阶段验收:
 - S8: 无偏差. 同文件残留的裸 `init_resolved` / `decl_init` / `init_data` 一并改为字段族路径.
 - S9: 无偏差. `codegen.c` 文件头 (a)/(b) 注释与实现不一致, 本线只记录, 不改源码.
 - S10: 无偏差. 9.4.4 与 9.12 一并修正, 使 byte-exact 与生命周期结论与 03 / 9.3.10 一致.
+- S11: 无偏差. CI 表按 job 拆行, 同一个 workflow 可能出现两次.
 - 无范围变更.
 
 ## 后续影响
@@ -365,6 +390,17 @@ S10 阶段验收:
 - 示例: `/tmp/api_example.c` 通过 `cc -std=c11 -fsyntax-only -Wall -Wextra -Ilibcp/include`.
 - `! grep -n "reset 后一切失效" docs/09-api-reference.md`: 通过.
 - `grep -n "11.7.8"` / `grep -n "tokenize_buffer_len"`: 命中 9.3.7, 9.4.2, 9.9.2.
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --check`: 通过.
+
+### S11
+
+- `grep -n "10.8.1\|bench-tool\|check-context\|32 KiB\|--defined-only\|docker-test-thirdparty\|cpython" docs/10-build-install.md`: 全部命中.
+- `bash -n bench/run.sh`: 通过.
+- `make bench-tool`: 退出 0, 产出 `bench/libcp_bench.a` 与 `bench/libcp-bench`.
+- `nm -D --defined-only libcp.so | wc -l`: 39.
 - `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
 - `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
 - 快照: 41 份 `.s`, `snapshot diff: empty`.
