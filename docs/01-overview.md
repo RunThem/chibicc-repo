@@ -102,9 +102,9 @@ CST 进一步把每个标点变成叶子, 保证叶子按序重建等于输入. 
 上游的设计原则被保留下来:
 
 - 解析器里的重复是有意的, 不用高阶函数或宏去消.
-- 用链表当集合, 查找 O(n), 因为 n 通常很小.
-- 一个 `LibcpNode` 结构体容纳所有节点类型的字段, 不做 union.
-- 内存使用 calloc 语义分配; 解析期间不释放, 只在 context 边界批量归还.
+- token 链, 对象链与声明链仍用链表; 名字与 tag 作用域, 宏表, `pragma once` 与 include guard 用哈希表.
+- `LibcpNode` 是公共头字段加十个字段族的匿名 union, 每个 kind 只使用一个族; x86-64 构建下 `sizeof(LibcpNode)` 为 144 字节.
+- 内存使用 calloc 语义分配; 库不显式调用 `LIBCP_FREE`, 但 `LIBCP_REALLOC` 可能搬移或归还旧块; 对象级释放在 `reset` / `free` 边界.
 
 在这个库里, 这些选择还多了一层理由: 代码要被第三方阅读和修改. 聪明的抽象会提高修改门槛.
 
@@ -166,7 +166,7 @@ CST 进一步把每个标点变成叶子, 保证叶子按序重建等于输入. 
 本仓库是 Rui Ueyama 的 chibicc 的 fork. 上游仍是一个教学编译器, 目标是让读者按 commit 学习 C 编译器怎么实现. 本 fork 保留了它的代码风格和大部分实现, 但把目标改成了库:
 
 - 源码搬到 `libcp/src/`, 公共头在 `libcp/include/libcp/`.
-- 根目录只留驱动器 `main.c`, 代码生成器 `codegen.c` 和驱动器内部头 `driver.h`.
+- 根目录的库外 C 源文件只有驱动器 `main.c` 与代码生成器 `codegen.c`, 驱动器内部头是 `driver.h`.
 - 所有跨层状态收进 `LibcpContext`, 错误改走诊断回调.
 - 新增了 trivia, CST, provenance, 忠实语法层和 sema 标注层.
 - 上游 README 描述的是编译器, 与本仓库冲突时以 `AGENTS.md` 和本文档为准.
@@ -178,7 +178,7 @@ CST 进一步把每个标点变成叶子, 保证叶子按序重建等于输入. 
 **已经做到的部分**:
 
 - 阶段 5 的闸门全绿: Docker 内完整测试与自举, 汇编快照零 diff, 公共头独立编译, 符号白名单, ASan/UBSan 无报告, install 与 pkg-config 可用.
-- 第 1 层到第 4 层的产物有逐字节或结构级锁定: trivia 48 个语料文件重建, CST 覆盖 48 个文件 round-trip / 48 个 verify / 15 个边界样本 / 65 个 dump 样本 (共 309 次 check), AST 85 例, 诊断 68 例, 形状 34 段.
+- 第 1 层到第 4 层的产物有逐字节或结构级锁定: trivia 48 个语料文件重建, CST 覆盖 48 个 round-trip 文件 / 48 个 verify 文件 / 15 个边界样本 / 65 个 dump 样本 (`test/cst.sh` 共 313 次 check), AST 85 例, 诊断 68 例, 形状 34 段.
 - L5 产品化验证已完成 (2026-10-25): `tools/fmt.c` 是真实 formatter 消费者, AST 源码范围由 `libcp_node_source_range` 提供, `LibcpDiagnostic` 带 `tok` / `prov` 诊断展开点.
 - Pratt 表达式解析在成为唯一路径之前, 与旧级联的 AST 与汇编在 41 个语料文件和 tinycc 真实构建上逐字节一致 (PLAN-pratt-parse); 单一路径化后由汇编快照基线继续锁定.
 
