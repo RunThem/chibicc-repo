@@ -179,6 +179,17 @@ check -idirafter
 echo "#include \"idirafter\"" | $chibicc -idirafter $tmp/dir1 -I$tmp/dir2 -E -xc - | grep -q bar
 check -idirafter
 
+# A separated -I argument adds the directory to the include search path.
+echo sep > $tmp/dir2/separated-i
+echo "#include \"separated-i\"" | $chibicc -I $tmp/dir2 -E -xc - | grep -q sep
+check '-I separated argument'
+
+# A separated -idirafter argument adds the directory, and the directory is
+# not treated as an input file.
+echo after > $tmp/dir1/only-idirafter
+echo "#include \"only-idirafter\"" | $chibicc -idirafter $tmp/dir1 -E -xc - | grep -q after
+check '-idirafter separated argument'
+
 # -fcommon
 echo 'int foo;' | $chibicc -S -o- -xc - | grep -q '\.comm foo'
 check '-fcommon (default)'

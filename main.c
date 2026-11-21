@@ -228,6 +228,11 @@ static void parse_args(int argc, char** argv) {
       continue;
     }
 
+    if (!strcmp(argv[i], "-I")) {
+      libcp_context_add_include_path(ctx, argv[++i]);
+      continue;
+    }
+
     if (!strncmp(argv[i], "-I", 2)) {
       libcp_context_add_include_path(ctx, argv[i] + 2);
       continue;
@@ -340,7 +345,7 @@ static void parse_args(int argc, char** argv) {
     }
 
     if (!strcmp(argv[i], "-idirafter")) {
-      libcp_strarray_push(ctx, &idirafter, argv[i++]);
+      libcp_strarray_push(ctx, &idirafter, argv[++i]);
       continue;
     }
 
