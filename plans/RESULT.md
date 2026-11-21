@@ -19,7 +19,8 @@
 | S5 | `164e724` | Calibrate the token and preprocessor layer docs |
 | S6 | `61d112b` | Describe the CST declaration and directive shapes |
 | S7 | `dd5ea36` | Correct the parse node counts and field paths |
-| S8 | 本记录所在提交 | Align the sema field paths and serialization docs |
+| S8 | `05ed9a4` | Align the sema field paths and serialization docs |
+| S9 | 本记录所在提交 | Document the codegen shaping order and emission branches |
 
 ## 各步记录
 
@@ -78,6 +79,13 @@
 - 测试: `grep -nP 'LibcpType[^.]*\.(offset|bit_offset)'` 无命中; `! grep -n "n->body\|n->var"` 通过; `/tmp/sema_example.c` 用 `cc -std=c11 -fsyntax-only -Wall -Wextra -Ilibcp/include` 通过; `layout_union` 实现实测只比较 `mem->align` 与 `mem->ty->size`; `write_gvar_data` 的数组分支逐元素写, 指针路径走 `LibcpRelocation`; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
 - 偏差: 无. 额外把同文件中残留的裸 `init_resolved` / `decl_init` / `init_data` 统一成字段族路径.
 - 验收: 成员偏移只出现在 `LibcpMember`; 字段表补全或明确为关键字段; 示例可编译; 字符串序列化区分两种路径; `layout_union` 不再声称专门处理位域/匿名成员; `docs-links` 通过.
+
+### S9 - `docs/08-codegen.md` 整形遍与发射
+
+- 做了什么: 8.5.1 按实现改写六条不变量: 表达式/声明改写后序, 循环与 switch 在进入子树前分配标签 (前序), 每函数上下文, 不重入, 嵌套函数只访问一次, 初始化器走 `shape_init_exprs`; 补一句 `codegen.c` 文件头的 (a)/(b) 注释与实现不一致. 8.5.2 把 `op != 0` / `arrow_tok` / `is_elvis` 改为 `assign.op` / `access.arrow_tok` / `ctrl.is_elvis`, `case` 链改为 `case_`, 后缀 `++` 改为 `new_add(..., -addend)` 反向加减并 cast, 新增"声明记录链过滤"与"VLA 声明"两行, `goto` 行补 `ND_LABEL_VAL`. 8.5.3 把指针缩放拆成发射点与整形遍两条路径. 8.5.4 写清 `label_base` 与局部 `label_seq`, 以及发射器的 `.L.begin` / `.L.else` / `.L.end` / `.L.false` / `.L.true` / `.L.return` 与 `count()` 数字标签. 8.5.5 改为 4096 桶指针键哈希表. 8.6.1 写清 `.comm`, `.data` / `.tdata`, `.bss` / `.tbss` 三类全局. 8.6.2 补 `is_live == false` 的 static inline 过滤, 分开描述 `new_add` / `new_sub`. 8.6.4 写明 `-g` / `-O*` / `-W*` 接受但忽略. 8.8.1 补字段族与 `libcp_node_family`, 忠实节点补 `ND_LABEL_VAL`.
+- 测试: 对照 `codegen.c` 的 `shape_node` / `shape_chain` / `expand_decl` / `new_inc_dec` / `new_add` / `new_sub` / `emit_data` / `emit_text` / `resolve_label_refs`; `grep -n "assign.op\|access.arrow_tok\|ctrl.is_elvis"` 命中; `grep -n "is_live"` 命中; `grep -n "4096"` 命中; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无. `codegen.c` 文件头 (a)/(b) 注释不改, 只在文档与 RESULT 后续项记录.
+- 验收: 六条不变量与实现一致且明确说明前序标签; 8.5.2 覆盖链过滤与 VLA 展开; 指针缩放归属正确; 标签, 全局发射, `is_live`, `-g` 描述正确; 旧字段清零; `docs-links` 通过.
 
 ## 验收
 
@@ -182,6 +190,21 @@ S8 阶段验收:
 | `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
 | 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
 
+S9 阶段验收:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 六条不变量 | 通过 | 表达式后序, 循环/switch 前序, 每函数上下文, 不重入, 只访问一次, `shape_init_exprs` |
+| 注释不同步 | 通过 | 文档写明 `codegen.c` 文件头 (a)/(b) 与实现不一致, 未改源码 |
+| 8.5.2 覆盖 | 通过 | 字段族路径, `case_`, 后缀 `new_add(-addend)`, 链过滤, VLA 展开, `ND_LABEL_VAL` |
+| 指针缩放 | 通过 | 普通算术/下标在发射点, `op=` 与 `++/--` 在整形遍 |
+| 标签 | 通过 | `label_base` + `label_seq`; 发射器 `.L.*` 与 `count()` 数字标签 |
+| 全局发射 | 通过 | `.comm`, `.data` / `.tdata`, `.bss` / `.tbss` |
+| `is_live` 与 `-g` | 通过 | static inline 过滤; `-g` / `-O*` / `-W*` 接受但忽略 |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
+
 全线验收待 S14 补齐.
 
 ## 偏差与原因
@@ -195,6 +218,7 @@ S8 阶段验收:
 - S6: 无偏差.
 - S7: 计划写 `infix_ops[].kind` 为 19 个, 实测去重后 21 个; 文档按 46 + 21 - 2 = 65 写, 结论不变.
 - S8: 无偏差. 同文件残留的裸 `init_resolved` / `decl_init` / `init_data` 一并改为字段族路径.
+- S9: 无偏差. `codegen.c` 文件头 (a)/(b) 注释与实现不一致, 本线只记录, 不改源码.
 - 无范围变更.
 
 ## 后续影响
@@ -292,6 +316,18 @@ S8 阶段验收:
 - `/tmp/sema_example.c`: `cc -std=c11 -fsyntax-only -Wall -Wextra -Ilibcp/include` 通过.
 - `layout_union`: `sema.c` 只比较 `mem->align` 与 `mem->ty->size`, 再 `libcp_align_to`.
 - 字符串路径: `write_gvar_data` 的 `TY_ARRAY` 分支逐元素递归, 指针分支经 `eval2` 写 `LibcpRelocation`.
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --check`: 通过.
+
+### S9
+
+- 不变量对照: `shape_node` 对循环/switch 先取标签再 `shape_children`; 表达式改写先 `shape_children`; `shape_init_exprs` 显式遍历初始化器.
+- 字段与分支: `grep -n "assign.op\|access.arrow_tok\|ctrl.is_elvis" docs/08-codegen.md` 命中第 113, 119, 195 行.
+- `is_live`: `codegen.c` 的 `emit_text` 跳过 `!fn->is_live`.
+- 私有表: `CG_BUCKETS` 为 4096, 三张指针键哈希表.
+- 标签: `label_base = libcp_unique_name_next(ctx)`, `new_label` 用 `label_base + label_seq++`.
 - `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
 - `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
 - 快照: 41 份 `.s`, `snapshot diff: empty`.

@@ -42,7 +42,7 @@
 
 - `LibcpObj *prog`: `libcp_sema` 返回的全局对象链.
 - 每个函数的 `body`: 标注树.
-- 每个全局变量的 `init_data` / `rel`: 已序列化的数据.
+- 每个全局变量的 `LibcpObj.init_data` / `LibcpObj.rel`: 已序列化的数据.
 
 输出:
 
@@ -89,14 +89,14 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 
 整形遍按六条不变量运行:
 
-1. **后序**: 子节点先整形, 再改写父节点. 外层改写可以依赖内层已完成.
-2. **阶段顺序**: 表达式和声明整形先于控制流标签分配, 这样整形中新建的循环也能拿到标签.
+1. **表达式与声明的改写是后序**: 子节点先整形, 再改写父节点. 外层改写可以依赖内层已完成.
+2. **循环与 switch 的标签分配是前序**: `while` / `do` / `for` / `switch` 在进入子树之前先取得自己的标签, 因此整形中新建的循环也能拿到标签.
 3. **函数上下文**: 改写创建的临时槽追加到当前函数的 locals, 并且都在 `assign_lvar_offsets` 之前存在.
 4. **不重入**: 整形新建的子树已经是整形后的, 不再走一遍; 树里没有能把遍历引回去的别名.
 5. **只访问一次**: 嵌套函数的函数体只从程序链访问一次, 不从宿主函数体进入.
 6. **初始化器走显式路径**: 解析后的初始化器树由 `shape_init_exprs` 显式遍历, 不靠节点字段递归.
 
-这六条写在 `codegen.c` 文件头, 是修改整形遍时的契约.
+第 2 条与 `codegen.c` 文件头对 (a)/(b) 的描述不一致: 文件头仍写"所有表达式与声明整形先于控制流标签分配", 而实现是循环/switch 前序取标签. 这是已知的注释不同步, 记录在 `plans/RESULT.md` 的后续项; 本线不改源码.
 
 ### 8.5.2 整形遍做什么
 
@@ -104,21 +104,24 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 |---|---|
 | `while` / `do` / `for` | 分配 break 和 continue 标签 |
 | `switch` | 分配 break 标签, 收集 case 链 |
-| `case` | 分配唯一标签, 挂进 case 链 |
+| `case` | 分配唯一标签, 挂进 `case_` 链 |
 | `label` | 分配唯一标签, 收集到函数标签表 |
-| `goto` | 留给 `resolve_label_refs`, 与 label 配对 |
+| `goto` / `ND_LABEL_VAL` | 留给 `resolve_label_refs`, 与 label 配对并写入 `unique_label` |
 | `for` 的 init 链 | 多于一条语句时包成 `ND_BLOCK`, 适配发射器的单语句 init 槽 |
-| 复合赋值 `op != 0` | `to_assign` 改写成读改写, 处理成员和原子形式 |
-| `ND_INCDEC` | 改写成复合赋值, 后缀形式再包一层减一 |
+| 声明记录链 | `shape_chain` 摘除 `ND_TYPEDEF` / `ND_ENUM_CONST` / `ND_GVAR_DECL` / `ND_FUNCDEF`; `ND_DECL` 原位保留 |
+| VLA 声明 | `expand_decl` 展开成尺寸计算、`alloca` 与初始化链 |
+| 复合赋值 `assign.op != 0` | `to_assign` 改写成读改写, 处理成员和原子形式 |
+| `ND_INCDEC` | 改写成复合赋值; 后缀形式再用 `new_add(..., -addend)` 反向加减并 cast |
 | 结构体/联合返回值调用 | 建 `ret_buffer` 临时槽 |
 | VLA 的 `sizeof` | 改写成计算并读取尺寸变量的逗号表达式 |
 | 复合字面量 | 改写成初始化逗号加隐藏对象引用 |
 | `_Generic` | 只整形被选中的关联表达式 |
-| `ND_COND` | 只递归, 不改写. elvis 由发射器无槽处理 |
+| `ND_COND` | 只递归, 不改写. `ctrl.is_elvis` 由发射器无槽处理 |
 
 ### 8.5.3 整形遍不做什么
 
-- 不缩放下标和指针算术. 这由发射器的 `new_add` / `new_sub` 在发射点做.
+- 普通 `ND_ADD` / `ND_SUB` 与 `ND_SUBSCRIPT` 不在这里缩放. 发射器的 `new_add` / `new_sub` 在发射点缩放普通算术, `gen_addr` 在算 `p[i]` 地址时就地缩放.
+- `op=` 与 `++` / `--` 的指针操作数在整形遍经 `new_add` / `new_sub` 缩放; 发射器对这些已降级的节点不再重复缩放.
 - 不交换 `>` / `>=`. 发射器处理.
 - 不把 `while` 改成 `for`. 发射器按 `ND_WHILE` 发射.
 - 不展开普通声明初始化链. 发射器在 `gen_stmt(ND_DECL)` 就地摊开.
@@ -130,7 +133,8 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 标签名形如 `.L..N`. 编号来自 `LibcpContext` 里的 `unique_name_id` 计数器 (不是全局变量):
 
 - 第 4 层物化匿名对象时用这个计数器, 例如字符串全局.
-- 第 5 层整形时从 `libcp_unique_name_next(ctx)` 接着用.
+- `codegen` 入口调用 `libcp_unique_name_next(ctx)` 取得 `label_base`, 之后整形遍用局部 `label_seq` 递增, 生成 `label_base + label_seq`.
+- 发射器另有 `.L.begin` / `.L.else` / `.L.end` / `.L.false` / `.L.true` / `.L.return` 与 `count()` 产生的数字局部标签.
 
 格式是 load-bearing 的: 快照闸门是逐字节 diff, 改前缀或编号规则会让所有相关快照非空.
 
@@ -147,7 +151,7 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 - `CgObj.stack_size`.
 - `CgType.vla_size`.
 
-这些字段不在公共 `LibcpNode` / `LibcpObj` / `LibcpType` 里, 而是保存在 `codegen.c` 的私有指针键表:
+这些字段不在公共 `LibcpNode` / `LibcpObj` / `LibcpType` 里, 而是保存在 `codegen.c` 的私有指针键哈希表中 (每个 4096 桶):
 
 - `CgNode`: 按 `LibcpNode *` 查.
 - `CgObj`: 按 `LibcpObj *` 查.
@@ -162,32 +166,33 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 `emit_data` 遍历 `prog`:
 
 - 跳过非定义和函数.
-- 暂定定义在默认 `-fcommon` 下输出 `.comm`; 有初始化器时输出 `.data` / `.tdata`, 否则输出 `.bss` / `.tbss`.
-- 对每个全局变量输出对齐, 标签, 初始化字节.
-- 处理 `init_data` 和 `rel`.
+- 暂定定义在默认 `-fcommon` 下输出 `.comm`.
+- 有初始化数据的定义输出 `.data` / `.tdata`, 对齐, 标签, 类型, 大小与字节.
+- 没有初始化数据的定义输出 `.bss` / `.tbss`, 用 `.zero` 保留空间.
+- 处理 `LibcpObj.init_data` 和 `LibcpObj.rel`.
 
 ### 8.6.2 文本
 
 `emit_text` 遍历 `prog`:
 
 - 跳过非函数和非定义.
+- 跳过 `is_live == false` 的 `static inline` 函数, 它们没有调用者, 不发射代码.
 - 对每个函数输出序言, 栈帧, 参数保存, 函数体, 尾声.
 - 函数体由 `gen_stmt` / `gen_expr` 递归发射.
 
-`gen_expr` 在入口把忠实的 `ND_ADD` / `ND_SUB` 替换成 `new_add` / `new_sub` 的产物. 这两个工厂做三件事:
+`gen_expr` 在入口把忠实的 `ND_ADD` / `ND_SUB` 替换成 `new_add` / `new_sub` 的产物. 两个工厂的职责不同:
 
-- 做指针缩放.
-- 把 `num + ptr` 规范化为 `ptr + num`.
-- 把产物记在私有 `CgNode.is_lowered`.
+- `new_add`: 给操作数定型; 数值相加直接建节点; 把 `num + ptr` 规范化为 `ptr + num`; 对 `ptr + num` 按元素大小缩放.
+- `new_sub`: 给操作数定型; 数值相减直接建节点; 处理 `ptr - num` 与指向 VLA 的指针; `ptr - ptr` 先取字节差, 再除以元素大小.
 
-发射器只降级没有标记的节点, 也就是第 3/4 层留下的忠实节点.
+两者都把产物记在私有 `CgNode.is_lowered`, 并做 invalid operands 检查. 发射器只降级没有标记的节点, 也就是第 3/4 层留下的忠实节点.
 
 ### 8.6.3 发射点就地处理
 
 | 源码形态 | 发射处理 |
 |---|---|
 | `p[i]` | `gen_addr` 按指针加下标算地址, 缩放就地做 |
-| `p->x` | `gen_addr` 按 `arrow_tok` 先解引用 |
+| `p->x` | `gen_addr` 按 `access.arrow_tok` 先解引用 |
 | `a > b` / `a >= b` | 二元尾部换序, 用小于/小于等于指令 |
 | `a ?: b` | 无临时槽, 测试值留在寄存器 |
 | `while` | `gen_stmt` 按循环发射 |
@@ -202,7 +207,7 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 - ELF 目标.
 - Linux 路径: 驱动器硬编码 `/usr/lib/x86_64-linux-gnu`, `/usr/include/x86_64-linux-gnu` 等.
 - 调用 `as` 和 `ld`.
-- 不支持 `-g` 一类的调试选项, 但总会发射 `.file` / `.loc` 行号信息, 因此汇编与目标文件带行号节.
+- 不支持 `-g` 一类的调试选项: `-g` / `-O*` / `-W*` 被接受但忽略, 不生成调试信息. 仍总会发射 `.file` / `.loc` 行号信息, 因此汇编与目标文件带行号节.
 - 不做优化.
 
 在非 x86-64 Linux 宿主 (例如 macOS) 上可以构建 `chibicc`, 也能输出汇编文本 (`-S`), 但生成的汇编不能在本机汇编或运行. 完整测试在 Linux 容器里跑.
@@ -235,10 +240,11 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 如果你要用第 4 层做自己的代码生成器, 需要处理:
 
 - `LibcpObj` 链, 过滤 `is_definition`.
+- `LibcpNode` 的公共头与十个字段族; 用 `libcp_node_family` 判断该下降哪些子节点, 不要读取非活动族.
 - 声明记录 `ND_DECL` / `ND_GVAR_DECL` / `ND_FUNCDEF` / `ND_TYPEDEF` / `ND_ENUM_CONST` 仍在语句链上.
-- 忠实节点: `ND_SUBSCRIPT`, `ND_WHILE`, `ND_GT`, `ND_GE`, `ND_INCDEC`, 带 `assign.op` 的 `ND_ASSIGN`, `ND_COMPOUND_LITERAL` 带隐藏对象. 字符串必须同时处理源码表达式改写后的 `ND_VAR` 与物化时保留的 `ND_STRING`, 两者都通过 `node->decl.var` 指向匿名全局对象.
+- 忠实节点: `ND_SUBSCRIPT`, `ND_WHILE`, `ND_GT`, `ND_GE`, `ND_INCDEC`, 带 `assign.op` 的 `ND_ASSIGN`, `ND_COMPOUND_LITERAL` 带隐藏对象, `ND_LABEL_VAL` 带标签引用. 字符串必须同时处理源码表达式改写后的 `ND_VAR` 与物化时保留的 `ND_STRING`, 两者的 `decl.var` 都指向匿名全局对象.
 - 需要自己决定: 指针缩放, 复合赋值展开, 自增自减, 控制流标签, 临时槽, 初始化器展开.
-- 初始化数据: `LibcpObj.init_data` / `rel`.
+- 初始化数据: `LibcpObj.init_data` / `LibcpObj.rel`.
 - 函数体: `LibcpObj.body`.
 - 局部对象: `LibcpObj.locals`.
 
