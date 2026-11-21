@@ -38,25 +38,25 @@
 |---|---|---|
 | `a[i]` | `ND_SUBSCRIPT` | `ND_DEREF(ND_ADD(a, i))` |
 | `a > b` | `ND_GT` | `ND_LT(b, a)` |
-| `x += 1` | `ND_ASSIGN` 且 `op == ND_ADD` | 读改写 |
-| `x++` | `ND_INCDEC`, `is_post = true` | 复合赋值 |
+| `x += 1` | `ND_ASSIGN` 且 `assign.op == ND_ADD` | 读改写 |
+| `x++` | `ND_INCDEC`, `incdec.is_post = true` | 复合赋值 |
 | `while (c) ...` | `ND_WHILE` | `ND_FOR` |
 | `sizeof(T)` | `ND_SIZEOF` 且 `ty_op = T` | `ND_NUM` |
 | `int a[2] = {1, 2}` | `ND_DECL` + `LibcpInitializer` | 赋值链 |
 | `"abc"` | `ND_STRING` | `ND_VAR` 指向匿名全局 |
-| `p->x` | `ND_MEMBER` 且 `arrow_tok` 非 NULL | `ND_DEREF` + `ND_MEMBER` |
-| `a ?: b` | `ND_COND` 且 `is_elvis = true` | 完整 `?:` |
+| `p->x` | `ND_MEMBER` 且 `access.arrow_tok` 非 NULL | `ND_DEREF` + `ND_MEMBER` |
+| `a ?: b` | `ND_COND` 且 `ctrl.is_elvis = true` | 完整 `?:` |
 
-隐式 cast 也有标记: 第 3 层不插入隐式 cast; 第 4 层插入时设 `is_implicit = true`. 源码写出的 cast 是 `is_implicit = false`.
+隐式 cast 也有标记: 第 3 层不插入隐式 cast; 第 4 层插入时设 `value.is_implicit = true`. 源码写出的 cast 是 `value.is_implicit = false`.
 
 ### 6.2.2 声明是记录, 不是语句
 
 `int x = 1;` 在语法树里是一个 `ND_DECL` 记录节点:
 
 - `ty_op`: 声明类型, 可能还有待补全的数组维度.
-- `name_tok`: 声明的标识符 token.
-- `attr`: 存储类与对齐属性.
-- `decl_init`: 忠实的初始化器记录, 或 NULL.
+- `decl.name_tok`: 声明的标识符 token.
+- `decl.attr`: 存储类与对齐属性.
+- `decl.decl_init`: 忠实的初始化器记录, 或 NULL.
 
 它不立即变成"建变量 + 初始化"的语句. 变量什么时候建, 初始化怎么展开, 是第 4 层和第 5 层的事.
 
@@ -77,7 +77,7 @@ C 文法不是上下文无关的. 最典型的例子:
 - `typedef` 名字的作用域栈.
 - `struct` / `union` / `enum` tag 的查找.
 
-除此之外不做任何名字解析. 变量引用是 `ND_IDENT`, `var` 为 NULL; 函数调用不检查声明; 成员访问不绑定成员.
+除此之外不做任何名字解析. 变量引用是 `ND_IDENT`, 不带绑定字段; 函数调用不检查声明; 成员访问不绑定成员.
 
 这个 oracle 由解析器自己维护, 与第 4 层的作用域是两套独立结构. 第 4 层从树结构重建作用域, 不依赖解析器的栈.
 
@@ -88,7 +88,7 @@ C 文法不是上下文无关的. 最典型的例子:
 - 数组维度: 未定长度在解析器里记为 `array_len = -1`, 维度表达式放在 `dim_len`, 等第 4 层求值后写回真实长度.
 - `typeof(expr)`: 操作数放在 `typeof_expr`, 等第 4 层标注.
 - `_Alignas(<type>)`: 对齐类型放在 `align_expr` / `align_ty`, 等第 4 层计算.
-- 位域宽度: 表达式放在 `Member.width_expr`, 等第 4 层求值.
+- 位域宽度: 表达式放在 `LibcpMember.width_expr`, 等第 4 层求值.
 - 聚合类型的成员布局: `layout_pending` 标记, 等第 4 层调用 `layout_struct` / `layout_union`.
 
 这些字段就是"语法到语义"的交接点. 消费者如果直接读类型, 必须知道哪些字段可能还没填.
@@ -121,11 +121,12 @@ C 文法不是上下文无关的. 最典型的例子:
 | 声明记录 | `ND_DECL`, `ND_GVAR_DECL`, `ND_FUNCDEF`, `ND_TYPEDEF`, `ND_ENUM_CONST`, `ND_COMPOUND_LITERAL` |
 | 内部 | `ND_MEMZERO` |
 
-第 3 层的解析器实际产出 66 种. 不产出的三种:
+第 3 层的解析器实际产出 65 种. 计数方法: 把 `libcp_new_node` / `libcp_new_unary` / `libcp_new_binary` 直接命名的 46 种, 与 `infix_ops[].kind` 的 21 种合并, 去掉重复的 `ND_ASSIGN` 与 `ND_COND`, 得到 65. 不产出的四种:
 
 - `ND_VAR`: 第 4 层绑定名字时产生.
 - `ND_VLA_PTR`: 第 5 层整形遍展开 VLA 声明时产生; `sema.c` 只提供构造器 `libcp_new_vla_ptr`, 不在第 4 层生成该节点.
 - `ND_MEMZERO`: 第 5 层展开初始化器时产生.
+- `ND_NULL_EXPR`: 第 5 层整形遍生成的空表达式占位; 解析器只在 `infix_ops` 表里把它当作 `assign_op` 的哨兵, 不建该节点.
 
 ### 6.3.2 LibcpNode
 
@@ -185,7 +186,7 @@ struct libcp_node {
   calloc 的零值.
 - `ty` 在第 3 层大多为 NULL. 不要假设有类型. 例外: `ND_NUM` 带词法类型,
   `ND_TYPEDEF` 带声明类型.
-- `decl.var` 在第 3 层为 NULL. `ND_IDENT` 只有 `tok` 的拼写.
+- 声明记录的 `decl.var` 在第 3 层为 NULL; `ND_IDENT` 不带绑定字段, 只有 `tok` 的拼写.
 - `decl.init_resolved` 是 sema 的私有载荷, 消费者不得读写.
 - `tok` 是代表 token, 不是完整源码范围. 一个节点可能由多个 token 组成,
   但只记录一个锚点.
@@ -274,8 +275,8 @@ tinycc 真实构建曾由 `test/pratt-ab.sh` 锁定两路径 `-dump-ast` 与 `-S
 
 - 块内普通变量: `ND_DECL`.
 - 文件作用域变量, 或块内 `extern`: `ND_GVAR_DECL`.
-- 函数定义: `ND_FUNCDEF`, `body` 非 NULL.
-- 函数声明: `ND_FUNCDEF`, `body` 为 NULL.
+- 函数定义: `ND_FUNCDEF`, `decl.body` 非 NULL.
+- 函数声明: `ND_FUNCDEF`, `decl.body` 为 NULL.
 - `typedef`: `ND_TYPEDEF`.
 - 枚举常量: `ND_ENUM_CONST`.
 - 复合字面量: `ND_COMPOUND_LITERAL`, 出现在表达式位置.
@@ -287,7 +288,7 @@ tinycc 真实构建曾由 `test/pratt-ab.sh` 锁定两路径 `-dump-ast` 与 `-S
 一个历史问题是: 声明符把名字写进共享的类型记录, 会污染基本类型单例和 typedef 类型. 修复后的做法是:
 
 - 声明符把名字放在 `LibcpDeclName` 载体里.
-- 声明记录节点保存 `name_tok`.
+- 声明记录节点保存 `decl.name_tok`.
 - 类型记录上的 `name` / `name_pos` 只在函数参数的 per-parameter 副本上填写, 供 sema 读.
 - 共享类型记录永远不写名字.
 
@@ -335,7 +336,7 @@ ND_FUNCDEF @input.c:1:14 "{" ty_op=func(int) name="f" attr=none
 注意:
 
 - `ND_ADD` 没有 `ty`.
-- `ND_IDENT` 只有拼写, 没有 `var`.
+- `ND_IDENT` 只有拼写, 没有绑定字段.
 - `ND_NUM` 的 `val` 是词法阶段就有的字面值, 不是常量求值的结果.
 - `INIT` 是初始化器记录, 不是赋值链.
 
@@ -382,11 +383,11 @@ for (LibcpNode *n = ast; n; n = n->next) {
   switch (n->kind) {
   case ND_FUNCDEF:
     printf("function %.*s, body=%s\n",
-           n->name_tok->len, n->name_tok->loc,
-           n->body ? "yes" : "no");
+           n->decl.name_tok->len, n->decl.name_tok->loc,
+           n->decl.body ? "yes" : "no");
     break;
   case ND_GVAR_DECL:
-    printf("global %.*s\n", n->name_tok->len, n->name_tok->loc);
+    printf("global %.*s\n", n->decl.name_tok->len, n->decl.name_tok->loc);
     break;
   case ND_TYPEDEF:
     printf("typedef\n");
@@ -415,8 +416,8 @@ static void dump_expr(LibcpNode *n) {
 ### 6.7.4 初始化器记录
 
 ```c
-if (n->kind == ND_DECL && n->decl_init) {
-  LibcpInitializer *init = n->decl_init;
+if (n->kind == ND_DECL && n->decl.decl_init) {
+  LibcpInitializer *init = n->decl.decl_init;
   if (init->kind == INIT_LIST) {
     for (LibcpInitItem *it = init->items; it; it = it->next) {
       /* it->desigs, it->init */
@@ -434,7 +435,7 @@ if (n->kind == ND_DECL && n->decl_init) {
 ## 6.8 边界与已知限制
 
 - **没有类型计算**. 大多数 `LibcpNode.ty` 在第 3 层为 NULL. 例外: `ND_NUM` 带词法类型, `ND_TYPEDEF` 带声明类型. 显式 cast 和声明记录的目标类型在 `ty_op`.
-- **没有名字绑定**. `ND_IDENT.var` 为 NULL. 第 4 层才绑定.
+- **没有名字绑定**. `ND_IDENT` 不携带绑定字段; 第 4 层把变量/函数引用改写成 `ND_VAR`, 绑定在 `decl.var`; 枚举常量改写成 `ND_NUM`, 值在 `value.val`.
 - **没有常量求值**. `sizeof` / `_Alignof` / `_Generic` 只有形式, 没有结论.
 - **声明记录不是语句**. 消费者必须处理 `ND_DECL` / `ND_GVAR_DECL` / `ND_FUNCDEF` / `ND_TYPEDEF` / `ND_ENUM_CONST`. 第 4 层保留它们, 第 5 层摘除.
 - **初始化器是记录, 不是树**. 指示符未求值, 大括号省略未应用, 灵活数组成员未定尺寸.
@@ -442,6 +443,6 @@ if (n->kind == ND_DECL && n->decl_init) {
 - **没有错误恢复**. 第一个语法错误就返回. 想要"报多个错误"需要自己分段调用.
 - **只接受预处理后的流**. 传原始 token 流会在 `#` 或宏名上报错.
 - **宏调用不可见**. 树上只有展开后的结构. 来源查 provenance.
-- **语法检查范围有限**. 只有文法可判的 15 类诊断. 类型错误在第 4 层.
+- **语法检查范围有限**. `test/diagnostic.sh` 的 A 组锁定 15 例文法诊断; 当前 `parse.c` 有 21 个 `libcp_error_tok` 调用点, 17 条不同消息. 类型错误在第 4 层.
 - **深度上限 512**. 超深嵌套报诊断, 不返回部分树.
 - **GNU 扩展支持不完整**. `typeof`, 语句表达式, `&&label`, 范围 case, `asm` 有节点, 但不是每个细节都与 GCC 一致.

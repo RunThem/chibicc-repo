@@ -17,7 +17,8 @@
 | S3 | `34e99ec` | Align the overview design principles with the current tree |
 | S4 | `c2890e8` | Correct the architecture contracts, error model, and directory map |
 | S5 | `164e724` | Calibrate the token and preprocessor layer docs |
-| S6 | 本记录所在提交 | Describe the CST declaration and directive shapes |
+| S6 | `61d112b` | Describe the CST declaration and directive shapes |
+| S7 | 本记录所在提交 | Correct the parse node counts and field paths |
 
 ## 各步记录
 
@@ -62,6 +63,13 @@
 - 测试: `./chibicc -dump-cst` 对 `int x;` 输出 `DECL -> DECL_SPECS, DECLARATOR, ;`, 对 `int y = 1;` 输出 `DECL -> DECL_SPECS, INIT_DECLARATOR(DECLARATOR, =, PRIMARY), ;`; `grep -n "CST_PP_DIRECTIVE"` 命中 5.4.4; `grep -n "seed_typedef"` 命中 5.2.4 示例与 5.9; CST 种类计数 57 不变; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
 - 偏差: 无.
 - 验收: 无初始化器声明不再写成 `CST_INIT_DECLARATOR`; `#include_next` 的落点明确; `seed_typedef` 缓解存在; 57 种节点计数不变; `docs-links` 通过.
+
+### S7 - `docs/06-layer3-parse.md` 计数, 字段路径与示例
+
+- 做了什么: 6.3.1 把解析器产出从 66 改为 65, 不产出列表从 3 种改为 4 种并加入 `ND_NULL_EXPR`, 写明"46 个直接构造 + 21 个 `infix_ops[].kind` - 2 个重复 = 65"的计数方法; 6.2.1 / 6.2.2 / 6.2.3 / 6.2.4 / 6.4.3 / 6.4.4 把 `name_tok`, `attr`, `decl_init`, `body`, `op`, `is_post`, `is_elvis`, `arrow_tok`, `is_implicit`, `Member.width_expr` 改为字段族路径; 6.7.2 / 6.7.4 示例改用 `decl.name_tok` / `decl.body` / `decl.decl_init`; 6.8 改写 `ND_IDENT.var`, 并把文法诊断写为 A 组 15 例 / 21 个调用点 / 17 条消息.
+- 测试: 用脚本合并 `libcp_new_node` / `libcp_new_unary` / `libcp_new_binary` 的 46 个 kind 与 `infix_ops[].kind` 的 21 个, 去重 2 个后为 65; 69 减去不产出的 `ND_VAR` / `ND_VLA_PTR` / `ND_MEMZERO` / `ND_NULL_EXPR` 也为 65; `awk` 统计 `test/diagnostic.sh` 的 A 组 15 个 `snippet`; `parse.c` 有 21 个 `libcp_error_tok` 调用点与 17 条消息; `/tmp/parse_example.c` 用 `cc -std=c11 -fsyntax-only -Wall -Wextra -Ilibcp/include` 通过; `! grep -n "66 种"` 通过; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 计划写"46 个字面量构造种类加 19 个 `infix_ops[].kind`"; 实测 `infix_ops[].kind` 去重后是 21 个, 与 46 个直接构造种类有 `ND_ASSIGN` / `ND_COND` 两个重复, 因此文档按 46 + 21 - 2 = 65 写. 这是计数方法修正, 结论 65 不变.
+- 验收: 69 与 65 的口径分开写清; `ND_NULL_EXPR` 在不产出列表; 06 中不再有裸 `name_tok` / `body` / `decl_init` / `ND_IDENT.var`; 示例通过语法检查; `docs-links` 通过.
 
 ## 验收
 
@@ -140,6 +148,19 @@ S6 阶段验收:
 | `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
 | 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
 
+S7 阶段验收:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 69 / 65 计数 | 通过 | 69 个枚举 kind; 直接构造 46 + infix 21 - 重复 2 = 65 |
+| 不产出列表 | 通过 | `ND_VAR`, `ND_VLA_PTR`, `ND_MEMZERO`, `ND_NULL_EXPR` 四种 |
+| 字段路径 | 通过 | 06 中的声明字段都写成 `decl.*`, `access.*`, `ctrl.*`, `value.*`, `incdec.*` |
+| 示例可编译 | 通过 | `/tmp/parse_example.c` 通过 `cc -fsyntax-only -Wall -Wextra` |
+| 诊断计数 | 通过 | A 组 15 例; `parse.c` 21 个调用点 / 17 条消息 |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
+
 全线验收待 S14 补齐.
 
 ## 偏差与原因
@@ -151,6 +172,7 @@ S6 阶段验收:
 - S4: 无偏差. 目录地图补了计划未列出的 `LICENSE`, 因为它是已跟踪的根级文件.
 - S5: 无偏差. 03 的 11.5.8 引用在 S12 新增该子节前暂不可达; 全线验收时会补齐.
 - S6: 无偏差.
+- S7: 计划写 `infix_ops[].kind` 为 19 个, 实测去重后 21 个; 文档按 46 + 21 - 2 = 65 写, 结论不变.
 - 无范围变更.
 
 ## 后续影响
@@ -225,6 +247,17 @@ S6 阶段验收:
 - `grep -n "CST_PP_DIRECTIVE" docs/05-layer2-cst.md`: 第 98, 186 行; 第 186 行写明 `#include_next` 的落点.
 - `grep -n "seed_typedef" docs/05-layer2-cst.md`: 第 156, 311, 325 行.
 - CST 种类: `cst.h` 枚举 57 项.
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --check`: 通过.
+
+### S7
+
+- 节点计数: `ast.h` 69 个 `ND_*`; 直接构造 46 个, `infix_ops[].kind` 21 个, 重复 `ND_ASSIGN` / `ND_COND` 两个, 合并 65 个; 不产出 `ND_VAR` / `ND_VLA_PTR` / `ND_MEMZERO` / `ND_NULL_EXPR`.
+- 诊断计数: `test/diagnostic.sh` A 组 15 个 `snippet`; `parse.c` 21 个 `libcp_error_tok` 调用点, 17 条不同消息.
+- 示例: `/tmp/parse_example.c` 通过 `cc -std=c11 -fsyntax-only -Wall -Wextra -Ilibcp/include`.
+- `! grep -n "66 种" docs/06-layer3-parse.md`: 通过.
 - `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
 - `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
 - 快照: 41 份 `.s`, `snapshot diff: empty`.
