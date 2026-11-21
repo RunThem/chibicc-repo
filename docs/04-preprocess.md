@@ -148,7 +148,7 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 | 指令 | 行为 |
 |---|---|
 | `#include` | 引号形式先查当前文件所在目录, 再查 include 路径; 尖括号形式只查 include 路径 |
-| `#include_next` | 从当前 include 路径的下一个位置继续查 |
+| `#include_next` | 从 context 的 `include_next_idx` 继续查 include 路径, 不是 per-file include 栈 |
 | `#define` | 对象宏, 函数宏, 变参宏; 记录宏体和 `#define` 名 token |
 | `#undef` | 删除宏 |
 | `#if` | 用 `libcp_const_expr` 求值, 未选中分支跳过 |
@@ -180,11 +180,13 @@ include 的文件会做 include guard 检测和 `#pragma once` 记录. `include_
 2. **对象宏**: 把宏体复制出来, 套上 hideset, 记录展开.
 3. **函数宏**: 读实参, 展开实参, 对宏体做替换, 处理 `#` 字符串化和 `##` 粘贴, 套上 hideset, 记录展开.
 
-每个产物 token 的 provenance 在 `subst` 里挂接:
+函数宏的宏体与实参 provenance 在 `subst` 里挂接:
 
 - 来自宏体的 token: `arg_index = -1`.
 - 来自第 i 个实参的 token: `arg_index = i`.
 - 产物自身的 `next` 链上下文作为新链的尾部.
+
+内建宏与对象宏的产物在 `expand_macro` 里直接创建 `new_prov`, 不经过 `subst`.
 
 `join_adjacent_string_literals` 会重扫字符串, 它保存并恢复 `prov`, 保证拼接后的 token 仍能追到来源.
 
@@ -370,6 +372,7 @@ libcp_context_reset(ctx);   /* 生效 */
 - **实参之间的 trivia 丢失**. 宏调用 `M(a, b)` 中逗号两边的空白和注释不进入展开流. 产物的 trivia 指向宏体或实参内部.
 - **合成位置**. 粘贴或字符串化产生的 token 位置是合成缓冲. dump 显示 `@synth`, 诊断位置可能指向宏定义或合成位置, 而不是调用点.
 - **内存中的输入也被标成 `@synth`**. `libcp_tokenize_buffer` 的 `raw == contents`, provenance 的 `is_synthetic` 判定会把它当作合成缓冲. 用文件输入才有真实行号.
+- **`#include_next` 是 context 全局游标**. 它从 `ctx->include_next_idx` 继续扫描, 不是 GNU 的 per-file include 栈; 命中后游标停在该目录, 重复 `#include_next` 可能再次命中同一目录. 需要严格 GNU 语义时, 在消费者侧自己管理 include 路径.
 - **不支持的指令**. `#warning` 等未知指令报 `invalid preprocessor directive`. `#pragma` 除 `once` 外忽略.
 - **include 只走文件系统**. 没有虚拟文件系统或内存 include 回调. 内存中的源码可以 `#include` 磁盘上的头, 但不能 include 另一个内存字符串.
 - **预定义宏假设 x86-64 Linux**. `__linux__`, `__ELF__`, `_LP64`, `__x86_64__` 无条件定义, 即使库在 macOS 上构建. 做跨目标语义分析时要注意.

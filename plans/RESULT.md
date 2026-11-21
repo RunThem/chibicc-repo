@@ -15,7 +15,8 @@
 | S1 | `aeb769d` | Archive the agents dedup line and add the docs calibration plan |
 | S2 | `538d194` | Refresh the README baseline and five-minute example |
 | S3 | `34e99ec` | Align the overview design principles with the current tree |
-| S4 | 本记录所在提交 | Correct the architecture contracts, error model, and directory map |
+| S4 | `c2890e8` | Correct the architecture contracts, error model, and directory map |
+| S5 | 本记录所在提交 | Calibrate the token and preprocessor layer docs |
 
 ## 各步记录
 
@@ -46,6 +47,13 @@
 - 测试: `! grep -n "开放决策"` 与 `! grep -n "本章后面"` 通过; `grep -n "bench/"` 命中第 349 行; `grep -n "decl.var\|value.val\|ctrl.generic_sel"` 命中第 133, 135 行; `grep -n "LIBCP_DEFAULT_ALLOCATOR"` 命中第 321 行; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
 - 偏差: 无. 目录地图额外补了 `LICENSE`, 它是已跟踪的根级文件.
 - 验收: 2.4 的类型字段归属与 `parse.c` 一致; 2.5.3 不再声称零释放; 2.6 明确 verify 例外; 2.10 包含 `bench/`, `docs/`, 根级构建文件与三态 `plans/`; 旧字段名在该节清零; `docs-links` 通过.
+
+### S5 - `docs/03-layer1-token.md` 与 `docs/04-preprocess.md`
+
+- 做了什么: 03 的 3.2.2 / 3.3.2 把 `File.*` 改为 `LibcpFile.*`; 3.3.3 / 3.5 说明 `TK_PP_NUM` 只覆盖 pp-number 数值字面量, 字符常量在词法阶段就是 `TK_NUM` 并带 `val` / `ty`; 3.4.4 / 3.6 / 3.8 把 byte-exact 重建限定为 `tokenize_file` 与已处于扫描缓冲形态的内存输入, 写出原始 `\uXXXX` 会让 `trivia_len` 为负并指向 11.5.8. 04 的 4.4.3 把 provenance 挂接拆成函数宏 `subst` 与内建/对象宏 `expand_macro` 两类; 4.4.2 / 4.8 说明 `#include_next` 用 context 全局 `include_next_idx`, 不是 per-file 栈, 重复调用可能再次命中同一目录.
+- 测试: `grep -n "TK_PP_NUM"` 的四处都只描述数值字面量; `grep -n "LibcpFile"` 命中 3.2.2 / 3.3.2; 无裸 `File.`; `grep -n "subst\|expand_macro"` 命中两类挂接; `grep -n "include_next_idx"` 命中 4.4.2 与 4.8; `/tmp/ucn_probe.c` 对 `"\\u00e9 x\n"` 实测第二个 token 的 `trivia_len = -5`; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无. 11.5.8 在 S12 才新增, 本步先建立引用, 全线验收时该子节已存在.
+- 验收: 03 不再把字符常量写成 pp-num; 03 的 byte-exact 声明有输入形态限定; 04 的 provenance 挂接分三类; 04 的 `#include_next` 不再是 per-file 栈描述; `docs-links` 通过.
 
 ## 验收
 
@@ -98,6 +106,20 @@ S4 阶段验收:
 | `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
 | 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
 
+S5 阶段验收:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 字符常量种类 | 通过 | `tokenize.c` 的 `read_char_literal` 产出 `TK_NUM`; 文档不再把它算进 `TK_PP_NUM` |
+| `LibcpFile` 字段名 | 通过 | 3.2.2 四处改为 `LibcpFile.*`; 无裸 `File.` |
+| byte-exact 输入限定 | 通过 | 3.4.4 / 3.6 / 3.8 写明原始 `\uXXXX` 例外并指向 11.5.8 |
+| UCN 实测 | 通过 | `/tmp/ucn_probe.c` 输出第二个 token `trivia_len=-5` |
+| provenance 归属 | 通过 | 函数宏在 `subst`, 内建/对象宏在 `expand_macro` |
+| `#include_next` | 通过 | 4.4.2 表与 4.8 都写 context 全局 `include_next_idx` |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
+
 全线验收待 S14 补齐.
 
 ## 偏差与原因
@@ -107,6 +129,7 @@ S4 阶段验收:
 - S2: 无偏差.
 - S3: 无偏差. 字段族大小写成 "x86-64 构建下", 因为 `sizeof(LibcpNode)` 随 ABI 变化.
 - S4: 无偏差. 目录地图补了计划未列出的 `LICENSE`, 因为它是已跟踪的根级文件.
+- S5: 无偏差. 03 的 11.5.8 引用在 S12 新增该子节前暂不可达; 全线验收时会补齐.
 - 无范围变更.
 
 ## 后续影响
@@ -151,6 +174,28 @@ S4 阶段验收:
 - `git diff --check`: 通过.
 
 ### S4
+
+- `! grep -n "开放决策" docs/02-architecture.md`: 通过.
+- `! grep -n "本章后面" docs/02-architecture.md`: 通过.
+- `grep -n "bench/" docs/02-architecture.md`: 第 349 行.
+- `grep -n "decl.var\|value.val\|ctrl.generic_sel" docs/02-architecture.md`: 第 133, 135 行.
+- `grep -n "LIBCP_DEFAULT_ALLOCATOR" docs/02-architecture.md`: 第 321 行.
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --check`: 通过.
+
+### S5
+
+- `grep -n "TK_PP_NUM" docs/03-layer1-token.md`: 第 77, 150, 192, 228 行, 只描述 pp-number 数值字面量; 第 228 行补字符常量例外.
+- `grep -n "LibcpFile" docs/03-layer1-token.md`: 第 42-45, 97, 121, 165, 167 行; 无裸 `File.`.
+- `grep -n "subst\|expand_macro" docs/04-preprocess.md`: 第 136, 177, 183, 189 行; 函数宏与内建/对象宏分开.
+- `grep -n "include_next_idx" docs/04-preprocess.md`: 第 151, 375 行.
+- UCN 复现: `/tmp/ucn_probe.c` 对 `"\\u00e9 x\n"` 输出 `kind=1 raw_len=6`, 随后 `kind=0 trivia_len=-5`.
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --check`: 通过.
 
 - `! grep -n "开放决策" docs/02-architecture.md`: 通过.
 - `! grep -n "本章后面" docs/02-architecture.md`: 通过.
