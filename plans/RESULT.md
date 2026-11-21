@@ -20,7 +20,8 @@
 | S6 | `61d112b` | Describe the CST declaration and directive shapes |
 | S7 | `dd5ea36` | Correct the parse node counts and field paths |
 | S8 | `05ed9a4` | Align the sema field paths and serialization docs |
-| S9 | 本记录所在提交 | Document the codegen shaping order and emission branches |
+| S9 | `e0dd3b7` | Document the codegen shaping order and emission branches |
+| S10 | 本记录所在提交 | Correct the public API semantics and examples |
 
 ## 各步记录
 
@@ -86,6 +87,13 @@
 - 测试: 对照 `codegen.c` 的 `shape_node` / `shape_chain` / `expand_decl` / `new_inc_dec` / `new_add` / `new_sub` / `emit_data` / `emit_text` / `resolve_label_refs`; `grep -n "assign.op\|access.arrow_tok\|ctrl.is_elvis"` 命中; `grep -n "is_live"` 命中; `grep -n "4096"` 命中; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
 - 偏差: 无. `codegen.c` 文件头 (a)/(b) 注释不改, 只在文档与 RESULT 后续项记录.
 - 验收: 六条不变量与实现一致且明确说明前序标签; 8.5.2 覆盖链过滤与 VLA 展开; 指针缩放归属正确; 标签, 全局发射, `is_live`, `-g` 描述正确; 旧字段清零; `docs-links` 通过.
+
+### S10 - `docs/09-api-reference.md` API 语义与示例
+
+- 做了什么: 9.3.3 的 reset 清单补 stdin 缓存; 9.3.4 补 `libcp_expansion_verify` 直接写 stderr 的例外; 9.3.7 / 9.9.2 记录 `context_define` 对象宏的 `macro` 名是 `NAME=body` 并指向 11.7.8; 9.4.1 把 stdin 缓存限定为同一 TU, reset 后读到空流; 9.4.2 改为 `tokenize_buffer` 用 `strlen`, 内嵌 NUL 静默截断, 要检测 NUL 用 `_len`; 9.4.4 的 byte-exact 声明补输入形态限定; 9.6.5 区分普通校验失败与内部错误边界; 9.7.2 补 `access.arrow_tok`, `case_.colon_tok` 与空子树 NULL 行为; 9.11 限定 `cst_verify` 与 `context_*` 行; 9.12 把"reset 后一切失效"改为带静态 name/value 例外; 9.14.3 过滤隐藏返回缓冲区参数; 9.14.8 补 C++ `char *` 限制.
+- 测试: `/tmp/define_probe.c` 实测 `context_define("FOO","42")` 的 provenance `macro` 为 `FOO=42`; `/tmp/nul_probe.c` 实测 `tokenize_buffer` 3 个 token 且 `failed=0`, `_len` 返回 NULL 且 `failed=1`; `/tmp/stdin_probe.c` 实测 reset 前 3 个 token, reset 后 0 个; `/tmp/api_example.c` 通过 `cc -fsyntax-only -Wall -Wextra`; `! grep -n "reset 后一切失效"` 通过; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无. 9.4.4 与 9.12 一并修正, 使 byte-exact 与生命周期结论与 03 / 9.3.10 一致.
+- 验收: 09 的每条 API 语义与头文件或实测一致; `tokenize_buffer` NUL 与 stdin 生命周期不再误导; `context_define` 缺陷有链接; `cst_verify` / `context_*` 返回值行正确; source range 锚点完整; 示例可编译; `docs-links` 通过.
 
 ## 验收
 
@@ -205,6 +213,21 @@ S9 阶段验收:
 | `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
 | 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
 
+S10 阶段验收:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| stdin 生命周期 | 通过 | reset 清单含 stdin 缓存; 实测 reset 前 3 token, reset 后 0 token |
+| expansion_verify 例外 | 通过 | 9.3.4 写明直接写 stderr |
+| `context_define` 缺陷 | 通过 | 实测 `macro=FOO=42`; 9.3.7 / 9.9.2 指向 11.7.8 |
+| `tokenize_buffer` NUL | 通过 | 实测 `buffer` 静默截断且 `failed=0`; `_len` 报错且 `failed=1` |
+| `cst_verify` 返回值 | 通过 | 普通 false 不置 `failed`; 内部边界才可能 false + `failed` |
+| source range 锚点 | 通过 | 文档含 `decl.name_tok` / `access.arrow_tok` / `case_.colon_tok` / `spec_decls` 与 NULL 行为 |
+| 示例可编译 | 通过 | `/tmp/api_example.c` 通过 `cc -fsyntax-only -Wall -Wextra` |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
+
 全线验收待 S14 补齐.
 
 ## 偏差与原因
@@ -219,6 +242,7 @@ S9 阶段验收:
 - S7: 计划写 `infix_ops[].kind` 为 19 个, 实测去重后 21 个; 文档按 46 + 21 - 2 = 65 写, 结论不变.
 - S8: 无偏差. 同文件残留的裸 `init_resolved` / `decl_init` / `init_data` 一并改为字段族路径.
 - S9: 无偏差. `codegen.c` 文件头 (a)/(b) 注释与实现不一致, 本线只记录, 不改源码.
+- S10: 无偏差. 9.4.4 与 9.12 一并修正, 使 byte-exact 与生命周期结论与 03 / 9.3.10 一致.
 - 无范围变更.
 
 ## 后续影响
@@ -328,6 +352,19 @@ S9 阶段验收:
 - `is_live`: `codegen.c` 的 `emit_text` 跳过 `!fn->is_live`.
 - 私有表: `CG_BUCKETS` 为 4096, 三张指针键哈希表.
 - 标签: `label_base = libcp_unique_name_next(ctx)`, `new_label` 用 `label_base + label_seq++`.
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --check`: 通过.
+
+### S10
+
+- `context_define` 探针: `/tmp/define_probe.c` 输出 `token=42 macro=FOO=42`.
+- NUL 探针: `/tmp/nul_probe.c` 输出 `buffer: tokens=3 failed=0`; `buffer_len: result=null failed=1`.
+- stdin 探针: `printf 'int a;\n' | /tmp/stdin_probe` 输出 `first tokens=3`, `after reset tokens=0`.
+- 示例: `/tmp/api_example.c` 通过 `cc -std=c11 -fsyntax-only -Wall -Wextra -Ilibcp/include`.
+- `! grep -n "reset 后一切失效" docs/09-api-reference.md`: 通过.
+- `grep -n "11.7.8"` / `grep -n "tokenize_buffer_len"`: 命中 9.3.7, 9.4.2, 9.9.2.
 - `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
 - `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
 - 快照: 41 份 `.s`, `snapshot diff: empty`.

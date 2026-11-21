@@ -108,6 +108,7 @@ void libcp_context_reset(LibcpContext *ctx);
 
 - 归还全部 per-TU 分配.
 - 清空文件表, 宏表, 条件编译栈, 作用域, 语义状态.
+- 清空 stdin 缓存 (`stdin_text` / `stdin_len`).
 - 清除 `failed`.
 - 重新安装预定义宏.
 - 按记录顺序重新应用 `-D` / `-U`.
@@ -133,7 +134,7 @@ typedef void (*LibcpDiagnosticFn)(void *user,
                                     const LibcpDiagnostic *);
 ```
 
-- 注册后, 库不再向 stderr 打印.
+- 注册后, 库不再向 stderr 打印. 例外是 `libcp_expansion_verify` 的违规报告: 它直接写 stderr, 不经过回调.
 - `user` 原样传给回调.
 - `fn` 为 NULL 时恢复默认打印行为.
 - 回调里的字符串只保证到下一次 reset.
@@ -183,6 +184,7 @@ void libcp_context_define(LibcpContext *ctx, char *name, char *buf);
 - 立即生效.
 - 记录在配置里, reset 后重新应用.
 - 顺序很重要, 后定义的覆盖先定义的.
+- 已知缺陷: 这样定义的对象宏, `libcp_macro_expansion_macro` 当前返回 `NAME=body`, 不是 `NAME`; 源码里的 `#define` 正常. 见 11.7.8, 不要依赖 `-D` 宏的 `macro` 名.
 
 ### 9.3.8 libcp_context_undef
 
@@ -263,7 +265,7 @@ LibcpToken *libcp_tokenize_file(LibcpContext *ctx, char *path);
 读取文件并 tokenize.
 
 - `path` 是文件系统路径.
-- `-` 表示 stdin. 内容只读一次, 同一 context 内第二次 tokenize `-` 会拿到缓存.
+- `-` 表示 stdin. 内容只读一次, 同一 TU (即 reset 之前) 内第二次 tokenize `-` 会拿到缓存. reset 会清空缓存; reset 后再次 tokenize `-` 读到空流, 因为 stdin 的 EOF 标志是粘滞的.
 - 返回以 `TK_EOF` 结尾的链.
 - 失败返回 NULL 并报告诊断. 失败原因: 打不开, 文件过大, 含 NUL, 非法 token.
 - 第一次调用会设置 `__BASE_FILE__` 的文件名.
@@ -279,7 +281,7 @@ tokenize 一个 NUL 结尾的内存字符串.
 
 - `name` 是显示文件名, 用于诊断.
 - 输入被复制进 per-TU 分配.
-- 输入不能包含 NUL; 发现 NUL 会报 `NUL byte in source file` 并返回 NULL.
+- 长度由 `strlen` 求得, 所以缓冲区里的内嵌 NUL 会被静默截断, 不会报错. 要检测内嵌 NUL, 用 `libcp_tokenize_buffer_len`.
 - 不做扫描缓冲改写: 不跳 BOM, 不删续行, 不改写 universal char. 见第 11.5.3 节.
 
 ### 9.4.3 libcp_tokenize_buffer_len
@@ -304,7 +306,7 @@ void libcp_reconstruct(LibcpContext *ctx, LibcpToken *tok, FILE *out);
 
 按序写出每个 token 的 trivia 和拼写.
 
-- 对 `tokenize_file` / `tokenize_buffer_len` 的直接输出, 结果等于输入文件的原始字节.
+- 对 `tokenize_file` 与已处于扫描缓冲形态的 `tokenize_buffer_len` 输出, 结果等于输入字节; 原始 `\uXXXX` 的内存输入例外, 见 3.8 与 11.5.8.
 - 对预处理后的流, 结果不是原文件. 宏体替代了调用点, 指令行消失.
 - `out` 由调用者打开和关闭.
 - 不需要先预处理.
@@ -383,7 +385,7 @@ bool libcp_cst_verify(LibcpContext *ctx, LibcpCstNode *root,
 - 每个叶子指向同一个 token 对象.
 - 顺序一致.
 
-返回 true 表示通过. 失败返回 false, 不报告诊断.
+返回 true 表示通过. 普通校验失败返回 false, 不报告诊断, 也不置 `failed`; 只有内部错误边界 (例如上下文已处于错误状态) 才可能返回 false 且 `failed` 为 true.
 
 ## 9.7 第 3 层 API
 
@@ -413,11 +415,8 @@ void libcp_node_source_range(const LibcpNode *node,
 span 的最小接口. 注意事项:
 
 - `next` 链是兄弟, 不被跟随; 初始化器树不被下降.
-- 极值取自各节点的代表 token: 例如 `ND_FUNCDEF` 的代表 token 是函数体的
-  `{`, 但 `range.c` 还会收集 `name_tok`, 所以整个函数定义的 range 从它的名字
-  token 开始, 不从声明说明符开始. `spec_decls` 只保存 declspec 中产生的声明
-  记录 (如 enum 常量), 不是说明符 token, 不能用来取得更早边界; 需要更早边界
-  时请回到 token / CST.
+- 极值取自各节点的代表 token, 并额外收集 `decl.name_tok`, `access.arrow_tok` 与 `case_.colon_tok`: 例如 `ND_FUNCDEF` 的代表 token 是函数体的 `{`, 但 `range.c` 还会收集 `name_tok`, 所以整个函数定义的 range 从它的名字 token 开始, 不从声明说明符开始. `spec_decls` 只保存 declspec 中产生的声明记录 (如 enum 常量), 不是说明符 token, 不能用来取得更早边界; 需要更早边界时请回到 token / CST.
+- 子树完全没有 token 时, `*start` 与 `*end` 都为 NULL.
 - 宏展开产物 token 的坐标在合成缓冲里, 跨文件比较按文件指针先序, 稳定
   但无语义.
 
@@ -498,7 +497,7 @@ bool libcp_macro_expansion_is_builtin(LibcpMacroExpansion *e);
 
 - `name`: 调用点的宏名 token.
 - `end`: 函数宏的右括号; 对象宏返回宏名 token.
-- `macro`: 宏的拼写, NUL 结尾.
+- `macro`: 宏的拼写, NUL 结尾. 源码 `#define` 返回宏名; `-D` / `libcp_context_define` 定义的对象宏当前返回 `NAME=body`, 见 11.7.8.
 - `def`: `#define` 的宏名 token; 内建宏和 `-D` 定义返回 NULL.
 - `arg`: 第 i 个实参的 token 链, 以 `TK_EOF` 结尾; 越界返回 NULL.
 - `arg_count`: 实参个数.
@@ -534,12 +533,14 @@ const char *libcp_version(void);
 | `libcp_tokenize_buffer_len` | token 链 | NULL + `failed` |
 | `libcp_preprocess` | token 链 | NULL + `failed` |
 | `libcp_cst_parse` | 树 | NULL + `failed` |
-| `libcp_cst_verify` | true | false (或 false + `failed`) |
+| `libcp_cst_verify` | true | false (普通失败不置 `failed`; 内部错误边界才可能 false + `failed`) |
 | `libcp_parse` | 树 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
 | `libcp_sema` | `LibcpObj` 链 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
 | `libcp_expansion_verify` | true | false |
 | `libcp_reconstruct` / `_cst_reconstruct` / `_cst_dump` / `_expansion_dump` | 返回 | 提前返回 |
-| `libcp_context_*` 配置 | 返回 | 无返回; 分配失败时配置可能未生效 |
+| `libcp_context_*` void 配置函数 | 返回 | 无返回; 分配失败时配置可能未生效 |
+
+`libcp_context_failed` / `_predefined_count` / `_predefined_at` 是查询函数, 正常返回值, 不设错误边界.
 
 错误处理模板:
 
@@ -564,7 +565,7 @@ if (!ast) {
   - `define` / `undef`: 复制名字和替换文本.
   - `FILE *out`: 调用者拥有, 库不关闭.
 - 诊断回调里的 `filename` / `message`: context 拥有, 到下一次 reset.
-- `reset` 后一切失效.
+- `reset` 后, 由 context 做 per-TU 分配的指针失效; `libcp_version` 的字符串字面量与预定义宏表的静态 `name` / 固定 `value` 例外.
 - `free` 后一切失效.
 
 ## 9.13 完整示例
@@ -724,11 +725,18 @@ for (LibcpObj *o = prog; o; o = o->next) {
   if (!o->is_function || !o->is_definition)
     continue;
   printf("%s(", o->name);
-  for (LibcpObj *p = o->params; p; p = p->next)
-    printf("%s%s", p == o->params ? "" : ", ", p->name);
+  int first = 1;
+  for (LibcpObj *p = o->params; p; p = p->next) {
+    if (!*p->name)  /* 跳过隐藏返回缓冲区参数 */
+      continue;
+    printf("%s%s", first ? "" : ", ", p->name);
+    first = 0;
+  }
   printf(")\n");
 }
 ```
+
+大 struct/union 返回值会多一个名字为空的隐藏首参数; 上面的 `if (*p->name)` 把它过滤掉. 需要完整 ABI 签名时不要过滤, 但要知道第一个参数可能是返回缓冲区.
 
 用第 3 层也可以, 但参数名在类型记录的 per-parameter 副本上, 且没有 `LibcpObj` 方便.
 
@@ -794,6 +802,8 @@ extern "C" {
 ```
 
 结构体是普通 C 结构, 可以直接读字段.
+
+公共入口的参数类型是 `char *`, 不是 `const char *`. C++ 里不能直接把字符串字面量传进去; 用可写缓冲区, 或显式 `const_cast<char *>` (仅当库确实不修改该缓冲时).
 
 ## 9.15 API 的边界
 
