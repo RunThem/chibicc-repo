@@ -15,9 +15,9 @@
 
 ## 11.2 生命周期与内存
 
-### 11.2.1 reset 后所有指针失效
+### 11.2.1 reset 后 per-TU 指针失效
 
-这不是"可能失效", 是契约. `libcp_context_reset` 归还全部 per-TU 分配. token, AST, Obj, 类型, CST, 诊断字符串全部失效.
+这不是"可能失效", 是契约. `libcp_context_reset` 归还全部 per-TU 分配. token, AST, Obj, 类型, CST, 诊断字符串全部失效. 例外是 `libcp_version` 的字符串字面量与预定义宏表的静态 `name` / 固定 `value`, 它们不属于 per-TU 分配.
 
 规避:
 
@@ -167,11 +167,20 @@ libcp_context_add_include_path(ctx, "/usr/include");
 
 ### 11.5.6 stdin 只读一次
 
-`libcp_tokenize_file(ctx, "-")` 第一次读 stdin, 内容缓存. 第二次拿到同一份文本, 不是新的输入.
+`libcp_tokenize_file(ctx, "-")` 第一次读 stdin, 内容缓存. 同一 reset 周期内第二次拿到同一份文本, 不是新的输入. reset 会清空缓存; reset 后再次读 stdin 得到空流, 因为 stdin 的 EOF 标志是粘滞的.
 
-### 11.5.7 源文件含 NUL 会报错
+### 11.5.7 源文件含 NUL 的处理不一致
 
-NUL 被视为诊断, 不是静默截断. 二进制文件不能直接 tokenize.
+- `tokenize_file` 与 `tokenize_buffer_len`: 范围内出现 NUL 会报 `NUL byte in source file`, 返回 NULL.
+- `tokenize_buffer`: 先用 `strlen` 求长度, 内嵌 NUL 之前的字节被当作完整输入, 后续字节静默丢弃, 不报错.
+
+规避: 已知长度的内存输入用 `tokenize_buffer_len`; 不要让 NUL 出现在有效长度内.
+
+### 11.5.8 原始 `\uXXXX` 的内存输入破坏 raw 坐标
+
+`tokenize_buffer*` 不做扫描缓冲改写, 所以原始 `\u00e9` 被扫描成 `\` 加 `u00e9`. 但 `raw_end_of` 会把这个 `\` 当成 universal character name, 让 `\` token 的 `raw_len` 覆盖整个转义; 后一个 token 的 `trivia_len` 因此变成负数, `libcp_reconstruct` 输出错位. 实测 `"\\u00e9 x\n"` 的第二个 token `trivia_len = -5`.
+
+规避: 先把这类文本转成 UTF-8, 或改用 `tokenize_file`. 建议修复方向: 让 `raw_end_of` 只在扫描缓冲形态下按 UCN 计算, 或统一走 `make_scan_buffer`.
 
 ## 11.6 语言覆盖
 
@@ -237,6 +246,16 @@ NUL 被视为诊断, 不是静默截断. 二进制文件不能直接 tokenize.
 
 规避: `libcp_context_set_predefined_macros(ctx, false)` 后 reset, 自己定义需要的宏.
 
+### 11.7.8 `-D` / `context_define` 的 provenance 宏名带 `=body`
+
+观察: 通过 `libcp_context_define(ctx, "FOO", "42")` (或命令行 `-D`) 定义的对象宏, 展开后 `libcp_macro_expansion_macro` 返回 `FOO=42`, 不是 `FOO`; 源码里的 `#define FOO 42` 返回正常的 `FOO`.
+
+原因: 配置串 `D:FOO=42` 被就地分割后传给 `add_macro`, 宏表保存的是指向该串的指针; 分割处的 `=` 随后被恢复, 名字就变回 `FOO=42`.
+
+冲突契约: `docs/09-api-reference.md` 9.9.2 说 `macro` 是宏的拼写; `libcp_expansion_verify` 的名字一致性检查也会因此失败.
+
+规避: 不要依赖 `-D` 宏的 `macro` 名; 需要宏名时用调用点 token (`libcp_macro_expansion_name`) 或 `#define` 源码. 建议修复方向: `add_macro` 复制 name, 或在 `define_macro` 入口先复制.
+
 ## 11.8 CST
 
 ### 11.8.1 结构覆盖不完整
@@ -256,7 +275,7 @@ GNU 语句表达式 `({ ... })` 已由 `CST_STMT_EXPR` 结构化. 重建不受�
 - 只认文件内的几种 typedef 写法.
 - 名字在整个文件内可见, 不按声明位置.
 - 局部 typedef 被当作全局.
-- include 来的 typedef 未知.
+- include 来的 typedef 未知, 可以用 `libcp_cst_seed_typedef` 预置 (该配置跨 reset 保留).
 
 判断错误时树形可能错 (cast 当括号, 声明当表达式), 字节不丢.
 
@@ -281,7 +300,7 @@ CST 内部节点只有 `children`, 没有 `start` / `end`. 算范围要递归到
 ### 11.9.1 第 3 层没有类型计算和名字
 
 - 大多数 `LibcpNode.ty` 为 NULL. 例外: 数值字面量带词法类型, `ND_TYPEDEF` 带声明类型.
-- `ND_IDENT.var` 为 NULL.
+- `ND_IDENT` 不携带绑定字段; 第 4 层把变量/函数引用改写成 `ND_VAR`, 绑定在 `decl.var`; 枚举常量改写成 `ND_NUM`, 值在 `value.val`.
 - 常量未求值.
 
 ### 11.9.2 第 4 层原地改写
@@ -298,7 +317,7 @@ CST 内部节点只有 `children`, 没有 `start` / `end`. 算范围要递归到
 - 对同一个文件重新跑一条管线.
 - 库没有深拷贝 API.
 
-### 11.9.3 `init_resolved` 是私有字段
+### 11.9.3 `decl.init_resolved` 是私有字段
 
 `sema.c` 的初始化树指针. 消费者不得读写. 需要初始化数据时:
 
@@ -396,7 +415,7 @@ filename = NULL, line = 0, column = 0
 
 规避: Linux 下优先用 `.so`, 它只导出 39 个 D7 函数. 或者把库放到独立命名空间 / 单独进程.
 
-### 11.11.3 公共头没有 `extern "C"`, 参数不是 const
+### 11.11.3 公共头没有 `extern "C"`, 字符串类参数不是 const
 
 C++ 消费者要自己包:
 
@@ -406,17 +425,25 @@ extern "C" {
 }
 ```
 
-此外, `libcp_tokenize_buffer` / `libcp_context_add_include_path` / `_define` 等入口的参数类型是 `char *`, 不是 `const char *`. C++ 里传字符串字面量需要显式转换. C 里不要求.
+此外, `libcp_tokenize_buffer` / `libcp_tokenize_file` / `libcp_context_add_include_path` / `_define` 等字符串或路径类入口的参数类型是 `char *`, 不是 `const char *`. C++ 里传字符串字面量需要显式转换. C 里不要求. 只读取的结构体参数仍有 const 形式, 例如 `libcp_node_source_range` 的 `const LibcpNode *`.
 
 ### 11.11.4 版本宏与 Makefile 必须同步
 
 `LIBCP_VERSION` 和 `VERSION` 不一致会被 `test/install.sh` 抓到. 手改时要同时改.
 
+### 11.11.5 `context.h` 的预定义宏生命周期注释与实现不一致
+
+观察: `context.h` 在 `LibcpPredefinedMacro` 上说 `name` / `value` "归 context 所有, 并会被 `libcp_context_reset` 失效". 实现里静态表的 `name` 与固定 `value` 是字符串字面量, reset 不会让它们失效; 只有 `predefined` 数组本身与 per-TU 构造的 `value` 会失效.
+
+冲突契约: `docs/09-api-reference.md` 9.3.10 与 9.12 已经按实现写明静态部分不失效.
+
+规避: 不要 `free` 这些指针, 也不要依赖 reset 后继续可用; 需要长期保存就复制. 以 docs/09 9.3.10 与 9.12 为准. 建议修复方向: 改 `context.h` 注释, 或在 reset 时统一把静态项复制进 per-TU 分配.
+
 ## 11.12 性能
 
 - 没有优化 pass. 代码生成质量不在库的范围内.
 - 词法和语法是简单实现, 没有为速度做特殊优化.
-- 哈希表, 链表, 字符串驻留都是"够用"级别.
+- 哈希表, 链表, 字符串复制与存储都是"够用"级别.
 - 大文件的内存峰值取决于分配器的 `realloc` 语义; 每个 per-TU 对象带一个两指针的登记链头部.
 - 每次调用从头构建, 没有增量.
 
@@ -448,6 +475,7 @@ extern "C" {
 | 内存输入带 BOM 后接 `int` | `int` 可能被读成标识符的一部分 |
 | 内存输入带反斜杠续行 | `\` 成为独立标点, 两行不连接 |
 | 内存输入带 `\u00e9` | 读成 `\` 加 `u00e9` |
+| 内存输入带 `\u00e9` 的 raw 坐标 | `\` 的 `raw_len` 覆盖 UCN, 后一个 token 的 `trivia_len` 为负, 重建成错位 |
 | 内存输入带孤立 CR | 行号不增加 |
 | `#line` | 行号偏移, token 显示名与 `__FILE__` 改变; 诊断仍用物理路径 |
 | 宏体语法错误 | 可能指向 `#define` 行 |
@@ -459,7 +487,10 @@ extern "C" {
 | `libcp_context_failed` | 粘性, 直到 reset |
 | `set_predefined_macros` | 下一次 reset 生效 |
 | `tokenize_buffer` | 复制输入, 调用者可立即释放 |
+| `tokenize_buffer` 内嵌 NUL | 用 `strlen` 截断, 不报错; `_len` 才报错 |
+| `-D` / `context_define` 的 provenance 宏名 | `NAME=body`, 不是 `NAME` |
 | `tokenize_file("-")` | stdin 只读一次, 之后用缓存 |
+| reset 后读 stdin | 缓存已清, 读到空流 |
 | `globals` | 逆序, 含匿名对象和 `extern` 声明 |
 | `LibcpObj.params` / `locals` | 含隐藏 ABI 对象, 空名字 |
 | CST 的 `UNPARSED` | 结构未知, 字节不丢 |

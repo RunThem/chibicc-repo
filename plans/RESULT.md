@@ -22,7 +22,8 @@
 | S8 | `05ed9a4` | Align the sema field paths and serialization docs |
 | S9 | `e0dd3b7` | Document the codegen shaping order and emission branches |
 | S10 | `9c061c8` | Correct the public API semantics and examples |
-| S11 | 本记录所在提交 | Document the build, bench, and CI entry points |
+| S11 | `c436f9b` | Document the build, bench, and CI entry points |
+| S12 | 本记录所在提交 | Record the input, macro, and lifecycle limitations |
 
 ## 各步记录
 
@@ -102,6 +103,13 @@
 - 测试: `grep -n "10.8.1\|bench-tool\|check-context\|32 KiB\|--defined-only\|docker-test-thirdparty\|cpython"` 命中; `bash -n bench/run.sh` 通过; `make bench-tool` 退出 0; `nm -D --defined-only libcp.so | wc -l` 为 39; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
 - 偏差: 无. CI 表把 `test.yml` 的两个 job 分成两行, 便于区分单元闸门与 thirdparty 依赖关系.
 - 验收: bench 目标与测量项完整; 10.3 表与 `Makefile` 一致; `check-library` / `check-context` 有前置与正文; Docker 挂载描述分目标; CI 章节存在; 嵌入命令可编译; `docs-links` 通过.
+
+### S12 - `docs/11-limitations.md` 限制与已知缺陷
+
+- 做了什么: 11.2.1 改为 per-TU 指针失效并补静态表例外; 11.5.6 把 stdin 缓存限定为同一 reset 周期; 11.5.7 拆分 `tokenize_file` / `_len` 报 NUL 与 `tokenize_buffer` 静默截断; 新增 11.5.8 原始 `\uXXXX` 破坏 raw 坐标; 新增 11.7.8 `-D` / `context_define` 的 provenance 宏名带 `=body`; 11.8.2 补 `libcp_cst_seed_typedef`; 11.9.1 改写 `ND_IDENT.var`; 11.9.3 标题改为 `decl.init_resolved`; 11.11.3 限定字符串类参数为 `char *`; 新增 11.11.5 `context.h` 注释与实现不一致; 11.12 删除"字符串驻留"; 11.14 增加四行.
+- 测试: `/tmp/ucn_probe.c` 复现 `trivia_len=-5`; `/tmp/define_probe.c` 复现 `macro=FOO=42`; `/tmp/nul_probe.c` 复现 `buffer` 静默截断与 `_len` 报错; `/tmp/stdin_probe.c` 复现 reset 后空流; `! grep -n "字符串驻留"` 与 `! grep -n "ND_IDENT.var"` 通过; `grep -n "11.5.8\|11.7.8\|11.11.5"` 命中; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无. 11.2.1 也按同一例外修正, 避免与 11.11.5 / docs/09 冲突.
+- 验收: 四条新缺陷有观察行为, 冲突契约, 规避与建议; 旧字段清零; `seed_typedef` 缓解存在; 11.14 表覆盖; `docs-links` 通过.
 
 ## 验收
 
@@ -252,6 +260,22 @@ S11 阶段验收:
 | `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
 | 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
 
+S12 阶段验收:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| stdin 生命周期 | 通过 | 11.5.6 限定同一 reset 周期; 11.14 补 reset 后空流 |
+| NUL 行为拆分 | 通过 | `tokenize_file` / `_len` 报错; `tokenize_buffer` 静默截断 |
+| UCN raw 坐标 | 通过 | 11.5.8 记录观察, 契约冲突, 规避与修复方向 |
+| `-D` provenance 名 | 通过 | 11.7.8 记录 `FOO=42` 与修复方向 |
+| `seed_typedef` | 通过 | 11.8.2 写明预置与跨 reset 保留 |
+| 旧字段与旧机制 | 通过 | `ND_IDENT.var` 与"字符串驻留"清零 |
+| `context.h` 注释 | 通过 | 11.11.5 记录冲突并以 docs/09 9.3.10 / 9.12 为准 |
+| 11.14 速查表 | 通过 | 增加 NUL, `-D` 宏名, reset 后 stdin, UCN raw 坐标四行 |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
+
 全线验收待 S14 补齐.
 
 ## 偏差与原因
@@ -268,6 +292,7 @@ S11 阶段验收:
 - S9: 无偏差. `codegen.c` 文件头 (a)/(b) 注释与实现不一致, 本线只记录, 不改源码.
 - S10: 无偏差. 9.4.4 与 9.12 一并修正, 使 byte-exact 与生命周期结论与 03 / 9.3.10 一致.
 - S11: 无偏差. CI 表按 job 拆行, 同一个 workflow 可能出现两次.
+- S12: 无偏差. 11.2.1 一并补上静态表例外.
 - 无范围变更.
 
 ## 后续影响
@@ -401,6 +426,20 @@ S11 阶段验收:
 - `bash -n bench/run.sh`: 通过.
 - `make bench-tool`: 退出 0, 产出 `bench/libcp_bench.a` 与 `bench/libcp-bench`.
 - `nm -D --defined-only libcp.so | wc -l`: 39.
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --check`: 通过.
+
+### S12
+
+- UCN 探针: `/tmp/ucn_probe.c` 输出第二个 token `trivia_len=-5`.
+- `-D` 探针: `/tmp/define_probe.c` 输出 `macro=FOO=42`.
+- NUL 探针: `/tmp/nul_probe.c` 输出 `buffer: tokens=3 failed=0`; `_len` 返回 NULL 且 `failed=1`.
+- stdin 探针: reset 前 3 个 token, reset 后 0 个.
+- `! grep -n "字符串驻留" docs/11-limitations.md`: 通过.
+- `! grep -n "ND_IDENT.var" docs/11-limitations.md`: 通过.
+- `grep -n "11.5.8\|11.7.8\|11.11.5"`: 命中第 179, 249, 434 行.
 - `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
 - `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
 - 快照: 41 份 `.s`, `snapshot diff: empty`.
