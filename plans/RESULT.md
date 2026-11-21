@@ -18,7 +18,8 @@
 | S4 | `c2890e8` | Correct the architecture contracts, error model, and directory map |
 | S5 | `164e724` | Calibrate the token and preprocessor layer docs |
 | S6 | `61d112b` | Describe the CST declaration and directive shapes |
-| S7 | 本记录所在提交 | Correct the parse node counts and field paths |
+| S7 | `dd5ea36` | Correct the parse node counts and field paths |
+| S8 | 本记录所在提交 | Align the sema field paths and serialization docs |
 
 ## 各步记录
 
@@ -70,6 +71,13 @@
 - 测试: 用脚本合并 `libcp_new_node` / `libcp_new_unary` / `libcp_new_binary` 的 46 个 kind 与 `infix_ops[].kind` 的 21 个, 去重 2 个后为 65; 69 减去不产出的 `ND_VAR` / `ND_VLA_PTR` / `ND_MEMZERO` / `ND_NULL_EXPR` 也为 65; `awk` 统计 `test/diagnostic.sh` 的 A 组 15 个 `snippet`; `parse.c` 有 21 个 `libcp_error_tok` 调用点与 17 条消息; `/tmp/parse_example.c` 用 `cc -std=c11 -fsyntax-only -Wall -Wextra -Ilibcp/include` 通过; `! grep -n "66 种"` 通过; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
 - 偏差: 计划写"46 个字面量构造种类加 19 个 `infix_ops[].kind`"; 实测 `infix_ops[].kind` 去重后是 21 个, 与 46 个直接构造种类有 `ND_ASSIGN` / `ND_COND` 两个重复, 因此文档按 46 + 21 - 2 = 65 写. 这是计数方法修正, 结论 65 不变.
 - 验收: 69 与 65 的口径分开写清; `ND_NULL_EXPR` 在不产出列表; 06 中不再有裸 `name_tok` / `body` / `decl_init` / `ND_IDENT.var`; 示例通过语法检查; `docs-links` 通过.
+
+### S8 - `docs/07-layer4-sema.md` 字段, 布局与序列化
+
+- 做了什么: 7.2.1 把成员偏移从 `LibcpType` 移到 `LibcpMember.offset` / `LibcpMember.bit_offset`; 7.3.2 补 `LibcpType` 的其余字段与 `LibcpMember` 的 `next` / `tok` / `width_expr`; 7.4.1 示例改用 `n->decl.body` / `n->decl.var`; 7.4.4 说明 `layout_union` 只取最大 size/align, 位域按底层类型参与, 匿名成员按普通成员参与; 7.4.5 说明绑定改写发生在 resolve pass, `libcp_add_type` 的 `ND_STRING` 分支只物化匿名全局并设置 `decl.var`; 7.4.6 区分 `char a[] = "abc"` 的逐元素字节与 `char *p = "abc"` 的 `LibcpRelocation`; 7.5 / 7.6 的 `init_data`, `init_resolved`, `decl_init`, `ND_SIZEOF.val`, `ND_GENERIC.generic_sel` 改为字段族路径.
+- 测试: `grep -nP 'LibcpType[^.]*\.(offset|bit_offset)'` 无命中; `! grep -n "n->body\|n->var"` 通过; `/tmp/sema_example.c` 用 `cc -std=c11 -fsyntax-only -Wall -Wextra -Ilibcp/include` 通过; `layout_union` 实现实测只比较 `mem->align` 与 `mem->ty->size`; `write_gvar_data` 的数组分支逐元素写, 指针路径走 `LibcpRelocation`; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无. 额外把同文件中残留的裸 `init_resolved` / `decl_init` / `init_data` 统一成字段族路径.
+- 验收: 成员偏移只出现在 `LibcpMember`; 字段表补全或明确为关键字段; 示例可编译; 字符串序列化区分两种路径; `layout_union` 不再声称专门处理位域/匿名成员; `docs-links` 通过.
 
 ## 验收
 
@@ -161,6 +169,19 @@ S7 阶段验收:
 | `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
 | 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
 
+S8 阶段验收:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 成员偏移归属 | 通过 | 只出现在 `LibcpMember.offset` / `LibcpMember.bit_offset` |
+| 字段表 | 通过 | `LibcpType` 其余字段与 `LibcpMember` 的 `next` / `tok` / `width_expr` 已列 |
+| 示例可编译 | 通过 | `/tmp/sema_example.c` 通过 `cc -fsyntax-only -Wall -Wextra` |
+| 字符串序列化 | 通过 | 数组逐元素写字节; 指针写 `LibcpRelocation` |
+| `layout_union` | 通过 | 只取最大 size/align, 无位域/匿名成员专门分支 |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
+
 全线验收待 S14 补齐.
 
 ## 偏差与原因
@@ -173,6 +194,7 @@ S7 阶段验收:
 - S5: 无偏差. 03 的 11.5.8 引用在 S12 新增该子节前暂不可达; 全线验收时会补齐.
 - S6: 无偏差.
 - S7: 计划写 `infix_ops[].kind` 为 19 个, 实测去重后 21 个; 文档按 46 + 21 - 2 = 65 写, 结论不变.
+- S8: 无偏差. 同文件残留的裸 `init_resolved` / `decl_init` / `init_data` 一并改为字段族路径.
 - 无范围变更.
 
 ## 后续影响
@@ -263,11 +285,13 @@ S7 阶段验收:
 - 快照: 41 份 `.s`, `snapshot diff: empty`.
 - `git diff --check`: 通过.
 
-- `! grep -n "开放决策" docs/02-architecture.md`: 通过.
-- `! grep -n "本章后面" docs/02-architecture.md`: 通过.
-- `grep -n "bench/" docs/02-architecture.md`: 第 349 行.
-- `grep -n "decl.var\|value.val\|ctrl.generic_sel" docs/02-architecture.md`: 第 133, 135 行.
-- `grep -n "LIBCP_DEFAULT_ALLOCATOR" docs/02-architecture.md`: 第 321 行.
+### S8
+
+- `grep -nP 'LibcpType[^.]*\.(offset|bit_offset)' docs/07-layer4-sema.md`: 无命中.
+- `! grep -n "n->body\|n->var" docs/07-layer4-sema.md`: 通过.
+- `/tmp/sema_example.c`: `cc -std=c11 -fsyntax-only -Wall -Wextra -Ilibcp/include` 通过.
+- `layout_union`: `sema.c` 只比较 `mem->align` 与 `mem->ty->size`, 再 `libcp_align_to`.
+- 字符串路径: `write_gvar_data` 的 `TY_ARRAY` 分支逐元素递归, 指针分支经 `eval2` 写 `LibcpRelocation`.
 - `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
 - `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
 - 快照: 41 份 `.s`, `snapshot diff: empty`.
