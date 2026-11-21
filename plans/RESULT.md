@@ -14,8 +14,8 @@
 | 步骤 | hash | subject |
 |---|---|---|
 | S1 | `a51ef7a` | Archive the docs calibration line and add the help plan |
-| S2 | 本记录所在提交 | Fix the separated arguments of -I and -idirafter |
-| S3 | 待执行 | Add a detailed --help/-h option summary |
+| S2 | `a62e223` | Fix the separated arguments of -I and -idirafter |
+| S3 | 本记录所在提交 | Add a detailed --help/-h option summary |
 | S4 | 待执行 | Finish the help line |
 
 ## 各步记录
@@ -33,6 +33,13 @@
 - 测试: `test/driver.sh ./chibicc` 输出 `OK`, 两个新用例均 `passed`; `make test-all` 退出 0; 41 份汇编快照与 `d761c8d` 基线 `diff -ru` 为空; `make format-check` 与 `git diff --check` 通过.
 - 偏差: 无. 实测 `-idirafter` 的目录仍排在 `-I` 之后, 但排在内建系统路径之前, 与 GCC 的 "after system directories" 不同; 本步只修参数绑定, 不改顺序, 帮助将按实际顺序描述.
 - 验收: 分离写法在 stage1 与 stage2 均通过; 既有 `-idirafter` 优先级用例仍通过; 快照 diff 为空; `format-check` 通过.
+
+### S3 - 实现详细 `-h` / `--help`, 并补测试与 docs 导航
+
+- 做了什么: `main.c` 增加 `help_text` 静态正文与 `print_help()`, 版本头取 `LIBCP_VERSION`; `parse_args()` 在校验参数之前扫描 `-h` / `--help`, 命中即向 stdout 打印并退出 0; `usage()` 改为 `Usage: chibicc [options] file...` 并在失败时加 `Try 'chibicc --help' for more information.`; `test/driver.sh` 用七个用例替换旧的一行检查, 并用 44 条模式锁定帮助中的全部选项; `docs/02-architecture.md` 2.9 增加一段导航说明.
+- 测试: `./chibicc --help` 退出 0, stdout 80 行, stderr 0 字节; `./chibicc -h` 与 `--help` 逐字节相同; `test/driver.sh ./chibicc` 与 `make test-all` 中 stage1 / stage2 均输出 `--help lists every option ... passed`; `make test-all` 退出 0; 41 份汇编快照 diff 为空; `make format-check`, `make check-context`, `test/docs-links.sh` 通过.
+- 偏差: 无. 帮助正文最初漏写 `Usage:` 两行, 由新增的 `--help prints usage` 用例当场捕获并补上; 这是实现过程中的修正, 不影响计划范围.
+- 验收: 帮助覆盖 D3 表中的每个选项; 输出流, 退出码, 两种写法一致, 帮助优先, 缺少参数提示均通过; stage1 / stage2 用例通过; docs 导航段存在; 全线闸门通过.
 
 ## 验收
 
@@ -63,4 +70,19 @@
 - `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
 - 汇编快照: 41 份 `.s`, 与 `/tmp/libcp-help-base-ElClCm/s` 的 `diff -ru` 为空.
 - `make format-check`: 退出 0.
+- `git diff --check`: 通过.
+
+### S3
+
+- `./chibicc --help`: 退出 0; stdout 含版本头, `Usage: chibicc`, 九组选项与 `退出码`; stderr 0 字节.
+- `./chibicc -h`: 退出 0; 与 `--help` 的 `cmp` 为空; stderr 0 字节.
+- `./chibicc -o`: 退出 1; stderr 为 `Usage: chibicc [options] file...` 与 `Try 'chibicc --help' for more information.`.
+- `./chibicc -h -o <out> test/common`: 退出 0, `<out>` 不存在.
+- `grep -nP '[，。：；（）【】、《》“”‘’！？]' /tmp/help.txt`: 无命中.
+- `test/driver.sh ./chibicc`: 输出 `OK`; 七个帮助用例全部 `passed`; 44 条选项模式全部命中.
+- `make test-all`: 退出 0; stage1 与 stage2 各有一次 `testing --help lists every option ... passed` 与 `testing -idirafter separated argument ... passed`; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 汇编快照: 41 份 `.s`, 与 `/tmp/libcp-help-base-ElClCm/s` 的 `diff -ru` 为空.
+- `make format-check`: 退出 0.
+- `make check-context`: 退出 0; accessors 0, thread-local 0, `cg_ctx` 0, accessor symbols 0.
+- `test/docs-links.sh`: `docs-links: ok (48 references checked)`.
 - `git diff --check`: 通过.

@@ -48,8 +48,98 @@ static LibcpStringArray input_paths;
 static LibcpStringArray tmpfiles;
 
 static void usage(int status) {
-  fprintf(stderr, "chibicc [ -o <path> ] <file>\n");
+  fprintf(stderr, "Usage: chibicc [options] file...\n");
+  if (status != 0)
+    fprintf(stderr, "Try 'chibicc --help' for more information.\n");
   exit(status);
+}
+
+// 帮助正文. 选项清单必须与 parse_args() 保持同步; test/driver.sh 会检查
+// 每个受支持选项都出现在这里. 选项列的宽度固定为 26 个字符.
+static const char help_text[] =
+    "Usage: chibicc [options] file...\n"
+    "       chibicc -h | --help\n"
+    "\n"
+    "输入文件: .c 为 C 源文件, .s 为汇编, .o 为目标文件, .a 为静态库,\n"
+    ".so 为共享库; - 表示标准输入, 需要 -x 或 -E 指定语言. 默认动作是\n"
+    "编译, 汇编并链接.\n"
+    "\n"
+    "输出与模式:\n"
+    "  -c                        只编译并汇编, 不链接.\n"
+    "  -S                        只编译, 输出汇编.\n"
+    "  -E                        只预处理, 输出 C 源.\n"
+    "  -o <path>                 输出到 <path>; 也接受 -o<path>.\n"
+    "                            默认: 链接为 a.out, -c 为 <文件>.o, -S 为 <文件>.s,\n"
+    "                            -E 与只读通道为标准输出.\n"
+    "                            多个输入时, -o 只用于链接.\n"
+    "  -x <lang>                 把所有输入当作 <lang>: c, assembler 或 none.\n"
+    "                            也接受 -x<lang>; none 恢复按扩展名判断;\n"
+    "                            最后一个 -x 生效; -E 总是按 C.\n"
+    "  -###                      向 stderr 打印每个子进程命令行.\n"
+    "  -h, --help                打印本帮助并退出.\n"
+    "\n"
+    "预处理:\n"
+    "  -I <dir>                  把 <dir> 加入 include 搜索路径; 也接受 -I<dir>.\n"
+    "  -idirafter <dir>          在所有 -I 目录之后加入 <dir>; 内建系统路径排在它之后.\n"
+    "  -D <name>[=<value>]       定义 <name> 为 <value>, 省略 =<value> 时为 1;\n"
+    "                            也接受 -D<name>[=<value>].\n"
+    "  -U <name>                 取消 <name> 的定义; 也接受 -U<name>.\n"
+    "  -include <file>           在主源文件之前处理 <file>.\n"
+    "\n"
+    "依赖生成:\n"
+    "  -M                        写出 make 依赖后停止; 输出到 -MF, 否则 -o, 否则标准输出.\n"
+    "  -MD                       写出依赖并继续编译; 输出到 -MF, 否则 <输出名>.d.\n"
+    "  -MMD                      同 -MD, 但省略系统目录中的头文件.\n"
+    "  -MF <file>                依赖写入 <file>.\n"
+    "  -MT <target>              设置规则目标为 <target>; 可重复.\n"
+    "  -MQ <target>              同 -MT, 但转义 make 特殊字符.\n"
+    "  -MP                       为每个被包含的头文件生成伪目标.\n"
+    "\n"
+    "链接:\n"
+    "  -l<lib>                   链接库 <lib>.\n"
+    "  -L <dir>                  把 <dir> 加入库搜索路径; 也接受 -L<dir>.\n"
+    "  -Wl,<arg>[,<arg>]         把逗号分隔的参数传给链接器.\n"
+    "  -Xlinker <arg>            把一个参数传给链接器.\n"
+    "  -s                        去掉符号表.\n"
+    "  -static                   生成静态链接的可执行文件.\n"
+    "  -shared                   生成共享对象.\n"
+    "\n"
+    "代码生成:\n"
+    "  -fcommon                  暂定定义放入 common (默认).\n"
+    "  -fno-common               暂定定义生成为零初始化定义.\n"
+    "  -fpic, -fPIC              生成位置无关代码.\n"
+    "\n"
+    "接受但忽略:\n"
+    "  -O<n>, -W<name>, -g<n>, -std=<std>\n"
+    "  -ffreestanding, -fno-builtin, -fno-omit-frame-pointer,\n"
+    "  -fno-stack-protector, -fno-strict-aliasing\n"
+    "  -m64, -mno-red-zone, -w\n"
+    "                            这些选项为兼容性接受, 没有效果. -O, -W, -g 的任意后缀\n"
+    "                            都被忽略; -Wl,... 是链接选项, 不属于被忽略的警告选项.\n"
+    "\n"
+    "只读通道:\n"
+    "  -dump-tokens              预处理前打印 token 与 trivia.\n"
+    "  -reconstruct              按 token 流重建原始字节.\n"
+    "  -dump-cst                 打印 lossless CST.\n"
+    "  -reconstruct-cst          按 CST 叶子重建原始字节.\n"
+    "  -verify-cst               校验 CST 叶子与 token 流.\n"
+    "  -dump-expansions          打印宏展开 provenance.\n"
+    "  -verify-expansions        校验 provenance 不变量.\n"
+    "  -dump-ast                 在 sema 之前打印忠实 AST.\n"
+    "                            这些通道在汇编与链接之前停止; 输出到 -o 或标准输出.\n"
+    "\n"
+    "内部选项:\n"
+    "  -cc1                      在库前端中运行一个翻译单元.\n"
+    "  -cc1-input <file>         设置 -cc1 的基文件.\n"
+    "  -cc1-output <file>        设置 -cc1 的汇编输出.\n"
+    "                            驱动器用它们重新调用自身; 不要直接使用.\n"
+    "\n"
+    "退出码: 成功为 0, 出错为 1.\n";
+
+static void print_help(void) {
+  printf("chibicc %s - C11 compiler driver (libcp)\n\n", LIBCP_VERSION);
+  fputs(help_text, stdout);
+  exit(0);
 }
 
 static bool take_arg(char* arg) {
@@ -131,6 +221,11 @@ static char* quote_makefile(char* s) {
 }
 
 static void parse_args(int argc, char** argv) {
+  // -h / --help 优先于其他参数, 且不依赖已解析的配置.
+  for (int i = 1; i < argc; i++)
+    if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help"))
+      print_help();
+
   // 确保所有带参数的命令行选项都有参数.
   for (int i = 1; i < argc; i++)
     if (take_arg(argv[i]))
@@ -149,9 +244,6 @@ static void parse_args(int argc, char** argv) {
       opt_cc1 = true;
       continue;
     }
-
-    if (!strcmp(argv[i], "--help"))
-      usage(0);
 
     if (!strcmp(argv[i], "-o")) {
       opt_o = argv[++i];

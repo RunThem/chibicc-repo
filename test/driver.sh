@@ -20,9 +20,82 @@ $chibicc -c -o $tmp/out $tmp/empty.c
 [ -f $tmp/out ]
 check -o
 
-# --help
-$chibicc --help 2>&1 | grep -q chibicc
-check --help
+# -h and --help: detailed help on stdout, nothing on stderr, exit 0.
+$chibicc --help > $tmp/help 2> $tmp/help.err
+[ $? -eq 0 ] && [ -s $tmp/help ] && [ ! -s $tmp/help.err ]
+check '--help writes help to stdout'
+
+$chibicc -h > $tmp/help-h 2> $tmp/help-h.err
+[ $? -eq 0 ] && cmp -s $tmp/help $tmp/help-h && [ ! -s $tmp/help-h.err ]
+check '-h matches --help'
+
+grep -q '^Usage: chibicc' $tmp/help
+check '--help prints usage'
+
+missing=
+while IFS= read -r pat; do
+    grep -Eq -- "$pat" $tmp/help || missing="$missing $pat"
+done <<'EOF'
+^  -c[[:space:]]
+^  -S[[:space:]]
+^  -E[[:space:]]
+^  -o <path>[[:space:]]
+^  -x <lang>[[:space:]]
+^  -###[[:space:]]
+^  -h, --help[[:space:]]
+^  -I <dir>[[:space:]]
+^  -idirafter <dir>[[:space:]]
+^  -D <name>\[=<value>\][[:space:]]
+^  -U <name>[[:space:]]
+^  -include <file>[[:space:]]
+^  -M[[:space:]]
+^  -MD[[:space:]]
+^  -MMD[[:space:]]
+^  -MF <file>[[:space:]]
+^  -MT <target>[[:space:]]
+^  -MQ <target>[[:space:]]
+^  -MP[[:space:]]
+^  -l<lib>[[:space:]]
+^  -L <dir>[[:space:]]
+^  -Wl,<arg>\[,<arg>\][[:space:]]
+^  -Xlinker <arg>[[:space:]]
+^  -s[[:space:]]
+^  -static[[:space:]]
+^  -shared[[:space:]]
+^  -fcommon[[:space:]]
+^  -fno-common[[:space:]]
+^  -fpic, -fPIC[[:space:]]
+^  -O<n>, -W<name>, -g<n>, -std=<std>$
+^  -ffreestanding, -fno-builtin, -fno-omit-frame-pointer,$
+^  -fno-stack-protector, -fno-strict-aliasing$
+^  -m64, -mno-red-zone, -w$
+^  -dump-tokens[[:space:]]
+^  -reconstruct[[:space:]]
+^  -dump-cst[[:space:]]
+^  -reconstruct-cst[[:space:]]
+^  -verify-cst[[:space:]]
+^  -dump-expansions[[:space:]]
+^  -verify-expansions[[:space:]]
+^  -dump-ast[[:space:]]
+^  -cc1[[:space:]]
+^  -cc1-input <file>[[:space:]]
+^  -cc1-output <file>[[:space:]]
+EOF
+if [ -n "$missing" ]; then
+    echo "help misses:$missing"
+    exit 1
+fi
+check '--help lists every option'
+
+rm -f $tmp/help-out
+$chibicc -h -o $tmp/help-out $tmp/empty.c > /dev/null 2>&1
+[ ! -e $tmp/help-out ]
+check '--help takes precedence and does not compile'
+
+$chibicc -o > /dev/null 2> $tmp/usage.err
+[ $? -ne 0 ] && grep -q '^Usage: chibicc' $tmp/usage.err &&
+    grep -q "Try 'chibicc --help'" $tmp/usage.err
+check 'missing argument prints usage hint'
 
 # -S
 echo 'int main() {}' | $chibicc -S -o- -xc - | grep -q 'main:'
