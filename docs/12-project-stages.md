@@ -29,6 +29,12 @@
 | 2026-10-23 | 库改名 libcp | `3a46b6c` 完成 |
 | 2026-10-25 | Pratt 单一路径与内部符号前缀 | `ab6106f` 完成 |
 | 2026-10-25 | L5 产品化验证 (formatter / 覆盖 / source mapping) | `plans/RESULT-l5.md` |
+| 2026-10-26 | c2c 回归闸门 | `plans/RESULT-c2c.md` |
+| 2026-11-01 | 类型名统一 `Libcp*` | `53785b9` |
+| 2026-11-10 | 前端 benchmark | `7dc2126`, `plans/RESULT-benchmark.md` |
+| 2026-11-19 | per-TU 分配替换 arena | `b70287e`, `plans/RESULT-alloc.md` |
+| 2026-11-21 | `LibcpNode` 字段族 | `505d0bf`, `plans/RESULT-node-families.md` |
+| 2026-11-21 | AGENTS/docs 去重 | `c57acbe`, `plans/RESULT-agents-dedup.md` |
 
 日期是终态提交的日期, 不是开工日期. 每个阶段的详细执行记录在 `plans/` 下.
 
@@ -273,7 +279,7 @@ trivia 只保留了 token 之间的字节, 没有语法结构. 格式化器还�
 - 指令节点: `#define`, `#undef`, `#include`, `#line`, `#pragma`, `#error`, 空指令, `#if` 分支.
 - 文件内 typedef 预扫描作为 cast/声明 oracle.
 - 三个只读通道: `-dump-cst`, `-reconstruct-cst`, `-verify-cst`.
-- 当时代码锁定 305 项断言 (当前 309 项), 当时 61 个 dump 样本 (当前 65 个), 48 个语料文件加 15 个边界样本 round-trip.
+- 当时代码锁定 305 项断言 (当前 313 项), 当时 61 个 dump 样本 (当前 `test/cst.sh` 为 65 个), 48 个语料文件加 15 个边界样本 round-trip.
 
 ### 产物
 
@@ -351,8 +357,8 @@ trivia 只保留了 token 之间的字节, 没有语法结构. 格式化器还�
 L0 到 L4, 每步一提交:
 
 - L1: codegen 字段移出公共 `LibcpNode` / `LibcpType` / `LibcpObj`, 进 codegen 私有表.
-- L2: `LibcpContext`, arena, 诊断回调 + longjmp, 19 个文件域 static 收进 context.
-- L3.0: CST children 进 arena, reset 活字节闸门.
+- L2: `LibcpContext`, 当时的 arena (2026-11-19 已被 per-TU 分配替换), 诊断回调 + longjmp, 19 个文件域 static 收进 context.
+- L3.0: CST children 进当时的 arena, reset 活字节闸门.
 - L3.1: 9 个公共头, context 不透明, 头文件卫生.
 - L3.2: `Libcp*` 命名, `libcp_reconstruct` 进库, D7 白名单, `.a` 内部符号策略.
 - L3.3: `.a`, Linux `.so`, stage2 库对象, install, pkg-config, 版本.
@@ -362,8 +368,8 @@ L0 到 L4, 每步一提交:
 修复的缺陷:
 
 - `equal()` 的越界读.
-- arena 8 字节对齐导致 `long double` 的 UBSan 报告.
-- CST children 的裸 `realloc` 泄漏.
+- 当时 arena 的 8 字节对齐导致 `long double` 的 UBSan 报告 (历史; 当前 per-TU 分配按 `_Alignof(max_align_t)` 对齐).
+- CST children 的裸 `realloc` 泄漏 (当时修法是把 children 放进 arena; 2026-11-19 起改为 per-TU 分配).
 
 ### 产物
 
@@ -470,11 +476,13 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 | provenance 链 | provenance 线 | 宏来源不可从 AST 恢复 |
 | `LibcpContext` 不透明 | 库边界 L3 | 公共面不泄漏内部布局 |
 | 39 个公共函数 | 库边界 D7 + L5 | 唯一的公共 API 清单(L5 追加 seed 与 range; 0.2.0 追加 node_family) |
+| `LibcpNode` 的十个字段族与 `libcp_node_family` | 字段族线 | 0.2.0 把 46 个平铺字段收进匿名 union |
+| per-TU 分配替换 arena | 分配线 | 每对象独立 `LIBCP_*` 分配, reset 沿登记链归还 |
 | 表达式层是一个绑定力循环 | Pratt 线 + Pratt 单一路径线 | 级联已删, Pratt 是唯一实现 |
 
 ## 12.16 读历史文档的注意事项
 
-`plans/` 下的文件是执行记录, 不是当前 API 文档:
+`plans/` 下的文件是执行记录, 不是当前 API 文档. 目录有三态: 现行 `PLAN.md` / `RESULT.md`, 已完成线的归档 `PLAN-*.md` / `RESULT-*.md`, 以及格式模板 `PLAN-TEMPLATE.md` / `RESULT-TEMPLATE.md`.
 
 - 行号, 函数名, 字段名可能已经变了.
 - 当时的"未完成"可能现在已经完成.

@@ -23,7 +23,8 @@
 | S9 | `e0dd3b7` | Document the codegen shaping order and emission branches |
 | S10 | `9c061c8` | Correct the public API semantics and examples |
 | S11 | `c436f9b` | Document the build, bench, and CI entry points |
-| S12 | 本记录所在提交 | Record the input, macro, and lifecycle limitations |
+| S12 | `9be7a79` | Record the input, macro, and lifecycle limitations |
+| S13 | 本记录所在提交 | Extend the project timeline and historical notes |
 
 ## 各步记录
 
@@ -110,6 +111,13 @@
 - 测试: `/tmp/ucn_probe.c` 复现 `trivia_len=-5`; `/tmp/define_probe.c` 复现 `macro=FOO=42`; `/tmp/nul_probe.c` 复现 `buffer` 静默截断与 `_len` 报错; `/tmp/stdin_probe.c` 复现 reset 后空流; `! grep -n "字符串驻留"` 与 `! grep -n "ND_IDENT.var"` 通过; `grep -n "11.5.8\|11.7.8\|11.11.5"` 命中; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
 - 偏差: 无. 11.2.1 也按同一例外修正, 避免与 11.11.5 / docs/09 冲突.
 - 验收: 四条新缺陷有观察行为, 冲突契约, 规避与建议; 旧字段清零; `seed_typedef` 缓解存在; 11.14 表覆盖; `docs-links` 通过.
+
+### S13 - `docs/12-project-stages.md` 时间线与阶段事实
+
+- 做了什么: 12.2 时间线补 2026-10-26 c2c 回归闸门, 2026-11-01 类型名统一, 2026-11-10 benchmark, 2026-11-19 per-TU 分配替换 arena, 2026-11-21 字段族, 2026-11-21 AGENTS/docs 去重; 12.8 的 309 改为 313, 61/65 dump 样本口径与 `test/cst.sh` 对齐; 12.10 的 L2 / L3.0 与 arena 对齐缺陷标注为当时实现, 并说明 2026-11-19 已被 per-TU 分配替换; 12.15 增加字段族与 per-TU 分配两行; 12.16 的 `plans/` 描述改为现行 / 归档 / 模板三态.
+- 测试: `git cat-file -e` 对 `53785b9` / `7dc2126` / `b70287e` / `505d0bf` / `c57acbe` 全部通过; `git log -1 --date=short` 的日期与时间线一致; `grep -n "2026-11"` 命中五条; `grep -n "arena"` 每处都有"当时"或"已替换"限定; `grep -n "309"` 无命中, `grep -n "313"` 命中; `grep -n "PLAN-TEMPLATE"` 命中; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 计划把 309 的位置写成 12.5, 实际在 12.8 (CST 阶段); 按实际位置修正, 结论不变. c2c 终态提交 `754b0cd` 的日期是 2026-10-26, 与计划一致.
+- 验收: 时间线含 2026-11 五条以上; arena 不再被写成现行; 309 清零; 12.15 含字段族与分配模型; `plans/` 三态描述正确; `docs-links` 通过.
 
 ## 验收
 
@@ -276,6 +284,19 @@ S12 阶段验收:
 | `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
 | 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
 
+S13 阶段验收:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 时间线 | 通过 | 补 2026-10-26 与 2026-11 五条; 提交日期与 `git log` 一致 |
+| CST 计数 | 通过 | 309 清零, 313 与 `test/cst.sh` 一致 |
+| arena 时态 | 通过 | L2 / L3.0 / 对齐缺陷都标为当时实现或已替换 |
+| 12.15 现状表 | 通过 | 增加字段族与 per-TU 分配两行 |
+| `plans/` 三态 | 通过 | 现行 / 归档 / 模板 |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
+
 全线验收待 S14 补齐.
 
 ## 偏差与原因
@@ -293,6 +314,7 @@ S12 阶段验收:
 - S10: 无偏差. 9.4.4 与 9.12 一并修正, 使 byte-exact 与生命周期结论与 03 / 9.3.10 一致.
 - S11: 无偏差. CI 表按 job 拆行, 同一个 workflow 可能出现两次.
 - S12: 无偏差. 11.2.1 一并补上静态表例外.
+- S13: 计划把 309 的位置写成 12.5, 实际在 12.8; 已按实际位置修正, 结论不变.
 - 无范围变更.
 
 ## 后续影响
@@ -440,6 +462,18 @@ S12 阶段验收:
 - `! grep -n "字符串驻留" docs/11-limitations.md`: 通过.
 - `! grep -n "ND_IDENT.var" docs/11-limitations.md`: 通过.
 - `grep -n "11.5.8\|11.7.8\|11.11.5"`: 命中第 179, 249, 434 行.
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --check`: 通过.
+
+### S13
+
+- `git cat-file -e` 对 `53785b9` / `7dc2126` / `b70287e` / `505d0bf` / `c57acbe`: 全部存在.
+- `git log -1 --date=short`: 2026-11-01, 2026-11-10, 2026-11-19, 2026-11-21, 2026-11-21.
+- `grep -n "arena" docs/12-project-stages.md`: 每处都有"当时"或"已替换"限定.
+- `! grep -n "309" docs/12-project-stages.md`: 通过; `grep -n "313"` 命中第 282 行.
+- `grep -n "PLAN-TEMPLATE"`: 命中第 485 行.
 - `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
 - `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
 - 快照: 41 份 `.s`, `snapshot diff: empty`.
