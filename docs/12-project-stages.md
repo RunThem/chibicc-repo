@@ -35,6 +35,7 @@
 | 2026-11-19 | per-TU 分配替换 arena | `b70287e`, `plans/RESULT-alloc.md` |
 | 2026-11-21 | `LibcpNode` 字段族 | `505d0bf`, `plans/RESULT-node-families.md` |
 | 2026-11-21 | AGENTS/docs 去重 | `c57acbe`, `plans/RESULT-agents-dedup.md` |
+| 2026-11-21 | docs 按当前代码校准 (本线) | `plans/RESULT.md` |
 
 日期是终态提交的日期, 不是开工日期. 每个阶段的详细执行记录在 `plans/` 下.
 
@@ -235,8 +236,8 @@
 
 ### 实现
 
-- 双缓冲: `File.raw` 原样文本, `File.contents` 扫描缓冲.
-- `File.map` 扫描偏移到 raw 偏移, `File.lines` raw 偏移到行号.
+- 双缓冲: `LibcpFile.raw` 原样文本, `LibcpFile.contents` 扫描缓冲.
+- `LibcpFile.map` 扫描偏移到 raw 偏移, `LibcpFile.lines` raw 偏移到行号.
 - `make_scan_buffer` 一遍产出扫描缓冲和两张表.
 - token 的 `trivia` / `trivia_len` / `raw_loc` / `raw_len` 都是 raw 坐标.
 - 扫描缓冲保持 T1 前的文字效果: 换行归一变 `\n`, 续行删除, universal char 改写, BOM 跳过, 末尾补换行.

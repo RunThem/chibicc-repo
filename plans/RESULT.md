@@ -24,7 +24,8 @@
 | S10 | `9c061c8` | Correct the public API semantics and examples |
 | S11 | `c436f9b` | Document the build, bench, and CI entry points |
 | S12 | `9be7a79` | Record the input, macro, and lifecycle limitations |
-| S13 | 本记录所在提交 | Extend the project timeline and historical notes |
+| S13 | `bdd693d` | Extend the project timeline and historical notes |
+| S14 | 本记录所在提交 | Finish the docs calibration sweep |
 
 ## 各步记录
 
@@ -118,6 +119,13 @@
 - 测试: `git cat-file -e` 对 `53785b9` / `7dc2126` / `b70287e` / `505d0bf` / `c57acbe` 全部通过; `git log -1 --date=short` 的日期与时间线一致; `grep -n "2026-11"` 命中五条; `grep -n "arena"` 每处都有"当时"或"已替换"限定; `grep -n "309"` 无命中, `grep -n "313"` 命中; `grep -n "PLAN-TEMPLATE"` 命中; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
 - 偏差: 计划把 309 的位置写成 12.5, 实际在 12.8 (CST 阶段); 按实际位置修正, 结论不变. c2c 终态提交 `754b0cd` 的日期是 2026-10-26, 与计划一致.
 - 验收: 时间线含 2026-11 五条以上; arena 不再被写成现行; 309 清零; 12.15 含字段族与分配模型; `plans/` 三态描述正确; `docs-links` 通过.
+
+### S14 - 全线一致性校对与 RESULT 收尾
+
+- 做了什么: 对全 `docs/` 做旧口径与字段 sweep, 修掉 `docs/12` 历史段残留的裸 `File.*`; 在 `docs/12` 时间线追加本线 (终态 `plans/RESULT.md`); 补齐提交表, 全线验收对照, 偏差与后续项; 重跑全线闸门.
+- 测试: 39 个公共函数 / 57 个 `CST_*` / 69 个 `ND_*` / 65 个解析器产出 / 47 个预定义宏 / 313 次 CST check / 68 例诊断全部由脚本或测试输出复核; `! grep -rn "不做 union\|66 种\|309\|字符串驻留\|ND_IDENT.var"` 通过; `! grep -rnP '(?<!Libcp)(Obj|File)\.'` 只剩 codegen 私有的 `CgObj.*`; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; `make format-check` 与 `make check-context` 退出 0; 41 份快照 diff 为空; `git diff --check` 通过; `git diff --stat c57acbe..HEAD -- ':!docs' ':!plans'` 为空.
+- 偏差: sweep 发现 `docs/12` 的 trivia 历史段仍用裸 `File.*`, 本步改为 `LibcpFile.*`; 这是收尾修正, 不改变计划范围.
+- 验收: 全线闸门全绿; 旧字段与旧计数清零; `docs-links` 通过; `git diff` 只含 `docs/` 与 `plans/`; RESULT 完整且包含代码缺陷后续项.
 
 ## 验收
 
@@ -297,7 +305,21 @@ S13 阶段验收:
 | `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
 | 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
 
-全线验收待 S14 补齐.
+全线验收:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| `make format-check` | 通过 | 退出 0 |
+| `make check-context` | 通过 | accessors 0, `cg_ctx` 0, accessor symbols 0 |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与 `c57acbe` 基线 diff 为空 |
+| `git diff --check` | 通过 | 无空白错误 |
+| 改动范围 | 通过 | `git diff --stat c57acbe..HEAD` 只含 `docs/` 与 `plans/` |
+| 代码零改动 | 通过 | `git diff --stat c57acbe..HEAD -- ':!docs' ':!plans'` 为空 |
+| 计数一致 | 通过 | 39 个公共函数, 57 个 `CST_*`, 69 个 `ND_*`, 65 个解析器产出, 47 个预定义宏, 313 次 CST check, 68 例诊断 |
+| 旧口径清零 | 通过 | `不做 union`, `66 种`, `309`, `字符串驻留`, `ND_IDENT.var` 均无命中 |
+| 提交与计划对应 | 通过 | S1-S14 共 14 个提交, 与 PLAN 的 14 步一一对应 |
 
 ## 偏差与原因
 
@@ -319,8 +341,14 @@ S13 阶段验收:
 
 ## 后续影响
 
-- 本线只改 `docs/` 与 `plans/`; 审计发现的实现缺陷只写入 `docs/11-limitations.md` 与本文的后续项, 不修代码.
-- 后续项候选: `libcp_tokenize_buffer` 的 NUL 截断, `libcp_context_define` 的 provenance `macro` 名带 `=body`, reset 后 stdin 缓存失效, 原始 `\uXXXX` memory 输入的 raw 坐标错位, `codegen.c` 文件头 (a)/(b) 注释与实现不一致.
+- 本线只改 `docs/` 与 `plans/`; 以下实现或头文件缺陷只记录, 待另立计划, 是否修由用户拍板:
+  1. `libcp_tokenize_buffer` 用 `strlen` 求长度: 内嵌 NUL 静默截断 (`libcp/src/lib.c:361`). 文档 9.4.2 / 11.5.7 已按当前行为写. 修复方向: 保留 `strlen` 语义并要求调用者用 `_len`, 或新增显式长度入口; 两者都是 API 决策.
+  2. `-D` / `libcp_context_define` 的 provenance `macro` 名带 `=body` (`libcp/src/lib.c:172-207` 与 `libcp/src/preprocess.c:418`). 修复方向: `add_macro` 复制 name, 或在 `define_macro` 入口复制; 修好后 `libcp_expansion_verify` 的名字一致性检查才能覆盖 `-D`.
+  3. 原始 `\uXXXX` 的内存输入破坏 raw 坐标 (`libcp/src/tokenize.c` 的 `raw_end_of` / `new_token`). 修复方向: `raw_end_of` 只在扫描缓冲形态按 UCN 计算, 或统一走 `make_scan_buffer`.
+  4. reset 清空 stdin 缓存, reset 后第二次 `tokenize_file("-")` 读到空流. 文档 9.4.1 / 11.5.6 已写明; 是否改为跨 reset 保留缓存是行为决策.
+  5. `context.h` 的预定义宏生命周期注释与实现不一致 (`libcp/include/libcp/context.h:43-48`); 建议改注释, 或在 reset 时把静态项复制进 per-TU 分配.
+  6. `codegen.c` 文件头 (a)/(b) 注释与实现不一致; 建议改注释, 不改整形顺序.
+  7. `test/fmt.sh` 顶部注释仍说 `-S` 等价只在容器内跑, 实际有系统头时也跑; 建议改注释 (本线不改测试脚本).
 - 41 份汇编基线固定在 `/tmp/libcp-docs-base-s`; 每步用同一命令重建 `/tmp/libcp-docs-cur-s` 并 diff.
 
 ## 闸门实测
@@ -478,3 +506,15 @@ S13 阶段验收:
 - `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
 - 快照: 41 份 `.s`, `snapshot diff: empty`.
 - `git diff --check`: 通过.
+
+### S14
+
+- `make test-all`: 退出 0; 末尾 `c2c s-equiv: 54 files assembly-identical` 与 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- `make format-check`: 退出 0.
+- `make check-context`: 退出 0; accessors 0, `cg_ctx` 0, file-scope pointer 0, accessor symbols 0.
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --check`: 通过.
+- 范围: `git diff --stat c57acbe..HEAD` 为 17 个文件, 只含 `docs/` 与 `plans/`; `git diff --stat c57acbe..HEAD -- ':!docs' ':!plans'` 为空.
+- 计数: `d7=39`, `cst=57`, `nd=69`, `parser=65`, `predefined=47`, `cst_checks=313`, `diagnostics=68` (`diagnostic lock: 68 cases byte-exact`).
+- 旧口径: `不做 union`, `66 种`, `309`, `字符串驻留`, `ND_IDENT.var` 在 `docs/` 无命中; 裸 `Obj.` / `File.` 只剩 `CgObj.offset` / `CgObj.stack_size`, 是 codegen 私有类型.
