@@ -16,7 +16,8 @@
 | S2 | `538d194` | Refresh the README baseline and five-minute example |
 | S3 | `34e99ec` | Align the overview design principles with the current tree |
 | S4 | `c2890e8` | Correct the architecture contracts, error model, and directory map |
-| S5 | 本记录所在提交 | Calibrate the token and preprocessor layer docs |
+| S5 | `164e724` | Calibrate the token and preprocessor layer docs |
+| S6 | 本记录所在提交 | Describe the CST declaration and directive shapes |
 
 ## 各步记录
 
@@ -54,6 +55,13 @@
 - 测试: `grep -n "TK_PP_NUM"` 的四处都只描述数值字面量; `grep -n "LibcpFile"` 命中 3.2.2 / 3.3.2; 无裸 `File.`; `grep -n "subst\|expand_macro"` 命中两类挂接; `grep -n "include_next_idx"` 命中 4.4.2 与 4.8; `/tmp/ucn_probe.c` 对 `"\\u00e9 x\n"` 实测第二个 token 的 `trivia_len = -5`; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
 - 偏差: 无. 11.5.8 在 S12 才新增, 本步先建立引用, 全线验收时该子节已存在.
 - 验收: 03 不再把字符常量写成 pp-num; 03 的 byte-exact 声明有输入形态限定; 04 的 provenance 挂接分三类; 04 的 `#include_next` 不再是 per-file 栈描述; `docs-links` 通过.
+
+### S6 - `docs/05-layer2-cst.md` 声明形状与指令节点
+
+- 做了什么: 5.4.3 改为"声明拆成 `CST_DECL_SPECS`, 一个或多个 `CST_DECLARATOR`, 分号; 有初始化器时该声明符包在 `CST_INIT_DECLARATOR` 中"; 5.4.4 补 `#include_next` 在 `cst_pp_kind` 中没有专门分支, 落到 `CST_PP_DIRECTIVE`; 5.9 的 typedef 限制补 `libcp_cst_seed_typedef` 预置, 并说明该配置跨 reset 保留.
+- 测试: `./chibicc -dump-cst` 对 `int x;` 输出 `DECL -> DECL_SPECS, DECLARATOR, ;`, 对 `int y = 1;` 输出 `DECL -> DECL_SPECS, INIT_DECLARATOR(DECLARATOR, =, PRIMARY), ;`; `grep -n "CST_PP_DIRECTIVE"` 命中 5.4.4; `grep -n "seed_typedef"` 命中 5.2.4 示例与 5.9; CST 种类计数 57 不变; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无.
+- 验收: 无初始化器声明不再写成 `CST_INIT_DECLARATOR`; `#include_next` 的落点明确; `seed_typedef` 缓解存在; 57 种节点计数不变; `docs-links` 通过.
 
 ## 验收
 
@@ -120,6 +128,18 @@ S5 阶段验收:
 | `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
 | 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
 
+S6 阶段验收:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 声明形状 | 通过 | `-dump-cst` 显示无初始化器是 `DECLARATOR`, 有初始化器是 `INIT_DECLARATOR` |
+| `#include_next` 落点 | 通过 | `cst_pp_kind` 无专门分支; 文档写 `CST_PP_DIRECTIVE` |
+| `seed_typedef` 缓解 | 通过 | 5.9 写明预置方式与跨 reset 保留 |
+| CST 种类计数 | 通过 | `cst.h` 枚举 57 项, 文档计数不变 |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
+
 全线验收待 S14 补齐.
 
 ## 偏差与原因
@@ -130,6 +150,7 @@ S5 阶段验收:
 - S3: 无偏差. 字段族大小写成 "x86-64 构建下", 因为 `sizeof(LibcpNode)` 随 ABI 变化.
 - S4: 无偏差. 目录地图补了计划未列出的 `LICENSE`, 因为它是已跟踪的根级文件.
 - S5: 无偏差. 03 的 11.5.8 引用在 S12 新增该子节前暂不可达; 全线验收时会补齐.
+- S6: 无偏差.
 - 无范围变更.
 
 ## 后续影响
@@ -192,6 +213,18 @@ S5 阶段验收:
 - `grep -n "subst\|expand_macro" docs/04-preprocess.md`: 第 136, 177, 183, 189 行; 函数宏与内建/对象宏分开.
 - `grep -n "include_next_idx" docs/04-preprocess.md`: 第 151, 375 行.
 - UCN 复现: `/tmp/ucn_probe.c` 对 `"\\u00e9 x\n"` 输出 `kind=1 raw_len=6`, 随后 `kind=0 trivia_len=-5`.
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --check`: 通过.
+
+### S6
+
+- `./chibicc -dump-cst /tmp/cst1.c`: `DECL` 下是 `DECL_SPECS`, `DECLARATOR`, `;`.
+- `./chibicc -dump-cst /tmp/cst2.c`: `DECL` 下是 `DECL_SPECS`, `INIT_DECLARATOR(DECLARATOR, =, PRIMARY)`, `;`.
+- `grep -n "CST_PP_DIRECTIVE" docs/05-layer2-cst.md`: 第 98, 186 行; 第 186 行写明 `#include_next` 的落点.
+- `grep -n "seed_typedef" docs/05-layer2-cst.md`: 第 156, 311, 325 行.
+- CST 种类: `cst.h` 枚举 57 项.
 - `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
 - `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
 - 快照: 41 份 `.s`, `snapshot diff: empty`.

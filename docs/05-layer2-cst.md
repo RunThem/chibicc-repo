@@ -173,7 +173,7 @@ LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok) {
 ### 5.4.3 声明与语句
 
 - 顶层和块内都用 `cst_is_decl_start` 判断是不是声明. 判断依据是类型关键字, `struct` / `union` / `enum` / `typeof` / `_Atomic`, 或已知的 typedef 名.
-- 声明拆成 `CST_DECL_SPECS`, 一个或多个 `CST_INIT_DECLARATOR`, 分号. 函数定义是 `CST_FUNC_DEF`.
+- 声明拆成 `CST_DECL_SPECS`, 一个或多个 `CST_DECLARATOR`, 分号. 有初始化器时, 该声明符包在 `CST_INIT_DECLARATOR` 中. 函数定义是 `CST_FUNC_DEF`.
 - 语句覆盖 C 的语句形式: `if`, `switch`, `while`, `do`, `for`, `case`, `default`, 标签, `goto`, `break`, `continue`, `return`, `asm`, 块, 空语句, 表达式语句.
 - 表达式按 C 优先级链解析, 包括逗号. 每个运算符和括号是显式叶子.
 - `(T)x` 与 `(x)` 的区分: 如果 `(` 后面的第一个 token 看起来像类型名, 按 cast 或复合字面量解析; 否则按括号表达式. 判断可能错, 错了就是树形错, 字节不错.
@@ -183,7 +183,7 @@ LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok) {
 - 行首的 `#` 开始一条指令. 指令的范围到下一个逻辑行首.
 - `#define` 的对象宏和函数宏分界规则与 `preprocess.c` 一致.
 - `#if` / `#elif` / `#else` / `#endif` 组成 `CST_PP_IF`, 每个分支一个 `CST_PP_BRANCH`. 条件不求值, 分支全部保留, `#endif` 作为 `PP_IF` 的子节点.
-- 未知指令或无法完整识别的指令变成 `CST_PP_DIRECTIVE`, 其 token 仍是叶子.
+- 未知指令或无法完整识别的指令变成 `CST_PP_DIRECTIVE`, 其 token 仍是叶子. `#include_next` 在 `cst_pp_kind` 中没有专门分支, 因此落到 `CST_PP_DIRECTIVE`, 不是 `CST_PP_INCLUDE`.
 - 指令出现在已经退化为 `CST_UNPARSED` 的跨度里时, 它不会额外变成 `CST_PP_*` 节点. 它仍然是 token 叶子. 这是结构覆盖的边界, 不影响重建.
 
 ### 5.4.5 回退
@@ -322,7 +322,7 @@ if (node->kind == CST_UNPARSED) {
 
 - **必须在预处理之前建树**. 预处理会改写输入链. 同一份文件 tokenize 两次也可以, 但要接受两份内存.
 - **不做预处理**. 指令不求值, 宏不展开, include 不跟随. `#if 0` 的分支也在树里.
-- **typedef oracle 是启发式**. 只认文件内的几种 typedef 写法. include 来的 typedef 未知, 局部 typedef 被当作全局可见. 判断错误时树形退化, 字节不丢.
+- **typedef oracle 是启发式**. 只认文件内的几种 typedef 写法. include 来的 typedef 未知, 可以用 `libcp_cst_seed_typedef` 预置 (该配置跨 reset 保留); 局部 typedef 被当作全局可见. 判断错误时树形退化, 字节不丢.
 - **`CST_UNPARSED` 的覆盖面**. 当前基线 (`test/cst-stats.golden`): 48 个语料文件中 7 个含 `UNPARSED`, 共 45 个 span, 主要来源是宏形状残骸, 属性内嵌 struct 与 `_Atomic`. GNU 语句表达式已经由 `CST_STMT_EXPR` 结构化. 依赖结构的工具必须处理 `UNPARSED`.
 - **没有源码范围字段**. CST 内部节点只有 children, 没有 `start` / `end`. 要算一个节点的字节范围, 得递归到首叶子和末叶子. L5 的 formatter MVP (`tools/fmt.c`) 已交付, 它按树发射而不依赖该字段; AST 子树范围由 `libcp_node_source_range` 提供.
 - **指令在 `UNPARSED` 跨度内不独立成 PP 节点**. 重建不受影响, 结构查询会漏.
