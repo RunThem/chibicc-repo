@@ -15,8 +15,8 @@
 |---|---|---|
 | S1 | `a51ef7a` | Archive the docs calibration line and add the help plan |
 | S2 | `a62e223` | Fix the separated arguments of -I and -idirafter |
-| S3 | 本记录所在提交 | Add a detailed --help/-h option summary |
-| S4 | 待执行 | Finish the help line |
+| S3 | `a392aec` | Add a detailed --help/-h option summary |
+| S4 | 本记录所在提交 | Finish the help line |
 
 ## 各步记录
 
@@ -43,15 +43,39 @@
 
 ## 验收
 
-- 待收线时补齐.
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| `-h` / `--help` 详细帮助 | 通过 | stdout 80 行, 含版本头, `Usage: chibicc`, 九组选项与退出码 |
+| 输出流与退出码 | 通过 | 两种写法均退出 0, stdout 有内容, stderr 0 字节; `cmp` 逐字节相同 |
+| 选项覆盖 | 通过 | `test/driver.sh` 的 44 条模式覆盖 `parse_args` 的全部选项, 含兼容性忽略组与内部 `-cc1*` 组 |
+| 帮助优先 | 通过 | `chibicc -h -o <out> test/common` 退出 0 且不产生 `<out>` |
+| 用法错误提示 | 通过 | `chibicc -o` 退出 1, stderr 含 `Usage: chibicc [options] file...` 与 `Try 'chibicc --help'` |
+| `-I <dir>` 分离写法 | 通过 | stage1 与 stage2 的 `-I separated argument` 用例通过 |
+| `-idirafter <dir>` 分离写法 | 通过 | stage1 与 stage2 的 `-idirafter separated argument` 用例通过; 既有优先级用例仍通过 |
+| 全量测试含自举 | 通过 | `make test-all` 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编等价性 | 通过 | 41 份 `test/*.c` 的 `-S` 输出与 `d761c8d` 基线逐字节 diff 为空 |
+| 格式与上下文审计 | 通过 | `make format-check` 退出 0; `make check-context` 输出 accessors 0, thread-local 0, `cg_ctx` 0, accessor symbols 0 |
+| docs 链接 | 通过 | `docs-links: ok (48 references checked)` |
+| 改动范围 | 通过 | 只改 `main.c`, `test/driver.sh`, `docs/02-architecture.md` 2.9 与 `plans/`; `libcp/`, 公共头, `codegen.c`, `Makefile` 未动 |
 
 ## 偏差与原因
 
-- 待收线时补齐.
+- S1: 无偏差. 归档正文与 `HEAD` 版本逐行相同, 只改标题并加归档说明.
+- S2: 计划只要求修正分离参数绑定; 实测 `-idirafter` 的目录排在 `-I` 之后但排在内建系统路径之前, 与 GCC 的 "after system directories" 不同. 本步没有改顺序, 帮助按实际行为描述; 该差异记录在后续影响.
+- S3: 帮助正文最初漏写 `Usage:` 两行, 新增的 `--help prints usage` 用例当场失败并暴露问题; 补上后通过. 这是实现过程中的修正, 不改变范围与验收.
+- S4: 无偏差. RESULT 初次统计把帮助行数写成 76, 选项模式写成 43; 实测为 80 与 44, 本步更正.
+- 无范围变更; 没有修改 `PLAN.md` 的步骤或验收标准.
 
 ## 后续影响
 
-- 待收线时补齐.
+- `-idirafter` 的顺序仍与 GCC 不同: 当前在 `-I` 之后, 内建系统路径之前. 若要对齐 GCC, 需要在 `add_default_include_paths()` 之后追加 idirafter 目录; 这是独立的行为决策, 本线不做.
+- `-l<lib>` 仍只支持连写形式; 帮助没有宣称 `-l <lib>` 可用. 若要对齐 GCC 分离写法, 需要另立计划并补测试.
+- 帮助正文是 `main.c` 的静态字符串, 新增或修改选项时必须同步 `help_text` 与 `test/driver.sh` 的模式清单; 后者会在遗漏时失败.
+- `-h` / `--help` 的版本头取 `LIBCP_VERSION`; Makefile 的 `VERSION` 必须继续与公共头同步, 否则帮助头会显示库版本而不是驱动器版本.
+- 兼容性选项仍然是接受但忽略, 尤其 `-w` 不会抑制警告; 帮助已明确写出.
+- 内部 `-cc1` / `-cc1-input` / `-cc1-output` 已列入帮助, 但只供驱动器自调用; 帮助已标注不要直接使用.
+- 41 份汇编基线固定在 `/tmp/libcp-help-base-ElClCm/s`; 该路径是临时目录, 新线需要按同样命令重新生成.
+- 用户要求最后推送 `main`; 本线收线提交后执行 `git push origin main`.
 
 ## 闸门实测
 
@@ -86,3 +110,13 @@
 - `make check-context`: 退出 0; accessors 0, thread-local 0, `cg_ctx` 0, accessor symbols 0.
 - `test/docs-links.sh`: `docs-links: ok (48 references checked)`.
 - `git diff --check`: 通过.
+
+### S4
+
+- `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 汇编快照: 41 份 `.s`, 与 `/tmp/libcp-help-base-ElClCm/s` 的 `diff -ru` 为空.
+- `make format-check`: 退出 0.
+- `make check-context`: 退出 0; accessors 0, thread-local 0, `cg_ctx` 0, accessor symbols 0.
+- `test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `git diff --check`: 通过.
+- 工作树: 本步只改 `plans/RESULT.md`.
