@@ -79,7 +79,7 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 
 它服务的是"要理解程序"的工具: 类型检查, 语义分析, 代码生成, C 转 C.
 
-一条重要的设计决定是: **不为宏调用建语法节点**. 语法层消费展开流, 宏的原始写法由第 2 层保留, 宏到产物的对应由 provenance 提供. 放弃的是"在宏展开内部做外科式编辑"的能力. 这个决定及理由记录在 `plans/PLAN-provenance.md` 与 `AGENTS.md` 的开放决策一节.
+一条重要的设计决定是: **不为宏调用建语法节点**. 语法层消费展开流, 宏的原始写法由第 2 层保留, 宏到产物的对应由 provenance 提供. 放弃的是"在宏展开内部做外科式编辑"的能力. 这个决定及理由记录在 `plans/PLAN-provenance.md` 与 `AGENTS.md` 的 `已定边界` 一节.
 
 ## 2.4 层间契约
 
@@ -117,7 +117,7 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 ### 2.4.4 第 3 层的契约
 
 - 输入是预处理后的 token 链.
-- 表达式节点不做类型计算. 大多数 `LibcpNode.ty` 在第 3 层为 NULL. 两个例外: 数值字面量 `ND_NUM` 带词法阶段的类型, `ND_TYPEDEF` 记录带它声明的类型. 显式 cast 与声明记录的目标类型在 `ty_op`. 其余类型由第 4 层填.
+- 表达式节点不做类型计算. 大多数 `LibcpNode.ty` 在第 3 层为 NULL. 两个例外: 数值字面量 `ND_NUM` 带词法阶段的类型, `ND_TYPEDEF` 记录带它声明的类型. `ND_CAST` 与声明记录 `ND_DECL` / `ND_GVAR_DECL` / `ND_FUNCDEF` / `ND_ENUM_CONST` 的目标类型在 `ty_op`. 其余类型由第 4 层填.
 - 名字不绑定. 标识符是 `ND_IDENT`, `var` 为 NULL.
 - 常量不求值. `sizeof`, `_Alignof` 的结论不填.
 - 声明以记录节点交给 sema: `ND_DECL`, `ND_GVAR_DECL`, `ND_FUNCDEF`, `ND_TYPEDEF`, `ND_ENUM_CONST`.
@@ -130,11 +130,11 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 - 输入是第 3 层的树, 原地标注.
 - 输出是全局对象链 `LibcpObj *`, 每个函数和全局变量一项, 包含 `extern` 声明与 `__func__` 一类匿名对象.
 - 树上的每个表达式节点都有 `ty`.
-- `ND_IDENT` 被绑定成 `ND_VAR` 或 `ND_NUM`. 源码表达式位置的 `ND_STRING` 被改写成指向匿名全局的 `ND_VAR`; 第 4 层物化字符串 (例如 `INIT_STR` 初始化器) 时仍会创建保持 `ND_STRING` 种类的节点, 两者都通过 `var` 指向匿名全局. 这是第 4 层仅有的节点种类改写.
+- `ND_IDENT` 被绑定成 `ND_VAR` 或 `ND_NUM`. 源码表达式位置的 `ND_STRING` 被改写成指向匿名全局的 `ND_VAR`; 第 4 层物化字符串 (例如 `INIT_STR` 初始化器) 时仍会创建保持 `ND_STRING` 种类的节点, 两者的 `decl.var` 都指向匿名全局. 这是第 4 层仅有的节点种类改写.
 - 声明记录保留在语句链里, 供消费者决定怎么展开. sema 不把记录变成语句.
-- 编译期结论记录在节点字段上: `ND_SIZEOF` / `ND_ALIGNOF` 的 `val`, `ND_GENERIC` 的 `generic_sel`, 内建类型谓词的 `val`.
-- 隐式 cast 由 sema 插入, 带 `is_implicit = true`.
-- 初始化器记录被解析成 `LibcpInitTree`, 指针放在 `init_resolved`. 该字段是 sema 私有载荷, 消费者不得读写.
+- 编译期结论记录在节点字段上: `ND_SIZEOF` / `ND_ALIGNOF` 的 `value.val`, `ND_GENERIC` 的 `ctrl.generic_sel`, 内建类型谓词的 `value.val`.
+- 隐式 cast 由 sema 插入, 带 `value.is_implicit = true`.
+- 初始化器记录被解析成 `LibcpInitTree`, 指针放在 `decl.init_resolved`. 该字段是 sema 私有载荷, 消费者不得读写.
 - 不做指针缩放, 不做复合赋值展开, 不做控制流标签, 不做临时槽. 这些是第 5 层的.
 
 ### 2.4.6 第 5 层的契约
@@ -179,7 +179,7 @@ libcp_context_free(ctx);                     /* 销毁 */
 - 每个块前有一个只含 `next` / `prev` 的链头部, 把块挂进 context 的登记链. 这不是池化: 库不做块切分, 不批量预分配, 嵌入方的分配器 (包括 arena) 是唯一的分配策略层.
 - 分配器负责对齐; 头部尺寸按 `_Alignof(max_align_t)` 取整, 因此返回给调用方的指针对任意类型都对得上. `LibcpToken` 与 `LibcpNode` 内含 `long double`, 在 x86-64 上需要 16 字节对齐.
 - `libcp_tu_calloc` 返回零初始化内存; `libcp_tu_realloc` 使用 `LIBCP_REALLOC`, 保留旧字节并清零超过 `old_size` 的尾部.
-- 解析, 预处理, CST, parse, sema 期间不做任何释放. `libcp_context_reset` 与 `libcp_context_free` 沿登记链逐块 `LIBCP_FREE`, 因此一个 TU 的分配仍然"一起活, 一起死".
+- 库不显式调用 `LIBCP_FREE`; `libcp_tu_realloc` 使用 `LIBCP_REALLOC`, 可能搬移块或归还旧块. `libcp_context_reset` 与 `libcp_context_free` 沿登记链逐块 `LIBCP_FREE`, 因此一个 TU 的分配仍然"一起活, 一起死".
 - 不提供逐对象 free 的公共 API. 不做 per-phase arena.
 
 这条设计是刻意的: 库的调用者不需要追踪每个对象的生命周期, 只需要在 TU 边界 reset; 嵌入方也不必面对库内 arena 与其自有 arena 的嵌套.
@@ -210,8 +210,8 @@ typedef void (*LibcpDiagnosticFn)(void *user, const LibcpDiagnostic *);
 libcp_context_set_diagnostic(ctx, on_diagnostic, user);
 ```
 
-- 注册回调后, 库不向 stderr 打印任何东西.
-- 没有注册回调时, 库按驱动器旧格式打印 `file:line: 源码行` 和插入符, 然后返回或退出.
+- 注册回调后, 库不向 stderr 打印任何东西. 例外是 `libcp_expansion_verify` 的违规报告: 它直接写 stderr, 不受诊断回调和 `failed` 影响.
+- 没有注册回调时, 默认处理器有两种输出: token 锚定的诊断 (`verror_at`) 打印 `file:line: 源码行` 与插入符; `libcp_error` 一类无位置的诊断只打印消息一行.
 - `error()` 一类没有位置的错误, `filename` 为 NULL, `line` 和 `column` 为 0. 例如文件打不开.
 
 ### 2.6.2 返回与展开
@@ -310,7 +310,7 @@ codegen(ctx, prog, out);
 | `-verify-expansions` | provenance | 校验展开链的不变量 |
 | `-dump-ast` | 第 3 层 | 打印忠实语法树, 在 sema 之前早退 |
 
-这些通道是理解库行为的最好工具. 本章后面的例子会反复用到.
+这些通道是理解库行为的最好工具.
 
 ## 2.10 目录与文件地图
 
@@ -318,14 +318,14 @@ codegen(ctx, prog, out);
 libcp/
   include/libcp/
     libcp.h        伞头, 唯一需要 include 的文件
-    allocator.h     可替换的分配器宏 LIBCP_MALLOC / CALLOC / REALLOC / FREE
+    allocator.h     构建期可替换的分配器宏: LIBCP_DEFAULT_ALLOCATOR 或全部四个 LIBCP_* 宏, 只在重编库时生效
     context.h        context, 诊断回调, 配置, 预定义宏
     diagnostic.h     LibcpDiagnostic 与 severity
     token.h          LibcpToken, LibcpFile, 第 1 层入口
     preprocess.h     libcp_preprocess
     provenance.h     宏展开访问器与两个只读通道
     cst.h            第 2 层: LibcpCstKind, LibcpCstNode
-    ast.h            第 3/4 层: LibcpNode, LibcpType, LibcpObj, 初始化器, 类型种类
+    ast.h            第 3/4 层: LibcpNode 与 LibcpNodeFamily, LibcpType, LibcpObj, 初始化器, 类型种类
     sema.h           libcp_sema
   src/
     tokenize.c       词法, trivia, raw 坐标, 诊断格式化
@@ -346,9 +346,17 @@ codegen.c            x86-64 代码生成器, 参考消费者
 driver.h             驱动器内部头
 tools/fmt.c          CST formatter MVP (make fmt-tool, 不安装)
 tools/c2c.c          C 转 C 打印器 (make c2c, 仅测试回归闸门)
+bench/               前端分阶段 benchmark (make bench-tool / make bench)
+docs/                库文档, 入口 docs/README.md
 test/                测试, 见第 10 章
-plans/               历史计划与执行记录
+plans/               现行 PLAN.md / RESULT.md, 归档 PLAN-*.md / RESULT-*.md, 模板 *-TEMPLATE.md
 include/             chibicc 自举头文件, 通过 -Iinclude 使用
+Makefile             构建, 测试与安装入口
+README.md            上游风格的项目说明
+AGENTS.md            仓库规范与执行流程
+Dockerfile           amd64 测试环境
+libcp.pc.in          pkg-config 模板
+LICENSE              许可证
 ```
 
 公共头只包含标准头和彼此, 不包含 `libcp/src/libcp.h`, 不声明内部函数, 不定义 `_POSIX_C_SOURCE`, 不包含 `glob.h` 或 `sys/wait.h`. 每个公共头都能单独用 `cc -std=c11 -fsyntax-only -Wall -Wextra` 编译. 这条卫生规则由 `test/public-api.sh` 锁定.

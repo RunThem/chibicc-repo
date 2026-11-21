@@ -14,7 +14,8 @@
 |---|---|---|
 | S1 | `aeb769d` | Archive the agents dedup line and add the docs calibration plan |
 | S2 | `538d194` | Refresh the README baseline and five-minute example |
-| S3 | 本记录所在提交 | Align the overview design principles with the current tree |
+| S3 | `34e99ec` | Align the overview design principles with the current tree |
+| S4 | 本记录所在提交 | Correct the architecture contracts, error model, and directory map |
 
 ## 各步记录
 
@@ -38,6 +39,13 @@
 - 测试: `! grep -n "不做 union"` 通过; `grep -n "313"` 命中第 181 行; `grep -n "库外 C 源文件"` 命中第 169 行; `grep -n "十个字段族\|144 字节"` 命中第 106 行; `sizeof(LibcpNode)` 实测 144; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
 - 偏差: 无. 144 字节补了 "x86-64 构建下" 限定, 因为结构体大小随 ABI 变化.
 - 验收: "不做 union" 消失; 313 出现且与 `test/cst.sh` 的 313 行 `testing` 一致; 根目录表述只限定库外 C 源; `docs-links` 通过.
+
+### S4 - `docs/02-architecture.md` 层间契约, 生命周期, 错误模型与目录
+
+- 做了什么: 2.4.4 明确 `ND_TYPEDEF` 的声明类型在 `ty`, `ND_CAST` / `ND_DECL` / `ND_GVAR_DECL` / `ND_FUNCDEF` / `ND_ENUM_CONST` 的目标类型在 `ty_op`; 2.4.5 把 `var`, `val`, `generic_sel`, `is_implicit`, `init_resolved` 改为 `decl.var`, `value.val`, `ctrl.generic_sel`, `value.is_implicit`, `decl.init_resolved`; 2.5.3 改为"不显式 `LIBCP_FREE`, `LIBCP_REALLOC` 可能搬移或归还旧块, 逐块释放在 `reset` / `free`"; 2.6.1 补 `libcp_expansion_verify` 直接写 stderr 的例外与默认处理器的两种输出; 2.9 删除"本章后面的例子"; 2.10 把 `AGENTS.md` 的"开放决策"改为"已定边界", 目录地图补 `bench/`, `docs/`, 根级 `Makefile` / `README.md` / `AGENTS.md` / `Dockerfile` / `libcp.pc.in` / `LICENSE`, `plans/` 改为三态描述, `ast.h` 补 `LibcpNodeFamily` 与 `libcp_node_family`, `allocator.h` 补构建期开关.
+- 测试: `! grep -n "开放决策"` 与 `! grep -n "本章后面"` 通过; `grep -n "bench/"` 命中第 349 行; `grep -n "decl.var\|value.val\|ctrl.generic_sel"` 命中第 133, 135 行; `grep -n "LIBCP_DEFAULT_ALLOCATOR"` 命中第 321 行; `bash test/docs-links.sh` 输出 `docs-links: ok (48 references checked)`; `make test-all` 退出 0; 41 份快照 diff 为空.
+- 偏差: 无. 目录地图额外补了 `LICENSE`, 它是已跟踪的根级文件.
+- 验收: 2.4 的类型字段归属与 `parse.c` 一致; 2.5.3 不再声称零释放; 2.6 明确 verify 例外; 2.10 包含 `bench/`, `docs/`, 根级构建文件与三态 `plans/`; 旧字段名在该节清零; `docs-links` 通过.
 
 ## 验收
 
@@ -77,6 +85,19 @@ S3 阶段验收:
 | `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
 | 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
 
+S4 阶段验收:
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 2.4 字段归属 | 通过 | `ND_TYPEDEF` 用 `ty`, 其余五个记录与 `ND_CAST` 用 `ty_op`, 与 `parse.c` 一致 |
+| 2.5.3 释放语义 | 通过 | 改为"不显式 `LIBCP_FREE`", 保留 `reset` / `free` 逐块释放 |
+| 2.6 错误模型 | 通过 | `libcp_expansion_verify` 的 stderr 例外与默认处理器两种输出都写明 |
+| 2.10 目录地图 | 通过 | 含 `bench/`, `docs/`, 根级构建文件与三态 `plans/`; `ast.h` 与 `allocator.h` 条目已补 |
+| 旧字段与旧引用 | 通过 | `开放决策` 与 `本章后面` 清零; `init_resolved` / `generic_sel` / `is_implicit` 只以族路径出现 |
+| `bash test/docs-links.sh` | 通过 | `docs-links: ok (48 references checked)` |
+| `make test-all` | 通过 | 退出 0, 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered` |
+| 汇编快照 diff | 通过 | 41 份 `.s` 与基线 diff 为空 |
+
 全线验收待 S14 补齐.
 
 ## 偏差与原因
@@ -85,6 +106,7 @@ S3 阶段验收:
 - 归档文件在 Git 中显示为新增, 固定槽位 `plans/PLAN.md` 与 `plans/RESULT.md` 显示为修改, 因为归档后立即复用了原路径. 归档正文与旧内容一致, 只多头部四行.
 - S2: 无偏差.
 - S3: 无偏差. 字段族大小写成 "x86-64 构建下", 因为 `sizeof(LibcpNode)` 随 ABI 变化.
+- S4: 无偏差. 目录地图补了计划未列出的 `LICENSE`, 因为它是已跟踪的根级文件.
 - 无范围变更.
 
 ## 后续影响
@@ -123,6 +145,18 @@ S3 阶段验收:
 - `grep -n "313" docs/01-overview.md`: 第 181 行, `test/cst.sh` 共 313 次 check.
 - `grep -n "库外 C 源文件" docs/01-overview.md`: 第 169 行.
 - `sizeof(LibcpNode)`: 144 (x86-64).
+- `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
+- `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
+- 快照: 41 份 `.s`, `snapshot diff: empty`.
+- `git diff --check`: 通过.
+
+### S4
+
+- `! grep -n "开放决策" docs/02-architecture.md`: 通过.
+- `! grep -n "本章后面" docs/02-architecture.md`: 通过.
+- `grep -n "bench/" docs/02-architecture.md`: 第 349 行.
+- `grep -n "decl.var\|value.val\|ctrl.generic_sel" docs/02-architecture.md`: 第 133, 135 行.
+- `grep -n "LIBCP_DEFAULT_ALLOCATOR" docs/02-architecture.md`: 第 321 行.
 - `bash test/docs-links.sh`: `docs-links: ok (48 references checked)`.
 - `make test-all`: 退出 0; 末尾 `c2c lock: 81 golden samples byte-exact and idempotent, 65 node kinds covered`.
 - 快照: 41 份 `.s`, `snapshot diff: empty`.
