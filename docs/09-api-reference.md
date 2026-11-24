@@ -1,6 +1,6 @@
 # 09 API 参考与用法
 
-本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 39 个公共函数与公共宏, 不列内部函数.
+本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 52 个公共函数与公共宏, 不列内部函数.
 
 ## 9.1 头文件, 链接与命名
 
@@ -10,7 +10,7 @@
 #include <libcp/libcp.h>
 ```
 
-它是伞头, 包含其余 9 个公共头:
+它是伞头, 包含其余 10 个公共头:
 
 ```text
 libcp.h       伞头, LIBCP_VERSION, libcp_version
@@ -22,6 +22,7 @@ preprocess.h    libcp_preprocess
 provenance.h    宏展开访问器, dump / verify
 cst.h           第 2 层
 ast.h           第 3/4 层的数据类型与 libcp_parse
+backend.h       后端支持面: 节点构造, LibcpBuiltinType 与类型标注
 sema.h          libcp_sema
 ```
 
@@ -42,12 +43,12 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 - 函数一律 `libcp_` 前缀.
 - 类型一律 `Libcp` 前缀.
 - 公开数据结构的 tag 是 `struct libcp_*`; 不透明的 `LibcpContext` 例外, tag 是 `struct LibcpContext`.
-- 枚举常量保留层前缀: `TK_` (token), `ND_` (node), `TY_` (type), `CST_` (CST), `INIT_` (initializer).
+- 枚举常量保留层前缀: `TK_` (token), `ND_` (node), `TY_` (type), `CST_` (CST), `INIT_` (initializer), `BT_` (backend 的内建类型).
 - 宏是 `LIBCP_*`.
 
 `LIBCP_API` 在 GCC/Clang 下展开为 `__attribute__((visibility("default")))`, 用于共享库导出. 消费者不需要关心它.
 
-`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 39 个函数.
+`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 52 个函数.
 
 ## 9.2 函数总表
 
@@ -60,6 +61,8 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 | 第 2 层 | `libcp_cst_parse`, `libcp_cst_seed_typedef`, `libcp_cst_reconstruct`, `libcp_cst_dump`, `libcp_cst_verify` |
 | 第 3 层 | `libcp_parse`, `libcp_node_family`, `libcp_node_source_range` |
 | 第 4 层 | `libcp_sema` |
+| 后端支持面 | `libcp_node_new`, `_binary`, `_unary`, `_num`, `_long`, `_arith`, `_var`, `_vla_ptr`, `_alloca`, `_cast` |
+| 后端支持面 | `libcp_type_builtin`, `libcp_node_annotate_type`, `libcp_type_pointer_to` |
 | provenance | `libcp_token_provenance`, `libcp_macro_prov_next`, `_expansion`, `_arg_index` |
 | provenance | `libcp_macro_expansion_name`, `_end`, `_macro`, `_def`, `_arg`, `_arg_count`, `_is_builtin` |
 | provenance | `libcp_expansion_dump`, `libcp_expansion_verify` |
@@ -805,7 +808,61 @@ extern "C" {
 
 公共入口的参数类型是 `char *`, 不是 `const char *`. C++ 里不能直接把字符串字面量传进去; 用可写缓冲区, 或显式 `const_cast<char *>` (仅当库确实不修改该缓冲时).
 
-## 9.15 API 的边界
+## 9.15 后端支持面
+
+`<libcp/backend.h>` 服务库外后端: 它提供构造第 4 层节点, 取内建类型, 标注子树与构造指针类型所需的最小入口. 它不是库自带的第 5 层, 也不拥有层间的数据契约; 构造与标注规则仍由库实现.
+
+### 9.15.1 内建类型
+
+```c
+typedef enum {
+  BT_VOID, BT_BOOL, BT_CHAR, BT_UCHAR, BT_SHORT, BT_USHORT, BT_INT,
+  BT_UINT, BT_LONG, BT_ULONG, BT_FLOAT, BT_DOUBLE, BT_LDOUBLE,
+} LibcpBuiltinType;
+
+LibcpType *libcp_type_builtin(LibcpBuiltinType kind);
+```
+
+- 13 种内建类型分别映射到库内共享的类型记录.
+- 返回记录跨 context 共享且只读, 消费者不得修改. 该查询不触碰 per-TU 状态, 因此不带 context.
+- 记录的 `kind`, `size`, `align` 与 `is_unsigned` 直接可读; 例如 `BT_ULONG` 是 `TY_LONG`, 大小与对齐都是 8, `is_unsigned` 为 true.
+
+### 9.15.2 节点构造
+
+```c
+LibcpNode *libcp_node_new(LibcpContext *ctx, LibcpNodeKind kind, LibcpToken *tok);
+LibcpNode *libcp_node_binary(LibcpContext *ctx, LibcpNodeKind kind,
+                             LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok);
+LibcpNode *libcp_node_unary(LibcpContext *ctx, LibcpNodeKind kind,
+                            LibcpNode *expr, LibcpToken *tok);
+LibcpNode *libcp_node_num(LibcpContext *ctx, int64_t val, LibcpToken *tok);
+LibcpNode *libcp_node_long(LibcpContext *ctx, int64_t val, LibcpToken *tok);
+LibcpNode *libcp_node_arith(LibcpContext *ctx, LibcpNodeKind kind,
+                            LibcpNode *lhs, LibcpNode *rhs, LibcpToken *tok);
+LibcpNode *libcp_node_var(LibcpContext *ctx, LibcpObj *var, LibcpToken *tok);
+LibcpNode *libcp_node_vla_ptr(LibcpContext *ctx, LibcpObj *var, LibcpToken *tok);
+LibcpNode *libcp_node_alloca(LibcpContext *ctx, LibcpNode *sz);
+LibcpNode *libcp_node_cast(LibcpContext *ctx, LibcpNode *expr, LibcpType *ty);
+```
+
+- 节点分配自当前 context 的 per-TU 登记链, 归 context 所有; 不提供逐对象 free, reset / free 时一起归还.
+- `libcp_node_new` 只填 kind 与 tok, 其余字段为零.
+- `libcp_node_num` / `_long` / `_unary` / `_binary` 产生降级过程使用的忠实形态; `_long` 的节点创建时即带 `long` 类型.
+- `libcp_node_arith` 先标注两个操作数, 再施加常规算术转换, 返回节点的 `ty` 就是结果类型.
+- `libcp_node_var` / `_vla_ptr` 携带已绑定的 `LibcpObj`; `libcp_node_alloca` 构造内建 `alloca` 的调用节点, 因此要求当前 context 至少跑过一次 `libcp_sema` (内建声明在那里安装).
+- `libcp_node_cast` 构造 sema 风格的隐式转换: `value.is_implicit` 为 true, `ty` 是目标类型的浅拷贝, 其 `origin` 指向传入的 `ty`.
+
+### 9.15.3 类型标注与指针类型
+
+```c
+void libcp_node_annotate_type(LibcpContext *ctx, LibcpNode *node);
+LibcpType *libcp_type_pointer_to(LibcpContext *ctx, LibcpType *base);
+```
+
+- `libcp_node_annotate_type` 用 sema 的规则标注一棵子树: 填 `node->ty`, 插入标准要求的隐式转换, 运行需要已定型树的检查. 幂等: 已带 `ty` 的节点直接返回.
+- `libcp_type_pointer_to` 从基础类型构造指针类型: `kind` 为 `TY_PTR`, 8 字节大小与对齐, `is_unsigned` 为 true, `base` 指向传入类型.
+
+## 9.16 API 的边界
 
 - 没有深拷贝树的 API. 第 4 层原地改写.
 - 第 3 层有 `libcp_node_source_range` 取子树锚点范围; CST 节点仍没有 `start` / `end`, sema 的 `LibcpObj` 链也没有等价范围 API.

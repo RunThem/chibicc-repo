@@ -63,13 +63,13 @@
 
 **第二遍: 标注**
 
-- `libcp_add_type` / `type_chain` 给每个节点定型.
-- 插入标准要求的隐式转换, 全部经 `libcp_new_cast`, 带 `value.is_implicit = true`.
+- `libcp_node_annotate_type` / `type_chain` 给每个节点定型.
+- 插入标准要求的隐式转换, 全部经 `libcp_node_cast`, 带 `value.is_implicit = true`.
 - 跑需要类型的检查: 左值性, 实参个数, 位域取地址, VLA 初始化, 不完整类型等.
 - 记录编译期结论.
 - 标注初始化器表达式. 声明记录的初始化器不会被普通遍历到达, 所以单独走 `decl.init_resolved`.
 
-在标注之后, `analyze_function` 还调用 `check_control_flow` 做一次独立的控制流检查: `break` / `continue` / `case` / `default` 的位置, 以及 `goto` / label 配对. 这些检查不在 `libcp_add_type` 里.
+在标注之后, `analyze_function` 还调用 `check_control_flow` 做一次独立的控制流检查: `break` / `continue` / `case` / `default` 的位置, 以及 `goto` / label 配对. 这些检查不在 `libcp_node_annotate_type` 里.
 
 两遍分开的原因是: 第一遍建立名字和类型, 第二遍才能定型. 例如 `a + b` 的类型取决于 `a` 和 `b` 的声明, 而声明可能写在后面.
 
@@ -434,7 +434,7 @@ static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
 
 ### 7.4.5 标注与检查
 
-`libcp_add_type` 是一个大 switch, 按节点种类定型. 它:
+`libcp_node_annotate_type` 是一个大 switch, 按节点种类定型. 它:
 
 - 递归标注子节点.
 - 计算节点类型.
@@ -442,9 +442,9 @@ static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
 - 跑检查.
 - 记录结论.
 
-`libcp_add_type` 的每个分支都在 A9.2 里逐项审计过, 确认全部是纯标注, 没有形状改写. 绑定改写发生在 resolve pass; `libcp_add_type` 的 `ND_STRING` 分支只物化匿名全局并设置 `decl.var`, 不改 kind. 另一个例外是显式 cast 的定型.
+`libcp_node_annotate_type` 的每个分支都在 A9.2 里逐项审计过, 确认全部是纯标注, 没有形状改写. 绑定改写发生在 resolve pass; `libcp_node_annotate_type` 的 `ND_STRING` 分支只物化匿名全局并设置 `decl.var`, 不改 kind. 另一个例外是显式 cast 的定型.
 
-`libcp_add_type` 中的检查包括:
+`libcp_node_annotate_type` 中的检查包括:
 
 - 赋值目标的左值性.
 - 函数实参个数与类型.

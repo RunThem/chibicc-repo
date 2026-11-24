@@ -121,10 +121,10 @@ C 文法不是上下文无关的. 最典型的例子:
 | 声明记录 | `ND_DECL`, `ND_GVAR_DECL`, `ND_FUNCDEF`, `ND_TYPEDEF`, `ND_ENUM_CONST`, `ND_COMPOUND_LITERAL` |
 | 内部 | `ND_MEMZERO` |
 
-第 3 层的解析器实际产出 65 种. 计数方法: 把 `libcp_new_node` / `libcp_new_unary` / `libcp_new_binary` 直接命名的 46 种, 与 `infix_ops[].kind` 的 21 种合并, 去掉重复的 `ND_ASSIGN` 与 `ND_COND`, 得到 65. 不产出的四种:
+第 3 层的解析器实际产出 65 种. 计数方法: 把 `libcp_node_new` / `libcp_node_unary` / `libcp_node_binary` 直接命名的 46 种, 与 `infix_ops[].kind` 的 21 种合并, 去掉重复的 `ND_ASSIGN` 与 `ND_COND`, 得到 65. 不产出的四种:
 
 - `ND_VAR`: 第 4 层绑定名字时产生.
-- `ND_VLA_PTR`: 第 5 层整形遍展开 VLA 声明时产生; `sema.c` 只提供构造器 `libcp_new_vla_ptr`, 不在第 4 层生成该节点.
+- `ND_VLA_PTR`: 第 5 层整形遍展开 VLA 声明时产生; `sema.c` 只提供构造器 `libcp_node_vla_ptr`, 不在第 4 层生成该节点.
 - `ND_MEMZERO`: 第 5 层展开初始化器时产生.
 - `ND_NULL_EXPR`: 第 5 层整形遍生成的空表达式占位; 解析器只在 `infix_ops` 表里把它当作 `assign_op` 的哨兵, 不建该节点.
 
@@ -191,7 +191,7 @@ struct libcp_node {
 - `tok` 是代表 token, 不是完整源码范围. 一个节点可能由多个 token 组成,
   但只记录一个锚点.
 - `sizeof(LibcpNode)` 为 144 字节, 16 字节对齐; 节点仍是一次固定大小分配,
-  `libcp_new_node` 不按 kind 改变分配尺寸.
+  `libcp_node_new` 不按 kind 改变分配尺寸.
 
 ### 6.3.3 类型
 

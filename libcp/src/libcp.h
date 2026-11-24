@@ -85,19 +85,10 @@ void libcp_init_macros(LibcpContext* ctx);
 void libcp_define_macro(LibcpContext* ctx, char* name, char* buf);
 void libcp_undef_macro(LibcpContext* ctx, char* name);
 
-// parse.c: 节点构造函数与解析器状态
+// parse.c: 解析器状态
 
-// 忠实树节点的构造函数. 定义在 parse.c 中; sema 用它们构建其降级过程
-// 引入的节点. 只有降级才会产生的形态 - 已绑定名字, VLA 指示符,
-// 创建时即定型的数值字面量 - 由 sema 自己构造.
-LibcpNode* libcp_new_node(LibcpContext* ctx, LibcpNodeKind kind, LibcpToken* tok);
-LibcpNode* libcp_new_binary(LibcpContext* ctx,
-                            LibcpNodeKind kind,
-                            LibcpNode* lhs,
-                            LibcpNode* rhs,
-                            LibcpToken* tok);
-LibcpNode* libcp_new_unary(LibcpContext* ctx, LibcpNodeKind kind, LibcpNode* expr, LibcpToken* tok);
-LibcpNode* libcp_new_num(LibcpContext* ctx, int64_t val, LibcpToken* tok);
+// 忠实树节点的构造函数属于公共后端支持面 (<libcp/backend.h>):
+// libcp_node_new / _binary / _unary / _num. 这里不重复声明.
 
 // 标识符拼写, sema 在声明解析器声明记录所指称的对象时使用.
 char* libcp_get_ident(LibcpContext* ctx, LibcpToken* tok);
@@ -117,22 +108,12 @@ int64_t libcp_const_expr(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok);
 // 求值的表达式.
 LibcpNode* libcp_conditional(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok);
 
-// 消费者构建已定型节点所需的类型层工具: 标注入口, 只有 sema 才会
-// 产生的形态的构造函数, 以及承载 sema 决策的转换.
-void libcp_add_type(LibcpContext* ctx, LibcpNode* node);
-LibcpNode* libcp_new_arith(LibcpContext* ctx,
-                           LibcpNodeKind kind,
-                           LibcpNode* lhs,
-                           LibcpNode* rhs,
-                           LibcpToken* tok);
+// 只有 sema 才会产生的形态的构造函数与类型工具属于公共后端支持面
+// (<libcp/backend.h>): libcp_node_annotate_type, _arith, _cast, _long,
+// _var, _vla_ptr, _alloca. 这里只声明库内部共用, 不对外承诺的辅助.
 void libcp_usual_arith_conv(LibcpContext* ctx, LibcpNode** lhs, LibcpNode** rhs);
 LibcpType* libcp_get_common_type(LibcpContext* ctx, LibcpType* ty1, LibcpType* ty2);
-LibcpNode* libcp_new_cast(LibcpContext* ctx, LibcpNode* expr, LibcpType* ty);
-LibcpNode* libcp_new_long(LibcpContext* ctx, int64_t val, LibcpToken* tok);
 LibcpNode* libcp_new_ulong(LibcpContext* ctx, long val, LibcpToken* tok);
-LibcpNode* libcp_new_var_node(LibcpContext* ctx, LibcpObj* var, LibcpToken* tok);
-LibcpNode* libcp_new_vla_ptr(LibcpContext* ctx, LibcpObj* var, LibcpToken* tok);
-LibcpNode* libcp_new_alloca(LibcpContext* ctx, LibcpNode* sz);
 
 // 匿名名字计数器接下来会给出的值, 但不消耗它.
 int libcp_unique_name_next(LibcpContext* ctx);
@@ -161,7 +142,6 @@ bool libcp_is_flonum(LibcpType* ty);
 bool libcp_is_numeric(LibcpType* ty);
 bool libcp_is_compatible(LibcpType* t1, LibcpType* t2);
 LibcpType* libcp_copy_type(LibcpContext* ctx, LibcpType* ty);
-LibcpType* libcp_pointer_to(LibcpContext* ctx, LibcpType* base);
 LibcpType* libcp_func_type(LibcpContext* ctx, LibcpType* return_ty);
 LibcpType* libcp_array_of(LibcpContext* ctx, LibcpType* base, int size);
 LibcpType* libcp_vla_of(LibcpContext* ctx, LibcpType* base, LibcpNode* expr);
