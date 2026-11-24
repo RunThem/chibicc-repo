@@ -10,6 +10,7 @@
 
 #include <libcp/allocator.h>
 #include <libcp/ast.h>
+#include <libcp/backend.h>
 #include <libcp/context.h>
 #include <libcp/cst.h>
 #include <libcp/diagnostic.h>

@@ -332,6 +332,144 @@ static int check_source_range(LibcpContext *ctx) {
   return 0;
 }
 
+// The backend support face (issue #17): a consumer that sees only the
+// public headers builds every node a backend needs, reads back kind and
+// fields, and gets sema's type conclusions through libcp_node_annotate_type.
+static int check_backend_support(LibcpContext *ctx) {
+  LibcpObj *prog = NULL;
+  LibcpNode *ast = compile(ctx, "int g; int f(int a) { return a; }\n", &prog);
+  if (!ast || !prog)
+    return 1;
+
+  LibcpObj *g = NULL;
+  for (LibcpObj *o = prog; o; o = o->next)
+    if (o->name && strcmp(o->name, "g") == 0)
+      g = o;
+  if (!g || !g->ty || g->ty->kind != TY_INT)
+    return 1;
+
+  LibcpToken *tok = ast->tok;
+  if (!tok)
+    return 1;
+
+  // All 13 builtin kinds map to the shared singleton; a second call
+  // returns the same record.
+  static const struct {
+    LibcpBuiltinType bt;
+    LibcpTypeKind kind;
+    int size;
+    int align;
+    int is_unsigned;
+  } builtins[] = {
+    {BT_VOID, TY_VOID, 1, 1, 0},
+    {BT_BOOL, TY_BOOL, 1, 1, 0},
+    {BT_CHAR, TY_CHAR, 1, 1, 0},
+    {BT_UCHAR, TY_CHAR, 1, 1, 1},
+    {BT_SHORT, TY_SHORT, 2, 2, 0},
+    {BT_USHORT, TY_SHORT, 2, 2, 1},
+    {BT_INT, TY_INT, 4, 4, 0},
+    {BT_UINT, TY_INT, 4, 4, 1},
+    {BT_LONG, TY_LONG, 8, 8, 0},
+    {BT_ULONG, TY_LONG, 8, 8, 1},
+    {BT_FLOAT, TY_FLOAT, 4, 4, 0},
+    {BT_DOUBLE, TY_DOUBLE, 8, 8, 0},
+    {BT_LDOUBLE, TY_LDOUBLE, 16, 16, 0},
+  };
+  if (sizeof(builtins) / sizeof(builtins[0]) != 13)
+    return 1;
+  for (size_t i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++) {
+    LibcpType *ty = libcp_type_builtin(builtins[i].bt);
+    if (!ty || ty->kind != builtins[i].kind || ty->size != builtins[i].size ||
+        ty->align != builtins[i].align ||
+        ty->is_unsigned != (builtins[i].is_unsigned != 0))
+      return 1;
+    if (libcp_type_builtin(builtins[i].bt) != ty)
+      return 1;
+  }
+
+  LibcpType *ptr = libcp_type_pointer_to(ctx, libcp_type_builtin(BT_INT));
+  if (!ptr || ptr->kind != TY_PTR || ptr->size != 8 || ptr->align != 8 ||
+      !ptr->is_unsigned || ptr->base != libcp_type_builtin(BT_INT))
+    return 1;
+
+  // libcp_node_new leaves the payload zeroed and records kind and tok.
+  LibcpNode *plain = libcp_node_new(ctx, ND_EXPR_STMT, tok);
+  if (!plain || plain->kind != ND_EXPR_STMT || plain->tok != tok || plain->ty ||
+      plain->lhs || plain->rhs || plain->next)
+    return 1;
+
+  LibcpNode *num = libcp_node_num(ctx, 42, tok);
+  if (!num || num->kind != ND_NUM || num->value.val != 42 || num->tok != tok)
+    return 1;
+
+  LibcpNode *lng = libcp_node_long(ctx, 7, tok);
+  if (!lng || lng->kind != ND_NUM || lng->value.val != 7 ||
+      lng->ty != libcp_type_builtin(BT_LONG))
+    return 1;
+
+  LibcpNode *operand = libcp_node_num(ctx, 9, tok);
+  LibcpNode *un = libcp_node_unary(ctx, ND_NEG, operand, tok);
+  if (!un || un->kind != ND_NEG || un->lhs != operand || un->rhs ||
+      un->tok != tok)
+    return 1;
+
+  LibcpNode *blhs = libcp_node_num(ctx, 1, tok);
+  LibcpNode *brhs = libcp_node_num(ctx, 2, tok);
+  LibcpNode *bin = libcp_node_binary(ctx, ND_ADD, blhs, brhs, tok);
+  if (!bin || bin->kind != ND_ADD || bin->lhs != blhs || bin->rhs != brhs ||
+      bin->tok != tok)
+    return 1;
+  libcp_node_annotate_type(ctx, bin);
+  if (bin->ty != libcp_type_builtin(BT_INT) ||
+      blhs->ty != libcp_type_builtin(BT_INT) ||
+      brhs->ty != libcp_type_builtin(BT_INT))
+    return 1;
+
+  LibcpNode *ai = libcp_node_num(ctx, 3, tok);
+  LibcpNode *al = libcp_node_long(ctx, 4, tok);
+  // The usual arithmetic conversions wrap both operands in casts to the
+  // common result type; each cast carries a copy whose origin is the
+  // shared long type, and the node takes the left operand's copy.
+  LibcpNode *arith = libcp_node_arith(ctx, ND_ADD, ai, al, tok);
+  if (!arith || arith->kind != ND_ADD || !arith->ty ||
+      arith->ty->kind != TY_LONG ||
+      arith->ty->origin != libcp_type_builtin(BT_LONG) ||
+      arith->lhs->ty != arith->ty || arith->rhs->ty->kind != TY_LONG ||
+      arith->rhs->ty->origin != libcp_type_builtin(BT_LONG))
+    return 1;
+
+  LibcpNode *var = libcp_node_var(ctx, g, tok);
+  if (!var || var->kind != ND_VAR || var->decl.var != g || var->tok != tok)
+    return 1;
+  libcp_node_annotate_type(ctx, var);
+  if (var->ty != g->ty)
+    return 1;
+
+  LibcpNode *vla = libcp_node_vla_ptr(ctx, g, tok);
+  if (!vla || vla->kind != ND_VLA_PTR || vla->decl.var != g || vla->tok != tok)
+    return 1;
+
+  LibcpNode *size = libcp_node_num(ctx, 8, tok);
+  LibcpNode *alloc = libcp_node_alloca(ctx, size);
+  if (!alloc || alloc->kind != ND_FUNCALL || alloc->ctrl.args != size ||
+      !alloc->ctrl.func_ty || alloc->ty != alloc->ctrl.func_ty->return_ty)
+    return 1;
+  if (!alloc->lhs || alloc->lhs->kind != ND_VAR || !alloc->lhs->decl.var ||
+      !alloc->lhs->decl.var->name ||
+      strcmp(alloc->lhs->decl.var->name, "alloca") != 0)
+    return 1;
+
+  LibcpNode *src = libcp_node_num(ctx, 5, tok);
+  LibcpType *target = libcp_type_builtin(BT_ULONG);
+  LibcpNode *cast = libcp_node_cast(ctx, src, target);
+  if (!cast || cast->kind != ND_CAST || cast->lhs != src || cast->tok != tok ||
+      !cast->value.is_implicit || !cast->ty || cast->ty->origin != target ||
+      cast->ty->kind != TY_LONG || !cast->ty->is_unsigned)
+    return 1;
+
+  return 0;
+}
+
 static LibcpToken *exp_diag_tok;
 static const struct libcp_macro_prov *exp_diag_prov;
 
@@ -931,6 +1069,9 @@ int main(int argc, char **argv) {
     return 1;
   if (check_source_range(ctx))
     return 1;
+  if (check_backend_support(ctx))
+    return 1;
+  libcp_context_reset(ctx);
   if (check_diag_expansion(ctx))
     return 1;
   if (check_utf8(ctx))

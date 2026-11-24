@@ -57,6 +57,8 @@
 
 每一层的"产物"不是抽象概念, 而是具体的内存结构: token 链, CST 树, AST 树, 标注树和全局对象链. 这些结构体在公共头里定义, 字段直接可读.
 
+`<libcp/backend.h>` 不在这五层里, 它是给库外后端使用的支持面: 节点构造 (`libcp_node_new` / `_binary` / `_unary` / `_num` / `_long` / `_arith` / `_var` / `_vla_ptr` / `_alloca` / `_cast`), 内建类型查询 (`LibcpBuiltinType` 与 `libcp_type_builtin`), 类型标注 (`libcp_node_annotate_type`) 与指针类型构造 (`libcp_type_pointer_to`). 支持面只公开"读取第 4 层标注树并降级"所需的最小构造能力, 不拥有层间的数据契约: 构造出的节点与类型归 context 所有, 内建类型是跨 context 共享的只读单例, 标注仍走 sema 的规则.
+
 ## 2.3 两条路径为什么分开
 
 CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务对象也不同.
@@ -328,6 +330,7 @@ libcp/
     provenance.h     宏展开访问器与两个只读通道
     cst.h            第 2 层: LibcpCstKind, LibcpCstNode
     ast.h            第 3/4 层: LibcpNode 与 LibcpNodeFamily, LibcpType, LibcpObj, 初始化器, 类型种类
+    backend.h        后端支持面: 节点构造, LibcpBuiltinType 与类型标注
     sema.h           libcp_sema
   src/
     tokenize.c       词法, trivia, raw 坐标, 诊断格式化

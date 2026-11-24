@@ -135,33 +135,33 @@ LibcpNodeFamily libcp_node_family(LibcpNodeKind kind) {
   }
 }
 
-LibcpNode* libcp_new_node(LibcpContext* ctx, LibcpNodeKind kind, LibcpToken* tok) {
+LibcpNode* libcp_node_new(LibcpContext* ctx, LibcpNodeKind kind, LibcpToken* tok) {
   LibcpNode* node = libcp_tu_calloc(ctx, 1, sizeof(LibcpNode));
   node->kind      = kind;
   node->tok       = tok;
   return node;
 }
 
-LibcpNode* libcp_new_binary(LibcpContext* ctx,
-                            LibcpNodeKind kind,
-                            LibcpNode* lhs,
-                            LibcpNode* rhs,
-                            LibcpToken* tok) {
-  LibcpNode* node = libcp_new_node(ctx, kind, tok);
+LibcpNode* libcp_node_binary(LibcpContext* ctx,
+                             LibcpNodeKind kind,
+                             LibcpNode* lhs,
+                             LibcpNode* rhs,
+                             LibcpToken* tok) {
+  LibcpNode* node = libcp_node_new(ctx, kind, tok);
   node->lhs       = lhs;
   node->rhs       = rhs;
   return node;
 }
 
 LibcpNode*
-    libcp_new_unary(LibcpContext* ctx, LibcpNodeKind kind, LibcpNode* expr, LibcpToken* tok) {
-  LibcpNode* node = libcp_new_node(ctx, kind, tok);
+    libcp_node_unary(LibcpContext* ctx, LibcpNodeKind kind, LibcpNode* expr, LibcpToken* tok) {
+  LibcpNode* node = libcp_node_new(ctx, kind, tok);
   node->lhs       = expr;
   return node;
 }
 
-LibcpNode* libcp_new_num(LibcpContext* ctx, int64_t val, LibcpToken* tok) {
-  LibcpNode* node = libcp_new_node(ctx, ND_NUM, tok);
+LibcpNode* libcp_node_num(LibcpContext* ctx, int64_t val, LibcpToken* tok) {
+  LibcpNode* node = libcp_node_new(ctx, ND_NUM, tok);
   node->value.val = val;
   return node;
 }
@@ -532,10 +532,10 @@ static LibcpType*
     if (ty2->kind == TY_ARRAY) {
       // 只在参数上下文中把 "T 的数组" 转换为 "指向 T 的指针": 例如
       // *argv[] 在这里被转换为 **argv.
-      ty2 = libcp_pointer_to(ctx, ty2->base);
+      ty2 = libcp_type_pointer_to(ctx, ty2->base);
     } else if (ty2->kind == TY_FUNC) {
       // 同理, 函数也只在参数上下文中转换为函数指针.
-      ty2 = libcp_pointer_to(ctx, ty2);
+      ty2 = libcp_type_pointer_to(ctx, ty2);
     }
 
     // 参数记录被复制进函数类型; 名字存放在这份每参数私有的副本上,
@@ -603,7 +603,7 @@ static LibcpType*
 // 只被跳过, 不参与类型.
 static LibcpType* pointers(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, LibcpType* ty) {
   while (libcp_consume(&tok, tok, "*")) {
-    ty = libcp_pointer_to(ctx, ty);
+    ty = libcp_type_pointer_to(ctx, ty);
     while (libcp_equal(tok, "const") || libcp_equal(tok, "volatile") ||
            libcp_equal(tok, "restrict") || libcp_equal(tok, "__restrict") ||
            libcp_equal(tok, "__restrict__"))
@@ -759,7 +759,7 @@ static LibcpType*
     tok              = tok->next;
     add_declared_name(ctx, name);
 
-    LibcpNode* node = libcp_new_node(ctx, ND_ENUM_CONST, name);
+    LibcpNode* node = libcp_node_new(ctx, ND_ENUM_CONST, name);
     if (libcp_equal(tok, "="))
       node->lhs = libcp_conditional(ctx, &tok, tok->next);
     node->ty_op = ty;
@@ -826,7 +826,7 @@ static LibcpNode* declaration(LibcpContext* ctx,
       init->eq_tok   = eq;
     }
 
-    LibcpNode* decl     = libcp_new_node(ctx, ND_DECL, name);
+    LibcpNode* decl     = libcp_node_new(ctx, ND_DECL, name);
     decl->ty_op         = ty;
     decl->decl.name_tok = name;
     if (attr)
@@ -965,7 +965,7 @@ static bool is_typename(LibcpContext* ctx, LibcpToken* tok) {
 
 // 内联汇编语句: 只接受一个字符串字面量, 可带 volatile / inline 限定.
 static LibcpNode* asm_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
-  LibcpNode* node = libcp_new_node(ctx, ND_ASM, tok);
+  LibcpNode* node = libcp_node_new(ctx, ND_ASM, tok);
   tok             = tok->next;
 
   while (libcp_equal(tok, "volatile") || libcp_equal(tok, "inline"))
@@ -984,7 +984,7 @@ static LibcpNode* asm_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok
 static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   if (libcp_equal(tok, "return")) {
     // 到返回类型的隐式转换属于 sema: 解析器不知道外层函数.
-    LibcpNode* node = libcp_new_node(ctx, ND_RETURN, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_RETURN, tok);
     if (libcp_consume(rest, tok->next, ";"))
       return node;
 
@@ -994,7 +994,7 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   }
 
   if (libcp_equal(tok, "if")) {
-    LibcpNode* node = libcp_new_node(ctx, ND_IF, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_IF, tok);
     tok             = libcp_skip(ctx, tok->next, "(");
     node->ctrl.cond = expr(ctx, &tok, tok);
     tok             = libcp_skip(ctx, tok, ")");
@@ -1006,7 +1006,7 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   }
 
   if (libcp_equal(tok, "switch")) {
-    LibcpNode* node = libcp_new_node(ctx, ND_SWITCH, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_SWITCH, tok);
     tok             = libcp_skip(ctx, tok->next, "(");
     node->ctrl.cond = expr(ctx, &tok, tok);
     tok             = libcp_skip(ctx, tok, ")");
@@ -1017,7 +1017,7 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   if (libcp_equal(tok, "case")) {
     // case 标签代表的值是常量表达式, 因此不求值地记录; sema 在解析节点
     // 时把它们求值到 begin/end. 范围检查的锚点是 `:`.
-    LibcpNode* node        = libcp_new_node(ctx, ND_CASE, tok);
+    LibcpNode* node        = libcp_node_new(ctx, ND_CASE, tok);
     node->case_.begin_expr = libcp_conditional(ctx, &tok, tok->next);
 
     if (libcp_equal(tok, "...")) {
@@ -1032,7 +1032,7 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   }
 
   if (libcp_equal(tok, "default")) {
-    LibcpNode* node        = libcp_new_node(ctx, ND_CASE, tok);
+    LibcpNode* node        = libcp_node_new(ctx, ND_CASE, tok);
     node->case_.is_default = true;
     tok                    = libcp_skip(ctx, tok->next, ":");
     node->lhs              = stmt(ctx, rest, tok);
@@ -1040,7 +1040,7 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   }
 
   if (libcp_equal(tok, "for")) {
-    LibcpNode* node = libcp_new_node(ctx, ND_FOR, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_FOR, tok);
     tok             = libcp_skip(ctx, tok->next, "(");
 
     enter_scope(ctx);
@@ -1072,7 +1072,7 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   }
 
   if (libcp_equal(tok, "while")) {
-    LibcpNode* node = libcp_new_node(ctx, ND_WHILE, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_WHILE, tok);
     tok             = libcp_skip(ctx, tok->next, "(");
     node->ctrl.cond = expr(ctx, &tok, tok);
     tok             = libcp_skip(ctx, tok, ")");
@@ -1081,7 +1081,7 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   }
 
   if (libcp_equal(tok, "do")) {
-    LibcpNode* node = libcp_new_node(ctx, ND_DO, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_DO, tok);
     node->ctrl.then = stmt(ctx, &tok, tok->next);
 
     tok             = libcp_skip(ctx, tok, "while");
@@ -1098,13 +1098,13 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   if (libcp_equal(tok, "goto")) {
     if (libcp_equal(tok->next, "*")) {
       // [GNU] `goto *ptr` 跳转到 `ptr` 指定的地址.
-      LibcpNode* node = libcp_new_node(ctx, ND_GOTO_EXPR, tok);
+      LibcpNode* node = libcp_node_new(ctx, ND_GOTO_EXPR, tok);
       node->lhs       = expr(ctx, &tok, tok->next->next);
       *rest           = libcp_skip(ctx, tok, ";");
       return node;
     }
 
-    LibcpNode* node  = libcp_new_node(ctx, ND_GOTO, tok);
+    LibcpNode* node  = libcp_node_new(ctx, ND_GOTO, tok);
     node->jump.label = libcp_get_ident(ctx, tok->next);
     *rest            = libcp_skip(ctx, tok->next->next, ";");
     return node;
@@ -1112,16 +1112,16 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
 
   if (libcp_equal(tok, "break")) {
     *rest = libcp_skip(ctx, tok->next, ";");
-    return libcp_new_node(ctx, ND_BREAK, tok);
+    return libcp_node_new(ctx, ND_BREAK, tok);
   }
 
   if (libcp_equal(tok, "continue")) {
     *rest = libcp_skip(ctx, tok->next, ";");
-    return libcp_new_node(ctx, ND_CONTINUE, tok);
+    return libcp_node_new(ctx, ND_CONTINUE, tok);
   }
 
   if (tok->kind == TK_IDENT && libcp_equal(tok->next, ":")) {
-    LibcpNode* node  = libcp_new_node(ctx, ND_LABEL, tok);
+    LibcpNode* node  = libcp_node_new(ctx, ND_LABEL, tok);
     node->jump.label = libcp_tu_strndup(ctx, tok->loc, tok->len);
     node->lhs        = stmt(ctx, rest, tok->next->next);
     return node;
@@ -1137,7 +1137,7 @@ static LibcpNode* stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
 // extern 声明以及 [GNU] 嵌套函数定义) 在各自的源码位置进入链中; sema
 // 在 codegen 看到链之前会把它们移除.
 static LibcpNode* compound_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
-  LibcpNode* node           = libcp_new_node(ctx, ND_BLOCK, tok);
+  LibcpNode* node           = libcp_node_new(ctx, ND_BLOCK, tok);
   node->decl.is_scope_block = true;
   LibcpNode head            = {};
   LibcpNode* cur            = &head;
@@ -1184,10 +1184,10 @@ static LibcpNode* compound_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken
 static LibcpNode* expr_stmt(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
   if (libcp_equal(tok, ";")) {
     *rest = tok->next;
-    return libcp_new_node(ctx, ND_BLOCK, tok);
+    return libcp_node_new(ctx, ND_BLOCK, tok);
   }
 
-  LibcpNode* node = libcp_new_node(ctx, ND_EXPR_STMT, tok);
+  LibcpNode* node = libcp_node_new(ctx, ND_EXPR_STMT, tok);
   node->lhs       = expr(ctx, &tok, tok);
   *rest           = libcp_skip(ctx, tok, ";");
   return node;
@@ -1452,7 +1452,7 @@ static LibcpType*
 // (沿途展开匿名成员), 检查操作数, 并重新插入解引用.
 static LibcpNode*
     struct_ref(LibcpContext* ctx, LibcpNode* node, LibcpToken* tok, LibcpToken* arrow) {
-  LibcpNode* mem        = libcp_new_unary(ctx, ND_MEMBER, node, tok);
+  LibcpNode* mem        = libcp_node_unary(ctx, ND_MEMBER, node, tok);
   mem->access.arrow_tok = arrow;
   return mem;
 }
@@ -1472,7 +1472,7 @@ static LibcpNode* funcall(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
 
   *rest = libcp_skip(ctx, tok, ")");
 
-  LibcpNode* node = libcp_new_unary(ctx, ND_FUNCALL, fn, tok);
+  LibcpNode* node = libcp_node_unary(ctx, ND_FUNCALL, fn, tok);
   node->ctrl.args = head.next;
   return node;
 }
@@ -1481,7 +1481,7 @@ static LibcpNode* funcall(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
 // 在 `cond` 中保存控制表达式, 在 `args` 中为每个关联保存一个
 // ND_GENERIC_ASSOC.
 static LibcpNode* generic_selection(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) {
-  LibcpNode* node = libcp_new_node(ctx, ND_GENERIC, tok);
+  LibcpNode* node = libcp_node_new(ctx, ND_GENERIC, tok);
 
   tok             = libcp_skip(ctx, tok, "(");
   node->ctrl.cond = assign(ctx, &tok, tok);
@@ -1492,7 +1492,7 @@ static LibcpNode* generic_selection(LibcpContext* ctx, LibcpToken** rest, LibcpT
   while (!libcp_consume(rest, tok, ")")) {
     tok = libcp_skip(ctx, tok, ",");
 
-    LibcpNode* assoc = libcp_new_node(ctx, ND_GENERIC_ASSOC, tok);
+    LibcpNode* assoc = libcp_node_new(ctx, ND_GENERIC_ASSOC, tok);
 
     // "default:" 关联是唯一不携带类型名的关联.
     if (libcp_equal(tok, "default")) {
@@ -1519,7 +1519,7 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
 
   if (libcp_equal(tok, "(") && libcp_equal(tok->next, "{")) {
     // 这是 GNU 语句表达式.
-    LibcpNode* node = libcp_new_node(ctx, ND_STMT_EXPR, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_STMT_EXPR, tok);
     node->decl.body = compound_stmt(ctx, &tok, tok->next->next)->decl.body;
     *rest           = libcp_skip(ctx, tok, ")");
     return node;
@@ -1538,7 +1538,7 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
     *rest            = libcp_skip(ctx, tok, ")");
 
     // sizeof 保持忠实, 由 sema 折叠成它的值.
-    LibcpNode* node  = libcp_new_node(ctx, ND_SIZEOF, start);
+    LibcpNode* node  = libcp_node_new(ctx, ND_SIZEOF, start);
     node->ty_op      = ty;
     node->spec_decls = specs;
     return node;
@@ -1546,7 +1546,7 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
 
   if (libcp_equal(tok, "sizeof")) {
     // sizeof 保持忠实, 由 sema 折叠成它的值.
-    LibcpNode* node = libcp_new_node(ctx, ND_SIZEOF, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_SIZEOF, tok);
     node->lhs       = unary(ctx, rest, tok->next);
     return node;
   }
@@ -1557,14 +1557,14 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
     LibcpType* ty    = typename(ctx, &tok, tok->next->next, &specs);
     *rest            = libcp_skip(ctx, tok, ")");
 
-    LibcpNode* node  = libcp_new_node(ctx, ND_ALIGNOF, start);
+    LibcpNode* node  = libcp_node_new(ctx, ND_ALIGNOF, start);
     node->ty_op      = ty;
     node->spec_decls = specs;
     return node;
   }
 
   if (libcp_equal(tok, "_Alignof")) {
-    LibcpNode* node = libcp_new_node(ctx, ND_ALIGNOF, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_ALIGNOF, tok);
     node->lhs       = unary(ctx, rest, tok->next);
     return node;
   }
@@ -1574,7 +1574,7 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
 
   if (libcp_equal(tok, "__builtin_types_compatible_p")) {
     // 两个类型操作数都被记录; sema 把该节点折叠成 0 或 1.
-    LibcpNode* node    = libcp_new_node(ctx, ND_TYPES_COMPATIBLE, start);
+    LibcpNode* node    = libcp_node_new(ctx, ND_TYPES_COMPATIBLE, start);
     LibcpNode* specs   = NULL;
     tok                = libcp_skip(ctx, tok->next, "(");
     node->ty_op        = typename(ctx, &tok, tok, &specs);
@@ -1587,7 +1587,7 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
 
   if (libcp_equal(tok, "__builtin_reg_class")) {
     // sema 把该节点折叠成其类型操作数的寄存器类别.
-    LibcpNode* node  = libcp_new_node(ctx, ND_REG_CLASS, start);
+    LibcpNode* node  = libcp_node_new(ctx, ND_REG_CLASS, start);
     LibcpNode* specs = NULL;
     tok              = libcp_skip(ctx, tok->next, "(");
     node->ty_op      = typename(ctx, &tok, tok, &specs);
@@ -1597,7 +1597,7 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
   }
 
   if (libcp_equal(tok, "__builtin_compare_and_swap")) {
-    LibcpNode* node    = libcp_new_node(ctx, ND_CAS, tok);
+    LibcpNode* node    = libcp_node_new(ctx, ND_CAS, tok);
     tok                = libcp_skip(ctx, tok->next, "(");
     node->cas.cas_addr = assign(ctx, &tok, tok);
     tok                = libcp_skip(ctx, tok, ",");
@@ -1609,7 +1609,7 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
   }
 
   if (libcp_equal(tok, "__builtin_atomic_exchange")) {
-    LibcpNode* node = libcp_new_node(ctx, ND_EXCH, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_EXCH, tok);
     tok             = libcp_skip(ctx, tok->next, "(");
     node->lhs       = assign(ctx, &tok, tok);
     tok             = libcp_skip(ctx, tok, ",");
@@ -1621,7 +1621,7 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
   if (tok->kind == TK_IDENT) {
     // 对变量, 函数或枚举常量的引用. 它指代哪一个不是语法问题, 因此引用
     // 保持忠实, 由 sema 的解析 pass 利用树结构提供的作用域栈绑定.
-    LibcpNode* node = libcp_new_node(ctx, ND_IDENT, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_IDENT, tok);
     *rest           = tok->next;
     return node;
   }
@@ -1629,7 +1629,7 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
   if (tok->kind == TK_STR) {
     // 字面量保持忠实; sema 在标注节点类型时把它下降为对一个匿名全局
     // 对象的引用.
-    LibcpNode* node = libcp_new_node(ctx, ND_STRING, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_STRING, tok);
     *rest           = tok->next;
     return node;
   }
@@ -1638,10 +1638,10 @@ static LibcpNode* primary(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok)
   if (tok->kind == TK_NUM) {
     LibcpNode* node;
     if (libcp_is_flonum(tok->ty)) {
-      node             = libcp_new_node(ctx, ND_NUM, tok);
+      node             = libcp_node_new(ctx, ND_NUM, tok);
       node->value.fval = tok->fval;
     } else {
-      node = libcp_new_num(ctx, tok->val, tok);
+      node = libcp_node_num(ctx, tok->val, tok);
     }
 
     node->ty = tok->ty;
@@ -1754,7 +1754,7 @@ static LibcpNode* expr_nud(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok
     // 复合字面量: 保持忠实, 类型与初始化器记录挂在节点上; sema 物化该
     // 对象.
     if (libcp_equal(tok, "{")) {
-      LibcpNode* node      = libcp_new_node(ctx, ND_COMPOUND_LITERAL, start);
+      LibcpNode* node      = libcp_node_new(ctx, ND_COMPOUND_LITERAL, start);
       node->ty_op          = ty;
       node->spec_decls     = specs;
       node->decl.decl_init = init_record(ctx, rest, tok);
@@ -1762,8 +1762,8 @@ static LibcpNode* expr_nud(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok
     }
 
     // 源码写出的 cast: 无类型, 目标类型记录下来交给 sema. is_implicit
-    // 保持 false (sema 插入的 cast 由 libcp_new_cast 置位).
-    LibcpNode* node  = libcp_new_node(ctx, ND_CAST, start);
+    // 保持 false (sema 插入的 cast 由 libcp_node_cast 置位).
+    LibcpNode* node  = libcp_node_new(ctx, ND_CAST, start);
     node->lhs        = expr_bp(ctx, rest, tok, BP_CAST);
     node->ty_op      = ty;
     node->spec_decls = specs;
@@ -1774,29 +1774,29 @@ static LibcpNode* expr_nud(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok
     return expr_bp(ctx, rest, tok->next, BP_CAST);
 
   if (libcp_equal(tok, "-"))
-    return libcp_new_unary(ctx, ND_NEG, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
+    return libcp_node_unary(ctx, ND_NEG, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
   if (libcp_equal(tok, "&"))
-    return libcp_new_unary(ctx, ND_ADDR, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
+    return libcp_node_unary(ctx, ND_ADDR, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
   if (libcp_equal(tok, "*"))
-    return libcp_new_unary(ctx, ND_DEREF, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
+    return libcp_node_unary(ctx, ND_DEREF, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
   if (libcp_equal(tok, "!"))
-    return libcp_new_unary(ctx, ND_NOT, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
+    return libcp_node_unary(ctx, ND_NOT, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
   if (libcp_equal(tok, "~"))
-    return libcp_new_unary(ctx, ND_BITNOT, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
+    return libcp_node_unary(ctx, ND_BITNOT, expr_bp(ctx, rest, tok->next, BP_CAST), tok);
 
   if (libcp_equal(tok, "++")) {
-    LibcpNode* node     = libcp_new_node(ctx, ND_INCDEC, tok);
+    LibcpNode* node     = libcp_node_new(ctx, ND_INCDEC, tok);
     node->lhs           = expr_bp(ctx, rest, tok->next, BP_CAST);
     node->incdec.addend = 1;
     return node;
   }
 
   if (libcp_equal(tok, "--")) {
-    LibcpNode* node     = libcp_new_node(ctx, ND_INCDEC, tok);
+    LibcpNode* node     = libcp_node_new(ctx, ND_INCDEC, tok);
     node->lhs           = expr_bp(ctx, rest, tok->next, BP_CAST);
     node->incdec.addend = -1;
     return node;
@@ -1805,7 +1805,7 @@ static LibcpNode* expr_nud(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok
   // [GNU] labels-as-values. 必须在任何中缀解释之前判断, 因此 `&&label`
   // 不会被当作二元 `&&`.
   if (libcp_equal(tok, "&&")) {
-    LibcpNode* node  = libcp_new_node(ctx, ND_LABEL_VAL, tok);
+    LibcpNode* node  = libcp_node_new(ctx, ND_LABEL_VAL, tok);
     node->jump.label = libcp_get_ident(ctx, tok->next);
     *rest            = tok->next->next;
     return node;
@@ -1838,7 +1838,7 @@ static LibcpNode* expr_bp(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
 
       if (libcp_equal(op, "[")) {
         LibcpToken* idx      = op->next;
-        LibcpNode* subscript = libcp_new_node(ctx, ND_SUBSCRIPT, op);
+        LibcpNode* subscript = libcp_node_new(ctx, ND_SUBSCRIPT, op);
         subscript->lhs       = node;
         subscript->rhs       = expr(ctx, &idx, idx);
         *rest                = libcp_skip(ctx, idx, "]");
@@ -1859,7 +1859,7 @@ static LibcpNode* expr_bp(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
       }
 
       if (libcp_equal(op, "++")) {
-        LibcpNode* incdec      = libcp_new_node(ctx, ND_INCDEC, op);
+        LibcpNode* incdec      = libcp_node_new(ctx, ND_INCDEC, op);
         incdec->lhs            = node;
         incdec->incdec.is_post = true;
         incdec->incdec.addend  = 1;
@@ -1869,7 +1869,7 @@ static LibcpNode* expr_bp(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
       }
 
       if (libcp_equal(op, "--")) {
-        LibcpNode* incdec      = libcp_new_node(ctx, ND_INCDEC, op);
+        LibcpNode* incdec      = libcp_node_new(ctx, ND_INCDEC, op);
         incdec->lhs            = node;
         incdec->incdec.is_post = true;
         incdec->incdec.addend  = -1;
@@ -1883,7 +1883,7 @@ static LibcpNode* expr_bp(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
       break;
 
     if (kind == ND_COND) {
-      LibcpNode* cond = libcp_new_node(ctx, ND_COND, op);
+      LibcpNode* cond = libcp_node_new(ctx, ND_COND, op);
 
       if (libcp_equal(op->next, ":")) {
         // [GNU] `a ?: b`: 只有 cond 与 els, 并置上 is_elvis.
@@ -1905,13 +1905,13 @@ static LibcpNode* expr_bp(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok,
 
     if (kind == ND_ASSIGN) {
       LibcpNode* rhs    = expr_bp(ctx, rest, op->next, rbp);
-      LibcpNode* assign = libcp_new_binary(ctx, ND_ASSIGN, node, rhs, op);
+      LibcpNode* assign = libcp_node_binary(ctx, ND_ASSIGN, node, rhs, op);
       assign->assign.op = assign_op;
       node              = assign;
       continue;
     }
 
-    node = libcp_new_binary(ctx, kind, node, expr_bp(ctx, rest, op->next, rbp), op);
+    node = libcp_node_binary(ctx, kind, node, expr_bp(ctx, rest, op->next, rbp), op);
   }
 
   ctx->parse_depth--;
@@ -1954,7 +1954,7 @@ static LibcpNode*
     if (!decl.name)
       libcp_error_tok(ctx, decl.name_pos, "typedef name omitted");
 
-    LibcpNode* node = libcp_new_node(ctx, ND_TYPEDEF, decl.name);
+    LibcpNode* node = libcp_node_new(ctx, ND_TYPEDEF, decl.name);
     node->ty        = ty;
     add_typedef(ctx, node);
     cur = cur->next = node;
@@ -1976,7 +1976,7 @@ static LibcpNode* function_def(LibcpContext* ctx,
   if (!decl.name)
     libcp_error_tok(ctx, decl.name_pos, "function name omitted");
 
-  LibcpNode* node     = libcp_new_node(ctx, ND_FUNCDEF, tok);
+  LibcpNode* node     = libcp_node_new(ctx, ND_FUNCDEF, tok);
   node->ty_op         = ty;
   node->decl.name_tok = decl.name;
   node->decl.attr     = *attr;
@@ -2026,7 +2026,7 @@ static LibcpNode* global_variable(LibcpContext* ctx,
     LibcpToken* name = decl.name;
     add_declared_name(ctx, name);
 
-    LibcpNode* node     = libcp_new_node(ctx, ND_GVAR_DECL, tok);
+    LibcpNode* node     = libcp_node_new(ctx, ND_GVAR_DECL, tok);
     node->ty_op         = ty;
     node->decl.name_tok = name;
     node->decl.attr     = *attr;

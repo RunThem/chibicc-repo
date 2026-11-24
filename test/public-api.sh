@@ -25,7 +25,7 @@ fi
 mkdir -p "$tmp/pubinc"
 cp -R "$root/libcp/include/libcp" "$tmp/pubinc/"
 
-for h in allocator diagnostic context token preprocess provenance cst ast sema libcp; do
+for h in allocator diagnostic context token preprocess provenance cst ast backend sema libcp; do
   cat > "$tmp/h.c" <<EOF
 #include <libcp/$h.h>
 int main(void) { return 0; }
@@ -101,7 +101,7 @@ EOF
 # underscore on Darwin. Since the symbol-prefix line every internal
 # symbol carries the libcp_ prefix too, the deny list is anchored on it.
 nm -u "$tmp/consumer.o" | awk '{print $NF}' > "$tmp/undef"
-bad=$(grep -E '^_?(libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|add_type|new_cast|new_node|new_binary|new_unary|new_num|error|error_at|error_tok|warn_tok|strarray_push|nodearray_push|format|ctx|conditional|context_activate|context_set_base_file)|libcp_(hashmap|sema|ty|tu)_[a-z_0-9]+)$' "$tmp/undef" || true)
+bad=$(grep -E '^_?(libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|error|error_at|error_tok|warn_tok|strarray_push|nodearray_push|format|ctx|conditional|context_activate|context_set_base_file|get_input_files|unique_name_next)|libcp_(hashmap|sema|ty|tu)_[a-z_0-9]+)$' "$tmp/undef" || true)
 if [ -n "$bad" ]; then
   echo "public-api: the consumer references internal symbols:" >&2
   echo "$bad" >&2
@@ -142,6 +142,19 @@ libcp_cst_verify
 libcp_parse
 libcp_node_family
 libcp_node_source_range
+libcp_node_new
+libcp_node_binary
+libcp_node_unary
+libcp_node_num
+libcp_node_long
+libcp_node_arith
+libcp_node_var
+libcp_node_vla_ptr
+libcp_node_alloca
+libcp_node_cast
+libcp_type_builtin
+libcp_node_annotate_type
+libcp_type_pointer_to
 libcp_sema
 libcp_token_provenance
 libcp_macro_prov_next

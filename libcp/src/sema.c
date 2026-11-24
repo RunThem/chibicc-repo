@@ -10,7 +10,7 @@
 //    枚举常量, 完成解析器留给后续处理的类型记录 (数组维度, typeof
 //    操作数, 对齐, 位域宽度, case 值), 并完成聚合类型的布局;
 //
-//  - 标注 pass (libcp_add_type 与 type_chain) 为每个节点定型, 插入标准
+//  - 标注 pass (libcp_node_annotate_type 与 type_chain) 为每个节点定型, 插入标准
 //    要求的隐式转换, 运行需要已定型树的检查, 把编译期结论记录到节点上
 //    (sizeof 值, 泛型选择, 类型内建), 并物化语言规定存在的对象 (字符串
 //    字面量的匿名全局对象, 复合字面量的隐藏对象, 块作用域 static 的
@@ -25,9 +25,9 @@
 // 它还包含常量表达式求值器 (eval 及其同族), 两个 pass 都会使用它,
 // 预处理器也通过 libcp_const_expr 用它处理 `#if`.
 //
-// 少量类型层工具导出给自行构建节点的消费者 - libcp_add_type,
-// libcp_new_arith, usual_arith_conv, libcp_get_common_type,
-// libcp_new_cast 以及节点构造函数 (见 libcp.h). 消费者从这里获得
+// 少量类型层工具导出给自行构建节点的消费者 - libcp_node_annotate_type,
+// libcp_node_arith, usual_arith_conv, libcp_get_common_type,
+// libcp_node_cast 以及节点构造函数 (见 libcp.h). 消费者从这里获得
 // 转换, 而不是重新实现它们; 它提供的是形状, 不是语义.
 
 #include "libcp.h"
@@ -88,27 +88,27 @@ static LibcpMember* get_struct_member(LibcpType* ty, LibcpToken* tok);
 // 留作未绑定的 ND_IDENT), VLA 指示符, 以及类型在创建时即确定而不是
 // 从 token 读出的数值字面量. 已导出 (见 libcp.h): 构建节点的消费者
 // 需要节点一到达就已定型, 而这些是它自己无法构造的形态.
-LibcpNode* libcp_new_var_node(LibcpContext* ctx, LibcpObj* var, LibcpToken* tok) {
-  LibcpNode* node = libcp_new_node(ctx, ND_VAR, tok);
+LibcpNode* libcp_node_var(LibcpContext* ctx, LibcpObj* var, LibcpToken* tok) {
+  LibcpNode* node = libcp_node_new(ctx, ND_VAR, tok);
   node->decl.var  = var;
   return node;
 }
 
-LibcpNode* libcp_new_vla_ptr(LibcpContext* ctx, LibcpObj* var, LibcpToken* tok) {
-  LibcpNode* node = libcp_new_node(ctx, ND_VLA_PTR, tok);
+LibcpNode* libcp_node_vla_ptr(LibcpContext* ctx, LibcpObj* var, LibcpToken* tok) {
+  LibcpNode* node = libcp_node_new(ctx, ND_VLA_PTR, tok);
   node->decl.var  = var;
   return node;
 }
 
-LibcpNode* libcp_new_long(LibcpContext* ctx, int64_t val, LibcpToken* tok) {
-  LibcpNode* node = libcp_new_node(ctx, ND_NUM, tok);
+LibcpNode* libcp_node_long(LibcpContext* ctx, int64_t val, LibcpToken* tok) {
+  LibcpNode* node = libcp_node_new(ctx, ND_NUM, tok);
   node->value.val = val;
   node->ty        = libcp_ty_long;
   return node;
 }
 
 LibcpNode* libcp_new_ulong(LibcpContext* ctx, long val, LibcpToken* tok) {
-  LibcpNode* node = libcp_new_node(ctx, ND_NUM, tok);
+  LibcpNode* node = libcp_node_new(ctx, ND_NUM, tok);
   node->value.val = val;
   node->ty        = libcp_ty_ulong;
   return node;
@@ -117,10 +117,10 @@ LibcpNode* libcp_new_ulong(LibcpContext* ctx, long val, LibcpToken* tok) {
 // 隐式转换唯一的构建点: sema 插入的每个转换 - 常规算术转换, 赋值,
 // return 或实参转换到目标类型, 降级后的自增恢复操作数类型所用的
 // 转换 - 都经过这里, 因此标记节点只需一次赋值. 源码写出的 cast 由
-// 解析器以 ND_CAST 节点到达, 其标记保持 false, 由 libcp_add_type
+// 解析器以 ND_CAST 节点到达, 其标记保持 false, 由 libcp_node_annotate_type
 // 解析而不是构建.
-LibcpNode* libcp_new_cast(LibcpContext* ctx, LibcpNode* expr, LibcpType* ty) {
-  libcp_add_type(ctx, expr);
+LibcpNode* libcp_node_cast(LibcpContext* ctx, LibcpNode* expr, LibcpType* ty) {
+  libcp_node_annotate_type(ctx, expr);
 
   LibcpNode* node         = libcp_tu_calloc(ctx, 1, sizeof(LibcpNode));
   node->kind              = ND_CAST;
@@ -262,7 +262,7 @@ static LibcpObj* declare_function(LibcpContext* ctx,
 
 // 正在检查的函数的 goto 与标签集合: 在其函数体被标注和检查期间收集的
 // goto 与 [GNU] 标签值节点 (标签值可以位于语句树之外, 例如块作用域
-// static 初始化器中, 只有标注 pass 能到达那里 - 见 libcp_add_type 的
+// static 初始化器中, 只有标注 pass 能到达那里 - 见 libcp_node_annotate_type 的
 // ND_LABEL_VAL 分支).
 #define gotos  (ctx->gotos)
 #define labels (ctx->labels)
@@ -543,7 +543,7 @@ static void resolve_type(LibcpContext* ctx, LibcpType* ty) {
     // 操作数的类型填充这条记录, 而不是替换它: 解析器已经在其上构建了
     // 声明符其余的类型, 而且已经附加到该记录上的参数名必须在替换后
     // 保留 (F1).
-    libcp_add_type(ctx, expr);
+    libcp_node_annotate_type(ctx, expr);
     resolve_type(ctx, expr->ty);
 
     LibcpToken* name     = ty->name;
@@ -904,13 +904,13 @@ static void begin_function(LibcpContext* ctx, LibcpObj* fn, LibcpType* ty) {
   // 大 struct/union 返回值的缓冲区作为隐藏的第一个参数传入.
   LibcpType* rty = ty->return_ty;
   if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
-    new_lvar(ctx, "", libcp_pointer_to(ctx, rty));
+    new_lvar(ctx, "", libcp_type_pointer_to(ctx, rty));
 
   fn->params = locals;
 
   if (ty->is_variadic)
     fn->va_area = new_lvar(ctx, "__va_area__", libcp_array_of(ctx, libcp_ty_char, 136));
-  fn->alloca_bottom = new_lvar(ctx, "__alloca_size__", libcp_pointer_to(ctx, libcp_ty_char));
+  fn->alloca_bottom = new_lvar(ctx, "__alloca_size__", libcp_type_pointer_to(ctx, libcp_ty_char));
 
   // [https://www.sigbus.info/n1570#6.4.2.2p1] "__func__" 被自动定义为
   // 包含当前函数名的局部变量.
@@ -924,42 +924,42 @@ static void begin_function(LibcpContext* ctx, LibcpObj* fn, LibcpType* ty) {
 
 static void declare_builtin_functions(LibcpContext* ctx) {
   // 声明内建 alloca: 它是只有声明没有定义的对象, 供 VLA 降级调用.
-  LibcpType* ty                 = libcp_func_type(ctx, libcp_pointer_to(ctx, libcp_ty_void));
+  LibcpType* ty                 = libcp_func_type(ctx, libcp_type_pointer_to(ctx, libcp_ty_void));
   ty->params                    = libcp_copy_type(ctx, libcp_ty_int);
   builtin_alloca                = new_builtin_gvar(ctx, "alloca", ty);
   builtin_alloca->is_definition = false;
 }
 
 // 为 VLA 声明构建 `alloca(<size>)` 调用节点. 该调用到达时已完全定型,
-// 因此 libcp_add_type 会跳过它, codegen 按名字识别这个内建.
-LibcpNode* libcp_new_alloca(LibcpContext* ctx, LibcpNode* sz) {
+// 因此 libcp_node_annotate_type 会跳过它, codegen 按名字识别这个内建.
+LibcpNode* libcp_node_alloca(LibcpContext* ctx, LibcpNode* sz) {
   LibcpNode* node =
-      libcp_new_unary(ctx, ND_FUNCALL, libcp_new_var_node(ctx, builtin_alloca, sz->tok), sz->tok);
+      libcp_node_unary(ctx, ND_FUNCALL, libcp_node_var(ctx, builtin_alloca, sz->tok), sz->tok);
   node->ctrl.func_ty = builtin_alloca->ty;
   node->ty           = builtin_alloca->ty->return_ty;
   node->ctrl.args    = sz;
-  libcp_add_type(ctx, sz);
+  libcp_node_annotate_type(ctx, sz);
   return node;
 }
 
 // 用降级已经定好的操作数构建二元算术节点: 施加常规算术转换后节点
-// 返回时已完全定型, libcp_add_type 对它无事可做. 正是这一点让
+// 返回时已完全定型, libcp_node_annotate_type 对它无事可做. 正是这一点让
 // new_add/new_sub 完备 - 树中的每个 `+`/`-`, 无论来自解析器还是 sema
 // 从复合赋值或下标重建, 都恰好被缩放和转换一次, 节点也不需要标志
 // 说明自己属于哪一种.
 //
 // 已导出: 消费者由此获得已定型的二元节点, 以及 sema 的转换决策,
 // 无需重新实现其中任何一项.
-LibcpNode* libcp_new_arith(LibcpContext* ctx,
-                           LibcpNodeKind kind,
-                           LibcpNode* lhs,
-                           LibcpNode* rhs,
-                           LibcpToken* tok) {
-  libcp_add_type(ctx, lhs);
-  libcp_add_type(ctx, rhs);
+LibcpNode* libcp_node_arith(LibcpContext* ctx,
+                            LibcpNodeKind kind,
+                            LibcpNode* lhs,
+                            LibcpNode* rhs,
+                            LibcpToken* tok) {
+  libcp_node_annotate_type(ctx, lhs);
+  libcp_node_annotate_type(ctx, rhs);
   libcp_usual_arith_conv(ctx, &lhs, &rhs);
 
-  LibcpNode* node = libcp_new_binary(ctx, kind, lhs, rhs, tok);
+  LibcpNode* node = libcp_node_binary(ctx, kind, lhs, rhs, tok);
   node->ty        = lhs->ty;
   return node;
 }
@@ -987,18 +987,18 @@ static void lower_funcall(LibcpContext* ctx, LibcpNode* node, LibcpToken* tok) {
 
   for (LibcpNode* arg = node->ctrl.args; arg;) {
     LibcpNode* next = arg->next;
-    libcp_add_type(ctx, arg);
+    libcp_node_annotate_type(ctx, arg);
 
     if (!param_ty && !ty->is_variadic)
       libcp_error_tok(ctx, tok, "too many arguments");
 
     if (param_ty) {
       if (param_ty->kind != TY_STRUCT && param_ty->kind != TY_UNION)
-        arg = libcp_new_cast(ctx, arg, param_ty);
+        arg = libcp_node_cast(ctx, arg, param_ty);
       param_ty = param_ty->next;
     } else if (arg->ty->kind == TY_FLOAT) {
       // 若省略参数类型 (例如在 "..." 中), float 实参提升为 double.
-      arg = libcp_new_cast(ctx, arg, libcp_ty_double);
+      arg = libcp_node_cast(ctx, arg, libcp_ty_double);
     }
 
     arg->next = NULL;
@@ -1126,8 +1126,8 @@ static LibcpMember* find_init_member(LibcpContext* ctx, LibcpType* ty, LibcpToke
 // 把记录下来的字符串字面量变成引用其匿名全局对象的表达式节点, 这正是
 // 过去非数组目标的字符串初始化器解析出的形态.
 static LibcpNode* materialize_str(LibcpContext* ctx, LibcpInitializer* rec) {
-  LibcpNode* node = libcp_new_node(ctx, ND_STRING, rec->str_tok);
-  libcp_add_type(ctx, node);
+  LibcpNode* node = libcp_node_new(ctx, ND_STRING, rec->str_tok);
+  libcp_node_annotate_type(ctx, node);
   return node;
 }
 
@@ -1141,19 +1141,19 @@ static void resolve_string(LibcpContext* ctx, LibcpInitializer* rec, LibcpInitTr
     case 1: {
       char* str = tok->str;
       for (int i = 0; i < len; i++)
-        init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
+        init->children[i]->expr = libcp_node_num(ctx, str[i], tok);
       break;
     }
     case 2: {
       uint16_t* str = (uint16_t*)tok->str;
       for (int i = 0; i < len; i++)
-        init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
+        init->children[i]->expr = libcp_node_num(ctx, str[i], tok);
       break;
     }
     case 4: {
       uint32_t* str = (uint32_t*)tok->str;
       for (int i = 0; i < len; i++)
-        init->children[i]->expr = libcp_new_num(ctx, str[i], tok);
+        init->children[i]->expr = libcp_node_num(ctx, str[i], tok);
       break;
     }
     default: unreachable();
@@ -1478,7 +1478,7 @@ static void resolve_value(LibcpContext* ctx,
     // struct 可以用另一个 struct 初始化, 例如 `struct T x = y;`,
     // 其中 y 是 `struct T` 类型的变量. 先处理这种情况.
     LibcpNode* expr = (rec->kind == INIT_STR) ? materialize_str(ctx, rec) : rec->expr;
-    libcp_add_type(ctx, expr);
+    libcp_node_annotate_type(ctx, expr);
     if (expr->ty->kind == TY_STRUCT) {
       init->expr = expr;
       return;
@@ -1663,12 +1663,12 @@ LibcpType* libcp_get_common_type(LibcpContext* ctx, LibcpType* ty1, LibcpType* t
   // 求两个类型的公共类型: 指针/函数按指针处理, 浮点按最高精度提升,
   // 窄于 int 的整数先提升到 int, 再按宽度与符号选择.
   if (ty1->base)
-    return libcp_pointer_to(ctx, ty1->base);
+    return libcp_type_pointer_to(ctx, ty1->base);
 
   if (ty1->kind == TY_FUNC)
-    return libcp_pointer_to(ctx, ty1);
+    return libcp_type_pointer_to(ctx, ty1);
   if (ty2->kind == TY_FUNC)
-    return libcp_pointer_to(ctx, ty2);
+    return libcp_type_pointer_to(ctx, ty2);
 
   if (ty1->kind == TY_LDOUBLE || ty2->kind == TY_LDOUBLE)
     return libcp_ty_ldouble;
@@ -1697,8 +1697,8 @@ LibcpType* libcp_get_common_type(LibcpContext* ctx, LibcpType* ty1, LibcpType* t
 // 这一操作称为 "常规算术转换".
 void libcp_usual_arith_conv(LibcpContext* ctx, LibcpNode** lhs, LibcpNode** rhs) {
   LibcpType* ty = libcp_get_common_type(ctx, (*lhs)->ty, (*rhs)->ty);
-  *lhs          = libcp_new_cast(ctx, *lhs, ty);
-  *rhs          = libcp_new_cast(ctx, *rhs, ty);
+  *lhs          = libcp_node_cast(ctx, *lhs, ty);
+  *rhs          = libcp_node_cast(ctx, *rhs, ty);
 }
 
 // 按名字查找 struct 成员, 并下降进匿名成员.
@@ -1737,7 +1737,7 @@ static void resolve_member(LibcpContext* ctx, LibcpNode* node) {
   // `(&arr[0])->m`, 而不是对数组的非法解引用.
   if (arrow) {
     if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
-      ty = libcp_pointer_to(ctx, ty->base);
+      ty = libcp_type_pointer_to(ctx, ty->base);
 
     if (ty->kind != TY_PTR || !ty->base)
       libcp_error_tok(ctx, arrow, "invalid pointer dereference");
@@ -1761,7 +1761,7 @@ static void resolve_member(LibcpContext* ctx, LibcpNode* node) {
     if (!mem)
       libcp_error_tok(ctx, node->tok, "no such member");
 
-    LibcpNode* link     = libcp_new_unary(ctx, ND_MEMBER, cur, node->tok);
+    LibcpNode* link     = libcp_node_unary(ctx, ND_MEMBER, cur, node->tok);
     link->access.member = mem;
     if (arrow) {
       // 解引用属于最内层的链接. 标记留在它上面: codegen 的 gen_addr 把
@@ -1797,13 +1797,13 @@ static void resolve_member(LibcpContext* ctx, LibcpNode* node) {
 // 检查而定型 - 它们也是源码中的表达式, 真正的编译器同样会报告它们的
 // 错误.
 static void select_generic(LibcpContext* ctx, LibcpNode* node) {
-  libcp_add_type(ctx, node->ctrl.cond);
+  libcp_node_annotate_type(ctx, node->ctrl.cond);
 
   LibcpType* ty = node->ctrl.cond->ty;
   if (ty->kind == TY_FUNC)
-    ty = libcp_pointer_to(ctx, ty);
+    ty = libcp_type_pointer_to(ctx, ty);
   else if (ty->kind == TY_ARRAY)
-    ty = libcp_pointer_to(ctx, ty->base);
+    ty = libcp_type_pointer_to(ctx, ty->base);
 
   LibcpNode* sel = NULL;
   for (LibcpNode* assoc = node->ctrl.args; assoc; assoc = assoc->next) {
@@ -1825,12 +1825,12 @@ static void select_generic(LibcpContext* ctx, LibcpNode* node) {
 
   for (LibcpNode* assoc = node->ctrl.args; assoc; assoc = assoc->next)
     if (assoc->lhs != sel)
-      libcp_add_type(ctx, assoc->lhs);
+      libcp_node_annotate_type(ctx, assoc->lhs);
 
   // 选择的结论: 控制表达式所选关联的结果表达式, 记录在发问的节点上 -
   // 节点保持自己的 kind, 因此消费者读字段而不是读被替换的树
   // (PLAN A9.1). 选中的表达式在这里定型, 理由与上面未选中的那些相同.
-  libcp_add_type(ctx, sel);
+  libcp_node_annotate_type(ctx, sel);
   node->ctrl.generic_sel = sel;
   node->ty               = sel->ty;
 }
@@ -1854,7 +1854,7 @@ static void type_chain(LibcpContext* ctx, LibcpNode* head) {
       default: break;
     }
 
-    libcp_add_type(ctx, n);
+    libcp_node_annotate_type(ctx, n);
   }
 }
 
@@ -1867,7 +1867,7 @@ static void annotate_init_exprs(LibcpContext* ctx, LibcpInitTree* init) {
     return;
 
   if (init->expr) {
-    libcp_add_type(ctx, init->expr);
+    libcp_node_annotate_type(ctx, init->expr);
     return;
   }
 
@@ -1893,7 +1893,7 @@ static void annotate_init_exprs(LibcpContext* ctx, LibcpInitTree* init) {
 // 判断使它幂等, 因此每棵子树恰好被标注一次 - 这也是消费者不得对同一
 // 子树运行两次自己的整形的原因: 这道防线只阻止第二次 *标注*, 不阻止
 // 第二次 *降级* (PLAN 契约 3(d)).
-void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
+void libcp_node_annotate_type(LibcpContext* ctx, LibcpNode* node) {
   if (!node || node->ty)
     return;
 
@@ -1921,22 +1921,22 @@ void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
       stmt_expr_value = NULL;
   }
 
-  libcp_add_type(ctx, node->lhs);
-  libcp_add_type(ctx, node->rhs);
+  libcp_node_annotate_type(ctx, node->lhs);
+  libcp_node_annotate_type(ctx, node->rhs);
 
   LibcpNodeFamily fam = libcp_node_family(node->kind);
   if (fam == LIBCP_NF_CTRL) {
-    libcp_add_type(ctx, node->ctrl.cond);
-    libcp_add_type(ctx, node->ctrl.then);
-    libcp_add_type(ctx, node->ctrl.els);
+    libcp_node_annotate_type(ctx, node->ctrl.cond);
+    libcp_node_annotate_type(ctx, node->ctrl.then);
+    libcp_node_annotate_type(ctx, node->ctrl.els);
     type_chain(ctx, node->ctrl.init);
-    libcp_add_type(ctx, node->ctrl.inc);
+    libcp_node_annotate_type(ctx, node->ctrl.inc);
   }
   if (fam == LIBCP_NF_DECL)
     type_chain(ctx, node->decl.body);
   if (fam == LIBCP_NF_CTRL) {
     for (LibcpNode* n = node->ctrl.args; n; n = n->next)
-      libcp_add_type(ctx, n);
+      libcp_node_annotate_type(ctx, n);
   }
 
   switch (node->kind) {
@@ -1946,7 +1946,7 @@ void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
       // 解析器给出的原始 `+`/`-`: 各项降级 (指针缩放, `num + ptr` 的
       // 规范化, ptr-ptr 的元素计数) 现在属于消费者 (PLAN A4.1). 留在这里
       // 的是操作数可接受性 - new_add/new_sub 重建时检查的分支 - 与结果
-      // 类型. 不插入转换 cast: 重建的 libcp_new_arith 会执行它一贯执行的
+      // 类型. 不插入转换 cast: 重建的 libcp_node_arith 会执行它一贯执行的
       // usual_arith_conv, 重复执行会堆叠 cast 节点.
       LibcpType* lt = node->lhs->ty;
       LibcpType* rt = node->rhs->ty;
@@ -1988,7 +1988,7 @@ void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
       return;
     case ND_NEG: {
       LibcpType* ty = libcp_get_common_type(ctx, libcp_ty_int, node->lhs->ty);
-      node->lhs     = libcp_new_cast(ctx, node->lhs, ty);
+      node->lhs     = libcp_node_cast(ctx, node->lhs, ty);
       node->ty      = ty;
       return;
     }
@@ -2004,7 +2004,7 @@ void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
       if (node->lhs->ty->kind == TY_ARRAY)
         libcp_error_tok(ctx, node->lhs->tok, "not an lvalue");
       if (node->lhs->ty->kind != TY_STRUCT)
-        node->rhs = libcp_new_cast(ctx, node->rhs, node->lhs->ty);
+        node->rhs = libcp_node_cast(ctx, node->rhs, node->lhs->ty);
       node->ty = node->lhs->ty;
       return;
     case ND_INCDEC:
@@ -2072,7 +2072,7 @@ void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
       // 留在节点上 - 它正是类型的标识.
       LibcpType* ty = node->ty_op;
       if (!ty) {
-        libcp_add_type(ctx, node->lhs);
+        libcp_node_annotate_type(ctx, node->lhs);
         ty = node->lhs->ty;
       }
       // 读取操作数类型是为了取大小, 因此布局必须完整; 通过解引用到达的
@@ -2147,9 +2147,9 @@ void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
 
       LibcpType* ty = node->lhs->ty;
       if (ty->kind == TY_ARRAY)
-        node->ty = libcp_pointer_to(ctx, ty->base);
+        node->ty = libcp_type_pointer_to(ctx, ty->base);
       else
-        node->ty = libcp_pointer_to(ctx, ty);
+        node->ty = libcp_type_pointer_to(ctx, ty);
       return;
     }
     case ND_SUBSCRIPT: {
@@ -2210,12 +2210,12 @@ void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
       // 是因为这种表达式可以位于语句树之外 - 块作用域 static 初始化器
       // 就可能持有它, 只有求值器能到达. 类型标注保证每个节点只运行一次.
       libcp_nodearray_push(ctx, &gotos, node);
-      node->ty = libcp_pointer_to(ctx, libcp_ty_void);
+      node->ty = libcp_type_pointer_to(ctx, libcp_ty_void);
       return;
     case ND_CAS:
-      libcp_add_type(ctx, node->cas.cas_addr);
-      libcp_add_type(ctx, node->cas.cas_old);
-      libcp_add_type(ctx, node->cas.cas_new);
+      libcp_node_annotate_type(ctx, node->cas.cas_addr);
+      libcp_node_annotate_type(ctx, node->cas.cas_old);
+      libcp_node_annotate_type(ctx, node->cas.cas_new);
       node->ty = libcp_ty_bool;
 
       if (node->cas.cas_addr->ty->kind != TY_PTR)
@@ -2240,7 +2240,7 @@ void libcp_add_type(LibcpContext* ctx, LibcpNode* node) {
       if (node->lhs) {
         LibcpType* ty = sema_fn->ty->return_ty;
         if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
-          node->lhs = libcp_new_cast(ctx, node->lhs, ty);
+          node->lhs = libcp_node_cast(ctx, node->lhs, ty);
       }
       return;
     case ND_DECL: {
@@ -2310,14 +2310,14 @@ static int64_t eval(LibcpContext* ctx, LibcpNode* node) {
 // 常量表达式要么只是一个数, 要么是 ptr+n, 其中 ptr 是指向全局变量的
 // 指针, n 是正数或负数. 后一种形式只作为全局变量的初始化表达式接受.
 //
-// 入口处的 libcp_add_type 在 switch 运行前为树定型 - 对预处理器来说,
+// 入口处的 libcp_node_annotate_type 在 switch 运行前为树定型 - 对预处理器来说,
 // 这是该表达式唯一会得到的标注. 它仍然会降级树的一部分: SUBSCRIPT
 // 以 DEREF 到达, STRING 以 VAR 到达, sizeof 以数字到达, elvis 以逗号
 // 形态到达, 因此下面的 switch 只会看到这些降级后的形态. 随着剩余降级
 // 离开标注 pass (A6.1 起), 入口调用保留 - 它仍为树定型 - 但 switch
 // 开始看到忠实 kind, 下面的分支会连同降级形态一起识别它们.
 static int64_t eval2(LibcpContext* ctx, LibcpNode* node, LibcpLabelRef* label) {
-  libcp_add_type(ctx, node);
+  libcp_node_annotate_type(ctx, node);
 
   if (libcp_is_flonum(node->ty))
     return eval_double(ctx, node);
@@ -2551,7 +2551,7 @@ static int64_t eval_rval(LibcpContext* ctx, LibcpNode* node, LibcpLabelRef* labe
 // VLA 操作数自身的 kind 返回 false, 而不是因为折叠隐藏了它 - 否则
 // VLA 会静默变成固定数组.
 static bool is_const_expr(LibcpContext* ctx, LibcpNode* node) {
-  libcp_add_type(ctx, node);
+  libcp_node_annotate_type(ctx, node);
 
   switch (node->kind) {
     case ND_ADD:
@@ -2607,7 +2607,7 @@ int64_t libcp_const_expr(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) 
 // 像 eval2 一样先标注 (见那里): 这个 switch 看到的形态是标注 pass 当前
 // 产生的形态, 随着降级离开标注 pass, 下面的忠实分支会接管.
 static double eval_double(LibcpContext* ctx, LibcpNode* node) {
-  libcp_add_type(ctx, node);
+  libcp_node_annotate_type(ctx, node);
 
   if (libcp_is_integer(node->ty)) {
     if (node->ty->is_unsigned)
@@ -2965,7 +2965,7 @@ static void analyze_function(LibcpContext* ctx, LibcpObj* fn) {
   sema_fn           = fn;
   LibcpObj* save    = locals;
   locals            = NULL;
-  libcp_add_type(ctx, fn->body);
+  libcp_node_annotate_type(ctx, fn->body);
   check_control_flow(ctx, fn->body);
 
   // 把收集到的 goto 与标签值引用交给 codegen 的 shaping pass, 由它
