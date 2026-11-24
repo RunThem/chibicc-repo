@@ -1035,11 +1035,13 @@ static LibcpInitTree* new_resolved_init(LibcpContext* ctx, LibcpType* ty, bool i
 
   if (ty->kind == TY_ARRAY) {
     if (is_flexible && ty->size < 0) {
+      // 柔性数组还没有长度: 消费者按实际元素数扩展, 没有有效子节点.
       init->is_flexible = true;
       return init;
     }
 
-    init->children = libcp_tu_calloc(ctx, ty->array_len, sizeof(LibcpInitTree*));
+    init->child_count = ty->array_len;
+    init->children    = libcp_tu_calloc(ctx, ty->array_len, sizeof(LibcpInitTree*));
     for (int i = 0; i < ty->array_len; i++)
       init->children[i] = new_resolved_init(ctx, ty->base, false);
     return init;
@@ -1051,13 +1053,15 @@ static LibcpInitTree* new_resolved_init(LibcpContext* ctx, LibcpType* ty, bool i
     for (LibcpMember* mem = ty->members; mem; mem = mem->next)
       len++;
 
-    init->children = libcp_tu_calloc(ctx, len, sizeof(LibcpInitTree*));
+    init->child_count = len;
+    init->children    = libcp_tu_calloc(ctx, len, sizeof(LibcpInitTree*));
 
     for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
       if (is_flexible && ty->is_flexible && !mem->next) {
         LibcpInitTree* child     = libcp_tu_calloc(ctx, 1, sizeof(LibcpInitTree));
         child->ty                = mem->ty;
         child->is_flexible       = true;
+        child->child_count       = 0;
         init->children[mem->idx] = child;
       } else {
         init->children[mem->idx] = new_resolved_init(ctx, mem->ty, false);
@@ -1451,11 +1455,16 @@ static void resolve_value(LibcpContext* ctx,
                           LibcpInitItem** cursor) {
   LibcpType* ty = init->ty;
 
+  // 本槽位的锚点 token 来自解析它的记录; 没有记录的零值骨架保持 NULL.
+  init->tok = rec->tok;
+
   if (ty->kind == TY_ARRAY && rec->kind == INIT_STR) {
-    if (init->is_flexible)
-      *init = *new_resolved_init(ctx,
-                                 libcp_array_of(ctx, ty->base, rec->str_tok->ty->array_len),
-                                 false);
+    if (init->is_flexible) {
+      *init     = *new_resolved_init(ctx,
+                                     libcp_array_of(ctx, ty->base, rec->str_tok->ty->array_len),
+                                     false);
+      init->tok = rec->tok;
+    }
     resolve_string(ctx, rec, init);
     return;
   }
@@ -1468,6 +1477,7 @@ static void resolve_value(LibcpContext* ctx,
                                                        count_flex(ctx, rec, cursor, ty);
       *cursor             = save;
       *init               = *new_resolved_init(ctx, libcp_array_of(ctx, ty->base, len), false);
+      init->tok           = rec->tok;
     }
 
     if (rec->kind == INIT_LIST) {

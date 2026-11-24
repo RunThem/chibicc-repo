@@ -1521,8 +1521,10 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
       if (node->decl.attr.is_static || !node->decl.init_resolved)
         return;
 
-      LibcpNode* chain =
-          lvar_init_comma(ctx, node->decl.var, node->decl.init_resolved, node->decl.decl_init->tok);
+      LibcpNode* chain         = lvar_init_comma(ctx,
+                                                 node->decl.var,
+                                                 node->decl.init_resolved,
+                                                 node->decl.init_resolved->tok);
       node->decl.decl_init     = NULL;
       node->decl.init_resolved = NULL;
       libcp_node_annotate_type(ctx, chain);
@@ -1972,7 +1974,7 @@ static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
   } else if (node->decl.init_resolved) {
     // 初始化器逗号链; 指向 VLA 的指针也走到这里, 大小链排在
     // 赋值之前.
-    lowered = lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.decl_init->tok);
+    lowered = lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.init_resolved->tok);
     node->decl.decl_init = NULL;
     // 初始化器表达式从未经过本 pass, 树中也没有别处引用它们;
     // 大小链与指定初始化器目标已是降级形态, 不再触碰.
@@ -2353,7 +2355,7 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
 
         shape_init_exprs(ctx, node->decl.init_resolved);
         LibcpNode* lowered =
-            lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.decl_init->tok);
+            lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.init_resolved->tok);
         LibcpNode* comma = libcp_node_binary(ctx,
                                              ND_COMMA,
                                              lowered,

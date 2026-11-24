@@ -140,15 +140,22 @@ struct libcp_init_desig {
 // resolve pass 构建; 消费者的声明展开遍历它来构建赋值链, sema 的
 // 文件作用域序列化器遍历它生成 .data 字节. 初始化器可以嵌套
 // (例如 `int x[2][2] = {{1, 2}, {3, 4}}`), 因此它是一棵树.
+//
+// 遍历规则: 标量读 `expr`; 数组与 struct 递归 `children[0..child_count)`;
+// union 只处理 `children[mem->idx]`, 其余槽位是零值骨架; 柔性节点
+// (`is_flexible`) 由消费者按实际大小处理, 其 `child_count` 为 0.
 struct libcp_init_tree {
   LibcpType* ty;
-  bool is_flexible;
+  LibcpToken* tok;   // 本槽位初始化器的锚点 token
+  bool is_flexible;  // 柔性数组或柔性成员, 尚未定长
+  int child_count;   // `children[0..child_count)` 的有效长度
 
   // 若不是聚合类型且有初始化器, `expr` 存放初始化表达式.
   LibcpNode* expr;
 
   // 若是聚合类型 (例如数组或结构体) 的初始化器, `children` 存放其
-  // 子对象的初始化器.
+  // 子对象的初始化器. 数组的 child_count 是 array_len, struct / union
+  // 的是成员数, 标量为 0.
   LibcpInitTree** children;
 
   // 联合体只能初始化一个成员. `mem` 用于说明初始化的是哪个成员.
@@ -413,13 +420,13 @@ typedef struct {
 // 复合语句与声明记录的载荷. 函数定义同时携带函数体与声明属性, 因此
 // body 与声明字段同族; 块与语句表达式只使用 body 与 is_scope_block.
 typedef struct {
-  LibcpNode* body;              // 复合语句块, 语句表达式或函数体
-  bool is_scope_block;          // ND_BLOCK 是否引入词法作用域
-  LibcpVarAttr attr;            // 存储类与 _Alignas
-  LibcpToken* name_tok;         // 被声明的标识符
-  LibcpInitializer* decl_init;  // 忠实的初始化器记录
-  void* init_resolved;          // sema 私有: 解析后的初始化器树
-  LibcpObj* var;                // sema 绑定的变量/函数对象
+  LibcpNode* body;               // 复合语句块, 语句表达式或函数体
+  bool is_scope_block;           // ND_BLOCK 是否引入词法作用域
+  LibcpVarAttr attr;             // 存储类与 _Alignas
+  LibcpToken* name_tok;          // 被声明的标识符
+  LibcpInitializer* decl_init;   // 忠实的初始化器记录
+  LibcpInitTree* init_resolved;  // sema 解析后的初始化器树
+  LibcpObj* var;                 // sema 绑定的变量/函数对象
 } LibcpNodeDecl;
 
 // 字面量, 类型查询与 cast 的载荷.
