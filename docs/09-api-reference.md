@@ -1,6 +1,6 @@
 # 09 API 参考与用法
 
-本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 65 个公共函数与公共宏, 不列内部函数.
+本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 67 个公共函数与公共宏, 不列内部函数.
 
 ## 9.1 头文件, 链接与命名
 
@@ -17,11 +17,11 @@ libcp.h       伞头, LIBCP_VERSION, libcp_version
 allocator.h     可替换的分配器宏
 context.h       context, 诊断回调, 配置, base file, 预定义宏
 diagnostic.h    LibcpDiagnostic, severity
-token.h         LibcpToken, LibcpFile, 第 1 层入口, input file 枚举与 synthetic 判定
+token.h         LibcpToken, LibcpFile, 第 1 层入口, token dump, input file 枚举与 synthetic 判定
 preprocess.h    libcp_preprocess
 provenance.h    宏展开访问器, dump / verify
 cst.h           第 2 层
-ast.h           第 3/4 层的数据类型与 libcp_parse
+ast.h           第 3/4 层的数据类型, libcp_parse 与 AST dump
 backend.h       后端支持面: 节点构造, LibcpBuiltinType, 类型标注, 标签引用, 唯一名与诊断
 sema.h          libcp_sema
 ```
@@ -48,7 +48,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 
 `LIBCP_API` 在 GCC/Clang 下展开为 `__attribute__((visibility("default")))`, 用于共享库导出. 消费者不需要关心它.
 
-`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 65 个函数.
+`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 67 个函数.
 
 ## 9.2 函数总表
 
@@ -57,11 +57,11 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 | context | `libcp_context_new`, `_free`, `_reset`, `_set_diagnostic`, `_failed` |
 | 配置 | `libcp_context_add_include_path`, `libcp_context_set_base_file`, `_define`, `_undef`, `_set_predefined_macros`, `_predefined_count`, `_predefined_at` |
 | include 搜索 | `libcp_context_add_include_path_with_origin`, `libcp_context_resolve_include`, `libcp_context_include_is_system` |
-| 第 1 层 | `libcp_tokenize_file`, `libcp_tokenize_buffer`, `libcp_tokenize_buffer_len`, `libcp_reconstruct` |
+| 第 1 层 | `libcp_tokenize_file`, `libcp_tokenize_buffer`, `libcp_tokenize_buffer_len`, `libcp_reconstruct`, `libcp_token_dump` |
 | 源坐标 | `libcp_context_input_file_count`, `libcp_context_input_file_at`, `libcp_token_is_synthetic` |
 | 预处理 | `libcp_preprocess` |
 | 第 2 层 | `libcp_cst_parse`, `libcp_cst_seed_typedef`, `libcp_cst_reconstruct`, `libcp_cst_dump`, `libcp_cst_verify` |
-| 第 3 层 | `libcp_parse`, `libcp_node_family`, `libcp_node_child_count`, `libcp_node_child_at`, `libcp_node_source_range` |
+| 第 3 层 | `libcp_parse`, `libcp_ast_dump`, `libcp_node_family`, `libcp_node_child_count`, `libcp_node_child_at`, `libcp_node_source_range` |
 | 第 4 层 | `libcp_sema` |
 | 后端支持面 | `libcp_node_new`, `_binary`, `_unary`, `_num`, `_long`, `_arith`, `_var`, `_vla_ptr`, `_alloca`, `_cast` |
 | 后端支持面 | `libcp_type_builtin`, `libcp_node_annotate_type`, `libcp_type_pointer_to` |
@@ -402,6 +402,21 @@ bool libcp_token_is_synthetic(const LibcpToken *tok);
 - 宏展开产物的 `@synth` 标记是另一回事, 按 token 的 provenance 判断 (见 9.9).
 - `tok` 为 NULL 时返回 false.
 
+### 9.4.7 libcp_token_dump
+
+```c
+void libcp_token_dump(LibcpContext *ctx, const LibcpToken *tok, FILE *out);
+```
+
+把 token 流与 token 之间的 trivia 打印为文本 dump.
+
+- 每个 `T` 行是一个 token: 行号, 文件内字节偏移, 种类与转义后的拼写. 每个 `R` 行是它前面被跳过的原始字节, 按词法分析器跳过的片段拆分 (`lc` 行注释, `bc` 块注释, `nl` 换行, `ws` 空白, `cont` 反斜杠续行, `bom` 文件开头的 BOM).
+- 文本按 C 字面量风格转义: `\n`, `\t`, `\r`, `\\`, 其余控制字符, 0x7f 及以上的字节与空格打印为 `\xHH`.
+- 输入是 `libcp_tokenize_file` / `libcp_tokenize_buffer*` 的直接输出, 即预处理之前; 输出与驱动器的 `-dump-tokens` 逐字节相同.
+- 只读: 接受 `const` 输入, 不分配对象, 不选择处理阶段, 不退出. `ctx` 用于 token 种类名与错误边界.
+- 输出格式是公共契约, 由 `test/trivia.sh` 逐字节锁定; 格式变化属于行为变化.
+- `out` 由调用者打开和关闭.
+
 ## 9.5 预处理 API
 
 ### 9.5.1 libcp_preprocess
@@ -588,6 +603,21 @@ static void walk(const LibcpNode *node) {
 }
 ```
 
+### 9.7.5 libcp_ast_dump
+
+```c
+void libcp_ast_dump(LibcpContext *ctx, const LibcpNode *node, FILE *out);
+```
+
+把第 3 层忠实语法树打印为文本 dump.
+
+- 顶层沿 `next` 兄弟链逐个打印, 每个节点一行, 每层缩进两格; 子节点按 `libcp_node_child_at` 的顺序下降, 列表字段沿 `next` 走链.
+- 节点行包含种类, 代表 token (`@<文件>:<行>:<列> "拼写"`), 以及该 kind 的字段 (`ty_op`, `val`, `attr`, `name` 等). 宏展开产生的 token 打印为 `@synth`.
+- 初始化器记录 (`INIT`) 与属性侧 `align_expr` 是记录而不是结构子节点, 在枚举之后单独打印.
+- 输入是 `libcp_parse` 的输出, 在 `libcp_sema` 之前; 输出与驱动器的 `-dump-ast` 逐字节相同.
+- 只读: 接受 `const` 输入, 不分配对象, 不选择处理阶段, 不退出. 输出格式是公共契约, 由 `test/ast.sh` 逐字节锁定; 格式变化属于行为变化.
+- `out` 由调用者打开和关闭.
+
 ## 9.8 第 4 层 API
 
 ### 9.8.1 libcp_sema
@@ -679,7 +709,7 @@ const char *libcp_version(void);
 | `libcp_parse` | 树 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
 | `libcp_sema` | `LibcpObj` 链 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
 | `libcp_expansion_verify` | true | false |
-| `libcp_reconstruct` / `_cst_reconstruct` / `_cst_dump` / `_expansion_dump` | 返回 | 提前返回 |
+| `libcp_reconstruct` / `_token_dump` / `_cst_reconstruct` / `_cst_dump` / `_ast_dump` / `_expansion_dump` | 返回 | 提前返回 |
 | `libcp_context_*` void 配置函数 | 返回 | 无返回; 分配失败时配置可能未生效 |
 
 `libcp_context_failed` / `_predefined_count` / `_predefined_at` 是查询函数, 正常返回值, 不设错误边界.
@@ -1033,6 +1063,7 @@ void libcp_diagnostic_report(LibcpContext *ctx, LibcpToken *tok,
 
 - 没有深拷贝树的 API. 第 4 层原地改写.
 - 第 3 层有 `libcp_node_source_range` 取子树锚点范围; CST 节点仍没有 `start` / `end`, sema 的 `LibcpObj` 链也没有等价范围 API.
+- 四个 dump 入口只输出文本, 不接受格式选项; 文本格式由 golden 脚本锁定, 变化属于行为变化.
 - 没有公共 formatter API. `tools/fmt.c` 是仓库内的测试消费者, 不随 `make install` 发布; 第 2 层本身是数据.
 - 诊断已有 `tok` / `prov` 字段; 库不替消费者把整条链归结为单个"调用点位置".
 - 没有虚拟文件系统. include 只走磁盘.

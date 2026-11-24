@@ -48,7 +48,7 @@ int libcp_align_to(int n, int align) {
 // 转义写出 p 的前 len 个字节: \n, \t, \r 打印为 C 转义序列, 反斜杠
 // 打印为 \\; 其余控制字符, 0x7f 及以上的字节与空格都打印为 \xHH.
 // 空格也转义, 这样 dump 行不会以可能被工具去掉的空白结尾.
-void libcp_print_escaped(FILE* out, char* p, int len) {
+void libcp_print_escaped(FILE* out, const char* p, int len) {
   for (int i = 0; i < len; i++) {
     unsigned char c = p[i];
 

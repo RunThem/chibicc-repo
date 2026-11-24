@@ -1210,6 +1210,75 @@ static int check_reconstruct(LibcpContext *ctx) {
   return strcmp(buf, text) != 0;
 }
 
+// The public token and AST dump entries (issue #25): both write the
+// driver's channel text to a caller-owned FILE, accept const inputs, and
+// allocate nothing. The expected bytes are the ones test/trivia.sh and
+// test/ast.sh lock through the driver.
+static int check_token_dump(LibcpContext *ctx) {
+  const LibcpToken *tok = libcp_tokenize_buffer(ctx, "<libtest>", "int x=1;\n");
+  FILE *f = tmpfile();
+  if (!tok || !f)
+    return 1;
+  libcp_token_dump(ctx, tok, f);
+  if (libcp_context_failed(ctx)) {
+    fclose(f);
+    return 1;
+  }
+  fflush(f);
+  rewind(f);
+  char buf[512];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+
+  char *want =
+    "T 1 0 ident int\n"
+    "R 1 3 ws \\x20\n"
+    "T 1 4 ident x\n"
+    "T 1 5 punct =\n"
+    "T 1 6 pp-num 1\n"
+    "T 1 7 punct ;\n"
+    "R 1 8 nl \\n\n"
+    "T 2 9 eof\n";
+  return strcmp(buf, want) != 0;
+}
+
+static int check_ast_dump(LibcpContext *ctx) {
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<libtest>", "int f(int a){return a+1;}\n");
+  if (!tok)
+    return 1;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok)
+    return 1;
+  const LibcpNode *ast = libcp_parse(ctx, tok);
+  if (!ast || libcp_context_failed(ctx))
+    return 1;
+
+  FILE *f = tmpfile();
+  if (!f)
+    return 1;
+  libcp_ast_dump(ctx, ast, f);
+  if (libcp_context_failed(ctx)) {
+    fclose(f);
+    return 1;
+  }
+  fflush(f);
+  rewind(f);
+  char buf[1024];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+
+  char *want =
+    "ND_FUNCDEF @<libtest>:1:13 \"{\" ty_op=func(int) name=\"f\" attr=none\n"
+    "  ND_BLOCK @<libtest>:1:14 \"return\" is_scope_block=1\n"
+    "    ND_RETURN @<libtest>:1:14 \"return\"\n"
+    "      ND_ADD @<libtest>:1:22 \"+\"\n"
+    "        ND_IDENT @<libtest>:1:21 \"a\"\n"
+    "        ND_NUM @<libtest>:1:23 \"1\" val=1\n";
+  return strcmp(buf, want) != 0;
+}
+
 // The provenance accessors (PLAN L3.4a): an argument expansion and a
 // builtin expansion.
 static int check_provenance(LibcpContext *ctx) {
@@ -1782,6 +1851,10 @@ int main(int argc, char **argv) {
   // tokenize_file path with a context include path, and the recorded
   // macro operations (PLAN L3.4a).
   if (check_reconstruct(ctx))
+    return 1;
+  if (check_token_dump(ctx))
+    return 1;
+  if (check_ast_dump(ctx))
     return 1;
   if (check_provenance(ctx))
     return 1;
