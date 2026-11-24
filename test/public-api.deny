@@ -1,0 +1,6 @@
+# 公共 API 闸门与树外消费者共用的内部符号 deny list (决议 #14).
+# 一行一个 POSIX 扩展正则, 匹配 nm -u 输出中一行一个的未定义符号.
+# 每个内部符号都带 libcp_ 前缀, Darwin 的 nm 还会多一个前导下划线,
+# 因此模式允许可选的 `_?`. 空行与 `#` 开头的注释由读取方跳过.
+^_?libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|error|error_at|error_tok|warn_tok|diagnostic_vreport|strarray_push|nodearray_push|format|ctx|conditional|context_activate|unique_name_next)$
+^_?libcp_(hashmap|sema|ty|tu)_[a-z_0-9]+$

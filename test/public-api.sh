@@ -159,11 +159,21 @@ EOF
 # means the public surface leaked. Symbols differ by one leading
 # underscore on Darwin. Since the symbol-prefix line every internal
 # symbol carries the libcp_ prefix too, the deny list is anchored on it.
+# The patterns live in test/public-api.deny, shared with test/outside.sh
+# so the two gates cannot drift.
 nm -u "$tmp/consumer.o" | awk '{print $NF}' > "$tmp/undef"
-bad=$(grep -E '^_?(libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|error|error_at|error_tok|warn_tok|diagnostic_vreport|strarray_push|nodearray_push|format|ctx|conditional|context_activate|unique_name_next)|libcp_(hashmap|sema|ty|tu)_[a-z_0-9]+)$' "$tmp/undef" || true)
+bad=
+while IFS= read -r pat; do
+  case $pat in
+    ''|'#'*) continue ;;
+  esac
+  hit=$(grep -E -- "$pat" "$tmp/undef" || true)
+  if [ -n "$hit" ]; then
+    bad="$bad $hit"
+  fi
+done < "$root/test/public-api.deny"
 if [ -n "$bad" ]; then
-  echo "public-api: the consumer references internal symbols:" >&2
-  echo "$bad" >&2
+  echo "public-api: the consumer references internal symbols:$bad" >&2
   exit 1
 fi
 

@@ -462,7 +462,31 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 - **source mapping (W5)**: `libcp_node_source_range`(子树锚点 token 极值)与诊断展开点(`LibcpDiagnostic` 增加 `tok` / `prov`, 默认输出逐字节不变).
 - 同线关闭"展开流 CST"未决项(维持现状), per-node user data 扩展点按 formatter 的负结果继续推迟(只读遍历型消费者不需要它).
 
-## 12.15 从阶段史看现在的代码
+## 12.15 公共 seam 对树外消费者可用 (2026-11-25, 进行中)
+
+### 问题
+
+库边界固化后, 树外消费者只含公共头就能走完前端各层, 但 `main.c` 与 `codegen.c` 仍在使用的入口只存在于内部伞头 `libcp/src/libcp.h`: 节点构造, 内建类型, 标签引用, 唯一名, 诊断报告; 此外没有公共的子节点枚举, include 搜索 owner, token / AST dump, 源坐标访问与 typed 初始化器读取. 内部伞头因此是事实上的 seam.
+
+### 设计
+
+把"当前驱动器与 codegen 对库的全部使用"提升为公共契约 (spec #16): 新增 `<libcp/backend.h>`, 公开子节点枚举, 把 include 搜索收进库内单一 owner, 把 token / AST dump 移入库, 新增源坐标模块, 并把 typed 初始化器改成只读公共数据. 分五阶段迁移, 每阶段保持全量测试, 汇编等价性与公共面闸门; 最后删除驱动器与 codegen 对内部伞头的 include.
+
+### 产物 (已合入)
+
+- `backend.h`: 节点构造, 内建类型, 类型标注, 指针类型, 标签引用, 唯一名与返回式诊断 (#17, #18).
+- 子节点枚举 `libcp_node_child_count` / `_at` (#19).
+- 源坐标: input file 枚举, base file 与 synthetic 判定, 字符串重扫保留坐标 (#21, #22).
+- include 搜索单一 owner: origin 路径表, `resolve_include`, 系统目录判定与 per-file `#include_next` (#23, #24).
+- 公共 `libcp_token_dump` / `libcp_ast_dump` (#25).
+- typed 初始化器只读交接: `init_resolved` 保留到 reset, 带锚点 token 与 child_count (#26).
+- 树外消费者验收 (#27): `test/outside/consumer.c` 只含公共头并链接归档, 完成降级发射与诊断回调; `test/outside.sh` 把公共头复制到临时目录, 在默认与 stage2 归档上各跑一遍, 未定义符号与公共 API 闸门共用 `test/public-api.deny`.
+
+### 产物可以干什么
+
+一个不了解仓库布局的消费者可以只靠公共头与 `libcp.a` 构造后端需要的节点, 按公共类型信息缩放指针运算并发射目标指令, 并在不 longjmp 的路径上报告诊断. 截至本阶段, 驱动器的整体迁移 (#28) 与 seam 构建标志拆分 (#29) 仍未完成.
+
+## 12.16 从阶段史看现在的代码
 
 | 你看到的 | 来自哪个阶段 | 为什么 |
 |---|---|---|
@@ -481,7 +505,7 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 | per-TU 分配替换 arena | 分配线 | 每对象独立 `LIBCP_*` 分配, reset 沿登记链归还 |
 | 表达式层是一个绑定力循环 | Pratt 线 + Pratt 单一路径线 | 级联已删, Pratt 是唯一实现 |
 
-## 12.16 读历史文档的注意事项
+## 12.17 读历史文档的注意事项
 
 2026-11-24 之前, `plans/` 下的文件是执行记录, 不是当前 API 文档. 该目录已删除; 现行计划与记录改用 GitHub Issues (见 `docs/agents/issue-tracker.md`), 历史内容见 Git 历史.
 

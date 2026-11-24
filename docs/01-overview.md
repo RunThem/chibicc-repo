@@ -40,6 +40,7 @@
 - 按稳定顺序枚举一个翻译单元读入的文件, 设置 `__BASE_FILE__`, 判断 token 是否来自合成文件 (`libcp_context_input_file_count` / `_at`, `libcp_context_set_base_file`, `libcp_token_is_synthetic`).
 - 按固定顺序枚举一个节点的结构子节点, 不需要复制库内 walker 的字段 switch (`libcp_node_child_count` / `_at`, 见 9.7.4).
 - include 搜索的单一 owner: 按来源 (`USER` / `AFTER` / `SYSTEM`) 注册路径, 解析 include 文件名并判定系统目录 (`libcp_context_add_include_path_with_origin`, `libcp_context_resolve_include`, `libcp_context_include_is_system`).
+- 树外消费者验收 (`test/outside/consumer.c` + `test/outside.sh`): 消费者只包含公共头并链接归档, 完成一次真实降级与 x86-64 发射, 并走通诊断回调; 脚本把公共头复制到临时目录, 只以该目录作 include path, 由 `make test` 与 `make test-stage2` 用默认或 stage2 归档各跑一遍 (决议 #14).
 - 11 个公共头, 67 个公共函数(L5 起含 `libcp_cst_seed_typedef` 与 `libcp_node_source_range`; 0.2.0 起含 `libcp_node_family`; 后端支持面追加 17 个; 源坐标追加 4 个; 子节点枚举追加 2 个; include 搜索追加 3 个; dump 追加 2 个). 公共符号一律 `libcp_` / `Libcp` 前缀.
 
 库的实现约 1.1 万行 C, 公共头约 1050 行(11 个头文件). 它没有外部依赖, 除 C 标准库外只要求 POSIX 的文件与线程基础能力.
@@ -189,7 +190,7 @@ CST 进一步把每个标点变成叶子, 保证叶子按序重建等于输入. 
 
 **还没做到的部分**:
 
-- 第三方真实消费者验证仍然缺; `fmt` 与 `c2c` 都只作为仓库内测试消费者, 不随 `make install` 发布.
+- 第三方真实项目验证仍然缺; `test/outside.sh` 用只含公共头与归档的树外消费者覆盖 seam, 但它与 `fmt` / `c2c` 一样是仓库内验收, 不随 `make install` 发布.
 - CST 的结构覆盖率不完整: 当前 48 个语料文件中 7 个含 `CST_UNPARSED`, 共 45 个 span, 由 `test/cst-stats.golden` 逐文件锁定; GNU 语句表达式已由 `CST_STMT_EXPR` 结构化. 重建不受影响, 但依赖结构的工具会退化.
 - 公共结构体字段直接暴露, 版本升级可能破坏源码兼容.
 - 性能没有优化; 大文件的内存峰值取决于分配器的 `realloc` 语义, 且每个 per-TU 对象带一个两指针的登记链头部.
