@@ -69,14 +69,32 @@ bool libcp_equal(LibcpToken* tok, char* op);
 LibcpToken* libcp_skip(LibcpContext* ctx, LibcpToken* tok, char* op);
 bool libcp_consume(LibcpToken** rest, LibcpToken* tok, char* str);
 void libcp_convert_pp_tokens(LibcpContext* ctx, LibcpToken* tok);
-LibcpFile** libcp_get_input_files(LibcpContext* ctx);
-LibcpFile* libcp_new_file(LibcpContext* ctx, char* name, int file_no, char* contents);
-LibcpFile* libcp_new_file_len(LibcpContext* ctx, char* name, int file_no, char* contents, int len);
-bool libcp_is_line_break(char* p);
-int libcp_line_break_len(char* p);
 LibcpToken* libcp_tokenize_string_literal(LibcpContext* ctx, LibcpToken* tok, LibcpType* basety);
 LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file);
 LibcpToken* libcp_tokenize_file_impl(LibcpContext* ctx, char* filename);
+
+// source.c: 源坐标模块. LibcpFile 构造, 扫描缓冲构造, raw / 扫描偏移 /
+// 物理行换算, file 级 synthetic 判定与 input file 表登记都由它独占.
+// 公共的 input file 枚举与 libcp_token_is_synthetic 也在这里实现.
+
+typedef struct {
+  LibcpFile* file;
+  long offset;
+} LibcpSourcePos;
+
+LibcpFile* libcp_new_file(LibcpContext* ctx, char* name, int file_no, char* contents);
+LibcpFile* libcp_new_file_len(LibcpContext* ctx, char* name, int file_no, char* contents, int len);
+LibcpFile* libcp_new_file_from_raw(LibcpContext* ctx, char* name, char* raw, int len);
+void libcp_source_register_input_file(LibcpContext* ctx, LibcpFile* file);
+bool libcp_is_line_break(char* p);
+int libcp_line_break_len(char* p);
+int libcp_file_raw_offset(const LibcpFile* file, const char* p);
+int libcp_file_raw_end_of(const LibcpFile* file, int scan_off);
+int libcp_file_physical_line(const LibcpFile* file, int raw_offset);
+int libcp_token_raw_end(const LibcpToken* tok);
+int libcp_token_physical_line(const LibcpToken* tok);
+LibcpSourcePos libcp_token_source_pos(const LibcpToken* tok);
+bool libcp_file_is_synthetic(const LibcpFile* file);
 
 #define unreachable() libcp_error(ctx, "internal error at %s:%d", __FILE__, __LINE__)
 
@@ -327,10 +345,6 @@ struct LibcpContext {
   int unique_name_id;
   bool resolving_body;
 };
-
-// base 文件名是 per-TU 状态, 不是配置: 它在 tokenize 开始时从输入路径设置,
-// 并由 reset 清除; 这一点与 include 路径和宏操作不同, 后者跨 reset 保留.
-void libcp_context_set_base_file(LibcpContext* ctx, char* path);
 
 void* libcp_tu_alloc(LibcpContext* ctx, size_t size);
 void* libcp_tu_calloc(LibcpContext* ctx, size_t count, size_t size);

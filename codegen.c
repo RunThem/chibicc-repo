@@ -2672,9 +2672,11 @@ static void emit_text(LibcpContext* ctx, LibcpObj* prog) {
 void codegen(LibcpContext* ctx, LibcpObj* prog, FILE* out) {
   output_file = out;
 
-  LibcpFile** files = libcp_get_input_files(ctx);
-  for (int i = 0; files[i]; i++)
-    println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
+  int file_count = libcp_context_input_file_count(ctx);
+  for (int i = 0; i < file_count; i++) {
+    LibcpFile* file = libcp_context_input_file_at(ctx, i);
+    println("  .file %d \"%s\"", file->file_no, file->name);
+  }
 
   // 整形遍最先运行: 它填充 gen_stmt 读取的标签字段并解析 goto 引用,
   // 在它之前不得进行任何分配或发射 (PLAN 契约 3).

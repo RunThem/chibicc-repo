@@ -726,21 +726,23 @@ static void print_dependencies(void) {
   else
     fprintf(out, "%s:", quote_makefile(replace_extn(base_file, ".o")));
 
-  LibcpFile** files = libcp_get_input_files(ctx);
+  int count = libcp_context_input_file_count(ctx);
 
-  for (int i = 0; files[i]; i++) {
-    if (opt_MMD && in_std_include_path(files[i]->name))
+  for (int i = 0; i < count; i++) {
+    LibcpFile* file = libcp_context_input_file_at(ctx, i);
+    if (opt_MMD && in_std_include_path(file->name))
       continue;
-    fprintf(out, " \\\n  %s", files[i]->name);
+    fprintf(out, " \\\n  %s", file->name);
   }
 
   fprintf(out, "\n\n");
 
   if (opt_MP) {
-    for (int i = 1; files[i]; i++) {
-      if (opt_MMD && in_std_include_path(files[i]->name))
+    for (int i = 1; i < count; i++) {
+      LibcpFile* file = libcp_context_input_file_at(ctx, i);
+      if (opt_MMD && in_std_include_path(file->name))
         continue;
-      fprintf(out, "%s:\n\n", quote_makefile(files[i]->name));
+      fprintf(out, "%s:\n\n", quote_makefile(file->name));
     }
   }
 }

@@ -332,6 +332,98 @@ static int check_source_range(LibcpContext *ctx) {
   return 0;
 }
 
+// The source-coordinate module (issue #21): a translation unit enumerates
+// the files it read, in first-read order, through count / at. The main
+// file comes first; an included header follows. Reset empties the table.
+static int check_input_files(LibcpContext *ctx, char *path, char *dir) {
+  libcp_context_add_include_path(ctx, dir);
+  LibcpToken *tok = libcp_tokenize_file(ctx, path);
+  if (!tok)
+    return 1;
+
+  if (libcp_context_input_file_count(ctx) != 1)
+    return 1;
+  LibcpFile *main_file = libcp_context_input_file_at(ctx, 0);
+  if (!main_file || !main_file->name || strcmp(main_file->name, path) != 0)
+    return 1;
+  if (libcp_context_input_file_at(ctx, -1) ||
+      libcp_context_input_file_at(ctx, 1))
+    return 1;
+
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || libcp_context_failed(ctx))
+    return 1;
+  if (libcp_context_input_file_count(ctx) != 2)
+    return 1;
+  if (libcp_context_input_file_at(ctx, 0) != main_file)
+    return 1;
+  LibcpFile *header = libcp_context_input_file_at(ctx, 1);
+  if (!header || !header->name || !strstr(header->name, "header.h"))
+    return 1;
+
+  libcp_context_reset(ctx);
+  if (libcp_context_input_file_count(ctx) != 0 ||
+      libcp_context_input_file_at(ctx, 0) != NULL)
+    return 1;
+  return 0;
+}
+
+// File-level synthetic judgment (issue #21): tokens from a real file are
+// not synthetic; every token from memory input is, including EOF.
+static int check_synthetic(LibcpContext *ctx, char *path) {
+  LibcpToken *tok = libcp_tokenize_file(ctx, path);
+  if (!tok)
+    return 1;
+  for (LibcpToken *t = tok; t; t = t->next)
+    if (libcp_token_is_synthetic(t))
+      return 1;
+  libcp_context_reset(ctx);
+
+  tok = libcp_tokenize_buffer(ctx, "<memory>", "int x;\n");
+  if (!tok)
+    return 1;
+  for (LibcpToken *t = tok; t; t = t->next)
+    if (!libcp_token_is_synthetic(t))
+      return 1;
+  libcp_context_reset(ctx);
+  return 0;
+}
+
+// The base file is per-TU: set_base_file wins over the tokenized name,
+// and reset forgets it, so the next input names itself again.
+static int check_base_file(LibcpContext *ctx) {
+  char *src = "char *b = __BASE_FILE__;\n";
+  libcp_context_set_base_file(ctx, "<chosen>");
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<buffer>", src);
+  if (!tok)
+    return 1;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || libcp_context_failed(ctx))
+    return 1;
+  LibcpToken *str = NULL;
+  for (LibcpToken *t = tok; t && t->kind != TK_EOF; t = t->next)
+    if (t->kind == TK_STR)
+      str = t;
+  if (!str || !str->str || strcmp(str->str, "<chosen>") != 0)
+    return 1;
+  libcp_context_reset(ctx);
+
+  tok = libcp_tokenize_buffer(ctx, "<fallback>", src);
+  if (!tok)
+    return 1;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || libcp_context_failed(ctx))
+    return 1;
+  str = NULL;
+  for (LibcpToken *t = tok; t && t->kind != TK_EOF; t = t->next)
+    if (t->kind == TK_STR)
+      str = t;
+  if (!str || !str->str || strcmp(str->str, "<fallback>") != 0)
+    return 1;
+  libcp_context_reset(ctx);
+  return 0;
+}
+
 // The backend support face (issue #17): a consumer that sees only the
 // public headers builds every node a backend needs, reads back kind and
 // fields, and gets sema's type conclusions through libcp_node_annotate_type.
@@ -1221,6 +1313,12 @@ int main(int argc, char **argv) {
     return 1;
   if (check_source_range(ctx))
     return 1;
+  if (argc > 2 && check_input_files(ctx, argv[1], argv[2]))
+    return 1;
+  if (argc > 1 && check_synthetic(ctx, argv[1]))
+    return 1;
+  if (check_base_file(ctx))
+    return 1;
   if (check_backend_support(ctx))
     return 1;
   if (check_backend_labels(ctx))
@@ -1305,7 +1403,8 @@ int main(int argc, char **argv) {
 }
 EOF
 
-"$cc" -std=c11 -pthread -I"$root/libcp/include" "$tmp/consumer.c" "$lib" -o "$tmp/consumer"
+"$cc" -std=c11 -Werror=implicit-function-declaration -pthread \
+  -I"$root/libcp/include" "$tmp/consumer.c" "$lib" -o "$tmp/consumer"
 "$tmp/consumer" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
 
 # The sanitizer gate (PLAN L3.0/L3.4c). The library sources themselves are
