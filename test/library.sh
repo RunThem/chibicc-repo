@@ -651,6 +651,168 @@ static int check_backend_unique_name(LibcpContext *ctx) {
   return 0;
 }
 
+static const LibcpNode *find_stmt(const LibcpNode *head, LibcpNodeKind kind);
+
+static int tok_is(const LibcpToken *tok, const char *s) {
+  size_t n = strlen(s);
+  return tok && tok->kind == TK_IDENT && tok->len == (int)n &&
+         memcmp(tok->loc, s, n) == 0;
+}
+
+static int tok_is_punct(const LibcpToken *tok, char c) {
+  return tok && tok->kind == TK_PUNCT && tok->len == 1 && tok->loc[0] == c;
+}
+
+// Typed initializer handoff (issue #26): sema builds the resolved tree,
+// clears the layer-3 faithful record, and keeps the tree readable until
+// reset. The tree is public read-only data: child_count bounds children
+// and tok is the initializer anchor, so a backend can walk arrays, structs,
+// unions and flexible members without the sema source.
+static int check_init_resolved(LibcpContext *ctx) {
+  char *src = "struct Inner { int a; int b; };\n"
+              "struct Outer { struct Inner in; int arr[2]; };\n"
+              "union U { int i; long l; };\n"
+              "struct Flex { int n; char tail[]; };\n"
+              "int g = 7;\n"
+              "int garr[2] = {1, 2};\n"
+              "union U gu = {.l = 5};\n"
+              "struct Flex gf = {3, {'a', 'b'}};\n"
+              "int f(int x) {\n"
+              "  struct Outer o = {{1, 2}, {3, 4}};\n"
+              "  union U u = {.l = 5};\n"
+              "  int a[2][3] = {{1, 2, 3}, {4, 5, 6}};\n"
+              "  int s = x + 1;\n"
+              "  return a[1][2] + o.arr[1] + s + u.i;\n"
+              "}\n";
+  LibcpObj *prog = NULL;
+  LibcpNode *ast = compile(ctx, src, &prog);
+  if (!ast || !prog)
+    return 1;
+
+  const LibcpNode *fn = find_stmt(ast, ND_FUNCDEF);
+  if (!fn || !fn->decl.body || fn->decl.body->kind != ND_BLOCK)
+    return 1;
+
+  const LibcpNode *a = NULL, *o = NULL, *u = NULL, *s = NULL;
+  for (const LibcpNode *n = fn->decl.body->decl.body; n; n = n->next) {
+    if (n->kind != ND_DECL)
+      continue;
+    if (tok_is(n->decl.name_tok, "a"))
+      a = n;
+    else if (tok_is(n->decl.name_tok, "o"))
+      o = n;
+    else if (tok_is(n->decl.name_tok, "u"))
+      u = n;
+    else if (tok_is(n->decl.name_tok, "s"))
+      s = n;
+  }
+  if (!a || !o || !u || !s)
+    return 1;
+
+  // Locals lose the faithful record; the resolved tree stays.
+  if (a->decl.decl_init || o->decl.decl_init || u->decl.decl_init ||
+      s->decl.decl_init)
+    return 1;
+
+  // Nested array: child_count is the array length at every level; tok is
+  // the brace that opened the initializer for that slot.
+  const LibcpInitTree *ai = a->decl.init_resolved;
+  if (!ai || ai->ty->kind != TY_ARRAY || ai->child_count != 2 || !ai->tok ||
+      !tok_is_punct(ai->tok, '{'))
+    return 1;
+  if (!ai->children || !ai->children[0] || !ai->children[1] ||
+      ai->children[0]->child_count != 3 || ai->children[1]->child_count != 3)
+    return 1;
+  if (!tok_is_punct(ai->children[0]->tok, '{') ||
+      !ai->children[0]->children[2] ||
+      !ai->children[0]->children[2]->expr ||
+      ai->children[0]->children[2]->expr->value.val != 3 ||
+      !ai->children[1]->children[2] ||
+      !ai->children[1]->children[2]->expr ||
+      ai->children[1]->children[2]->expr->value.val != 6)
+    return 1;
+
+  // struct: one child per member; a scalar leaf carries expr and no
+  // children.
+  const LibcpInitTree *oi = o->decl.init_resolved;
+  if (!oi || oi->ty->kind != TY_STRUCT || oi->child_count != 2 || !oi->tok)
+    return 1;
+  if (!oi->children[0]->children[1]->expr ||
+      oi->children[0]->children[1]->expr->value.val != 2 ||
+      !oi->children[1]->children[1]->expr ||
+      oi->children[1]->children[1]->expr->value.val != 4)
+    return 1;
+  if (oi->children[0]->children[0]->child_count != 0 ||
+      oi->children[0]->children[0]->children)
+    return 1;
+
+  // union: mem names the initialized member; the other slot is a zero
+  // skeleton.
+  const LibcpInitTree *ui = u->decl.init_resolved;
+  if (!ui || ui->ty->kind != TY_UNION || ui->child_count != 2 || !ui->mem ||
+      ui->mem->idx != 1 || !tok_is(ui->mem->name, "l"))
+    return 1;
+  if (ui->children[0]->expr || !ui->children[1]->expr ||
+      ui->children[1]->expr->value.val != 5)
+    return 1;
+
+  // Scalar: no children, expr holds the value.
+  const LibcpInitTree *si = s->decl.init_resolved;
+  if (!si || si->child_count != 0 || si->children || !si->expr ||
+      si->ty->kind != TY_INT)
+    return 1;
+
+  const LibcpNode *g = NULL, *garr = NULL, *gu = NULL, *gf = NULL;
+  for (const LibcpNode *n = ast; n; n = n->next) {
+    if (n->kind != ND_GVAR_DECL)
+      continue;
+    if (tok_is(n->decl.name_tok, "g"))
+      g = n;
+    else if (tok_is(n->decl.name_tok, "garr"))
+      garr = n;
+    else if (tok_is(n->decl.name_tok, "gu"))
+      gu = n;
+    else if (tok_is(n->decl.name_tok, "gf"))
+      gf = n;
+  }
+  if (!g || !garr || !gu || !gf)
+    return 1;
+
+  // Globals keep the resolved tree after sema serialized init_data; the
+  // layer-3 record is gone here too.
+  if (g->decl.decl_init || !g->decl.init_resolved || !g->decl.var ||
+      !g->decl.var->init_data || g->decl.init_resolved->child_count != 0 ||
+      !g->decl.init_resolved->expr ||
+      g->decl.init_resolved->expr->value.val != 7)
+    return 1;
+
+  const LibcpInitTree *gi = garr->decl.init_resolved;
+  if (garr->decl.decl_init || !gi || gi->ty->kind != TY_ARRAY ||
+      gi->child_count != 2 || !gi->children[1]->expr ||
+      gi->children[1]->expr->value.val != 2)
+    return 1;
+
+  const LibcpInitTree *gui = gu->decl.init_resolved;
+  if (gu->decl.decl_init || !gui || gui->child_count != 2 || !gui->mem ||
+      gui->mem->idx != 1 || !gui->children[1]->expr ||
+      gui->children[1]->expr->value.val != 5)
+    return 1;
+
+  // A flexible array member that received elements is completed in place,
+  // like a top-level `[]` initializer: the array length becomes the child
+  // count.
+  const LibcpInitTree *gfi = gf->decl.init_resolved;
+  if (gf->decl.decl_init || !gfi || gfi->child_count != 2 ||
+      !gfi->children[1] || gfi->children[1]->is_flexible ||
+      gfi->children[1]->child_count != 2 ||
+      !gfi->children[1]->children[1] ||
+      !gfi->children[1]->children[1]->expr ||
+      gfi->children[1]->children[1]->expr->value.val != 'b')
+    return 1;
+
+  return 0;
+}
+
 // Child enumeration (issue #19): the structural children in the fixed
 // order lhs, rhs, active family fields, spec_decls. next is a sibling
 // link, never a child; list fields report only their head with is_list.
@@ -1666,6 +1828,10 @@ int main(int argc, char **argv) {
     return 1;
   if (check_node_children(ctx))
     return 1;
+  libcp_context_reset(ctx);
+  if (check_init_resolved(ctx))
+    return 1;
+  libcp_context_reset(ctx);
   if (check_diagnostic_report(ctx))
     return 1;
   libcp_context_reset(ctx);

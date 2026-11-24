@@ -564,7 +564,8 @@ LibcpNodeChild libcp_node_child_at(const LibcpNode *node, int index);
 - 排除 `generic_sel` (它是 `ctrl.args` 中某个关联结果的别名),
   `decl.decl_init`, `decl.init_resolved`, `decl.attr.align_expr`, 以及
   类型载荷里的节点 (`ty->dim_len`, `ty->typeof_expr`, `ty->vla_len`,
-  `member->width_expr` 等).
+  `member->width_expr` 等). 初始化器树是独立的数据契约, 不参与结构
+  子节点枚举, 遍历方式见 9.8.2.
 - 不分配, 不诊断, 不需要 `LibcpContext`, 也不触碰 per-TU 状态. 树被
   修改后 `index` 不稳定.
 - 空翻译单元或叶子节点: count 为 0, 任何 index 都返回
@@ -604,8 +605,35 @@ LibcpObj *libcp_sema(LibcpContext *ctx, LibcpNode *toplevel);
 - 语义错误返回 NULL, `failed` 为 true.
 - 源码表达式位置的 `ND_IDENT` 和 `ND_STRING` 会被改写; 物化字符串时创建的 `ND_STRING` 节点保留原 kind.
 - 声明记录保留在语句链上.
+- 声明记录的初始化器被解析为 `decl.init_resolved` (`LibcpInitTree *`), 保留到 reset; 忠实的 `decl.decl_init` 被置 NULL.
 
 消费者通常过滤 `is_definition` 来拿真正的定义.
+
+### 9.8.2 typed 初始化器
+
+```c
+struct libcp_init_tree {
+  LibcpType *ty;
+  LibcpToken *tok;          /* 本槽位初始化器的锚点 */
+  bool is_flexible;         /* 柔性数组或柔性成员, 尚未定长 */
+  int child_count;          /* children[0..child_count) 有效 */
+  LibcpNode *expr;          /* 标量初始化表达式 */
+  LibcpInitTree **children; /* 聚合类型的子初始化器 */
+  LibcpMember *mem;         /* 联合的活跃成员 */
+};
+```
+
+`LibcpNode.decl.init_resolved` 是 sema 的只读输出, 有效到 `libcp_context_reset`. 不新增函数: `children` 与 `child_count` 就是公共数据契约.
+
+- 标量: 读 `expr`; `child_count` 为 0.
+- 数组: `child_count` 是 `array_len`, 遍历 `children[0..child_count)`.
+- struct: `child_count` 是成员数, 按成员顺序遍历.
+- union: 只处理 `children[mem->idx]`; 其余槽位是零值骨架.
+- 柔性数组或柔性成员: `is_flexible` 为 true, `child_count` 为 0, 由消费者按实际元素数扩展.
+- `tok` 是解析该槽位的初始化器记录的首 token, 可作合成节点的锚点.
+- `decl.decl_init` 是第 3 层记录, parse 后有效; sema 建好树后置 NULL. 需要忠实记录的消费者在 sema 前读取, 或直接消费 CST.
+
+参考实现: sema 的全局序列化器与 `codegen.c` 的局部展开都按上述规则遍历.
 
 ## 9.9 provenance API
 

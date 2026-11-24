@@ -56,7 +56,7 @@
 - `ty_op`: 声明类型, 可能还有待补全的数组维度.
 - `decl.name_tok`: 声明的标识符 token.
 - `decl.attr`: 存储类与对齐属性.
-- `decl.decl_init`: 忠实的初始化器记录, 或 NULL.
+- `decl.decl_init`: 忠实的初始化器记录, 或 NULL. 它在 parse 后有效; sema 构建 `decl.init_resolved` 后把它置 NULL.
 
 它不立即变成"建变量 + 初始化"的语句. 变量什么时候建, 初始化怎么展开, 是第 4 层和第 5 层的事.
 
@@ -188,7 +188,7 @@ struct libcp_node {
 - `ty` 在第 3 层大多为 NULL. 不要假设有类型. 例外: `ND_NUM` 带词法类型,
   `ND_TYPEDEF` 带声明类型.
 - 声明记录的 `decl.var` 在第 3 层为 NULL; `ND_IDENT` 不带绑定字段, 只有 `tok` 的拼写.
-- `decl.init_resolved` 是 sema 的私有载荷, 消费者不得读写.
+- `decl.init_resolved` 是 sema 输出的只读数据, sema 后有效到 reset. 第 3 层只需要 `decl.decl_init`; 需要忠实记录时在 sema 前读取, 或直接消费 CST.
 - `tok` 是代表 token, 不是完整源码范围. 一个节点可能由多个 token 组成,
   但只记录一个锚点.
 - `sizeof(LibcpNode)` 为 144 字节, 16 字节对齐; 节点仍是一次固定大小分配,
@@ -456,6 +456,8 @@ if (n->kind == ND_DECL && n->decl.decl_init) {
 ```
 
 设计符里的索引表达式没有求值. 要值就自己调用第 4 层, 或用 `libcp_sema` 的结论.
+
+`sema` 之后 `decl.decl_init` 为 NULL: 这个记录是第 3 层形态, 只在 sema 前可读. 解析后的形态在 `decl.init_resolved`, 见 `docs/07-layer4-sema.md` 7.3.3.
 
 ### 6.7.5 配置参数
 

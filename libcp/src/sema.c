@@ -1667,16 +1667,14 @@ static void gvar_init_data(LibcpContext* ctx, LibcpObj* var, LibcpInitTree* init
   var->rel       = head.next;
 }
 
-// 解析全局变量的忠实初始化器记录, 并序列化到该变量的 .data 镜像.
+// 解析全局变量的已解析初始化器树, 并序列化到该变量的 .data 镜像.
 // 全局变量的初始化器在编译期求值; 若初始化器列表包含非常量表达式,
-// 则是编译错误.
+// 则是编译错误. init_resolved 保留到 reset, 消费者仍可读取它.
 static void serialize_gvar(LibcpContext* ctx, LibcpNode* node) {
-  if (!node->decl.decl_init)
+  if (!node->decl.init_resolved)
     return;
 
   gvar_init_data(ctx, node->decl.var, node->decl.init_resolved);
-  node->decl.decl_init     = NULL;
-  node->decl.init_resolved = NULL;
 }
 
 LibcpType* libcp_get_common_type(LibcpContext* ctx, LibcpType* ty1, LibcpType* ty2) {
@@ -2266,20 +2264,12 @@ void libcp_node_annotate_type(LibcpContext* ctx, LibcpNode* node) {
       LibcpToken* tok = node->tok;
 
       if (node->decl.attr.is_static) {
-        if (node->decl.decl_init) {
+        // 数据镜像在这里序列化; init_resolved 保留到 reset, 消费者读它
+        // 也不会再次生成代码.
+        if (node->decl.init_resolved)
           gvar_init_data(ctx, var, node->decl.init_resolved);
-          node->decl.decl_init     = NULL;
-          node->decl.init_resolved = NULL;
-        }
         return;
       }
-
-      if (var->ty->kind == TY_VLA && node->decl.decl_init)
-        // 变长对象不得初始化. 解析器把两者并排放置, 因为一条声明是否为
-        // VLA 取决于维度是否为常量表达式; `=` 是过去报告该错误的位置.
-        libcp_error_tok(ctx,
-                        node->decl.decl_init->eq_tok,
-                        "variable-sized object may not be initialized");
 
       if (var->ty->kind != TY_VLA) {
         // 声明的对象必须具有完整的, 非 void 的类型.
@@ -2302,11 +2292,9 @@ void libcp_node_annotate_type(LibcpContext* ctx, LibcpNode* node) {
 
       annotate_init_exprs(ctx, node->decl.init_resolved);
 
-      if (!var->is_local) {
+      // 文件作用域的数据在这里序列化; init_resolved 保留到 reset.
+      if (!var->is_local)
         gvar_init_data(ctx, var, node->decl.init_resolved);
-        node->decl.decl_init     = NULL;
-        node->decl.init_resolved = NULL;
-      }
       node->ty = var->ty;
       return;
     }
@@ -2767,6 +2755,16 @@ static void resolve_node(LibcpContext* ctx, LibcpNode* node) {
         node->decl.init_resolved =
             resolve_initializer(ctx, node->decl.decl_init, node->decl.var->ty, &new_ty);
         node->decl.var->ty = new_ty;
+
+        // 变长对象不得初始化. 锚点仍是引入初始化器的 `=`; 这个检查放在
+        // 记录被清空之前, 解析顺序与旧标注 pass 一致.
+        if (!node->decl.attr.is_static && node->decl.var->ty->kind == TY_VLA)
+          libcp_error_tok(ctx,
+                          node->decl.decl_init->eq_tok,
+                          "variable-sized object may not be initialized");
+
+        // decl_init 是第 3 层的忠实记录; 树已建好, 不再保留.
+        node->decl.decl_init = NULL;
       }
       return;
     }
@@ -2793,6 +2791,7 @@ static void resolve_node(LibcpContext* ctx, LibcpNode* node) {
         LibcpType* new_ty;
         node->decl.init_resolved = resolve_initializer(ctx, node->decl.decl_init, var->ty, &new_ty);
         var->ty                  = new_ty;
+        node->decl.decl_init     = NULL;
       }
       return;
     }
@@ -2809,7 +2808,8 @@ static void resolve_node(LibcpContext* ctx, LibcpNode* node) {
         LibcpType* new_ty;
         node->decl.init_resolved =
             resolve_initializer(ctx, node->decl.decl_init, node->decl.var->ty, &new_ty);
-        node->decl.var->ty = new_ty;
+        node->decl.var->ty   = new_ty;
+        node->decl.decl_init = NULL;
       }
       return;
     case ND_STRING: {

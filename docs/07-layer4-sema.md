@@ -264,7 +264,9 @@ for (LibcpObj *o = prog; o; o = o->next) {
 ```c
 struct libcp_init_tree {
   LibcpType *ty;
-  bool is_flexible;
+  LibcpToken *tok;              /* 本槽位初始化器的锚点 */
+  bool is_flexible;             /* 柔性数组或柔性成员, 尚未定长 */
+  int child_count;              /* children[0..child_count) 有效 */
   LibcpNode *expr;              /* 标量初始化表达式 */
   LibcpInitTree **children;     /* 聚合类型的子初始化器 */
   LibcpMember *mem;             /* 联合的活跃成员 */
@@ -278,7 +280,14 @@ struct libcp_init_tree {
 - 大括号省略.
 - 灵活数组成员定尺寸.
 
-指针放在 `LibcpNode.decl.init_resolved`. 这个字段是 sema 私有载荷, 消费者不得读写. 需要初始化数据时, 用 `LibcpObj.init_data` (全局) 或自己从 `LibcpNode.decl.decl_init` 重新解析 (局部).
+指针放在 `LibcpNode.decl.init_resolved`. 这是 sema 的只读输出, 消费者可以读:
+
+- 标量读 `expr`.
+- 数组与 struct 遍历 `children[0..child_count)`, 递归处理.
+- union 只处理 `children[mem->idx]`, 其余槽位是零值骨架.
+- 柔性节点 (`is_flexible`) 的 `child_count` 为 0, 由消费者按实际大小处理.
+
+`child_count` 对数组是 `array_len`, 对 struct / union 是成员数, 对标量为 0. 不提供遍历函数: `children` 与 `child_count` 就是数据契约. 第三层的 `decl.decl_init` 在树建好后被置 NULL; 需要忠实初始化器记录的消费者在 sema 前读取, 或直接消费 CST.
 
 `LibcpInitPath` 是局部初始化器展开时的指示符路径, 供消费者建目标表达式:
 
@@ -300,7 +309,7 @@ struct libcp_init_path {
 - 源码表达式位置的 `ND_STRING` 已变成 `ND_VAR`; 物化字符串时创建的 `ND_STRING` 节点保持原 kind.
 - 隐式 cast 已插入, 带 `is_implicit`.
 - 声明记录仍在语句链上.
-- 初始化器树在 `decl.init_resolved`.
+- 初始化器树在 `decl.init_resolved`, 只读, 有效到 reset; `decl.decl_init` 为 NULL.
 - 结论字段已填.
 
 树的形状与第 3 层相同, 除了上述节点种类改写和 cast 插入.
@@ -393,7 +402,7 @@ static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
 2. 检查 `void` 变量.
 3. 建 `LibcpObj`: 普通局部用 `new_lvar`; static 用 `new_anon_gvar`.
 4. 把名字登记进当前作用域.
-5. 解析初始化器记录, 建 `decl.init_resolved`, 可能补全数组类型.
+5. 解析初始化器记录, 建 `decl.init_resolved`, 可能补全数组类型; 然后清空 `decl.decl_init`.
 6. 第二遍标注初始化器表达式.
 
 `ND_GVAR_DECL` (全局变量):
@@ -505,7 +514,7 @@ struct libcp_relocation {
 此外:
 
 - 每个聚合类型的成员布局已算好.
-- 局部声明的初始化器已解析成 `LibcpInitTree`, 指针在 `decl.init_resolved`, 供第 5 层展开; 全局变量与块域 static 在序列化后清空 `decl.decl_init` / `decl.init_resolved`, 字节从 `LibcpObj.init_data` 读取.
+- 声明记录的初始化器已解析成 `LibcpInitTree`, 指针在 `decl.init_resolved`, 只读并保留到 reset, 供消费者展开或检查; `decl.decl_init` 在解析完成后已置 NULL. 全局变量与块域 static 的数据字节从 `LibcpObj.init_data` 读取, 其 `init_resolved` 同样保留.
 - 每个 static inline 函数的活跃性已标记.
 - goto / label 引用已收集在 context 里, 交给 codegen 配对.
 
@@ -522,7 +531,7 @@ struct libcp_relocation {
 不能做:
 
 - 不能恢复第 3 层源码表达式位置的 `ND_IDENT` / `ND_STRING` 形态. 它们已经被改写; 物化字符串产生的 `ND_STRING` 节点仍然存在, 但已经是第 4 层物化的引用.
-- 不能读 `decl.init_resolved` 的内部结构. 它是私有载荷.
+- 不能在 sema 后读 `decl.decl_init`. 忠实记录已被清空; 需要它时在 sema 前读取, 或直接消费 CST.
 - 不能做跨翻译单元分析. 只有当前 TU 的 `globals`.
 - 不能拿到 const / volatile / restrict 限定符. 它们被解析后丢弃, 见第 11 章.
 
@@ -606,7 +615,7 @@ if (!o->is_function && o->is_definition && o->init_data) {
 ## 7.8 边界与已知限制
 
 - **原地改写**. `ND_IDENT` 变成 `ND_VAR` / `ND_NUM`, 源码表达式位置的 `ND_STRING` 变成 `ND_VAR`; 第 4 层物化字符串时创建的 `ND_STRING` 节点保留原 kind. 源码表达式位置的原始形态在 sema 后不再存在.
-- **`decl.init_resolved` 是私有字段**. 消费者不能读它的结构. 需要初始化数据时用 `LibcpObj.init_data` 或自己解析 `decl.decl_init`.
+- **`decl.decl_init` 在 sema 后为 NULL**. 忠实初始化器记录属于第 3 层; 第 4 层的 `decl.init_resolved` 是只读数据契约, 按 `children` / `child_count` 遍历, 见 7.3.3.
 - **限定符丢失**. `const`, `volatile`, `restrict` 在解析时被消费, 不进入类型记录. `_Atomic` 有 `is_atomic`. 依赖限定符的工具需要自己从 token 或 CST 读.
 - **没有 `LibcpObj` 链的范围 API**. 节点只有代表 token; 第 3 层树可以用 `libcp_node_source_range` 取子树锚点范围, 但 sema 返回的全局对象链没有等价的接口.
 - **没有跨 TU 信息**. 只有当前 TU.
