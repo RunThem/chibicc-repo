@@ -332,12 +332,11 @@ CST 内部节点只有 `children`, 没有 `start` / `end`. 算范围要递归到
 - 对同一个文件重新跑一条管线.
 - 库没有深拷贝 API.
 
-### 11.9.3 `decl.init_resolved` 是私有字段
+### 11.9.3 `decl.decl_init` 在 sema 后为 NULL
 
-`sema.c` 的初始化树指针. 消费者不得读写. 需要初始化数据时:
+`sema` 把忠实初始化器记录解析成 `decl.init_resolved` 后清空 `decl.decl_init`. 忠实记录只在 sema 前可读; 需要它时在 sema 前读取, 或直接消费 CST.
 
-- 全局: `LibcpObj.init_data`.
-- 局部: 自己从 `LibcpNode.decl.decl_init` 重新解析, 或写自己的后端逻辑.
+解析后的树 `LibcpInitTree` 是只读公共数据, 保留到 reset: 标量读 `expr`, 数组与 struct 遍历 `children[0..child_count)`, union 用 `mem` 指明成员, 柔性节点看 `is_flexible`. 全局数据字节仍从 `LibcpObj.init_data` 读取.
 
 ### 11.9.4 声明记录留在语句链上
 

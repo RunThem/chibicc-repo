@@ -138,18 +138,26 @@ struct libcp_init_desig {
 
 // 解析后的初始化器树 (PLAN A8.1): 忠实的初始化器记录在 designator 求值,
 // 成员名绑定, 花括号省略应用, 柔性数组定长之后变成的形态. 由 sema 的
-// resolve pass 构建; 消费者的声明展开遍历它来构建赋值链, sema 的
-// 文件作用域序列化器遍历它生成 .data 字节. 初始化器可以嵌套
-// (例如 `int x[2][2] = {{1, 2}, {3, 4}}`), 因此它是一棵树.
+// resolve pass 构建, 是第 4 层的只读输出, 一直有效到 context reset;
+// 消费者的声明展开遍历它来构建赋值链, sema 的文件作用域序列化器遍历它
+// 生成 .data 字节. 初始化器可以嵌套 (例如
+// `int x[2][2] = {{1, 2}, {3, 4}}`), 因此它是一棵树.
+//
+// 遍历规则: 标量读 `expr`; 数组与 struct 递归 `children[0..child_count)`;
+// union 只处理 `children[mem->idx]`, 其余槽位是零值骨架; 柔性节点
+// (`is_flexible`) 由消费者按实际大小处理, 其 `child_count` 为 0.
 struct libcp_init_tree {
   LibcpType* ty;
-  bool is_flexible;
+  LibcpToken* tok;   // 本槽位初始化器的锚点 token
+  bool is_flexible;  // 柔性数组或柔性成员, 尚未定长
+  int child_count;   // `children[0..child_count)` 的有效长度
 
   // 若不是聚合类型且有初始化器, `expr` 存放初始化表达式.
   LibcpNode* expr;
 
   // 若是聚合类型 (例如数组或结构体) 的初始化器, `children` 存放其
-  // 子对象的初始化器.
+  // 子对象的初始化器. 数组的 child_count 是 array_len, struct / union
+  // 的是成员数, 标量为 0.
   LibcpInitTree** children;
 
   // 联合体只能初始化一个成员. `mem` 用于说明初始化的是哪个成员.
@@ -337,9 +345,10 @@ typedef enum {
   ND_MEMZERO,           // 将栈变量清零
   ND_DECL,              // 局部变量声明: 名字 token 在 `name_tok` 中, 类型在
                         // `ty_op` 中, 属性在 `attr` 中, 忠实的初始化器记录在
-                        // `decl_init` 中. sema 在 resolve pass 声明该变量, 在
-                        // 标注 pass 标注初始化器表达式; 消费者的发射把它展开为
-                        // 0..n 条语句.
+                        // `decl_init` 中 (parse 后有效). sema 在 resolve pass
+                        // 声明该变量并构建 `init_resolved`, 然后清空 `decl_init`;
+                        // 初始化器表达式在标注 pass 标注. 消费者的发射遍历
+                        // `init_resolved` 把它展开为 0..n 条语句.
   ND_GVAR_DECL,         // 全局变量的声明记录 (文件作用域, 或块内的 `extern`/
                         // tentative 声明). sema 声明该变量并序列化其初始化器;
                         // 记录留在语句链中, 消费者的整形 pass 在发射时移除它.
@@ -352,8 +361,9 @@ typedef enum {
                         // 该名字; 记录留在语句链中, 消费者的整形 pass 在发射时
                         // 移除它.
   ND_COMPOUND_LITERAL,  // "(type){...}": 类型在 ty_op 中, 忠实的初始化器记录在
-                        // decl_init 中. sema 物化隐藏变量, 文件作用域的数据由
-                        // sema 序列化; 块作用域的展开由消费者的整形 pass 完成.
+                        // decl_init 中 (parse 后有效). sema 物化隐藏变量并构建
+                        // init_resolved, 文件作用域的数据由 sema 序列化; 块作用域
+                        // 的展开由消费者的整形 pass 遍历 init_resolved 完成.
   ND_ASM,               // "asm"
   ND_CAS,               // 原子比较并交换
   ND_EXCH,              // 原子交换
@@ -414,13 +424,15 @@ typedef struct {
 // 复合语句与声明记录的载荷. 函数定义同时携带函数体与声明属性, 因此
 // body 与声明字段同族; 块与语句表达式只使用 body 与 is_scope_block.
 typedef struct {
-  LibcpNode* body;              // 复合语句块, 语句表达式或函数体
-  bool is_scope_block;          // ND_BLOCK 是否引入词法作用域
-  LibcpVarAttr attr;            // 存储类与 _Alignas
-  LibcpToken* name_tok;         // 被声明的标识符
-  LibcpInitializer* decl_init;  // 忠实的初始化器记录
-  void* init_resolved;          // sema 私有: 解析后的初始化器树
-  LibcpObj* var;                // sema 绑定的变量/函数对象
+  LibcpNode* body;       // 复合语句块, 语句表达式或函数体
+  bool is_scope_block;   // ND_BLOCK 是否引入词法作用域
+  LibcpVarAttr attr;     // 存储类与 _Alignas
+  LibcpToken* name_tok;  // 被声明的标识符
+  // 忠实的初始化器记录: parse 后有效, sema 构建 init_resolved 后置 NULL.
+  LibcpInitializer* decl_init;
+  // sema 输出的解析后初始化器树, 只读, 有效到 context reset.
+  LibcpInitTree* init_resolved;
+  LibcpObj* var;  // sema 绑定的变量/函数对象
 } LibcpNodeDecl;
 
 // 字面量, 类型查询与 cast 的载荷.

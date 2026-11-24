@@ -90,6 +90,16 @@ int main(void) {
   if (!prog || libcp_context_failed(ctx))
     return 1;
 
+  // The resolved initializer tree is public read-only data: the anchor
+  // token and child count are visible from the public headers alone
+  // (issue #26).
+  if (ast->kind != ND_GVAR_DECL || ast->decl.decl_init != NULL ||
+      !ast->decl.init_resolved ||
+      ast->decl.init_resolved->child_count != 0 ||
+      !ast->decl.init_resolved->tok ||
+      ast->decl.init_resolved->tok->kind != TK_NUM)
+    return 1;
+
   // The backend support face links from the public headers alone: a
   // label-ref query, a fresh unique name, and a returning diagnostic.
   if (libcp_label_ref_count(ctx, prog) != 0 ||

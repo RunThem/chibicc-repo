@@ -54,6 +54,9 @@ struct CgNode {
   LibcpNode* default_case;
   bool pass_by_stack;
   bool is_lowered;
+  // 本消费者是否已把该声明的初始化器展开成语句链. 库树的 init_resolved
+  // 是只读公共数据, 消费状态只记在这里.
+  bool init_consumed;
 };
 
 typedef struct CgType CgType;
@@ -1517,14 +1520,19 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
       // 到达发射器的声明记录 (PLAN B1.2b): 块作用域 static (sema 的
       // 序列化器已写好其数据镜像) 与没有初始化器的固定大小对象不产生代码;
       // 带初始化器的对象变成逗号链, 这条链过去由 pass 里的展开构造 (先清零,
-      // 再逐元素赋值), 现在在这里发射.
+      // 再逐元素赋值), 现在在这里发射. 已消费的初始化器不再重复发射,
+      // 库树本身不被写回 (issue #26).
+      if (cg(node)->init_consumed)
+        return;
+      cg(node)->init_consumed = true;
+
       if (node->decl.attr.is_static || !node->decl.init_resolved)
         return;
 
-      LibcpNode* chain =
-          lvar_init_comma(ctx, node->decl.var, node->decl.init_resolved, node->decl.decl_init->tok);
-      node->decl.decl_init     = NULL;
-      node->decl.init_resolved = NULL;
+      LibcpNode* chain = lvar_init_comma(ctx,
+                                         node->decl.var,
+                                         node->decl.init_resolved,
+                                         node->decl.init_resolved->tok);
       libcp_node_annotate_type(ctx, chain);
       gen_expr(ctx, chain);
       return;
@@ -1628,7 +1636,11 @@ static void shape_chain(LibcpContext* ctx, LibcpNode** head) {
       case ND_GVAR_DECL:
       case ND_FUNCDEF: *pp = n->next; continue;
       case ND_DECL:
-        if (decl_needs_vla_size(n))
+        // 块作用域 static 的数据镜像已由 sema 序列化; 初始化器树保留在
+        // 库树上 (issue #26), 但它的表达式不属于本函数的发射路径.
+        if (n->decl.attr.is_static) {
+          // 不整形; 发射器也不为它产生语句.
+        } else if (decl_needs_vla_size(n))
           expand_decl(ctx, n);
         else
           // 记录保留; 已解析初始化器可能持有的那些残留节点种类靠这次
@@ -1945,6 +1957,12 @@ static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
   if (node->decl.attr.is_static)
     return false;
 
+  // 初始化器只消费一次, 消费状态记在消费者私有表里; 库树的
+  // init_resolved 保持只读 (issue #26).
+  if (cg(node)->init_consumed)
+    return false;
+  cg(node)->init_consumed = true;
+
   LibcpNode* vla_size = NULL;
   for (LibcpType* t = var->ty; t; t = t->base) {
     if (t->kind == TY_VLA) {
@@ -1971,13 +1989,11 @@ static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
         tok);
   } else if (node->decl.init_resolved) {
     // 初始化器逗号链; 指向 VLA 的指针也走到这里, 大小链排在
-    // 赋值之前.
-    lowered = lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.decl_init->tok);
-    node->decl.decl_init = NULL;
+    // 赋值之前. 锚点来自树自己的 tok.
+    lowered = lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.init_resolved->tok);
     // 初始化器表达式从未经过本 pass, 树中也没有别处引用它们;
     // 大小链与指定初始化器目标已是降级形态, 不再触碰.
     shape_init_exprs(ctx, node->decl.init_resolved);
-    node->decl.init_resolved = NULL;
   }
 
   // 没有初始化器的固定大小对象不产生语句.
@@ -2351,9 +2367,14 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
       {
         LibcpObj* var = node->decl.var;
 
+        // 初始化器只消费一次; 库树不被写回 (issue #26).
+        if (cg(node)->init_consumed)
+          return;
+        cg(node)->init_consumed = true;
+
         shape_init_exprs(ctx, node->decl.init_resolved);
         LibcpNode* lowered =
-            lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.decl_init->tok);
+            lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.init_resolved->tok);
         LibcpNode* comma = libcp_node_binary(ctx,
                                              ND_COMMA,
                                              lowered,

@@ -136,7 +136,7 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 - 声明记录保留在语句链里, 供消费者决定怎么展开. sema 不把记录变成语句.
 - 编译期结论记录在节点字段上: `ND_SIZEOF` / `ND_ALIGNOF` 的 `value.val`, `ND_GENERIC` 的 `ctrl.generic_sel`, 内建类型谓词的 `value.val`.
 - 隐式 cast 由 sema 插入, 带 `value.is_implicit = true`.
-- 初始化器记录被解析成 `LibcpInitTree`, 指针放在 `decl.init_resolved`. 该字段是 sema 私有载荷, 消费者不得读写.
+- 初始化器记录被解析成 `LibcpInitTree`, 指针放在 `decl.init_resolved`, 只读并保留到 reset. `decl.decl_init` 是第 3 层的忠实记录, sema 建好树后置 NULL. 消费者按 `children[0..child_count)` 递归; union 用 `mem`, 柔性节点看 `is_flexible`.
 - 不做指针缩放, 不做复合赋值展开, 不做控制流标签, 不做临时槽. 这些是第 5 层的.
 
 ### 2.4.6 第 5 层的契约
