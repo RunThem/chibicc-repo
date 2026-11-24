@@ -1,6 +1,6 @@
 # 09 API 参考与用法
 
-本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 60 个公共函数与公共宏, 不列内部函数.
+本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 63 个公共函数与公共宏, 不列内部函数.
 
 ## 9.1 头文件, 链接与命名
 
@@ -48,7 +48,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 
 `LIBCP_API` 在 GCC/Clang 下展开为 `__attribute__((visibility("default")))`, 用于共享库导出. 消费者不需要关心它.
 
-`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 60 个函数.
+`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 63 个函数.
 
 ## 9.2 函数总表
 
@@ -56,6 +56,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 |---|---|
 | context | `libcp_context_new`, `_free`, `_reset`, `_set_diagnostic`, `_failed` |
 | 配置 | `libcp_context_add_include_path`, `libcp_context_set_base_file`, `_define`, `_undef`, `_set_predefined_macros`, `_predefined_count`, `_predefined_at` |
+| include 搜索 | `libcp_context_add_include_path_with_origin`, `libcp_context_resolve_include`, `libcp_context_include_is_system` |
 | 第 1 层 | `libcp_tokenize_file`, `libcp_tokenize_buffer`, `libcp_tokenize_buffer_len`, `libcp_reconstruct` |
 | 源坐标 | `libcp_context_input_file_count`, `libcp_context_input_file_at`, `libcp_token_is_synthetic` |
 | 预处理 | `libcp_preprocess` |
@@ -170,16 +171,59 @@ bool libcp_context_failed(LibcpContext *ctx);
 void libcp_context_add_include_path(LibcpContext *ctx, char *path);
 ```
 
-追加一个 include 搜索目录.
+追加一个 include 搜索目录, 等同于来源为 `LIBCP_INCLUDE_USER` 的版本.
 
 - 内部复制字符串, 调用者可以释放 `path`.
-- 顺序就是搜索顺序.
 - 没有默认系统路径. 需要 `/usr/include` 就自己加.
 - 没有返回值. 内存分配失败时该路径可能不被记录.
 
-库本身不读环境变量, 不加编译器的默认路径.
+路径表跨 reset 保留. 库本身不读环境变量, 不加编译器的默认路径.
 
-### 9.3.7 libcp_context_set_base_file
+### 9.3.7 libcp_context_add_include_path_with_origin
+
+```c
+void libcp_context_add_include_path_with_origin(LibcpContext *ctx,
+                                                char *path,
+                                                LibcpIncludeOrigin origin);
+```
+
+按来源追加一个 include 搜索目录. `LibcpIncludeOrigin` 有三个值:
+
+- `LIBCP_INCLUDE_USER`: 用户目录 (`-I`).
+- `LIBCP_INCLUDE_SYSTEM`: 内建或默认系统目录.
+- `LIBCP_INCLUDE_AFTER`: `-idirafter` 风格目录.
+
+搜索顺序固定为 `USER` -> `AFTER` -> `SYSTEM`, 同一来源内保持注册顺序. 命令行上 `-I` 与 `-idirafter` 的先后不影响结果. 这与 GCC 不同: GCC 把 `-idirafter` 排在系统目录之后, 本库排在系统目录之前.
+
+字符串被复制, 路径表跨 reset 保留, 没有返回值. 内存分配失败时该路径可能不被记录.
+
+### 9.3.8 libcp_context_resolve_include
+
+```c
+char *libcp_context_resolve_include(LibcpContext *ctx, char *filename);
+```
+
+解析一个 include 文件名, 供 `-include` 或树外驱动器复用.
+
+- 先按原样查文件 (cwd 相对或绝对); 存在就返回该路径.
+- 否则按 `USER` -> `AFTER` -> `SYSTEM` 遍历路径表.
+- 绝对路径不会与路径表拼接; 表内也找不到时返回 NULL.
+- 返回 per-TU 分配的路径; 有效期到下一次 `reset` 或 `free`.
+- 命中路径表时与 `#include` 一样更新内部搜索状态.
+
+### 9.3.9 libcp_context_include_is_system
+
+```c
+bool libcp_context_include_is_system(LibcpContext *ctx, char *path);
+```
+
+判断一个文件路径是否落在系统目录下.
+
+- 对路径表做字符串前缀匹配, 不做 realpath 或 inode 归一.
+- `SYSTEM` 与 `AFTER` 来源算系统目录, `USER` 与表外路径不算.
+- 供 `-MMD` 一类"省略系统头"的过滤使用. `libcp` 不决定过滤策略, 只回答分类.
+
+### 9.3.10 libcp_context_set_base_file
 
 ```c
 void libcp_context_set_base_file(LibcpContext *ctx, char *path);
@@ -191,7 +235,7 @@ void libcp_context_set_base_file(LibcpContext *ctx, char *path);
 - per-TU 状态: reset 清空, 与 include 路径和宏操作不同 (后者跨 reset 保留).
 - 未显式设置时, 第一个被词法分析的输入文件 (文件或内存输入) 充当它.
 
-### 9.3.8 libcp_context_define
+### 9.3.11 libcp_context_define
 
 ```c
 void libcp_context_define(LibcpContext *ctx, char *name, char *buf);
@@ -206,7 +250,7 @@ void libcp_context_define(LibcpContext *ctx, char *name, char *buf);
 - 顺序很重要, 后定义的覆盖先定义的.
 - 已知缺陷: 这样定义的对象宏, `libcp_macro_expansion_macro` 当前返回 `NAME=body`, 不是 `NAME`; 源码里的 `#define` 正常. 见 11.7.8, 不要依赖 `-D` 宏的 `macro` 名.
 
-### 9.3.9 libcp_context_undef
+### 9.3.12 libcp_context_undef
 
 ```c
 void libcp_context_undef(LibcpContext *ctx, char *name);
@@ -218,7 +262,7 @@ void libcp_context_undef(LibcpContext *ctx, char *name);
 - 记录在配置里, reset 后重新应用.
 - 对未定义的宏是空操作.
 
-### 9.3.10 libcp_context_set_predefined_macros
+### 9.3.13 libcp_context_set_predefined_macros
 
 ```c
 void libcp_context_set_predefined_macros(LibcpContext *ctx, bool enabled);
@@ -230,7 +274,7 @@ void libcp_context_set_predefined_macros(LibcpContext *ctx, bool enabled);
 - 设置在**下一次 reset** 生效; setter 本身不改当前 TU 已安装的集合.
 - 关闭后, 预定义宏不安装, 但 `-D` / `-U` 仍然应用.
 
-### 9.3.11 libcp_context_predefined_count / _at
+### 9.3.14 libcp_context_predefined_count / _at
 
 ```c
 int libcp_context_predefined_count(LibcpContext *ctx);
@@ -252,7 +296,7 @@ typedef struct libcp_predefined_macro {
 - 越界返回 `{NULL, NULL}`.
 - 关闭预定义宏并 reset 之后 count 为 0; 只调用 setter 而未 reset 时, 当前 TU 的集合仍在.
 
-### 9.3.12 分配器宏
+### 9.3.15 分配器宏
 
 `allocator.h` 定义库的分配面, 选择方式是一个构建期开关:
 

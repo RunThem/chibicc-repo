@@ -827,39 +827,6 @@ static bool expand_macro(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) 
   return true;
 }
 
-// 在 include 路径中查找文件: 绝对路径直接返回, 结果按文件名缓存在
-// context 的 search_cache 里.
-char* libcp_search_include_paths(LibcpContext* ctx, char* filename) {
-  if (filename[0] == '/')
-    return filename;
-
-  char* cached = libcp_hashmap_get(ctx, &ctx->search_cache, filename);
-  if (cached)
-    return cached;
-
-  // 按顺序在各个 include 路径下尝试拼出完整路径.
-  for (int i = 0; i < ctx->include_paths_len; i++) {
-    char* path = libcp_format(ctx, "%s/%s", ctx->include_paths[i], filename);
-    if (!libcp_file_exists(path))
-      continue;
-    libcp_hashmap_put(ctx, &ctx->search_cache, filename, path);
-    // 记下命中位置的下一个下标, 供 #include_next 从后面继续搜索.
-    ctx->include_next_idx = i + 1;
-    return path;
-  }
-  return NULL;
-}
-
-// 从上次命中的下一个目录开始继续搜索 (GNU 的 #include_next).
-static char* search_include_next(LibcpContext* ctx, char* filename) {
-  for (; ctx->include_next_idx < ctx->include_paths_len; ctx->include_next_idx++) {
-    char* path = libcp_format(ctx, "%s/%s", ctx->include_paths[ctx->include_next_idx], filename);
-    if (libcp_file_exists(path))
-      return path;
-  }
-  return NULL;
-}
-
 // 读取 #include 的参数, 返回文件名; *is_dquote 表示是否用了双引号形式.
 static char*
     read_include_filename(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, bool* is_dquote) {
@@ -1027,16 +994,10 @@ static LibcpToken* preprocess2(LibcpContext* ctx, LibcpToken* tok) {
       bool is_dquote;
       char* filename = read_include_filename(ctx, &tok, tok->next, &is_dquote);
 
-      if (filename[0] != '/' && is_dquote) {
-        char* path =
-            libcp_format(ctx, "%s/%s", dirname(libcp_tu_strdup(ctx, start->file->name)), filename);
-        if (libcp_file_exists(path)) {
-          tok = include_file(ctx, tok, path, start->next->next, start->file);
-          continue;
-        }
-      }
-
-      char* path = libcp_search_include_paths(ctx, filename);
+      // 搜索归 include 模块所有; 这里只提交请求. 引号形式先查当前
+      // 文件目录的规则也在模块里.
+      char* path = is_dquote ? libcp_include_resolve_quoted(ctx, start->file, filename) :
+                               libcp_include_resolve_angled(ctx, filename);
       tok        = include_file(ctx, tok, path ? path : filename, start->next->next, start->file);
       continue;
     }
@@ -1044,7 +1005,7 @@ static LibcpToken* preprocess2(LibcpContext* ctx, LibcpToken* tok) {
     if (libcp_equal(tok, "include_next")) {
       bool ignore;
       char* filename = read_include_filename(ctx, &tok, tok->next, &ignore);
-      char* path     = search_include_next(ctx, filename);
+      char* path     = libcp_include_resolve_next(ctx, filename);
       tok = include_file(ctx, tok, path ? path : filename, start->next->next, start->file);
       continue;
     }

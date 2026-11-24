@@ -116,12 +116,15 @@ bool failed = libcp_context_failed(ctx);    /* false */
 规避:
 
 ```c
-libcp_context_add_include_path(ctx, "/usr/local/include");
-libcp_context_add_include_path(ctx, "/usr/include/x86_64-linux-gnu");
-libcp_context_add_include_path(ctx, "/usr/include");
+libcp_context_add_include_path_with_origin(ctx, "/usr/local/include",
+                                           LIBCP_INCLUDE_SYSTEM);
+libcp_context_add_include_path_with_origin(ctx, "/usr/include/x86_64-linux-gnu",
+                                           LIBCP_INCLUDE_SYSTEM);
+libcp_context_add_include_path_with_origin(ctx, "/usr/include",
+                                           LIBCP_INCLUDE_SYSTEM);
 ```
 
-顺序就是搜索顺序. 参考 `main.c` 的 `add_default_include_paths`.
+搜索顺序固定为 `USER` -> `AFTER` -> `SYSTEM`, 桶内保持注册顺序, 因此注册这些系统路径的先后不影响结果. 这与 GCC 不同: GCC 把 `-idirafter` 排在系统目录之后, 本库排在系统目录之前. 既有 `libcp_context_add_include_path` 等价于 `LIBCP_INCLUDE_USER`. 参考 `main.c` 的 `add_default_include_paths`.
 
 ### 11.5.2 没有虚拟文件系统
 
@@ -437,9 +440,9 @@ extern "C" {
 
 观察: `context.h` 在 `LibcpPredefinedMacro` 上说 `name` / `value` "归 context 所有, 并会被 `libcp_context_reset` 失效". 实现里静态表的 `name` 与固定 `value` 是字符串字面量, reset 不会让它们失效; 只有 `predefined` 数组本身与 per-TU 构造的 `value` 会失效.
 
-冲突契约: `docs/09-api-reference.md` 9.3.11 与 9.12 已经按实现写明静态部分不失效.
+冲突契约: `docs/09-api-reference.md` 9.3.14 与 9.12 已经按实现写明静态部分不失效.
 
-规避: 不要 `free` 这些指针, 也不要依赖 reset 后继续可用; 需要长期保存就复制. 以 docs/09 9.3.11 与 9.12 为准. 建议修复方向: 改 `context.h` 注释, 或在 reset 时统一把静态项复制进 per-TU 分配.
+规避: 不要 `free` 这些指针, 也不要依赖 reset 后继续可用; 需要长期保存就复制. 以 docs/09 9.3.14 与 9.12 为准. 建议修复方向: 改 `context.h` 注释, 或在 reset 时统一把静态项复制进 per-TU 分配.
 
 ## 11.12 性能
 

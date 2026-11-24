@@ -280,6 +280,15 @@ echo bar | $chibicc -include $tmp/out.h -E -o- -xc - | grep -q -z 'foo.*bar'
 check -include
 echo NULL | $chibicc -Iinclude -include stdio.h -E -o- -xc - | grep -q 0
 check -include
+# -include goes through the context include search, so -I and -idirafter
+# directories both resolve it.
+echo foo > $tmp/include-user.h
+echo bar | $chibicc -I$tmp -include include-user.h -E -o- -xc - | grep -q -z 'foo.*bar'
+check '-include searches -I'
+mkdir -p $tmp/include-after
+echo foo > $tmp/include-after/include-after.h
+echo bar | $chibicc -idirafter $tmp/include-after -include include-after.h -E -o- -xc - | grep -q -z 'foo.*bar'
+check '-include searches -idirafter'
 
 # -x
 echo 'int x;' | $chibicc -c -xc -o $tmp/foo.o -

@@ -402,7 +402,7 @@ make ALLOCATOR_CFLAGS='-include mimalloc.h -DLIBCP_MALLOC=mi_malloc -DLIBCP_CALL
 
 - 不要同时定义 `LIBCP_DEFAULT_ALLOCATOR`, 否则四个宏会被 libc 版本覆盖(重定义警告), 自定义分配器不会生效.
 - 自定义构建的文件必须是库的每个编译单元都能看到的, 并且链接时提供这四个函数.
-- 替换实现必须满足 libc 的对齐, 清零与 `realloc` 失败语义, 见 9.3.12.
+- 替换实现必须满足 libc 的对齐, 清零与 `realloc` 失败语义, 见 9.3.15.
 - `make test-stage2` 的 stage2 规则固定传 `-DLIBCP_DEFAULT_ALLOCATOR`, 即自举检查始终用默认分配器.
 - `test/allocator.sh` 只验证替换机制本身 (四个宏被调用, 每次 per-TU 分配独立, reset 后活块归零); 自定义分配器要让它生效, 仍需自己的 shim 头与链接参数, 不能只靠这个脚本.
 - 只给消费者加宏不会影响预编译的库.
@@ -431,7 +431,7 @@ make ALLOCATOR_CFLAGS='-include mimalloc.h -DLIBCP_MALLOC=mi_malloc -DLIBCP_CALL
 
 **`#include <stdio.h>` 找不到.**
 
-库不安装系统 include 路径. 消费者要自己 `libcp_context_add_include_path(ctx, "/usr/include")`, 以及目标平台需要的其他路径. 参考驱动器的 `add_default_include_paths`.
+库不安装系统 include 路径. 消费者要自己注册目标平台需要的路径; 系统目录用 `libcp_context_add_include_path_with_origin(ctx, "/usr/include", LIBCP_INCLUDE_SYSTEM)`, 这样才能与用户 `-I` 目录区分. 参考驱动器的 `add_default_include_paths`.
 
 **`make check-library` 在非 Linux 宿主上通过吗.**
 
