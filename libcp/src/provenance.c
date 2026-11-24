@@ -1,10 +1,10 @@
-// Read-only macro-expansion provenance channels (plans/PLAN.md, 判据 5).
+// Read-only macro-expansion provenance channels.
 //
 // stream:
 //
-// first violation. It never calls libcp_error() (判据 4), so the channel can
+// first violation. It never calls libcp_error(), so the channel can
 //
-// 只读的宏展开 provenance 通道 (plans/PLAN.md, 判据 5): 打印与校验
+// 只读的宏展开 provenance 通道: 打印与校验
 // preprocess.c 在宏展开时建立的来源链. 本文件不属于编译路径.
 //
 // -dump-expansions 为预处理后的 token 流中每个非 EOF token 打印一行.
@@ -14,9 +14,9 @@
 // (内建宏, -D 定义) 定义位置打印 "?:?". 由拼接产生的宏名使调用位置
 // 成为合成位置, 与其它合成 token 一样打印为 @synth.
 //
-// -verify-expansions 检查 plans/RESULT.md 中的链不变式 (I1-I3), 并在
+// -verify-expansions 检查链不变式 (I1-I3), 并在
 // stderr 上最多打印一条消息: 成功时退出码 0, 第一处违规时退出码 1.
-// 它从不调用 libcp_error() (判据 4), 因此该通道可以在损坏的流上运行,
+// 它从不调用 libcp_error(), 因此该通道可以在损坏的流上运行,
 // 而不会拖垮进程. 除 dump 之外, 它是这些访问器的唯一消费者. 两个通道
 // 都不触碰编译路径.
 

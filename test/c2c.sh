@@ -1,5 +1,5 @@
 #!/bin/bash
-# C→C 打印器测试 (plans/PLAN-c2c.md): 逐字节锁定 c2c 的打印输出。
+# C→C 打印器测试: 逐字节锁定 c2c 的打印输出。
 #
 # c2c 只作为 make test / make test-stage2 的回归闸门(2026-10-26 定位), 不是
 # 支持的工具: tokenize -> preprocess -> parse 后打印回单一展开后的翻译单元。

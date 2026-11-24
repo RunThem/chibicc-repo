@@ -57,7 +57,7 @@ scan_agents_files() {
   while IFS= read -r ref; do
     checked=$((checked + 1))
     [ -e "$ref" ] || report "$file: missing file reference: $ref"
-  done < <(grep -oE '`(AGENTS|README)\.md`|`(docs|plans)/[A-Za-z0-9._/-]+\.md`' "$file" | tr -d '`' || true)
+  done < <(grep -oE '`(AGENTS|README)\.md`|`docs/[A-Za-z0-9._/-]+\.md`' "$file" | tr -d '`' || true)
 }
 
 scan_agents_sections() {
@@ -78,7 +78,7 @@ scan_agents_sections() {
   done < <(grep -oE '`docs/[A-Za-z0-9._/-]+\.md` [0-9]+\.[0-9]+' "$file" | tr -d '`' || true)
 }
 
-for file in AGENTS.md README.md docs/*.md plans/PLAN.md plans/RESULT.md; do
+for file in AGENTS.md README.md docs/*.md; do
   [ -f "$file" ] || continue
   scan_markdown_links "$file"
 done

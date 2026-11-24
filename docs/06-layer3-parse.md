@@ -263,8 +263,7 @@ static LibcpNode *expr(LibcpContext *ctx, LibcpToken **rest, LibcpToken *tok);
 - 三个入口保持名字与语义: `expr` 允许逗号, `assign` 允许赋值, `libcp_conditional` 两者都不允许.
 
 历史上这里曾是与 C 优先级级联(每优先级一个函数)并存的双路径
-(`LIBCP_PRATT_PARSE_FEATURE` 开关, 见 `docs/12` §12.11 与
-`plans/PLAN-pratt-parse.md`); 2026-10-25 的 Pratt 单一路径线删掉了级联,
+(`LIBCP_PRATT_PARSE_FEATURE` 开关, 见 `docs/12` §12.11); 2026-10-25 的 Pratt 单一路径线删掉了级联,
 Pratt 成为唯一实现, 开关与双构建一并移除. 迁移前的 41 个语料文件与
 tinycc 真实构建曾由 `test/pratt-ab.sh` 锁定两路径 `-dump-ast` 与 `-S`
 逐字节一致 (该脚本已随单一路径线删除), 迁移后由汇编快照基线继续锁定.

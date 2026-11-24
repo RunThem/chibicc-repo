@@ -8,7 +8,7 @@
 
 - 库版本: `0.2.0` (`LIBCP_VERSION`, `libcp_version()`).
 - 文档对应的代码基线: `main` 分支 2026-11-21 的提交 `c57acbe`.
-- 2026-10-23 库从 `libchibicc` 改名为 `libcp`: 包名, 头路径 (`<libcp/...>`) 与符号前缀 (`libcp_` / `Libcp` / `LIBCP_`) 一起改; 二进制仍叫 `chibicc`, `__chibicc__` 预定义宏不变, 行为零变化. 记录见 `plans/RESULT-rename-libcp.md`.
+- 2026-10-23 库从 `libchibicc` 改名为 `libcp`: 包名, 头路径 (`<libcp/...>`) 与符号前缀 (`libcp_` / `Libcp` / `LIBCP_`) 一起改; 二进制仍叫 `chibicc`, `__chibicc__` 预定义宏不变, 行为零变化. 记录见 Git 历史.
 - 路线图阶段 5, 即库边界固化, 已完成: 公共头拆分, 不透明 context, per-TU 分配生命周期, 诊断回调, `libcp.a`, Linux 下的 `libcp.so`, install 与 pkg-config, 以及公共函数白名单, 都有测试闸门. 白名单在阶段 5 是 36 个函数, L5 后 38 个, 0.2.0 起 39 个.
 - 阶段 6, 即 L5 产品化验证, 已于 2026-10-25 完成: `tools/fmt.c` 是库的第一个真实消费者 (宿主二进制由 `make fmt-tool` 构建, 自举测试另建 `stage2/fmt`; 两者都不进 `all` / `install`), AST 源码范围由 `libcp_node_source_range` 提供, `LibcpDiagnostic` 带 `tok` / `prov` 诊断展开点. 第 11 章列出仍然存在的边界, 例如 CST 内部节点没有 `start` / `end`, 以及没有随安装发布的 formatter 或 C 转 C 工具.
 - 只承诺源码兼容, 不承诺 ABI. 公共结构体字段直接暴露, 换字段就是换版本.
@@ -32,7 +32,7 @@
 要修改库本身:
 
 - 先读 [02 架构与分层](02-architecture.md) 与 [11 缺陷与边界](11-limitations.md), 再读 [12 工程阶段史](12-project-stages.md).
-- 历史计划与执行记录在 `plans/`, 那些文件记录的是当时的口径, 不是当前 API 文档.
+- 历史计划与执行记录已随 `plans/` 于 2026-11-24 删除, 只保留在 Git 历史中; 当时的记录不代表当前 API.
 
 ## 目录
 

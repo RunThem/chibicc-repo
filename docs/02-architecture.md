@@ -79,7 +79,7 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 
 它服务的是"要理解程序"的工具: 类型检查, 语义分析, 代码生成, C 转 C.
 
-一条重要的设计决定是: **不为宏调用建语法节点**. 语法层消费展开流, 宏的原始写法由第 2 层保留, 宏到产物的对应由 provenance 提供. 放弃的是"在宏展开内部做外科式编辑"的能力. 这个决定及理由记录在 `plans/PLAN-provenance.md` 与 `AGENTS.md` 的 `已定边界` 一节.
+一条重要的设计决定是: **不为宏调用建语法节点**. 语法层消费展开流, 宏的原始写法由第 2 层保留, 宏到产物的对应由 provenance 提供. 放弃的是"在宏展开内部做外科式编辑"的能力. 这个决定及理由记录在 `AGENTS.md` 的 `已定边界` 一节.
 
 ## 2.4 层间契约
 
@@ -351,7 +351,6 @@ tools/c2c.c          C 转 C 打印器 (make c2c, 仅测试回归闸门)
 bench/               前端分阶段 benchmark (make bench-tool / make bench)
 docs/                库文档, 入口 docs/README.md
 test/                测试, 见第 10 章
-plans/               现行 PLAN.md / RESULT.md, 归档 PLAN-*.md / RESULT-*.md, 模板 *-TEMPLATE.md
 include/             chibicc 自举头文件, 通过 -Iinclude 使用
 Makefile             构建, 测试与安装入口
 README.md            上游风格的项目说明

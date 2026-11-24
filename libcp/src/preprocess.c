@@ -45,7 +45,7 @@ struct libcp_macro {
   LibcpMacroHandlerFn* handler;
 };
 
-// provenance 记录 (plans/PLAN.md): 每次展开生成一个 LibcpMacroExpansion,
+// provenance 记录: 每次展开生成一个 LibcpMacroExpansion,
 // 只建一次, 由该次展开产出的所有 token 只读共享; 每个 token 的每一层
 // provenance 是一个 LibcpMacroProv, 前插构造, 因此链从头读起是最内层优先.
 // 两者都是 per-TU 对象, 生命周期与 token 相同. 类型是私有的; libcp.h 只
@@ -125,7 +125,7 @@ static LibcpToken* new_eof(LibcpContext* ctx, LibcpToken* tok) {
 }
 
 // 前插一层 provenance. 尾部是本次调用自身文本已经携带的链, 所以链只靠
-// 前插构造, 共享的尾部从不会被改写 (plans/PLAN.md, "挂接规则").
+// 前插构造, 共享的尾部从不会被改写.
 static LibcpMacroProv*
     new_prov(LibcpContext* ctx, LibcpMacroExpansion* exp, int arg_index, LibcpMacroProv* next) {
   LibcpMacroProv* p = libcp_tu_calloc(ctx, 1, sizeof(LibcpMacroProv));

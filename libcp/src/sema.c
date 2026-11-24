@@ -16,8 +16,8 @@
 //    字面量的匿名全局对象, 复合字面量的隐藏对象, 块作用域 static 的
 //    数据镜像). 它不改写任何树形: 旧代码称为降级的一切 - 指针缩放,
 //    复合赋值与自增自减的往返, 调用, 下标, 成员, 字符串, VLA, 初始化器
-//    与声明的整形 - 都是 codegen 的 shaping pass (plans/PLAN.md 的
-//    codegen-direct 路线). 控制流检查 (游离的 break/continue/case/default,
+//    与声明的整形 - 都是 codegen 的 shaping pass (codegen-direct 路线).
+//    控制流检查 (游离的 break/continue/case/default,
 //    未声明的标签) 作为独立的一趟遍历运行; 标签分配以及这些检查过去
 //    附带的控制流改写属于 shaping pass, 每个函数为配对检查收集的
 //    goto 与标签值引用通过 LibcpObj.label_gotos 移交.

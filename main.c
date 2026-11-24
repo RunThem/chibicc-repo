@@ -1196,7 +1196,7 @@ static void print_ast_dump(LibcpNode* node) {
 static int cc1(void) {
   // -dump-tokens, -reconstruct 和 CST 通道都作用于基文件的原始流:
   // trivia 契约以及建在它上面的 CST 都作用于 libcp_tokenize() 的直接
-  // 输出, 即预处理之前的内容 (plans/PLAN.md 判据 3).
+  // 输出, 即预处理之前的内容.
   if (opt_dump_tokens || opt_reconstruct || opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
     LibcpToken* tok = must_tokenize_file(base_file);
     if (!tok)
@@ -1250,7 +1250,7 @@ static int cc1(void) {
     return 1;
 
   // provenance 通道读取预处理后的流并在此停止: 不生成目标文件, 不调用
-  // 汇编器, 不调用链接器 (plans/PLAN.md 判据 5).
+  // 汇编器, 不调用链接器.
   if (opt_dump_expansions || opt_verify_expansions) {
     if (opt_dump_expansions)
       libcp_expansion_dump(ctx, tok, open_file(opt_o ? opt_o : "-"));

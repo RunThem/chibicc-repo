@@ -26,7 +26,7 @@ FMT_SRCS=$(LIB_SRCS) $(LIB_HDR) $(PUBLIC_HDRS) $(DRIVER_SRCS)
 TEST_SRCS=$(wildcard test/*.c)
 TESTS=$(TEST_SRCS:.c=.exe)
 
-# 前端 benchmark (plans/PLAN.md): 独立 -O2 构建与分配器 shim, 不进入
+# 前端 benchmark: 独立 -O2 构建与分配器 shim, 不进入
 # all / test / install. BENCH_CFLAGS 刻意不含 ALLOCATOR_CFLAGS: 库对象
 # 必须走 bench/alloc_shim.h 的四个宏, 而不是 LIBCP_DEFAULT_ALLOCATOR.
 BENCH_CFLAGS=-std=c11 -O2 -g -fno-common -Wall -Wno-switch \
