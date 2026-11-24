@@ -35,13 +35,16 @@ make libcp.a   # 只构建静态库
 
 ```make
 ALLOCATOR_CFLAGS ?= -DLIBCP_DEFAULT_ALLOCATOR
-CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch \
-       $(ALLOCATOR_CFLAGS) -Ilibcp/include -Ilibcp/src
+BASE_CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch
+LIB_CFLAGS=$(BASE_CFLAGS) $(ALLOCATOR_CFLAGS) -Ilibcp/include -Ilibcp/src
+DRIVER_CFLAGS=$(BASE_CFLAGS) $(ALLOCATOR_CFLAGS) -Ilibcp/include
 
 BENCH_CFLAGS=-std=c11 -O2 -g -fno-common -Wall -Wno-switch \
   -D_POSIX_C_SOURCE=200809L -Ilibcp/include -Ilibcp/src \
   -include bench/alloc_shim.h
 ```
+
+`LIB_CFLAGS` 用于库对象, 带内部 include; `DRIVER_CFLAGS` 用于 `main.c` / `codegen.c`, 只带公共 include. 两者都带 `ALLOCATOR_CFLAGS`, 因为驱动器包含公共伞头, 分配器配置必须与库一致. `CFLAGS` 保留为 `LIB_CFLAGS` 的别名, 供链接命令与测试工具使用. stage2 规则按同样的方式拆分 include, 并同样带上 `ALLOCATOR_CFLAGS`. 驱动器这一侧的约束由 `test/driver-seam.sh` 锁定: 它检查三个驱动器源文件不含内部 include, 再用只含公共头的临时目录重编驱动器对象.
 
 `BENCH_CFLAGS` 刻意不含 `ALLOCATOR_CFLAGS`: benchmark 的库对象必须走 `bench/alloc_shim.h` 的四个 `LIBCP_*` 宏, 而不是 `LIBCP_DEFAULT_ALLOCATOR`.
 
@@ -146,14 +149,14 @@ pkg-config --cflags --libs libcp
 版本:
 
 ```sh
-pkg-config --modversion libcp   # 0.2.0
+pkg-config --modversion libcp   # 0.3.0
 ```
 
 ## 10.6 静态库与共享库
 
 ### 10.6.1 静态库
 
-- 归档内全部已定义全局符号统一 `libcp_` 前缀(2026-10-25 起; 当前 159 个, 其中 67 个是公共函数).
+- 归档内全部已定义全局符号统一 `libcp_` 前缀(2026-10-25 起; 当前 157 个, 其中 67 个是公共函数).
 - 公共头只声明 67 个 D7 函数.
 - 消费者**不得调用**未声明的内部函数. 它们在 `.a` 里可见, 但不是 API.
 - 前缀统一后与宿主符号碰撞的风险基本消除; 内外的判据是"公共头是否声明".
@@ -181,7 +184,7 @@ macOS 只承诺 `.a`. 没有 `.dylib` 目标.
 
 ### 10.6.3 版本
 
-- `LIBCP_VERSION` 在公共伞头里, 当前 `0.2.0`.
+- `LIBCP_VERSION` 在公共伞头里, 当前 `0.3.0`.
 - Makefile 的 `VERSION` 必须与它同步.
 - 只承诺源码兼容, 不承诺 ABI.
 - 改公共结构体字段就是换版本.
@@ -195,9 +198,9 @@ make test-stage2
 流程:
 
 1. 用宿主 `cc` 构建 `chibicc`.
-2. 用 `chibicc` 编译库源码, 产出 `stage2/libcp.a`.
-3. 用 `chibicc` 编译驱动器和测试.
-4. 跑 `test-stage2` 的行为测试套件, 包括 `test/library.sh` 链接 `stage2/libcp.a`, `test/self-test.sh`, `test/outside.sh` (用 `LIBCP_LIB` 选择 `stage2/libcp.a`), 以及 `stage2/fmt` / `stage2/c2c`; 后两者由宿主 `cc` 链接 `stage2/libcp.a` 构建. 它不跑 `test/allocator.sh`, 打包闸门 `public-api.sh` / `install.sh`, 隐式 context 审计 `test/context-audit.sh` 与 `test/docs-links.sh`.
+2. 用 `chibicc` 编译库源码, 产出 `stage2/libcp.a`; 库对象带内部 include.
+3. 用 `chibicc` 编译驱动器和测试; 驱动器对象只带公共 include.
+4. 跑 `test-stage2` 的行为测试套件, 包括 `test/driver-seam.sh` (用 `stage2/chibicc` 重编驱动器对象), `test/library.sh` 与 `test/public-api.sh` 链接 `stage2/libcp.a`, `test/self-test.sh`, `test/outside.sh` (用 `LIBCP_LIB` 选择 `stage2/libcp.a`), 以及 `stage2/fmt` / `stage2/c2c`; 后两者由宿主 `cc` 链接 `stage2/libcp.a` 构建. 它不跑 `test/allocator.sh`, 打包闸门 `install.sh`, 隐式 context 审计 `test/context-audit.sh` 与 `test/docs-links.sh`.
 
 自举证明库代码能被自己编译. `setjmp` 与 `va_copy` 都在这条路径上被验证.
 
@@ -208,6 +211,7 @@ make test-stage2
 | 测试 | 内容 |
 |---|---|
 | `test/*.exe` | 每个特性一个 C 测试, 覆盖语言功能 |
+| `test/driver-seam.sh` | 驱动器 seam: `main.c` / `codegen.c` / `driver.h` 不含内部 include, 驱动器对象只用临时公共头目录编译; `make test` 用宿主 `cc`, `make test-stage2` 用 `stage2/chibicc` |
 | `test/driver.sh` | 命令行选项 |
 | `test/diagnostic.sh` | 68 例诊断文案与插入符逐字节 |
 | `test/warning.sh` | 警告文案与插入符 |
@@ -285,6 +289,8 @@ make check-library
    - `.a` 中 D7 全部存在.
    - Linux `.so` 只导出 D7.
 4. `test/install.sh`: 验证安装布局与 pkg-config; 没有 `pkg-config` 时跳过 `.pc` 版本与消费者检查并成功返回.
+
+`test-stage2` 另用 `LIBCP_LIB=stage2/libcp.a` 跑一遍 `test/public-api.sh` (跳过 `.so` 检查), 与 `test/outside.sh` 一起锁住自举归档的同一公共面.
 
 隐式 context 审计单独运行:
 
@@ -404,7 +410,7 @@ make ALLOCATOR_CFLAGS='-include mimalloc.h -DLIBCP_MALLOC=mi_malloc -DLIBCP_CALL
 - 不要同时定义 `LIBCP_DEFAULT_ALLOCATOR`, 否则四个宏会被 libc 版本覆盖(重定义警告), 自定义分配器不会生效.
 - 自定义构建的文件必须是库的每个编译单元都能看到的, 并且链接时提供这四个函数.
 - 替换实现必须满足 libc 的对齐, 清零与 `realloc` 失败语义, 见 9.3.15.
-- `make test-stage2` 的 stage2 规则固定传 `-DLIBCP_DEFAULT_ALLOCATOR`, 即自举检查始终用默认分配器.
+- `make test-stage2` 的 stage2 规则使用同一个 `ALLOCATOR_CFLAGS` (默认 `-DLIBCP_DEFAULT_ALLOCATOR`), 库对象与驱动器对象都带上它.
 - `test/allocator.sh` 只验证替换机制本身 (四个宏被调用, 每次 per-TU 分配独立, reset 后活块归零); 自定义分配器要让它生效, 仍需自己的 shim 头与链接参数, 不能只靠这个脚本.
 - 只给消费者加宏不会影响预编译的库.
 

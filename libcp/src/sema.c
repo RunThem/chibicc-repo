@@ -868,12 +868,6 @@ static char* new_unique_name(LibcpContext* ctx) {
   return libcp_format(ctx, ".L..%d", unique_name_id++);
 }
 
-// 对计数器的只读窥视: 自行分配 `.L..%d` 标签的消费者 (codegen 的
-// shaping pass) 从这里继续编号.
-int libcp_unique_name_next(LibcpContext* ctx) {
-  return unique_name_id;
-}
-
 // 对计数器的消耗式读取 (公共后端支持面, issue #18): 返回的号不会再
 // 发出, 因此消费者用它构造的名字与库的匿名对象不会冲突.
 int libcp_context_take_unique_name(LibcpContext* ctx) {

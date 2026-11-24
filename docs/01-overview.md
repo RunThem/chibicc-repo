@@ -41,6 +41,7 @@
 - 按固定顺序枚举一个节点的结构子节点, 不需要复制库内 walker 的字段 switch (`libcp_node_child_count` / `_at`, 见 9.7.4).
 - include 搜索的单一 owner: 按来源 (`USER` / `AFTER` / `SYSTEM`) 注册路径, 解析 include 文件名并判定系统目录 (`libcp_context_add_include_path_with_origin`, `libcp_context_resolve_include`, `libcp_context_include_is_system`).
 - 树外消费者验收 (`test/outside/consumer.c` + `test/outside.sh`): 消费者只包含公共头并链接归档, 完成一次真实降级与 x86-64 发射, 并走通诊断回调; 脚本把公共头复制到临时目录, 只以该目录作 include path, 由 `make test` 与 `make test-stage2` 用默认或 stage2 归档各跑一遍 (决议 #14).
+- 驱动器 seam (`test/driver-seam.sh`): `main.c`, `codegen.c` 与 `driver.h` 只包含公共头; Makefile 的 `DRIVER_CFLAGS` 只为它们提供公共 include, 自举构建同样如此. 仓库自带的参考消费者因此与树外消费者走同一个公共 seam.
 - 11 个公共头, 67 个公共函数(L5 起含 `libcp_cst_seed_typedef` 与 `libcp_node_source_range`; 0.2.0 起含 `libcp_node_family`; 后端支持面追加 17 个; 源坐标追加 4 个; 子节点枚举追加 2 个; include 搜索追加 3 个; dump 追加 2 个). 公共符号一律 `libcp_` / `Libcp` 前缀.
 
 库的实现约 1.1 万行 C, 公共头约 1050 行(11 个头文件). 它没有外部依赖, 除 C 标准库外只要求 POSIX 的文件与线程基础能力.

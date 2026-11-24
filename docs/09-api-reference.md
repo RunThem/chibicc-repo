@@ -716,7 +716,7 @@ bool libcp_expansion_verify(LibcpContext *ctx, LibcpToken *tok);
 ## 9.10 版本 API
 
 ```c
-#define LIBCP_VERSION "0.2.0"
+#define LIBCP_VERSION "0.3.0"
 const char *libcp_version(void);
 ```
 

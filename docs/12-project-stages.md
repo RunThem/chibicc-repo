@@ -462,7 +462,7 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 - **source mapping (W5)**: `libcp_node_source_range`(子树锚点 token 极值)与诊断展开点(`LibcpDiagnostic` 增加 `tok` / `prov`, 默认输出逐字节不变).
 - 同线关闭"展开流 CST"未决项(维持现状), per-node user data 扩展点按 formatter 的负结果继续推迟(只读遍历型消费者不需要它).
 
-## 12.15 公共 seam 对树外消费者可用 (2026-11-25, 进行中)
+## 12.15 公共 seam 对树外消费者可用 (2026-11-25 完成)
 
 ### 问题
 
@@ -481,10 +481,12 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 - 公共 `libcp_token_dump` / `libcp_ast_dump` (#25).
 - typed 初始化器只读交接: `init_resolved` 保留到 reset, 带锚点 token 与 child_count (#26).
 - 树外消费者验收 (#27): `test/outside/consumer.c` 只含公共头并链接归档, 完成降级发射与诊断回调; `test/outside.sh` 把公共头复制到临时目录, 在默认与 stage2 归档上各跑一遍, 未定义符号与公共 API 闸门共用 `test/public-api.deny`.
+- 驱动器整体迁移 (#28): `main.c`, `codegen.c` 与 `driver.h` 只包含公共头, 用公共构造器, 子节点枚举, include 解析, dump, 坐标与 typed 初始化器完成原有工作.
+- seam 收口 (#29): Makefile 拆出 `LIB_CFLAGS` 与 `DRIVER_CFLAGS`, stage1 与 stage2 都为驱动器对象只给公共 include; `test/driver-seam.sh` 检查驱动器源码并 public-only 重编驱动器对象; `test-stage2` 另跑一遍 `test/public-api.sh`; 删除无调用者的内部入口 `libcp_unique_name_next` 与 `libcp_vla_of`; 版本升到 0.3.0.
 
 ### 产物可以干什么
 
-一个不了解仓库布局的消费者可以只靠公共头与 `libcp.a` 构造后端需要的节点, 按公共类型信息缩放指针运算并发射目标指令, 并在不 longjmp 的路径上报告诊断. 截至本阶段, 驱动器的整体迁移 (#28) 与 seam 构建标志拆分 (#29) 仍未完成.
+一个不了解仓库布局的消费者可以只靠公共头与 `libcp.a` 构造后端需要的节点, 按公共类型信息缩放指针运算并发射目标指令, 并在不 longjmp 的路径上报告诊断. 仓库自带的驱动器现在也只是这个公共 seam 的消费者, 不再看见 `libcp/src`; 树外消费者与公共 API 闸门在默认与 stage2 归档上都通过.
 
 ## 12.16 从阶段史看现在的代码
 

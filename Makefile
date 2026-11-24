@@ -3,10 +3,17 @@
 # ALLOCATOR_CFLAGS with an -include shim header plus the four
 # LIBCP_* macros and leaves LIBCP_DEFAULT_ALLOCATOR undefined.
 ALLOCATOR_CFLAGS ?= -DLIBCP_DEFAULT_ALLOCATOR
-CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch $(ALLOCATOR_CFLAGS) -Ilibcp/include -Ilibcp/src
+# 库对象可以看见内部伞头 (libcp/src); 驱动器对象 (main.c / codegen.c /
+# driver.h) 只允许公共 include. 两者都带 ALLOCATOR_CFLAGS: 驱动器包含
+# 公共伞头, 分配器配置必须与库一致. test/driver-seam.sh 用 public-only
+# 路径重编驱动器对象, 锁住第二个约束.
+BASE_CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch
+LIB_CFLAGS=$(BASE_CFLAGS) $(ALLOCATOR_CFLAGS) -Ilibcp/include -Ilibcp/src
+DRIVER_CFLAGS=$(BASE_CFLAGS) $(ALLOCATOR_CFLAGS) -Ilibcp/include
+CFLAGS=$(LIB_CFLAGS)
 
 # Keep VERSION in sync with LIBCP_VERSION in the public umbrella.
-VERSION=0.2.0
+VERSION=0.3.0
 PREFIX ?= /usr/local
 DESTDIR ?=
 INSTALL ?= install
@@ -65,11 +72,16 @@ libcp.so: libcp.so.0
 	ln -sf libcp.so.0 $@
 
 %.pic.o: %.c $(LIB_HDR) $(PUBLIC_HDRS)
-	$(CC) $(CFLAGS) -fPIC -fvisibility=hidden -c -o $@ $<
+	$(CC) $(LIB_CFLAGS) -fPIC -fvisibility=hidden -c -o $@ $<
 endif
 
-$(LIB_OBJS) $(DRIVER_OBJS): $(LIB_HDR) $(PUBLIC_HDRS)
-$(DRIVER_OBJS): driver.h
+# 库对象与驱动器对象的编译规则分开: 前者带内部 include, 后者只带
+# 公共 include. 误加内部 include 会在构建期和 test/driver-seam.sh 同时失败.
+$(LIB_OBJS): $(LIB_DIR)/%.o: $(LIB_DIR)/%.c $(LIB_HDR) $(PUBLIC_HDRS)
+	$(CC) $(LIB_CFLAGS) -c -o $@ $<
+
+$(DRIVER_OBJS): %.o: %.c driver.h $(PUBLIC_HDRS)
+	$(CC) $(DRIVER_CFLAGS) -c -o $@ $<
 
 test/%.exe: chibicc test/%.c test/common test/test.h
 	./chibicc -Iinclude -Itest -c -o test/$*.o test/$*.c
@@ -150,6 +162,7 @@ bench: bench-tool
 test: $(TESTS)
 	test/docs-links.sh
 	test/style.sh
+	test/driver-seam.sh "$(CC)"
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./chibicc
 	test/diagnostic.sh ./chibicc
@@ -195,6 +208,8 @@ check-style:
 # Stage 2
 
 STAGE2_LIB_OBJS=$(LIB_SRCS:$(LIB_DIR)/%.c=stage2/$(LIB_DIR)/%.o)
+STAGE2_LIB_FLAGS=$(ALLOCATOR_CFLAGS) -Ilibcp/include -Ilibcp/src
+STAGE2_DRIVER_FLAGS=$(ALLOCATOR_CFLAGS) -Ilibcp/include
 
 stage2/chibicc: stage2/libcp.a $(DRIVER_OBJS:%=stage2/%)
 	$(CC) $(CFLAGS) -o $@ $(DRIVER_OBJS:%=stage2/%) stage2/libcp.a $(LDFLAGS)
@@ -202,11 +217,14 @@ stage2/chibicc: stage2/libcp.a $(DRIVER_OBJS:%=stage2/%)
 stage2/libcp.a: $(STAGE2_LIB_OBJS)
 	$(AR) rcs $@ $^
 
-stage2/%.o: %.c chibicc $(LIB_HDR) $(PUBLIC_HDRS)
+# 与 stage 1 同一拆分: 库对象经过内部 include, 驱动器对象只用公共 include.
+$(STAGE2_LIB_OBJS): stage2/$(LIB_DIR)/%.o: $(LIB_DIR)/%.c chibicc $(LIB_HDR) $(PUBLIC_HDRS)
 	mkdir -p $(@D)
-	./chibicc -DLIBCP_DEFAULT_ALLOCATOR -Ilibcp/include -Ilibcp/src -c -o $@ $<
+	./chibicc $(STAGE2_LIB_FLAGS) -c -o $@ $<
 
-stage2/main.o stage2/codegen.o: driver.h
+stage2/main.o stage2/codegen.o: stage2/%.o: %.c chibicc driver.h $(PUBLIC_HDRS)
+	mkdir -p $(@D)
+	./chibicc $(STAGE2_DRIVER_FLAGS) -c -o $@ $<
 
 stage2/test/%.exe: stage2/chibicc test/%.c test/common test/test.h
 	mkdir -p stage2/test
@@ -222,6 +240,7 @@ stage2/c2c: stage2/libcp.a tools/c2c.c
 	$(CC) $(CFLAGS) -o $@ tools/c2c.c stage2/libcp.a
 
 test-stage2: libcp.a stage2/libcp.a $(TESTS:test/%=stage2/test/%)
+	test/driver-seam.sh ./stage2/chibicc "-I$(CURDIR)/include"
 	for i in $(TESTS:test/%=stage2/test/%); do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./stage2/chibicc
 	test/diagnostic.sh ./stage2/chibicc
@@ -234,6 +253,7 @@ test-stage2: libcp.a stage2/libcp.a $(TESTS:test/%=stage2/test/%)
 	test/expand.sh ./stage2/chibicc
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/library.sh
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/self-test.sh
+	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/public-api.sh
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/outside.sh
 	$(MAKE) stage2/fmt
 	test/fmt.sh ./stage2/chibicc ./stage2/fmt
