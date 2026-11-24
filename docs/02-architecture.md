@@ -348,6 +348,7 @@ codegen.c            x86-64 代码生成器, 参考消费者
 driver.h             驱动器内部头
 tools/fmt.c          CST formatter MVP (make fmt-tool, 不安装)
 tools/c2c.c          C 转 C 打印器 (make c2c, 仅测试回归闸门)
+tools/asm-diff.sh    汇编等价性闸门 (make asm-diff BASE=<ref>)
 bench/               前端分阶段 benchmark (make bench-tool / make bench)
 docs/                库文档, 入口 docs/README.md
 test/                测试, 见第 10 章

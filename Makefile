@@ -186,8 +186,8 @@ check-library: $(CHECK_LIBS) libcp.pc
 check-context: libcp.a
 	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
 
-# The style gate: tracked sources and docs carry no Chinese punctuation,
-# and the HEAD commit subject is uppercase, period-free ASCII.
+# 风格闸门: 全部 tracked 文本文件不得含中文标点, HEAD 提交信息须为大写
+# 开头, 无结尾句号的纯 ASCII.
 check-style:
 	test/style.sh
 

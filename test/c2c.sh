@@ -932,7 +932,7 @@ for name in $names; do
     fi
 done
 
-# 覆盖审计: 逐片段 dump 后合并 NodeKind 集合.69 个 kind 中 4 个是 sema
+# 覆盖审计: 逐片段 dump 后合并 NodeKind 集合. 69 个 kind 中 4 个是 sema
 # 专属 (ND_VAR / ND_VLA_PTR / ND_MEMZERO / ND_NULL_EXPR), parse 树可达的
 # 65 个必须全部被本脚本的片段触达.
 : > "$tmp/kinds.all"
@@ -949,7 +949,7 @@ fi
 # 树必须与原文的树形态相同 - -dump-ast 剥掉 @span 位置锚点与引号文本后
 # 逐字节比较 (kind, 结构字段, op/is_post/val/fval/label/attr/类型签名/
 # 初始化器形态全部保留; 字符串内容差异由 docker 的 -S 门逐字节兜底).
-# 打印产物再打印必须逐字节不变.本机缺 Linux 系统头时探测跳过, docker
+# 打印产物再打印必须逐字节不变. 本机缺 Linux 系统头时探测跳过, docker
 # 内为权威.
 normalize_dump() {
     # The driver's -dump-ast only accepts .c inputs; headers dump
@@ -1001,12 +1001,12 @@ else
     echo "c2c corpus: skipped (no Linux system headers)"
 fi
 
-# -S 汇编逐字节等价: 打印产物编译出的汇编必须与原文逐字节相同.只在能
-# 就地汇编的环境跑 (有系统头, 即容器内).打印产物写到 $tmp/p.c 后由
+# -S 汇编逐字节等价: 打印产物编译出的汇编必须与原文逐字节相同. 只在能
+# 就地汇编的环境跑 (有系统头, 即容器内). 打印产物写到 $tmp/p.c 后由
 # chibicc 直接编译, 不覆盖源文件: make -j test-all 会让 test 与 test-stage2
 # 并行跑这个脚本, 就地改写会让两次运行互相踩 backup, 把展开后的产物留在
-# 源码树里 (CI 的 codegen.c 事故)..file 伪指令嵌源路径, .file/.loc 行在
-# 比较前剥离.时间宏钉死 (macro.c 把 __DATE__/__TIME__ 当字符串用).自举
+# 源码树里 (CI 的 codegen.c 事故). `.file` 伪指令嵌源路径, .file/.loc 行在
+# 比较前剥离. 时间宏钉死 (macro.c 把 __DATE__/__TIME__ 当字符串用). 自举
 # 语料 (编译器自己的 ~15k 行源码) 一并入门 (PLAN-c2c 拍板 2).
 if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
    "$chibicc" -Iinclude -Itest -E "$tmp/probe.c" > /dev/null 2>&1; then
@@ -1037,7 +1037,7 @@ if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
             -D__DATE__='"Jan  1 2024"' -D__TIME__='"00:00:00"' \
             -S -o "$tmp/b.s" "$tmp/p.c" 2>/dev/null
         # 展开后的单文件没有 #include 行, .file 的头文件表与 .loc 的行号
-        # 本质上与原文不同 (fmt 保留 include 行所以能逐字节).这里剥离调试
+        # 本质上与原文不同 (fmt 保留 include 行所以能逐字节). 这里剥离调试
         # 行信息后比较: 指令序列, 标签, 数据与重定位逐字节.
         grep -vE '^[[:space:]]*\.(file|loc)[[:space:]]' "$tmp/a.s" > "$tmp/a.n.s"
         grep -vE '^[[:space:]]*\.(file|loc)[[:space:]]' "$tmp/b.s" > "$tmp/b.n.s"

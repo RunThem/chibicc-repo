@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# 汇编等价性闸门: 用同一批 test/*.c 分别驱动当前树与 BASE 提交里的
-# chibicc, 对 -S 产物做逐字节比较.
+# 汇编等价性闸门: 用同一批 test/*.c 分别驱动 BASE ref 构建的 chibicc 与
+# 当前工作树构建的 chibicc, 对 -S 产物做逐字节比较.
 #
 # 用法: tools/asm-diff.sh <BASE-ref> [chibicc 旗标...]
+#
+# BASE 是任意能解析为提交的 ref (SHA / 分支 / 标签), 脚本比较 BASE 构建
+# 的 chibicc 与当前工作树构建的 chibicc.
 #
 # 路径差异: 两边都先 cd 到各自的树根, 再用相对路径 test/*.c 编译, codegen
 # 发射的 .file 伪指令因此记录同一串相对路径. 产物 .s 写在临时目录, 不会
@@ -16,7 +19,7 @@
 # 中断) 由 trap 删除. 当前树缺的 test 文件必须也在 BASE 里存在, 否则无法
 # 比较, 直接报错.
 
-set -u
+set -euo pipefail
 
 usage() {
     echo "usage: tools/asm-diff.sh <BASE-ref> [chibicc flags...]" >&2
@@ -118,7 +121,7 @@ for f in "${files[@]}"; do
     name=$(basename "$f" .c)
     if ! cmp -s "$tmp/base-out/$name.s" "$tmp/cur-out/$name.s"; then
         echo "asm-diff: $f differs"
-        diff -u "$tmp/base-out/$name.s" "$tmp/cur-out/$name.s"
+        diff -u "$tmp/base-out/$name.s" "$tmp/cur-out/$name.s" || true
         diffs=$((diffs + 1))
     fi
 done
