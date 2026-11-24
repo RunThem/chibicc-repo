@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# 风格闸门: tracked 源码与文档不得含中文标点, HEAD 提交信息须为
-# 大写开头, 无结尾句号的纯 ASCII.
+# 风格闸门: tracked 文本文件不得含中文标点, HEAD 提交信息须为大写开头,
+# 无结尾句号的纯 ASCII.
+# 有 .git 时用 git ls-files 扫描全部 tracked 文本文件并检查 HEAD 提交信息;
+# 无 .git 时 (Docker 源码副本) 用 find 扫描同样的文本文件, 跳过提交检查.
 # 用法: test/style.sh [root]
 set -euo pipefail
 
@@ -14,6 +16,11 @@ cd "$root"
 
 fail=0
 checked=0
+have_git=0
+
+if [ "$(git rev-parse --show-toplevel 2>/dev/null || true)" = "$root" ]; then
+  have_git=1
+fi
 
 report() {
   printf 'style: %s\n' "$*" >&2
@@ -41,10 +48,16 @@ scan_file() {
   local file=$1
   local hit line
 
+  # grep -I 把二进制文件当成不匹配, 这里顺带跳过没有正文的文件.
+  if ! grep -Iq . -- "$file"; then
+    return 0
+  fi
+  checked=$((checked + 1))
+
   while IFS= read -r hit; do
-    # 唯一放行: AGENTS.md 中说明该规则本身的示例行.
+    # 唯一放行: AGENTS.md 中说明该规则本身的示例行. find 路径带 ./ 前缀.
     case $file in
-      AGENTS.md) case $hit in *不使用中文标点*) continue ;; esac ;;
+      AGENTS.md|./AGENTS.md) case $hit in *不使用中文标点*) continue ;; esac ;;
     esac
     line=${hit%%:*}
     report "$file:$line: Chinese punctuation"
@@ -75,17 +88,34 @@ check_commit() {
   esac
 }
 
-while IFS= read -r file; do
-  [ -f "$file" ] || continue
-  checked=$((checked + 1))
-  scan_file "$file"
-done < <(git ls-files -- '*.md' '*.c' '*.h' '*.sh')
+if [ "$have_git" -eq 1 ]; then
+  while IFS= read -r -d '' file; do
+    [ -f "$file" ] || continue
+    scan_file "$file"
+  done < <(git ls-files -z)
+else
+  while IFS= read -r -d '' file; do
+    case $file in ./.git/*) continue ;; esac
+    [ -f "$file" ] || continue
+    scan_file "$file"
+  done < <(find . -type f -print0)
+fi
 
-check_commit
+if [ "$checked" -eq 0 ]; then
+  report "no text files found under $root"
+fi
+
+if [ "$have_git" -eq 1 ]; then
+  check_commit
+fi
 
 if [ "$fail" -ne 0 ]; then
   printf 'style: FAILED (%d files checked)\n' "$checked" >&2
   exit 1
 fi
 
-printf 'style: ok (%d files checked, commit subject ok)\n' "$checked"
+if [ "$have_git" -eq 1 ]; then
+  printf 'style: ok (%d files checked, commit subject ok)\n' "$checked"
+else
+  printf 'style: ok (%d files checked, commit subject skipped (no git))\n' "$checked"
+fi

@@ -76,7 +76,7 @@
 - 每个特性对应一个 `test/<feature>.c`, 用 `test/test.h` 的 `ASSERT(expected, expr)` 并链接 `test/common`; 新用例加进对应的特性文件, 仅在必要时扩展 `test/test.h` / `test/common`.
 - 行为锁都在 `test/*.sh`, 由 `make test` 与 `make test-stage2` 各跑一遍; 改 codegen 的发射形必须同步更新 `test/shape.sh`, `subst` 新增分支必须同步更新 `test/expand.sh`, UNPARSED golden 用 `test/cst-stats.sh update` 更新.
 - 库内自测在 `test/self/`, 使用 `.a` 内部符号, 不属于公共 API.
-- 文档链接由 `test/docs-links.sh` 锁定, 由 `make test` 与 `.github/workflows/docs.yml` 运行; 不依赖编译器产物, 不进 `test-stage2`.
+- 文档链接由 `test/docs-links.sh` 锁定, 代码与文档的中文标点由 `test/style.sh` 锁定; 两者都由 `make test` 运行, 都不进 `test-stage2`, `test/docs-links.sh` 另由 `.github/workflows/docs.yml` 运行.
 - `test/thirdparty/*.sh` 很慢且仅限 Linux, 不属于 `make test`.
 
 ## Agent skills
