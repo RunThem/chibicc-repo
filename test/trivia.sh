@@ -187,7 +187,7 @@ done
 n_rb=0
 
 # exp_rec <name> <input-printf> <expected-printf>: 边界样本. T2.1 之后期望一律
-# 等于输入(这些正是 T1.2 锁过、当时期望小于输入的偏差样本, 现在全部转正).
+# 等于输入(这些正是 T1.2 锁过, 当时期望小于输入的偏差样本, 现在全部转正).
 exp_rec() {
     name=$1; shift
     n_rb=$((n_rb + 1))

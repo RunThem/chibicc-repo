@@ -1,12 +1,12 @@
 #!/bin/bash
-# C→C 打印器测试: 逐字节锁定 c2c 的打印输出。
+# C→C 打印器测试: 逐字节锁定 c2c 的打印输出.
 #
 # c2c 只作为 make test / make test-stage2 的回归闸门(2026-10-26 定位), 不是
-# 支持的工具: tokenize -> preprocess -> parse 后打印回单一展开后的翻译单元。
+# 支持的工具: tokenize -> preprocess -> parse 后打印回单一展开后的翻译单元.
 # 输出策略: 注释丢弃, 空白全部自造
 # (2 空格缩进, 一声明一行), 拼写从 token 原文取, tag 从 Type 记录的 tag_tok
 # 取, 枚举定义由 ND_ENUM_CONST 记录重组, 未使用的独立 tag 定义消失 (首次
-# 使用时内联打印), 同 declspec 记录的连续声明合并为多 declarator 语句。
+# 使用时内联打印), 同 declspec 记录的连续声明合并为多 declarator 语句.
 #
 # 覆盖 (随 CC2-CC5 逐步增长):
 #   CC2: 全部 18 个 TypeKind 的声明形态; 指针/数组/函数指针/嵌套括号
@@ -14,18 +14,18 @@
 #        枚举三种落位 (独立/吸收进声明/多 declarator); typedef 名恢复与
 #        基本类型结构化展开; 存储类与 _Alignas; _Atomic 与 typeof 两形态;
 #        原型形态 (无原型/(void)/变参/无名参数); packed/aligned 规范位;
-#        维度表达式。
+#        维度表达式.
 #   CC3: 全部二元运算符与优先级括号; 复合赋值与赋值链; 前后缀自增自减;
 #        一元运算与拼写粘连守卫 (- -x); 嵌套 cast; sizeof/_Alignof 两形态;
 #        ?: 与 elvis 与中段逗号; 调用/下标/成员/postfix 基座括号; 交换
 #        下标 (3[a]); 字符串拼接重发射/转义/宽字符前缀; 字面量拼写;
-#        _Generic 与类型谓词 builtin; 复合字面量; 原子 CAS/EXCH 重合成。
+#        _Generic 与类型谓词 builtin; 复合字面量; 原子 CAS/EXCH 重合成.
 #   CC4: 全部语句形态 (if/else 链, while/do/for 含声明 init 与空段,
 #        switch/case 区间/default 与 case 组缩进, 标签/计算 goto/
 #        &&label, break/continue, asm 与其空语句合并, 块与空语句);
 #        块内声明记录 (static/extern/typedef/enum/struct 局部化);
 #        语句表达式多行; c34 覆盖样本 + 覆盖审计 (69 kind 中 4 个
-#        sema 专属, parse 树可达的 65 个全部触达)。
+#        sema 专属, parse 树可达的 65 个全部触达).
 #
 # 用法: test/c2c.sh <chibicc> <c2c> (由 make test 与 make test-stage2 调用)
 
@@ -38,13 +38,13 @@ names=""
 fails=0
 checks=0
 
-# snippet <name>: 后随 heredoc 为被打印的源码片段。
+# snippet <name>: 后随 heredoc 为被打印的源码片段.
 snippet() {
     names="$names $1"
     cat > "$tmp/$1.c"
 }
 
-# expect <name>: 后随 heredoc 为期望的 stdout 原文 (逐字节)。
+# expect <name>: 后随 heredoc 为期望的 stdout 原文 (逐字节).
 expect() {
     cat > "$tmp/$1.expected"
 }
@@ -906,7 +906,7 @@ E e;
 arr_t a, b;
 WANT
 
-# 检查: 每个片段 (1) 输出与期望逐字节相同; (2) 对打印产物再打印逐字节不变。
+# 检查: 每个片段 (1) 输出与期望逐字节相同; (2) 对打印产物再打印逐字节不变.
 for name in $names; do
     checks=$((checks + 2))
     if ! "$c2c_bin" "$tmp/$name.c" > "$tmp/$name.got" 2> "$tmp/$name.err"; then
@@ -932,9 +932,9 @@ for name in $names; do
     fi
 done
 
-# 覆盖审计: 逐片段 dump 后合并 NodeKind 集合。69 个 kind 中 4 个是 sema
+# 覆盖审计: 逐片段 dump 后合并 NodeKind 集合.69 个 kind 中 4 个是 sema
 # 专属 (ND_VAR / ND_VLA_PTR / ND_MEMZERO / ND_NULL_EXPR), parse 树可达的
-# 65 个必须全部被本脚本的片段触达。
+# 65 个必须全部被本脚本的片段触达.
 : > "$tmp/kinds.all"
 for name in $names; do
     "$chibicc" -dump-ast "$tmp/$name.c" 2>/dev/null | grep -oE 'ND_[A-Z_]+' >> "$tmp/kinds.all"
@@ -948,9 +948,9 @@ fi
 # 语料 round-trip: 对 test/*.c 与 include/*.h, 打印产物再解析得到的第 3 层
 # 树必须与原文的树形态相同 - -dump-ast 剥掉 @span 位置锚点与引号文本后
 # 逐字节比较 (kind, 结构字段, op/is_post/val/fval/label/attr/类型签名/
-# 初始化器形态全部保留; 字符串内容差异由 docker 的 -S 门逐字节兜底)。
-# 打印产物再打印必须逐字节不变。本机缺 Linux 系统头时探测跳过, docker
-# 内为权威。
+# 初始化器形态全部保留; 字符串内容差异由 docker 的 -S 门逐字节兜底).
+# 打印产物再打印必须逐字节不变.本机缺 Linux 系统头时探测跳过, docker
+# 内为权威.
 normalize_dump() {
     # The driver's -dump-ast only accepts .c inputs; headers dump
     # through a .c-named copy. sed runs in the C locale: a string literal
@@ -967,9 +967,9 @@ if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
    "$chibicc" -Iinclude -Itest -E "$tmp/probe.c" > /dev/null 2>&1; then
     corpus_files=""
     for f in test/*.c include/*.h; do
-        # line.c: #line 重设行号, 打印产物必然错位 (记录在 PLAN-c2c 1.4)。
+        # line.c: #line 重设行号, 打印产物必然错位 (记录在 PLAN-c2c 1.4).
         # pragma-once.c: #include 指向自身, 树的形状取决于文件的路径身份
-        # (fmt.sh 的同款陷阱), 脱离原路径后展开结果不同。
+        # (fmt.sh 的同款陷阱), 脱离原路径后展开结果不同.
         [ "$f" = "test/line.c" ] && continue
         [ "$f" = "test/pragma-once.c" ] && continue
         corpus_files="$corpus_files $f"
@@ -1001,31 +1001,31 @@ else
     echo "c2c corpus: skipped (no Linux system headers)"
 fi
 
-# -S 汇编逐字节等价: 打印产物编译出的汇编必须与原文逐字节相同。只在能
-# 就地汇编的环境跑 (有系统头, 即容器内)。打印产物写到 $tmp/p.c 后由
+# -S 汇编逐字节等价: 打印产物编译出的汇编必须与原文逐字节相同.只在能
+# 就地汇编的环境跑 (有系统头, 即容器内).打印产物写到 $tmp/p.c 后由
 # chibicc 直接编译, 不覆盖源文件: make -j test-all 会让 test 与 test-stage2
 # 并行跑这个脚本, 就地改写会让两次运行互相踩 backup, 把展开后的产物留在
-# 源码树里 (CI 的 codegen.c 事故)。.file 伪指令嵌源路径, .file/.loc 行在
-# 比较前剥离。时间宏钉死 (macro.c 把 __DATE__/__TIME__ 当字符串用)。自举
-# 语料 (编译器自己的 ~15k 行源码) 一并入门 (PLAN-c2c 拍板 2)。
+# 源码树里 (CI 的 codegen.c 事故)..file 伪指令嵌源路径, .file/.loc 行在
+# 比较前剥离.时间宏钉死 (macro.c 把 __DATE__/__TIME__ 当字符串用).自举
+# 语料 (编译器自己的 ~15k 行源码) 一并入门 (PLAN-c2c 拍板 2).
 if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
    "$chibicc" -Iinclude -Itest -E "$tmp/probe.c" > /dev/null 2>&1; then
     s_fails=0
     s_count=0
     for f in test/*.c main.c codegen.c libcp/src/*.c; do
-        # line.c: __LINE__/__FILE__ 经 #line 重设, 打印产物必然错位。
+        # line.c: __LINE__/__FILE__ 经 #line 重设, 打印产物必然错位.
         [ "$f" = "test/line.c" ] && continue
         s_count=$((s_count + 1))
         # 旗标按语料分家, 与 Makefile 的构建规则一致: test 语料吃
         # -Iinclude -Itest; 自举语料 (main.c, codegen.c, libcp/src) 吃
         # -Ilibcp/include -Ilibcp/src, 其中 libcp 内部源与 codegen.c 走
-        # 内部 umbrella, 还要 -DLIBCP_DEFAULT_ALLOCATOR。
+        # 内部 umbrella, 还要 -DLIBCP_DEFAULT_ALLOCATOR.
         case "$f" in
         libcp/src/*.c|codegen.c|main.c)
             flags="-DLIBCP_DEFAULT_ALLOCATOR -Ilibcp/include -Ilibcp/src -Iinclude" ;;
         *)                       flags="-Iinclude -Itest" ;;
         esac
-        # 时间宏必须内联 (fmt.sh 的同款坑): 经变量展开会丢字面引号。
+        # 时间宏必须内联 (fmt.sh 的同款坑): 经变量展开会丢字面引号.
         "$chibicc" $flags -D__TIMESTAMP__='"Mon Jan  1 00:00:00 2024"' \
             -D__DATE__='"Jan  1 2024"' -D__TIME__='"00:00:00"' \
             -S -o "$tmp/a.s" "$f" 2>/dev/null
@@ -1037,8 +1037,8 @@ if printf '#include <stdio.h>\n' > "$tmp/probe.c" && \
             -D__DATE__='"Jan  1 2024"' -D__TIME__='"00:00:00"' \
             -S -o "$tmp/b.s" "$tmp/p.c" 2>/dev/null
         # 展开后的单文件没有 #include 行, .file 的头文件表与 .loc 的行号
-        # 本质上与原文不同 (fmt 保留 include 行所以能逐字节)。这里剥离调试
-        # 行信息后比较: 指令序列, 标签, 数据与重定位逐字节。
+        # 本质上与原文不同 (fmt 保留 include 行所以能逐字节).这里剥离调试
+        # 行信息后比较: 指令序列, 标签, 数据与重定位逐字节.
         grep -vE '^[[:space:]]*\.(file|loc)[[:space:]]' "$tmp/a.s" > "$tmp/a.n.s"
         grep -vE '^[[:space:]]*\.(file|loc)[[:space:]]' "$tmp/b.s" > "$tmp/b.n.s"
         if ! cmp -s "$tmp/a.n.s" "$tmp/b.n.s"; then

@@ -149,6 +149,7 @@ bench: bench-tool
 
 test: $(TESTS)
 	test/docs-links.sh
+	test/style.sh
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./chibicc
 	test/diagnostic.sh ./chibicc
@@ -184,6 +185,11 @@ check-library: $(CHECK_LIBS) libcp.pc
 # own. Run by test and available on its own.
 check-context: libcp.a
 	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
+
+# The style gate: tracked sources and docs carry no Chinese punctuation,
+# and the HEAD commit subject is uppercase, period-free ASCII.
+check-style:
+	test/style.sh
 
 # Stage 2
 
@@ -341,4 +347,4 @@ docker-snapshot-diff: docker-image
 	@rc=0; diff -ru .cache/snapshot .cache/snapshot.new || rc=1; rm -rf .cache/snapshot.new; \
 	  [ $$rc -eq 0 ] && echo "snapshot diff: empty" || { echo "snapshot diff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: all fmt-tool format test clean test-stage2 test-all test-thirdparty check-library check-context install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff bench bench-tool
+.PHONY: all fmt-tool format test clean test-stage2 test-all test-thirdparty check-library check-context check-style install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff bench bench-tool
