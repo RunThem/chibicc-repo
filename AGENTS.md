@@ -26,7 +26,7 @@
 ## 计划与记录格式
 
 - 计划与工单的格式由 `/to-spec` 与 `/to-tickets` 决定; 每步仍必须带可执行的测试与验收标准, 不得把 "优化", "整理", "完善" 这类无法验收的词单独作为一步.
-- 计划与记录使用中文与英文标点; 步骤用 `- [ ]` / `- [x]`.
+- 步骤用 `- [ ]` / `- [x]`.
 - 若某步偏差导致验收未通过, 必须写明是否阻塞后续步骤; 影响后续计划的, 在 issue 中同步修订.
 
 ## 目标架构与库边界
@@ -60,8 +60,7 @@
 
 - `Linux` + `x86_64`: 原生路径. 全量测试用 `make test-all`; 第三方用 `make test-thirdparty`; 汇编等价性用 `make asm-diff BASE=<ref>`; `make bench` 只在此路径运行. 禁止在此宿主运行 `make docker-image`, `make docker-test`, `make docker-test-thirdparty`, `make docker-snapshot-diff`.
 - 其它宿主: Docker 路径. 首次 `make docker-image`; 全量测试用 `make docker-test`; 第三方用 `make docker-test-thirdparty`; 汇编等价性用 `make docker-snapshot-diff`. 非 x86-64 宿主可用 `-E` / `-S` / `-dump-*` 只验前端, 见 `docs/10-build-install.md` 10.8.
-- Rosetta 下 tcc 的 106_pthread / 112_backtrace / 113_btdll 会不稳定 SIGSEGV, 与 chibicc 无关; `test/thirdparty/make` 是 PATH shim, 真 x86-64 Linux 不需要.
-- 容器内构建与测试必须在可写层 `/work`: tcc 的 `-run`/bcheck 只认 overlayfs, virtiofs 或 docker volume 上确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存.
+- 第三方测试与 Docker 的环境特例(tcc 的不稳定用例与容器内构建目录要求)见 `docs/10-build-install.md` 10.10.
 - 构建: `make` 产 `chibicc` 与 Linux 下的 `libcp.so`; `make libcp.a` 只产静态库; `make install PREFIX=... [DESTDIR=...]` 装公共头, 库与 `libcp.pc`; `make check-library` 跑公共面与打包闸门; `make check-context` 跑隐式上下文审计.
 - 格式: 改完代码必须跑 `make format`(clang-format 20), 不手工调格式; 只读闸门 `make format-check`.
 - 每次改动过三道闸门: 全量测试含自举(原生 `make test-all` 或 Docker `make docker-test`), 汇编等价性 diff, 该改动新增的针对性测试. 行为变化单独提交.
@@ -81,10 +80,6 @@
 - `test/thirdparty/*.sh` 很慢且仅限 Linux, 不属于 `make test`.
 
 ## Agent skills
-
-### Issue tracker
-
-Issues 与计划存于 GitHub Issues (`RunThem/chibicc-repo`), 通过 `gh` CLI 读写. 详见 `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
