@@ -304,7 +304,7 @@ static void check_children(LibcpContext* ctx, LibcpNode* node) {
     check_node(ctx, node->ctrl.cond);
     check_node(ctx, node->ctrl.then);
     check_node(ctx, node->ctrl.els);
-    check_node(ctx, node->ctrl.init);
+    check_chain(ctx, node->ctrl.init);
     check_node(ctx, node->ctrl.inc);
   }
   if (fam == LIBCP_NF_DECL)
@@ -318,6 +318,24 @@ static void check_children(LibcpContext* ctx, LibcpNode* node) {
   }
 }
 
+// for-init 的多条声明记录共享一个作用域, 同名重复声明违反 C 的约束.
+// 只有 init 链做这项检查: 普通块链上的声明记录仍不在本 pass 的范围.
+static void check_for_init_redeclaration(LibcpContext* ctx, LibcpNode* init) {
+  for (LibcpNode* n = init; n; n = n->next) {
+    if (n->kind != ND_DECL || !n->decl.name_tok)
+      continue;
+
+    for (LibcpNode* prev = init; prev != n; prev = prev->next)
+      if (prev->kind == ND_DECL && prev->decl.name_tok &&
+          prev->decl.name_tok->len == n->decl.name_tok->len &&
+          !memcmp(prev->decl.name_tok->loc, n->decl.name_tok->loc, n->decl.name_tok->len))
+        libcp_error_tok(ctx,
+                        n->decl.name_tok,
+                        "redefinition of %s",
+                        libcp_get_ident(ctx, n->decl.name_tok));
+  }
+}
+
 // 先序遍历, 与它镜像的 shaping pass 一致: 循环的检查在其内部触发,
 // case 的游离检查在其 switch 内部触发.
 static void check_node(LibcpContext* ctx, LibcpNode* node) {
@@ -327,7 +345,12 @@ static void check_node(LibcpContext* ctx, LibcpNode* node) {
   switch (node->kind) {
     case ND_WHILE:
     case ND_DO:
+      loop_depth++;
+      check_children(ctx, node);
+      loop_depth--;
+      return;
     case ND_FOR:
+      check_for_init_redeclaration(ctx, node->ctrl.init);
       loop_depth++;
       check_children(ctx, node);
       loop_depth--;

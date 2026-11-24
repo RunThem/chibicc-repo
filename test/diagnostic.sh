@@ -17,11 +17,11 @@
 # 覆盖清单: 判定表 A 15 处 + B 4 处 + C 11 处 + D 3 处 = 拆分线终态 parse.c 的全部 33 处
 # error_tok(B/C/D 18 处此后移入 sema.c);
 # 判定表 E 10 处中的 9 处, 另加 e11/e12(C2 审计修复的 enum 常量越界诊断:
-# 显式值与隐式递增各一例); f 系列 12 处
+# 显式值与隐式递增各一例) 与 e13(for-init 链的同名重复声明); f 系列 12 处
 # (A0.1 的 9 处, 夹在降级里的检查; 2026-09-29 基线缺陷修复随修锁定的 f10/f11;
 # 2026-10-19 审计修复的 f12); g 系列 11 处 (2026-10-19 审计修复: u8 拼接与位域宽度
 # 校验; 2026-10-20 审计修复: struct/union tag 重定义; 2026-10-21 审计修复: 整数常量
-# 溢出诊断). 合计 68 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
+# 溢出诊断). 合计 69 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
 # symbol" - find_func 只返回 is_function 为真的对象, 该守卫恒假, 当前树中不可达.
 # 另: 文件域 "void x;" 当前被接受(无检查), 亦无用例.
 #
@@ -469,6 +469,15 @@ SNIP
 expect e12_enum_implicit_overflow <<'WANT'
 e12_enum_implicit_overflow.c:1: enum E { X = 2147483647, Y };
                                                          ^ enum constant value is out of range for int
+WANT
+
+snippet e13_for_init_redefinition <<'SNIP'
+int main() { for (int i = 0, i = 1; ; ) ; }
+SNIP
+
+expect e13_for_init_redefinition <<'WANT'
+e13_for_init_redefinition.c:1: int main() { for (int i = 0, i = 1; ; ) ; }
+                                                            ^ redefinition of i
 WANT
 
 # ---- f 系列: 夹在降级代码里的检查 (12 处, PLAN A0.1 + 基线缺陷修复) ----
