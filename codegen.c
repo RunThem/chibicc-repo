@@ -1646,28 +1646,46 @@ static void shape_chain(LibcpContext* ctx, LibcpNode** head) {
   }
 }
 
-// 下降节点拥有的每棵子树, 语句与表达式一视同仁: break 可以出现在
-// 语句表达式里, 而语句表达式是一个持有语句链的表达式节点.
-static void shape_children(LibcpContext* ctx, LibcpNode* node) {
-  LibcpNodeFamily fam = libcp_node_family(node->kind);
-
-  shape_node(ctx, node->lhs);
-  shape_node(ctx, node->rhs);
-  if (fam == LIBCP_NF_CTRL) {
-    shape_node(ctx, node->ctrl.cond);
-    shape_node(ctx, node->ctrl.then);
-    shape_node(ctx, node->ctrl.els);
-    shape_chain(ctx, &node->ctrl.init);
-    shape_node(ctx, node->ctrl.inc);
+// 子节点枚举只给出列表字段的头节点, 而 shape_chain 会摘掉链头记录并
+// 写回新头, 所以列表分支还要拿到字段本体的地址. 枚举里的列表字段是
+// decl.body, ctrl.init, ctrl.args 与 spec_decls.
+static LibcpNode** list_head(LibcpNode* node, const LibcpNode* head) {
+  switch (libcp_node_family(node->kind)) {
+    case LIBCP_NF_CTRL:
+      if (node->ctrl.init == head)
+        return &node->ctrl.init;
+      if (node->ctrl.args == head)
+        return &node->ctrl.args;
+      break;
+    case LIBCP_NF_DECL:
+      if (node->decl.body == head)
+        return &node->decl.body;
+      break;
+    default: break;
   }
-  if (fam == LIBCP_NF_DECL)
-    shape_chain(ctx, &node->decl.body);
-  if (fam == LIBCP_NF_CTRL)
-    shape_chain(ctx, &node->ctrl.args);
-  if (fam == LIBCP_NF_CAS) {
-    shape_node(ctx, node->cas.cas_addr);
-    shape_node(ctx, node->cas.cas_old);
-    shape_node(ctx, node->cas.cas_new);
+
+  if (node->spec_decls == head)
+    return &node->spec_decls;
+  return NULL;
+}
+
+// 下降节点拥有的每棵子树, 语句与表达式一视同仁: break 可以出现在
+// 语句表达式里, 而语句表达式是一个持有语句链的表达式节点. 子节点顺序
+// 由公共枚举决定, 列表字段沿 next 走链, 单个字段只整形一个节点.
+// ND_GENERIC (只整形选中的关联结果) 与 case 标签 (只下降 lhs) 的特例
+// 仍在 shape_node 中.
+static void shape_children(LibcpContext* ctx, LibcpNode* node) {
+  for (int i = 0, count = libcp_node_child_count(node); i < count; i++) {
+    LibcpNodeChild child = libcp_node_child_at(node, i);
+    if (!child.is_list) {
+      shape_node(ctx, (LibcpNode*)child.node);
+      continue;
+    }
+
+    LibcpNode** head = list_head(node, child.node);
+    if (!head)
+      unreachable();
+    shape_chain(ctx, head);
   }
 }
 
