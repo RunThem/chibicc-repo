@@ -371,6 +371,8 @@ ND_FUNCDEF @input.c:1:14 "{" ty_op=func(int) name="f" attr=none
 
 `-dump-ast` 在 sema 之前早退, 所以它展示的正是第 3 层的形态.
 
+同一输出有公共入口 `libcp_ast_dump(ctx, node, out)` (声明在 `<libcp/ast.h>`): 树外消费者不需要驱动器就能打印第 3 层 AST. 入口只读, 接受 `const LibcpNode *`, 只写调用者给的 `FILE *`, 不选择处理阶段; 文本格式是公共契约, 由 `test/ast.sh` 逐字节锁定. `-dump-ast` 的选项解析, 早退时机与 `-o` / stdout 选择仍属于驱动器.
+
 ## 6.6 产物可以做什么
 
 - **C 转 C**: 遍历树, 按源码写法重新生成代码. 下标还是下标, `while` 还是 `while`, 复合赋值还是复合赋值.

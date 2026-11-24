@@ -153,8 +153,8 @@ pkg-config --modversion libcp   # 0.2.0
 
 ### 10.6.1 静态库
 
-- 归档内全部已定义全局符号统一 `libcp_` 前缀(2026-10-25 起; 当前 157 个, 其中 65 个是公共函数).
-- 公共头只声明 65 个 D7 函数.
+- 归档内全部已定义全局符号统一 `libcp_` 前缀(2026-10-25 起; 当前 159 个, 其中 67 个是公共函数).
+- 公共头只声明 67 个 D7 函数.
 - 消费者**不得调用**未声明的内部函数. 它们在 `.a` 里可见, 但不是 API.
 - 前缀统一后与宿主符号碰撞的风险基本消除; 内外的判据是"公共头是否声明".
 
@@ -217,7 +217,7 @@ make test-stage2
 | `test/cst.sh` | 48 个文件 round-trip / 48 个 verify / 15 个边界样本 / 65 个 dump 样本 |
 | `test/cst-stats.sh` | CST `UNPARSED` 计数与 `test/cst-stats.golden` 逐行比对 |
 | `test/expand.sh` | 29 个 provenance dump 样本, 3 个链形状样本, 17 个 verify 样本, 全量语料 |
-| `test/library.sh` | 公共面消费者, 错误路径, 双 context, ASan/UBSan |
+| `test/library.sh` | 公共面消费者, 错误路径, 双 context, token / AST dump, ASan/UBSan |
 | `test/allocator.sh` | 用替换分配器重编库, 活块归零 |
 | `test/self-test.sh` | 库内自测: hashmap / per-TU 分配 / sema 状态重置 |
 | `test/context-audit.sh` | 隐式 context 审计 (`--strict`, 由 `make test` 调用) |

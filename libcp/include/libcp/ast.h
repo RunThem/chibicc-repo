@@ -8,6 +8,7 @@
 #include <libcp/token.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 typedef struct libcp_type LibcpType;
 typedef struct libcp_node LibcpNode;
@@ -528,5 +529,12 @@ LIBCP_API LibcpNode* libcp_parse(LibcpContext* ctx, LibcpToken* tok);
 // 最大代表 token. 子树不携带 token 时 *start 与 *end 为 NULL.
 // `next` 链是兄弟节点, 不会跟进; 初始化器树不会被深入.
 LIBCP_API void libcp_node_source_range(const LibcpNode* node, LibcpToken** start, LibcpToken** end);
+
+// 只读的 AST dump 通道: 打印第 3 层忠实语法树的文本形式, 顶层沿
+// `next` 兄弟链逐个打印. 文本是确定性的: 不打印地址, 字段顺序固定,
+// 宏展开产生的 token 打印为 @synth. 输出格式是公共契约, 由
+// test/ast.sh 逐字节锁定. dump 只写到 `out`, 不分配对象, 不选择处理
+// 阶段, 也不退出.
+LIBCP_API void libcp_ast_dump(LibcpContext* ctx, const LibcpNode* node, FILE* out);
 
 #endif

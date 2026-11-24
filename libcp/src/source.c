@@ -32,12 +32,12 @@ static uint32_t read_universal_char(char* p, int len) {
 }
 
 // 若 p 处是一个换行则为 true: '\n', '\r\n' 或 '\r'.
-bool libcp_is_line_break(char* p) {
+bool libcp_is_line_break(const char* p) {
   return *p == '\n' || *p == '\r';
 }
 
 // p 处换行的长度.
-int libcp_line_break_len(char* p) {
+int libcp_line_break_len(const char* p) {
   return (*p == '\r' && p[1] == '\n') ? 2 : 1;
 }
 

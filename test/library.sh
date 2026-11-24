@@ -34,6 +34,18 @@ printf '#define PICK 1\n' > "$tmp/user/pick.h"
 printf '#define PICK 2\n' > "$tmp/after/pick.h"
 printf '#define PICK 3\n' > "$tmp/system/pick.h"
 
+# Per-file #include_next continuation (issue #24): chain.h lives in all
+# three buckets, and the wrappers cover the table index recorded for the
+# file that holds the directive.
+printf '#define FROM_USER 1\n' > "$tmp/user/chain.h"
+printf '#define FROM_AFTER 2\n' > "$tmp/after/chain.h"
+printf '#define FROM_SYSTEM 3\n' > "$tmp/system/chain.h"
+printf '#include_next "chain.h"\n' > "$tmp/user/wrap.h"
+printf '#include_next "chain.h"\n' > "$tmp/after/wrap_after.h"
+mkdir -p "$tmp/user/local"
+printf '#include_next "chain.h"\n' > "$tmp/user/local/wrap_self.h"
+printf '#include_next "chain.h"\n' > "$tmp/user/abs_wrap.h"
+
 cat > "$tmp/consumer.c" <<'EOF'
 #include <libcp/libcp.h>
 #include <pthread.h>
@@ -1360,6 +1372,75 @@ static int check_reconstruct(LibcpContext *ctx) {
   return strcmp(buf, text) != 0;
 }
 
+// The public token and AST dump entries (issue #25): both write the
+// driver's channel text to a caller-owned FILE, accept const inputs, and
+// allocate nothing. The expected bytes are the ones test/trivia.sh and
+// test/ast.sh lock through the driver.
+static int check_token_dump(LibcpContext *ctx) {
+  const LibcpToken *tok = libcp_tokenize_buffer(ctx, "<libtest>", "int x=1;\n");
+  FILE *f = tmpfile();
+  if (!tok || !f)
+    return 1;
+  libcp_token_dump(ctx, tok, f);
+  if (libcp_context_failed(ctx)) {
+    fclose(f);
+    return 1;
+  }
+  fflush(f);
+  rewind(f);
+  char buf[512];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+
+  char *want =
+    "T 1 0 ident int\n"
+    "R 1 3 ws \\x20\n"
+    "T 1 4 ident x\n"
+    "T 1 5 punct =\n"
+    "T 1 6 pp-num 1\n"
+    "T 1 7 punct ;\n"
+    "R 1 8 nl \\n\n"
+    "T 2 9 eof\n";
+  return strcmp(buf, want) != 0;
+}
+
+static int check_ast_dump(LibcpContext *ctx) {
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<libtest>", "int f(int a){return a+1;}\n");
+  if (!tok)
+    return 1;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok)
+    return 1;
+  const LibcpNode *ast = libcp_parse(ctx, tok);
+  if (!ast || libcp_context_failed(ctx))
+    return 1;
+
+  FILE *f = tmpfile();
+  if (!f)
+    return 1;
+  libcp_ast_dump(ctx, ast, f);
+  if (libcp_context_failed(ctx)) {
+    fclose(f);
+    return 1;
+  }
+  fflush(f);
+  rewind(f);
+  char buf[1024];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+
+  char *want =
+    "ND_FUNCDEF @<libtest>:1:13 \"{\" ty_op=func(int) name=\"f\" attr=none\n"
+    "  ND_BLOCK @<libtest>:1:14 \"return\" is_scope_block=1\n"
+    "    ND_RETURN @<libtest>:1:14 \"return\"\n"
+    "      ND_ADD @<libtest>:1:22 \"+\"\n"
+    "        ND_IDENT @<libtest>:1:21 \"a\"\n"
+    "        ND_NUM @<libtest>:1:23 \"1\" val=1\n";
+  return strcmp(buf, want) != 0;
+}
+
 // The provenance accessors (PLAN L3.4a): an argument expansion and a
 // builtin expansion.
 static int check_provenance(LibcpContext *ctx) {
@@ -1484,6 +1565,92 @@ static int check_include_origin(char *user, char *after, char *systemdir,
 out:
   libcp_context_free(c1);
   libcp_context_free(c2);
+  return rc;
+}
+
+// #include_next continuation (issue #24): the search resumes at the path
+// table index recorded for the file that holds the directive. A cached
+// target must not lose that position, and files that did not come from
+// the path table (the main file, a quoted current-directory hit, an
+// absolute path) start at the first path.
+static int check_include_next(char *user, char *after, char *systemdir) {
+  char name[4096], abs_wrap[4096], abs_src[8192];
+  int n = snprintf(name, sizeof name, "%s/main.c", user);
+  int m = snprintf(abs_wrap, sizeof abs_wrap, "%s/abs_wrap.h", user);
+  if (n < 0 || n >= (int)sizeof name || m < 0 || m >= (int)sizeof abs_wrap)
+    return 1;
+  m = snprintf(abs_src, sizeof abs_src,
+               "#include <wrap_after.h>\n#include \"%s\"\n"
+               "int g = FROM_SYSTEM;\nint h = FROM_USER;\n",
+               abs_wrap);
+  if (m < 0 || m >= (int)sizeof abs_src)
+    return 1;
+
+  LibcpContext *ctx = libcp_context_new();
+  if (!ctx)
+    return 1;
+  int rc = 1;
+
+  libcp_context_add_include_path_with_origin(ctx, systemdir,
+                                             LIBCP_INCLUDE_SYSTEM);
+  libcp_context_add_include_path_with_origin(ctx, after, LIBCP_INCLUDE_AFTER);
+  libcp_context_add_include_path(ctx, user);
+
+  // A plain include caches chain.h at start 0; the wrapper lives in the
+  // user bucket, so its #include_next continues in the after bucket.
+  LibcpToken *tok = libcp_tokenize_buffer(
+      ctx, name,
+      "#include <chain.h>\n#include <wrap.h>\n"
+      "int a = FROM_USER;\nint b = FROM_AFTER;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 1) || !find_num(tok, 2) ||
+      libcp_context_failed(ctx))
+    goto out;
+  libcp_context_reset(ctx);
+
+  // wrap_after.h was found in the after bucket, so it continues in
+  // system; the main file has no recorded index, so it starts at user.
+  tok = libcp_tokenize_buffer(
+      ctx, name,
+      "#include <wrap_after.h>\n#include_next <chain.h>\n"
+      "int c = FROM_SYSTEM;\nint d = FROM_USER;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 3) || !find_num(tok, 1) ||
+      libcp_context_failed(ctx))
+    goto out;
+  libcp_context_reset(ctx);
+
+  // A quoted include that hits the current directory has no recorded
+  // index either, and its start-0 search does not reuse the start-2
+  // cache entry left by the wrapper.
+  tok = libcp_tokenize_buffer(
+      ctx, name,
+      "#include <wrap_after.h>\n#include \"local/wrap_self.h\"\n"
+      "int e = FROM_SYSTEM;\nint f = FROM_USER;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 3) || !find_num(tok, 1) ||
+      libcp_context_failed(ctx))
+    goto out;
+  libcp_context_reset(ctx);
+
+  // An absolute path has no recorded index either.
+  tok = libcp_tokenize_buffer(ctx, name, abs_src);
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 3) || !find_num(tok, 1) ||
+      libcp_context_failed(ctx))
+    goto out;
+
+  rc = 0;
+out:
+  libcp_context_free(ctx);
   return rc;
 }
 
@@ -1851,12 +2018,18 @@ int main(int argc, char **argv) {
   // macro operations (PLAN L3.4a).
   if (check_reconstruct(ctx))
     return 1;
+  if (check_token_dump(ctx))
+    return 1;
+  if (check_ast_dump(ctx))
+    return 1;
   if (check_provenance(ctx))
     return 1;
   libcp_context_reset(ctx);
   if (argc > 2 && check_include(ctx, argv[1], argv[2]))
     return 1;
   if (argc > 8 && check_include_origin(argv[6], argv[7], argv[8], argv[1]))
+    return 1;
+  if (argc > 8 && check_include_next(argv[6], argv[7], argv[8]))
     return 1;
   libcp_context_reset(ctx);
   if (check_define(ctx))

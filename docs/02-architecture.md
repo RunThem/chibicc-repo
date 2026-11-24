@@ -314,7 +314,7 @@ codegen(ctx, prog, out);
 | `-verify-expansions` | provenance | 校验展开链的不变量 |
 | `-dump-ast` | 第 3 层 | 打印忠实语法树, 在 sema 之前早退 |
 
-这些通道是理解库行为的最好工具.
+这些通道是理解库行为的最好工具. dump 的实现属于库 (`libcp/src/dump.c`): 驱动只做选项解析, 阶段选择与 `-o` / stdout 选择, 并通过 `libcp_token_dump` / `libcp_ast_dump` 调用; 四种 dump 的文本格式都是公共契约, 分别由 `test/trivia.sh`, `test/ast.sh`, `test/cst.sh` 与 `test/expand.sh` 逐字节锁定.
 
 驱动器还提供 `-h` / `--help`, 打印按类别分组的全部选项 (模式, 预处理, 依赖, 链接, 代码生成, 兼容性, 只读通道与内部选项). 该输出是选项清单的权威位置; 选项的解析与行为由 `main.c` 与 `test/driver.sh` 锁定.
 
@@ -329,20 +329,21 @@ libcp/
     allocator.h     构建期可替换的分配器宏: LIBCP_DEFAULT_ALLOCATOR 或全部四个 LIBCP_* 宏, 只在重编库时生效
     context.h        context, 诊断回调, 配置, base file, 预定义宏
     diagnostic.h     LibcpDiagnostic 与 severity
-    token.h          LibcpToken, LibcpFile, 第 1 层入口, input file 枚举与 synthetic 判定
+    token.h          LibcpToken, LibcpFile, 第 1 层入口, token dump, input file 枚举与 synthetic 判定
     preprocess.h     libcp_preprocess
     provenance.h     宏展开访问器与两个只读通道
     cst.h            第 2 层: LibcpCstKind, LibcpCstNode
-    ast.h            第 3/4 层: LibcpNode 与 LibcpNodeFamily, LibcpType, LibcpObj, 初始化器, 类型种类
+    ast.h            第 3/4 层: LibcpNode 与 LibcpNodeFamily, LibcpType, LibcpObj, 初始化器, 类型种类, AST dump
     backend.h        后端支持面: 节点构造, LibcpBuiltinType, 类型标注, 标签引用, 唯一名与诊断
     sema.h           libcp_sema
   src/
     tokenize.c       词法, trivia, 诊断格式化
     source.c         源坐标: LibcpFile 构造, 扫描缓冲, raw / 扫描偏移 / 物理行换算, synthetic 判定, input file 表
-    include.c        include 搜索: 路径表 (path + origin), 搜索顺序与缓存, 系统目录判定, reset / free 语义
+    include.c        include 搜索: 路径表 (path + origin), 搜索顺序与缓存, 系统目录判定, per-file 续查, reset / free 语义
     preprocess.c     指令, 宏展开, provenance 记录; include 只提交解析请求
     provenance.c     展开链的 dump / verify
     cst.c            lossless CST 的建树, dump, verify
+    dump.c           第 1 层 token 与第 3 层 AST 的只读 dump (公共入口)
     parse.c          递归下降解析器
     sema.c           名字解析, 类型标注, 常量求值, 布局, 初始化器
     range.c          libcp_node_source_range: AST 子树锚点 token 范围

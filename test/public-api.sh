@@ -117,6 +117,20 @@ int main(void) {
   if (!root || !libcp_cst_verify(ctx, root, raw))
     return 1;
 
+  // The public token and AST dumps write to a caller-owned FILE (issue
+  // #25); const inputs prove the read-only signature.
+  FILE *dumpf = tmpfile();
+  if (!dumpf)
+    return 1;
+  const LibcpToken *ctok = raw;
+  const LibcpNode *cast = ast;
+  libcp_token_dump(ctx, ctok, dumpf);
+  libcp_ast_dump(ctx, cast, dumpf);
+  fflush(dumpf);
+  if (ftell(dumpf) <= 0)
+    return 1;
+  fclose(dumpf);
+
   // libcp_reconstruct rebuilds the tokenized bytes exactly.
   char *text = "int  x =  1;  /* c */\n\tchar *s = \"a\";\n";
   LibcpToken *t = libcp_tokenize_buffer(ctx, "<public-api>", text);
@@ -182,6 +196,7 @@ libcp_tokenize_file
 libcp_tokenize_buffer
 libcp_tokenize_buffer_len
 libcp_reconstruct
+libcp_token_dump
 libcp_context_input_file_count
 libcp_context_input_file_at
 libcp_token_is_synthetic
@@ -192,6 +207,7 @@ libcp_cst_reconstruct
 libcp_cst_dump
 libcp_cst_verify
 libcp_parse
+libcp_ast_dump
 libcp_node_family
 libcp_node_child_count
 libcp_node_child_at
