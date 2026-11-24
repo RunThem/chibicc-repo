@@ -339,7 +339,7 @@ libcp/
   src/
     tokenize.c       词法, trivia, 诊断格式化
     source.c         源坐标: LibcpFile 构造, 扫描缓冲, raw / 扫描偏移 / 物理行换算, synthetic 判定, input file 表
-    include.c        include 搜索: 路径表 (path + origin), 搜索顺序与缓存, 系统目录判定, reset / free 语义
+    include.c        include 搜索: 路径表 (path + origin), 搜索顺序与缓存, 系统目录判定, per-file 续查, reset / free 语义
     preprocess.c     指令, 宏展开, provenance 记录; include 只提交解析请求
     provenance.c     展开链的 dump / verify
     cst.c            lossless CST 的建树, dump, verify

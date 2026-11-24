@@ -106,13 +106,28 @@ bool libcp_file_is_synthetic(const LibcpFile* file);
 //
 
 // include.c: include 搜索的单一 owner. 路径表 (path + origin), 搜索顺序,
-// 搜索缓存, 系统目录判定与 reset / free 语义都由它独占. preprocess.c 只
-// 提交 include 请求; 驱动器只按 origin 注册路径并做 -MMD 分类.
+// 搜索缓存, 系统目录判定, per-file 续查与 reset / free 语义都由它独占.
+// preprocess.c 只提交 include 请求; 驱动器只按 origin 注册路径并做
+// -MMD 分类.
+
+// 一次 include 解析的结果. path 为 NULL 表示未命中; index 是路径表中的
+// 命中下标, -1 表示不是从路径表命中 (引号当前目录, 绝对路径, 主文件).
+typedef struct {
+  char* path;
+  int index;
+} LibcpIncludeHit;
+
+// per-file 续查位置: file 是 LibcpFile.name, index 是它自己的命中下标.
+// #include_next 从 index + 1 开始; 没有记录时从 0 开始.
+typedef struct {
+  char* file;
+  int index;
+} LibcpIncludeFileIndex;
 
 void libcp_include_add_path(LibcpContext* ctx, char* path, LibcpIncludeOrigin origin);
-char* libcp_include_resolve_quoted(LibcpContext* ctx, LibcpFile* current, char* filename);
-char* libcp_include_resolve_angled(LibcpContext* ctx, char* filename);
-char* libcp_include_resolve_next(LibcpContext* ctx, char* filename);
+LibcpIncludeHit libcp_include_resolve_quoted(LibcpContext* ctx, LibcpFile* current, char* filename);
+LibcpIncludeHit libcp_include_resolve_angled(LibcpContext* ctx, char* filename);
+LibcpIncludeHit libcp_include_resolve_next(LibcpContext* ctx, LibcpFile* current, char* filename);
 void libcp_include_reset(LibcpContext* ctx);
 void libcp_include_free(LibcpContext* ctx);
 
@@ -294,14 +309,16 @@ typedef struct {
   LibcpIncludeOrigin origin;
 } LibcpIncludePath;
 
-// include 搜索状态. 路径表是配置, 跨 reset 保留; 缓存与 #include_next
-// 游标是 per-TU 状态, reset 清空. module 独占全部字段的读写.
+// include 搜索状态. 路径表是配置, 跨 reset 保留; 搜索缓存与 per-file
+// 续查表是 per-TU 状态, reset 清空. module 独占全部字段的读写.
 typedef struct {
   LibcpIncludePath* paths;
   int len;
   int cap;
   LibcpHashMap cache;
-  int next_idx;
+  LibcpIncludeFileIndex* files;
+  int files_len;
+  int files_cap;
 } LibcpIncludeSearch;
 
 struct LibcpContext {

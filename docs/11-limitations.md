@@ -185,6 +185,16 @@ libcp_context_add_include_path_with_origin(ctx, "/usr/include",
 
 规避: 先把这类文本转成 UTF-8, 或改用 `tokenize_file`. 建议修复方向: 让 `raw_end_of` 只在扫描缓冲形态下按 UCN 计算, 或统一走 `make_scan_buffer`.
 
+### 11.5.9 `#include_next` 的续查记录按路径字符串键控
+
+`#include_next` 的续查位置按文件记录: 解析命中时把路径表下标记在目标文件上, 续查从该文件自己的下标 + 1 开始. 主文件, 引号形式命中当前目录的文件, 绝对路径打开的文件没有下标, 从第一条路径开始.
+
+限制:
+
+- 记录键是打开文件时使用的路径字符串 (`LibcpFile.name`). 同一个文件用不同拼写 (例如 `./a.h` 与 `a.h`) 包含时, 会得到两条独立的记录, 与 include guard / `#pragma once` 的限制一致.
+- 路径表在预处理开始后追加会移动已有下标, 因此会清空搜索缓存与续查记录. 应在处理翻译单元之前注册完 include 路径.
+- 不追踪 `-iquote` 一类来源; 路径顺序仍是 `USER` -> `AFTER` -> `SYSTEM`.
+
 ## 11.6 语言覆盖
 
 继承自上游 chibicc 的限制:
