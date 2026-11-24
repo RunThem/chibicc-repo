@@ -374,6 +374,14 @@ $chibicc -c -MMD -MF $tmp/mmd/local.d -o $tmp/mmd/local.o -I$tmp/mmd/inc $tmp/mm
 [ -f $tmp/mmd/local.d ] && grep -q 'mmd-local\.h' $tmp/mmd/local.d
 check '-MMD lists a -I header'
 
+# The same with a relative -I directory: the recorded dependency keeps the
+# spelling it was opened with (inc/mmd-rel.h).
+echo 'int mmd_rel;' > $tmp/mmd/inc/mmd-rel.h
+printf '#include "mmd-rel.h"\nint main(void) { return mmd_rel; }\n' > $tmp/mmd/rel.c
+(cd $tmp/mmd && $OLDPWD/$chibicc -c -MMD -Iinc rel.c)
+[ -f $tmp/mmd/rel.d ] && grep -q 'inc/mmd-rel\.h' $tmp/mmd/rel.d
+check '-MMD lists a relative -I header'
+
 printf '#include "mmd-after.h"\nint main(void) { return mmd_after; }\n' > $tmp/mmd/after.c
 $chibicc -c -MMD -MF $tmp/mmd/after.d -o $tmp/mmd/after.o -idirafter $tmp/mmd/after $tmp/mmd/after.c
 [ -f $tmp/mmd/after.d ] && ! grep -q 'mmd-after\.h' $tmp/mmd/after.d
