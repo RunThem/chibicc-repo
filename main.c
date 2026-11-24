@@ -1,4 +1,18 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "driver.h"
+
+#include <assert.h>
+#include <errno.h>
+#include <glob.h>
+#include <libgen.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <stdnoreturn.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 typedef enum {
   FILE_NONE,
@@ -45,6 +59,64 @@ static LibcpContext* ctx;
 
 static LibcpStringArray input_paths;
 static LibcpStringArray tmpfiles;
+
+// 驱动器本地工具 (issue #28): 公共面只暴露翻译单元需要的入口. printf
+// 风格格式化, 字符串数组增长, 文件存在判定与致命诊断留在驱动器, 内存
+// 随进程生命周期, 不进入库的 per-TU 登记链.
+static char* format(char* fmt, ...) __attribute__((format(printf, 1, 2)));
+
+static char* format(char* fmt, ...) {
+  va_list ap;
+  va_list ap2;
+  va_start(ap, fmt);
+  va_copy(ap2, ap);
+  int len = vsnprintf(NULL, 0, fmt, ap2);
+  va_end(ap2);
+
+  char* buf = calloc(1, len + 1);
+  vsnprintf(buf, len + 1, fmt, ap);
+  va_end(ap);
+  return buf;
+}
+
+static void strarray_push(LibcpStringArray* arr, char* s) {
+  if (!arr->data) {
+    arr->data     = calloc(8, sizeof(char*));
+    arr->capacity = 8;
+  }
+
+  if (arr->capacity == arr->len) {
+    arr->capacity *= 2;
+    arr->data = realloc(arr->data, sizeof(char*) * arr->capacity);
+  }
+
+  arr->data[arr->len++] = s;
+}
+
+static bool file_exists(char* path) {
+  struct stat st;
+  return !stat(path, &st);
+}
+
+// 致命诊断: 与库内部的 error 路径共用同一套格式化与回调交付, 但驱动器
+// 不在公共入口内, 出错时没有可以返回的翻译单元, 因此报告后结束进程.
+static noreturn void error(char* fmt, ...) __attribute__((format(printf, 1, 2)));
+
+static noreturn void error(char* fmt, ...) {
+  va_list ap;
+  va_list ap2;
+  va_start(ap, fmt);
+  va_copy(ap2, ap);
+  int len = vsnprintf(NULL, 0, fmt, ap2);
+  va_end(ap2);
+
+  char* msg = calloc(1, len + 1);
+  vsnprintf(msg, len + 1, fmt, ap);
+  va_end(ap);
+
+  libcp_diagnostic_report(ctx, NULL, LIBCP_DIAG_ERROR, "%s", msg);
+  exit(1);
+}
 
 static void usage(int status) {
   fprintf(stderr, "Usage: chibicc [options] file...\n");
@@ -161,10 +233,9 @@ static bool take_arg(char* arg) {
 
 static void add_default_include_paths(char* argv0) {
   // 假定 chibicc 专用的 include 文件安装在相对于 argv[0] 的 ./include 下.
-  libcp_context_add_include_path_with_origin(
-      ctx,
-      libcp_format(ctx, "%s/include", dirname(strdup(argv0))),
-      LIBCP_INCLUDE_SYSTEM);
+  libcp_context_add_include_path_with_origin(ctx,
+                                             format("%s/include", dirname(strdup(argv0))),
+                                             LIBCP_INCLUDE_SYSTEM);
 
   // 添加标准 include 路径. 它们与 chibicc 自带的 include 目录都属于
   // SYSTEM 桶, 排在 -I 与 -idirafter 之后.
@@ -192,7 +263,7 @@ static FileType parse_opt_x(char* s) {
     return FILE_ASM;
   if (!strcmp(s, "none"))
     return FILE_NONE;
-  libcp_error(ctx, "<command line>: unknown argument for -x: %s", s);
+  error("<command line>: unknown argument for -x: %s", s);
 }
 
 static char* quote_makefile(char* s) {
@@ -350,7 +421,7 @@ static void parse_args(int argc, char** argv) {
     }
 
     if (!strcmp(argv[i], "-include")) {
-      libcp_strarray_push(ctx, &opt_include, argv[++i]);
+      strarray_push(&opt_include, argv[++i]);
       continue;
     }
 
@@ -365,17 +436,17 @@ static void parse_args(int argc, char** argv) {
     }
 
     if (!strncmp(argv[i], "-l", 2) || !strncmp(argv[i], "-Wl,", 4)) {
-      libcp_strarray_push(ctx, &input_paths, argv[i]);
+      strarray_push(&input_paths, argv[i]);
       continue;
     }
 
     if (!strcmp(argv[i], "-Xlinker")) {
-      libcp_strarray_push(ctx, &ld_extra_args, argv[++i]);
+      strarray_push(&ld_extra_args, argv[++i]);
       continue;
     }
 
     if (!strcmp(argv[i], "-s")) {
-      libcp_strarray_push(ctx, &ld_extra_args, "-s");
+      strarray_push(&ld_extra_args, "-s");
       continue;
     }
 
@@ -398,7 +469,7 @@ static void parse_args(int argc, char** argv) {
       if (opt_MT == NULL)
         opt_MT = argv[++i];
       else
-        opt_MT = libcp_format(ctx, "%s %s", opt_MT, argv[++i]);
+        opt_MT = format("%s %s", opt_MT, argv[++i]);
       continue;
     }
 
@@ -411,7 +482,7 @@ static void parse_args(int argc, char** argv) {
       if (opt_MT == NULL)
         opt_MT = quote_makefile(argv[++i]);
       else
-        opt_MT = libcp_format(ctx, "%s %s", opt_MT, quote_makefile(argv[++i]));
+        opt_MT = format("%s %s", opt_MT, quote_makefile(argv[++i]));
       continue;
     }
 
@@ -443,25 +514,25 @@ static void parse_args(int argc, char** argv) {
 
     if (!strcmp(argv[i], "-static")) {
       opt_static = true;
-      libcp_strarray_push(ctx, &ld_extra_args, "-static");
+      strarray_push(&ld_extra_args, "-static");
       continue;
     }
 
     if (!strcmp(argv[i], "-shared")) {
       opt_shared = true;
-      libcp_strarray_push(ctx, &ld_extra_args, "-shared");
+      strarray_push(&ld_extra_args, "-shared");
       continue;
     }
 
     if (!strcmp(argv[i], "-L")) {
-      libcp_strarray_push(ctx, &ld_extra_args, "-L");
-      libcp_strarray_push(ctx, &ld_extra_args, argv[++i]);
+      strarray_push(&ld_extra_args, "-L");
+      strarray_push(&ld_extra_args, argv[++i]);
       continue;
     }
 
     if (!strncmp(argv[i], "-L", 2)) {
-      libcp_strarray_push(ctx, &ld_extra_args, "-L");
-      libcp_strarray_push(ctx, &ld_extra_args, argv[i] + 2);
+      strarray_push(&ld_extra_args, "-L");
+      strarray_push(&ld_extra_args, argv[i] + 2);
       continue;
     }
 
@@ -474,13 +545,13 @@ static void parse_args(int argc, char** argv) {
       continue;
 
     if (argv[i][0] == '-' && argv[i][1] != '\0')
-      libcp_error(ctx, "unknown argument: %s", argv[i]);
+      error("unknown argument: %s", argv[i]);
 
-    libcp_strarray_push(ctx, &input_paths, argv[i]);
+    strarray_push(&input_paths, argv[i]);
   }
 
   if (input_paths.len == 0)
-    libcp_error(ctx, "no input files");
+    error("no input files");
 
   // -E 意味着输入是 C 宏语言, 因此按 C 源文件处理.
   if (opt_E)
@@ -493,7 +564,7 @@ static FILE* open_file(char* path) {
 
   FILE* out = fopen(path, "w");
   if (!out)
-    libcp_error(ctx, "cannot open output file: %s: %s", path, strerror(errno));
+    error("cannot open output file: %s: %s", path, strerror(errno));
   return out;
 }
 
@@ -509,7 +580,7 @@ static char* replace_extn(char* tmpl, char* extn) {
   char* dot      = strrchr(filename, '.');
   if (dot)
     *dot = '\0';
-  return libcp_format(ctx, "%s%s", filename, extn);
+  return format("%s%s", filename, extn);
 }
 
 static void cleanup(void) {
@@ -521,10 +592,10 @@ static char* create_tmpfile(void) {
   char* path = strdup("/tmp/chibicc-XXXXXX");
   int fd     = mkstemp(path);
   if (fd == -1)
-    libcp_error(ctx, "mkstemp failed: %s", strerror(errno));
+    error("mkstemp failed: %s", strerror(errno));
   close(fd);
 
-  libcp_strarray_push(ctx, &tmpfiles, path);
+  strarray_push(&tmpfiles, path);
   return path;
 }
 
@@ -539,7 +610,7 @@ static void run_subprocess(char** argv) {
 
   pid_t pid = fork();
   if (pid < 0)
-    libcp_error(ctx, "fork failed: %s", strerror(errno));
+    error("fork failed: %s", strerror(errno));
 
   if (pid == 0) {
     // 子进程: 运行新命令.
@@ -554,7 +625,7 @@ static void run_subprocess(char** argv) {
   int status;
   while (waitpid(pid, &status, 0) == -1) {
     if (errno != EINTR)
-      libcp_error(ctx, "waitpid failed: %s", strerror(errno));
+      error("waitpid failed: %s", strerror(errno));
   }
 
   // 被信号终止和退出状态非零一样算失败.
@@ -653,8 +724,8 @@ static LibcpToken* append_tokens(LibcpToken* tok1, LibcpToken* tok2) {
 
 static int cc1(void) {
   // -dump-tokens, -reconstruct 和 CST 通道都作用于基文件的原始流:
-  // trivia 契约以及建在它上面的 CST 都作用于 libcp_tokenize() 的直接
-  // 输出, 即预处理之前的内容.
+  // trivia 契约以及建在它上面的 CST 都作用于 tokenize 的直接输出,
+  // 即预处理之前的内容.
   if (opt_dump_tokens || opt_reconstruct || opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
     LibcpToken* tok = must_tokenize_file(base_file);
     if (!tok)
@@ -687,7 +758,7 @@ static int cc1(void) {
     // 查路径表; 搜索细节归库内 include 模块.
     char* path = libcp_context_resolve_include(ctx, incl);
     if (!path)
-      libcp_error(ctx, "-include: %s: %s", incl, strerror(errno));
+      error("-include: %s: %s", incl, strerror(errno));
 
     LibcpToken* tok2 = must_tokenize_file(path);
     if (!tok2)
@@ -701,7 +772,7 @@ static int cc1(void) {
     return 1;
   tok = append_tokens(tok, tok2);
   tok = libcp_preprocess(ctx, tok);
-  if (ctx->failed)
+  if (libcp_context_failed(ctx))
     return 1;
 
   // provenance 通道读取预处理后的流并在此停止: 不生成目标文件, 不调用
@@ -728,7 +799,7 @@ static int cc1(void) {
   }
 
   LibcpNode* ast = libcp_parse(ctx, tok);
-  if (ctx->failed)
+  if (libcp_context_failed(ctx))
     return 1;
 
   // AST 形状通道停在第 3 层与第 4 层之间: 不做 sema, 不生成目标文件,
@@ -739,7 +810,7 @@ static int cc1(void) {
   }
 
   LibcpObj* prog = libcp_sema(ctx, ast);
-  if (ctx->failed)
+  if (libcp_context_failed(ctx))
     return 1;
 
   // 打开临时输出缓冲区.
@@ -774,11 +845,11 @@ static char* find_file(char* pattern) {
 }
 
 static char* find_libpath(void) {
-  if (libcp_file_exists("/usr/lib/x86_64-linux-gnu/crti.o"))
+  if (file_exists("/usr/lib/x86_64-linux-gnu/crti.o"))
     return "/usr/lib/x86_64-linux-gnu";
-  if (libcp_file_exists("/usr/lib64/crti.o"))
+  if (file_exists("/usr/lib64/crti.o"))
     return "/usr/lib64";
-  libcp_error(ctx, "library path is not found");
+  error("library path is not found");
 }
 
 static char* find_gcc_libpath(void) {
@@ -794,72 +865,72 @@ static char* find_gcc_libpath(void) {
       return dirname(path);
   }
 
-  libcp_error(ctx, "gcc library path is not found");
+  error("gcc library path is not found");
 }
 
 static void run_linker(LibcpStringArray* inputs, char* output) {
   LibcpStringArray arr = {};
 
-  libcp_strarray_push(ctx, &arr, "ld");
-  libcp_strarray_push(ctx, &arr, "-o");
-  libcp_strarray_push(ctx, &arr, output);
-  libcp_strarray_push(ctx, &arr, "-m");
-  libcp_strarray_push(ctx, &arr, "elf_x86_64");
+  strarray_push(&arr, "ld");
+  strarray_push(&arr, "-o");
+  strarray_push(&arr, output);
+  strarray_push(&arr, "-m");
+  strarray_push(&arr, "elf_x86_64");
 
   char* libpath     = find_libpath();
   char* gcc_libpath = find_gcc_libpath();
 
   if (opt_shared) {
-    libcp_strarray_push(ctx, &arr, libcp_format(ctx, "%s/crti.o", libpath));
-    libcp_strarray_push(ctx, &arr, libcp_format(ctx, "%s/crtbeginS.o", gcc_libpath));
+    strarray_push(&arr, format("%s/crti.o", libpath));
+    strarray_push(&arr, format("%s/crtbeginS.o", gcc_libpath));
   } else {
-    libcp_strarray_push(ctx, &arr, libcp_format(ctx, "%s/crt1.o", libpath));
-    libcp_strarray_push(ctx, &arr, libcp_format(ctx, "%s/crti.o", libpath));
-    libcp_strarray_push(ctx, &arr, libcp_format(ctx, "%s/crtbegin.o", gcc_libpath));
+    strarray_push(&arr, format("%s/crt1.o", libpath));
+    strarray_push(&arr, format("%s/crti.o", libpath));
+    strarray_push(&arr, format("%s/crtbegin.o", gcc_libpath));
   }
 
-  libcp_strarray_push(ctx, &arr, libcp_format(ctx, "-L%s", gcc_libpath));
-  libcp_strarray_push(ctx, &arr, "-L/usr/lib/x86_64-linux-gnu");
-  libcp_strarray_push(ctx, &arr, "-L/usr/lib64");
-  libcp_strarray_push(ctx, &arr, "-L/lib64");
-  libcp_strarray_push(ctx, &arr, "-L/usr/lib/x86_64-linux-gnu");
-  libcp_strarray_push(ctx, &arr, "-L/usr/lib/x86_64-pc-linux-gnu");
-  libcp_strarray_push(ctx, &arr, "-L/usr/lib/x86_64-redhat-linux");
-  libcp_strarray_push(ctx, &arr, "-L/usr/lib");
-  libcp_strarray_push(ctx, &arr, "-L/lib");
+  strarray_push(&arr, format("-L%s", gcc_libpath));
+  strarray_push(&arr, "-L/usr/lib/x86_64-linux-gnu");
+  strarray_push(&arr, "-L/usr/lib64");
+  strarray_push(&arr, "-L/lib64");
+  strarray_push(&arr, "-L/usr/lib/x86_64-linux-gnu");
+  strarray_push(&arr, "-L/usr/lib/x86_64-pc-linux-gnu");
+  strarray_push(&arr, "-L/usr/lib/x86_64-redhat-linux");
+  strarray_push(&arr, "-L/usr/lib");
+  strarray_push(&arr, "-L/lib");
 
   if (!opt_static) {
-    libcp_strarray_push(ctx, &arr, "-dynamic-linker");
-    libcp_strarray_push(ctx, &arr, "/lib64/ld-linux-x86-64.so.2");
+    strarray_push(&arr, "-dynamic-linker");
+    strarray_push(&arr, "/lib64/ld-linux-x86-64.so.2");
   }
 
   for (int i = 0; i < ld_extra_args.len; i++)
-    libcp_strarray_push(ctx, &arr, ld_extra_args.data[i]);
+    strarray_push(&arr, ld_extra_args.data[i]);
 
   for (int i = 0; i < inputs->len; i++)
-    libcp_strarray_push(ctx, &arr, inputs->data[i]);
+    strarray_push(&arr, inputs->data[i]);
 
   if (opt_static) {
-    libcp_strarray_push(ctx, &arr, "--start-group");
-    libcp_strarray_push(ctx, &arr, "-lgcc");
-    libcp_strarray_push(ctx, &arr, "-lgcc_eh");
-    libcp_strarray_push(ctx, &arr, "-lc");
-    libcp_strarray_push(ctx, &arr, "--end-group");
+    strarray_push(&arr, "--start-group");
+    strarray_push(&arr, "-lgcc");
+    strarray_push(&arr, "-lgcc_eh");
+    strarray_push(&arr, "-lc");
+    strarray_push(&arr, "--end-group");
   } else {
-    libcp_strarray_push(ctx, &arr, "-lc");
-    libcp_strarray_push(ctx, &arr, "-lgcc");
-    libcp_strarray_push(ctx, &arr, "--as-needed");
-    libcp_strarray_push(ctx, &arr, "-lgcc_s");
-    libcp_strarray_push(ctx, &arr, "--no-as-needed");
+    strarray_push(&arr, "-lc");
+    strarray_push(&arr, "-lgcc");
+    strarray_push(&arr, "--as-needed");
+    strarray_push(&arr, "-lgcc_s");
+    strarray_push(&arr, "--no-as-needed");
   }
 
   if (opt_shared)
-    libcp_strarray_push(ctx, &arr, libcp_format(ctx, "%s/crtendS.o", gcc_libpath));
+    strarray_push(&arr, format("%s/crtendS.o", gcc_libpath));
   else
-    libcp_strarray_push(ctx, &arr, libcp_format(ctx, "%s/crtend.o", gcc_libpath));
+    strarray_push(&arr, format("%s/crtend.o", gcc_libpath));
 
-  libcp_strarray_push(ctx, &arr, libcp_format(ctx, "%s/crtn.o", libpath));
-  libcp_strarray_push(ctx, &arr, NULL);
+  strarray_push(&arr, format("%s/crtn.o", libpath));
+  strarray_push(&arr, NULL);
 
   run_subprocess(arr.data);
 }
@@ -879,7 +950,7 @@ static FileType get_file_type(char* filename) {
   if (endswith(filename, ".s"))
     return FILE_ASM;
 
-  libcp_error(ctx, "<command line>: unknown file extension: %s", filename);
+  error("<command line>: unknown file extension: %s", filename);
 }
 
 int main(int argc, char** argv) {
@@ -899,7 +970,7 @@ int main(int argc, char** argv) {
   }
 
   if (input_paths.len > 1 && opt_o && (opt_c || opt_S || opt_E))
-    libcp_error(ctx, "cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
+    error("cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
 
   LibcpStringArray ld_args = {};
 
@@ -907,7 +978,7 @@ int main(int argc, char** argv) {
     char* input = input_paths.data[i];
 
     if (!strncmp(input, "-l", 2)) {
-      libcp_strarray_push(ctx, &ld_args, input);
+      strarray_push(&ld_args, input);
       continue;
     }
 
@@ -915,7 +986,7 @@ int main(int argc, char** argv) {
       char* s   = strdup(input + 4);
       char* arg = strtok(s, ",");
       while (arg) {
-        libcp_strarray_push(ctx, &ld_args, arg);
+        strarray_push(&ld_args, arg);
         arg = strtok(NULL, ",");
       }
       continue;
@@ -933,7 +1004,7 @@ int main(int argc, char** argv) {
 
     // 处理 .o, .a 或 .so.
     if (type == FILE_OBJ || type == FILE_AR || type == FILE_DSO) {
-      libcp_strarray_push(ctx, &ld_args, input);
+      strarray_push(&ld_args, input);
       continue;
     }
 
@@ -974,7 +1045,7 @@ int main(int argc, char** argv) {
     char* tmp2 = create_tmpfile();
     run_cc1(argc, argv, input, tmp1);
     assemble(tmp1, tmp2);
-    libcp_strarray_push(ctx, &ld_args, tmp2);
+    strarray_push(&ld_args, tmp2);
     continue;
   }
 

@@ -27,8 +27,100 @@
 
 #include "driver.h"
 
+#include <assert.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <stdnoreturn.h>
+#include <string.h>
+
+#ifndef __GNUC__
+#  define __attribute__(x)
+#endif
+
 #define GP_MAX 6
 #define FP_MAX 8
+
+#define MAX(x, y) ((x) < (y) ? (y) : (x))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
+// 本消费者本地的工具 (issue #28): 公共面不暴露 printf 风格格式化,
+// 对齐取整, 类型谓词与致命诊断, 它们只服务 codegen 的整形与发射.
+static char* format(char* fmt, ...) __attribute__((format(printf, 1, 2)));
+
+static char* format(char* fmt, ...) {
+  va_list ap;
+  va_list ap2;
+  va_start(ap, fmt);
+  va_copy(ap2, ap);
+  int len = vsnprintf(NULL, 0, fmt, ap2);
+  va_end(ap2);
+
+  char* buf = calloc(1, len + 1);
+  vsnprintf(buf, len + 1, fmt, ap);
+  va_end(ap);
+  return buf;
+}
+
+// 把非负的 `n` 向上取整到 `align` 的最近倍数.
+static int align_to(int n, int align) {
+  return (n + align - 1) / align * align;
+}
+
+static bool is_integer(LibcpType* ty) {
+  LibcpTypeKind k = ty->kind;
+  return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT || k == TY_INT || k == TY_LONG ||
+         k == TY_ENUM;
+}
+
+static bool is_flonum(LibcpType* ty) {
+  return ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE || ty->kind == TY_LDOUBLE;
+}
+
+static bool is_numeric(LibcpType* ty) {
+  return is_integer(ty) || is_flonum(ty);
+}
+
+// 致命诊断: 与库内部的 error 路径共用同一套格式化与回调交付, 但
+// codegen 不在公共入口内, 出错时没有可以返回的翻译单元, 因此报告后
+// 结束进程.
+static noreturn void error(LibcpContext* ctx, char* fmt, ...) __attribute__((format(printf, 2, 3)));
+
+static noreturn void error(LibcpContext* ctx, char* fmt, ...) {
+  va_list ap;
+  va_list ap2;
+  va_start(ap, fmt);
+  va_copy(ap2, ap);
+  int len = vsnprintf(NULL, 0, fmt, ap2);
+  va_end(ap2);
+
+  char* msg = calloc(1, len + 1);
+  vsnprintf(msg, len + 1, fmt, ap);
+  va_end(ap);
+
+  libcp_diagnostic_report(ctx, NULL, LIBCP_DIAG_ERROR, "%s", msg);
+  exit(1);
+}
+
+static noreturn void error_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+
+static noreturn void error_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...) {
+  va_list ap;
+  va_list ap2;
+  va_start(ap, fmt);
+  va_copy(ap2, ap);
+  int len = vsnprintf(NULL, 0, fmt, ap2);
+  va_end(ap2);
+
+  char* msg = calloc(1, len + 1);
+  vsnprintf(msg, len + 1, fmt, ap);
+  va_end(ap);
+
+  libcp_diagnostic_report(ctx, tok, LIBCP_DIAG_ERROR, "%s", msg);
+  exit(1);
+}
+
+#define unreachable() error(ctx, "internal error at %s:%d", __FILE__, __LINE__)
 
 static FILE* output_file;
 static int depth;
@@ -189,9 +281,6 @@ static void popf(int reg) {
   depth--;
 }
 
-// 把 `n` 向上取整到 `align` 最近倍数的函数现在位于 strings.c: sema 也
-// 需要它, 而 codegen 不能成为库的依赖.
-
 static char* reg_dx(LibcpContext* ctx, int sz) {
   switch (sz) {
     case 1: return "%dl";
@@ -327,7 +416,7 @@ static void gen_addr(LibcpContext* ctx, LibcpNode* node) {
     case ND_VLA_PTR: println("  lea %d(%%rbp), %%rax", obj_offset(node->decl.var)); return;
   }
 
-  libcp_error_tok(ctx, node->tok, "not an lvalue");
+  error_tok(ctx, node->tok, "not an lvalue");
 }
 
 // 从 %rax 指向的位置加载值.
@@ -406,7 +495,7 @@ static void cmp_zero(LibcpType* ty) {
       return;
   }
 
-  if (libcp_is_integer(ty) && ty->size <= 4)
+  if (is_integer(ty) && ty->size <= 4)
     println("  cmp $0, %%eax");
   else
     println("  cmp $0, %%rax");
@@ -573,7 +662,7 @@ static bool has_flonum2(LibcpType* ty) {
 }
 
 static void push_struct(LibcpType* ty) {
-  int sz = libcp_align_to(ty->size, 8);
+  int sz = align_to(ty->size, 8);
   println("  sub $%d, %%rsp", sz);
   depth += sz / 8;
 
@@ -638,7 +727,7 @@ static int push_args(LibcpContext* ctx, LibcpNode* node) {
       case TY_UNION:
         if (ty->size > 16) {
           cg(arg)->pass_by_stack = true;
-          stack += libcp_align_to(ty->size, 8) / 8;
+          stack += align_to(ty->size, 8) / 8;
         } else {
           bool fp1 = has_flonum1(ty);
           bool fp2 = has_flonum2(ty);
@@ -648,7 +737,7 @@ static int push_args(LibcpContext* ctx, LibcpNode* node) {
             gp = gp + !fp1 + !fp2;
           } else {
             cg(arg)->pass_by_stack = true;
-            stack += libcp_align_to(ty->size, 8) / 8;
+            stack += align_to(ty->size, 8) / 8;
           }
         }
         break;
@@ -1251,7 +1340,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
           return;
       }
 
-      libcp_error_tok(ctx, node->tok, "invalid expression");
+      error_tok(ctx, node->tok, "invalid expression");
     }
     case TY_LDOUBLE: {
       gen_expr(ctx, node->lhs);
@@ -1282,7 +1371,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
           return;
       }
 
-      libcp_error_tok(ctx, node->tok, "invalid expression");
+      error_tok(ctx, node->tok, "invalid expression");
     }
   }
 
@@ -1363,7 +1452,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
       return;
   }
 
-  libcp_error_tok(ctx, node->tok, "invalid expression");
+  error_tok(ctx, node->tok, "invalid expression");
 }
 
 static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
@@ -1577,7 +1666,7 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
     case ND_ASM: println("  %s", node->asm_.asm_str); return;
   }
 
-  libcp_error_tok(ctx, node->tok, "invalid statement");
+  error_tok(ctx, node->tok, "invalid statement");
 }
 
 // shaping pass 的最终形态: 它是 sema 在标注后下降中做过的控制流那一半
@@ -1594,17 +1683,41 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
 // 所以这个 pass 只处理通过检查的树. 它遵循的六条不变式写在文件开头.
 //
 // 标签名保持 `.L..%d` 格式, 沿用 sema 匿名对象所用的同一个编号空间, 从
-// 库计数器停下的地方继续 (入口处调用 libcp_unique_name_next): 快照
-// 归一化器只重编号这种后缀形状, 所以换一个前缀即使只是纯重编号也会表现为
-// diff, 而从零开始的新序列会与 sema 已经分配的对象名冲突.
+// 库计数器停下的地方继续 (入口处调用 libcp_context_take_unique_name, 此后
+// 没有别的消费者取号): 快照归一化器只重编号这种后缀形状, 所以换一个前缀
+// 即使只是纯重编号也会表现为 diff, 而从零开始的新序列会与 sema 已经分配
+// 的对象名冲突.
 static int label_base;  // 计数器停下处的取值, 只在入口取一次
 static int label_seq;   // 此后发出的标签数
 
 static LibcpNode* current_switch;
-static LibcpNodeArray cg_labels;  // 当前正在 shape 的函数的标签
+
+// 当前正在 shape 的函数的标签. 这是消费者的私有容器, 不用库内部的
+// 节点数组类型 (issue #28).
+typedef struct {
+  LibcpNode** data;
+  int capacity;
+  int len;
+} CgLabelArray;
+
+static CgLabelArray cg_labels;
+
+static void cg_labels_push(LibcpNode* node) {
+  if (!cg_labels.data) {
+    cg_labels.data     = calloc(8, sizeof(LibcpNode*));
+    cg_labels.capacity = 8;
+  }
+
+  if (cg_labels.capacity == cg_labels.len) {
+    cg_labels.capacity *= 2;
+    cg_labels.data = realloc(cg_labels.data, sizeof(LibcpNode*) * cg_labels.capacity);
+  }
+
+  cg_labels.data[cg_labels.len++] = node;
+}
 
 static char* new_label(LibcpContext* ctx) {
-  return libcp_format(ctx, ".L..%d", label_base + label_seq++);
+  return format(".L..%d", label_base + label_seq++);
 }
 
 static void shape_node(LibcpContext* ctx, LibcpNode* node);
@@ -1747,11 +1860,11 @@ static LibcpNode* new_add(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, Lib
   libcp_node_annotate_type(ctx, rhs);
 
   // num + num
-  if (libcp_is_numeric(lhs->ty) && libcp_is_numeric(rhs->ty))
+  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
     return mark_lowered(libcp_node_arith(ctx, ND_ADD, lhs, rhs, tok));
 
   if (lhs->ty->base && rhs->ty->base)
-    libcp_error_tok(ctx, tok, "invalid operands");
+    error_tok(ctx, tok, "invalid operands");
 
   // 把 `num + ptr` 规范化为 `ptr + num`.
   if (!lhs->ty->base && rhs->ty->base) {
@@ -1770,7 +1883,7 @@ static LibcpNode* new_sub(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, Lib
   libcp_node_annotate_type(ctx, rhs);
 
   // num - num
-  if (libcp_is_numeric(lhs->ty) && libcp_is_numeric(rhs->ty))
+  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
     return mark_lowered(libcp_node_arith(ctx, ND_SUB, lhs, rhs, tok));
 
   // 指向 VLA 的指针 - num
@@ -1778,7 +1891,7 @@ static LibcpNode* new_sub(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, Lib
     return mark_lowered(libcp_node_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 
   // ptr - num
-  if (lhs->ty->base && libcp_is_integer(rhs->ty))
+  if (lhs->ty->base && is_integer(rhs->ty))
     return mark_lowered(libcp_node_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 
   // ptr - ptr: 返回两者之间相隔多少个元素. 差值本身是元素个数,
@@ -1787,11 +1900,11 @@ static LibcpNode* new_sub(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, Lib
   // `DIV` 之下经过发射器.
   if (lhs->ty->base && rhs->ty->base) {
     LibcpNode* node = mark_lowered(libcp_node_binary(ctx, ND_SUB, lhs, rhs, tok));
-    node->ty        = libcp_ty_long;
+    node->ty        = libcp_type_builtin(BT_LONG);
     return libcp_node_arith(ctx, ND_DIV, node, libcp_node_num(ctx, lhs->ty->base->size, tok), tok);
   }
 
-  libcp_error_tok(ctx, tok, "invalid operands");
+  error_tok(ctx, tok, "invalid operands");
 }
 
 // 为计算 VLA 大小生成代码: 类型持有的每个 VLA 一条赋值, 最内层
@@ -1811,7 +1924,7 @@ static LibcpNode* compute_vla_size(LibcpContext* ctx, LibcpType* ty, LibcpToken*
   else
     base_sz = libcp_node_num(ctx, ty->base->size, tok);
 
-  cg_type(ty)->vla_size = new_lvar("", libcp_ty_ulong);
+  cg_type(ty)->vla_size = new_lvar("", libcp_type_builtin(BT_ULONG));
   LibcpNode* expr = libcp_node_binary(ctx,
                                       ND_ASSIGN,
                                       libcp_node_var(ctx, cg_type(ty)->vla_size, tok),
@@ -2271,7 +2384,7 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
       return;
     case ND_LABEL:
       cg(node)->unique_label = new_label(ctx);
-      libcp_nodearray_push(ctx, &cg_labels, node);
+      cg_labels_push(node);
       shape_node(ctx, node->lhs);
       return;
     case ND_ASSIGN:
@@ -2394,11 +2507,9 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
 // 分配的标签配对, 写入每个引用要跳转到的名字. 未声明标签的检查已在
 // sema 中运行, 所以这里的每个引用都在那里匹配上了.
 static void resolve_label_refs(LibcpContext* ctx, LibcpObj* fn) {
-  LibcpNodeArray* refs = libcp_sema_label_gotos(ctx, fn);
-  if (!refs)
-    return;
-  for (int i = 0; i < refs->len; i++) {
-    LibcpNode* x = refs->data[i];
+  int ref_count = libcp_label_ref_count(ctx, fn);
+  for (int i = 0; i < ref_count; i++) {
+    LibcpNode* x = libcp_label_ref_at(ctx, fn, i);
     for (int j = 0; j < cg_labels.len; j++) {
       LibcpNode* y = cg_labels.data[j];
       if (!strcmp(x->jump.label, y->jump.label)) {
@@ -2466,7 +2577,7 @@ static void assign_lvar_offsets(LibcpObj* prog) {
             continue;
       }
 
-      top                 = libcp_align_to(top, 8);
+      top                 = align_to(top, 8);
       cg_obj(var)->offset = top;
       top += var->ty->size;
     }
@@ -2483,11 +2594,11 @@ static void assign_lvar_offsets(LibcpObj* prog) {
           (var->ty->kind == TY_ARRAY && var->ty->size >= 16) ? MAX(16, var->align) : var->align;
 
       bottom += var->ty->size;
-      bottom              = libcp_align_to(bottom, align);
+      bottom              = align_to(bottom, align);
       cg_obj(var)->offset = -bottom;
     }
 
-    cg_obj(fn)->stack_size = libcp_align_to(bottom, 16);
+    cg_obj(fn)->stack_size = align_to(bottom, 16);
   }
 }
 
@@ -2627,7 +2738,7 @@ static void emit_text(LibcpContext* ctx, LibcpObj* prog) {
     if (fn->va_area) {
       int gp = 0, fp = 0;
       for (LibcpObj* var = fn->params; var; var = var->next) {
-        if (libcp_is_flonum(var->ty))
+        if (is_flonum(var->ty))
           fp++;
         else
           gp++;
@@ -2719,7 +2830,7 @@ void codegen(LibcpContext* ctx, LibcpObj* prog, FILE* out) {
 
   // 整形遍最先运行: 它填充 gen_stmt 读取的标签字段并解析 goto 引用,
   // 在它之前不得进行任何分配或发射 (PLAN 契约 3).
-  label_base = libcp_unique_name_next(ctx);
+  label_base = libcp_context_take_unique_name(ctx);
   shape(ctx, prog);
 
   assign_lvar_offsets(prog);
