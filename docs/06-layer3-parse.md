@@ -182,8 +182,9 @@ struct libcp_node {
 
 规则:
 
-- 通用 walker 必须先按族判断再下降; 读取非活动族是未定义行为, 不能依赖
-  calloc 的零值.
+- 通用 walker 用 `libcp_node_child_count` / `libcp_node_child_at` 下降,
+  不要自己重写字段 switch; 只有需要族特有的锚点或链策略时才结合
+  `libcp_node_family`. 读取非活动族是未定义行为, 不能依赖 calloc 的零值.
 - `ty` 在第 3 层大多为 NULL. 不要假设有类型. 例外: `ND_NUM` 带词法类型,
   `ND_TYPEDEF` 带声明类型.
 - 声明记录的 `decl.var` 在第 3 层为 NULL; `ND_IDENT` 不带绑定字段, 只有 `tok` 的拼写.
@@ -192,6 +193,35 @@ struct libcp_node {
   但只记录一个锚点.
 - `sizeof(LibcpNode)` 为 144 字节, 16 字节对齐; 节点仍是一次固定大小分配,
   `libcp_node_new` 不按 kind 改变分配尺寸.
+
+子节点枚举 (`libcp_node_child_count` / `libcp_node_child_at`) 是只读的
+通用下降接口, 不需要 `LibcpContext`:
+
+```c
+typedef struct {
+  const LibcpNode *node;
+  bool is_list;
+} LibcpNodeChild;
+
+int libcp_node_child_count(const LibcpNode *node);
+LibcpNodeChild libcp_node_child_at(const LibcpNode *node, int index);
+```
+
+- `index` 是存在子节点的序号 `0..count-1`, 不是字段槽位; 越界返回
+  `{NULL, false}`.
+- 顺序固定为 `lhs`, `rhs`, 活动族的节点字段, `spec_decls`: ctrl 的
+  `cond / then / els / init / inc / args`, decl 的 `body`, case 的
+  `begin_expr / end_expr`, cas 的三个操作数. 不是源码顺序.
+- `next` 是兄弟链接, 永远不是子节点. `decl.body`, `ctrl.init`,
+  `ctrl.args` 与 `spec_decls` 是列表字段: 只返回头节点并置
+  `is_list = true`, 调用者沿 `next` 访问兄弟. 枚举一个节点不会带出它的兄弟.
+- 排除 `generic_sel` (某个关联结果的别名), `decl_init`,
+  `init_resolved`, `attr.align_expr` 与类型载荷里的节点 (`ty->dim_len`,
+  `ty->typeof_expr`, `ty->vla_len`, `member->width_expr` 等).
+- 它回答 "下降哪些子节点, 顺序如何"; `libcp_node_family` 回答 "哪个
+  union 载荷有效", 并继续服务锚点 token 收集.
+- 树被修改后序号不稳定; 库内的 range 与 sema 三个 walker 共用这份枚举,
+  各自的链与特例策略保留在各自的代码里.
 
 ### 6.3.3 类型
 

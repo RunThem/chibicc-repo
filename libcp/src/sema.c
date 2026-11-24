@@ -294,27 +294,15 @@ static void check_chain(LibcpContext* ctx, LibcpNode* node) {
 }
 
 // 下降节点拥有的每个子树, 语句与表达式一视同仁: break 可以出现在
-// 语句表达式里, 而语句表达式是持有语句链的表达式节点.
+// 语句表达式里, 而语句表达式是持有语句链的表达式节点. 列表字段沿
+// next 走链, 单个字段只检查一个节点.
 static void check_children(LibcpContext* ctx, LibcpNode* node) {
-  LibcpNodeFamily fam = libcp_node_family(node->kind);
-
-  check_node(ctx, node->lhs);
-  check_node(ctx, node->rhs);
-  if (fam == LIBCP_NF_CTRL) {
-    check_node(ctx, node->ctrl.cond);
-    check_node(ctx, node->ctrl.then);
-    check_node(ctx, node->ctrl.els);
-    check_chain(ctx, node->ctrl.init);
-    check_node(ctx, node->ctrl.inc);
-  }
-  if (fam == LIBCP_NF_DECL)
-    check_chain(ctx, node->decl.body);
-  if (fam == LIBCP_NF_CTRL)
-    check_chain(ctx, node->ctrl.args);
-  if (fam == LIBCP_NF_CAS) {
-    check_node(ctx, node->cas.cas_addr);
-    check_node(ctx, node->cas.cas_old);
-    check_node(ctx, node->cas.cas_new);
+  for (int i = 0, count = libcp_node_child_count(node); i < count; i++) {
+    LibcpNodeChild child = libcp_node_child_at(node, i);
+    if (child.is_list)
+      check_chain(ctx, (LibcpNode*)child.node);
+    else
+      check_node(ctx, (LibcpNode*)child.node);
   }
 }
 
@@ -1943,22 +1931,15 @@ void libcp_node_annotate_type(LibcpContext* ctx, LibcpNode* node) {
       stmt_expr_value = NULL;
   }
 
-  libcp_node_annotate_type(ctx, node->lhs);
-  libcp_node_annotate_type(ctx, node->rhs);
-
-  LibcpNodeFamily fam = libcp_node_family(node->kind);
-  if (fam == LIBCP_NF_CTRL) {
-    libcp_node_annotate_type(ctx, node->ctrl.cond);
-    libcp_node_annotate_type(ctx, node->ctrl.then);
-    libcp_node_annotate_type(ctx, node->ctrl.els);
-    type_chain(ctx, node->ctrl.init);
-    libcp_node_annotate_type(ctx, node->ctrl.inc);
-  }
-  if (fam == LIBCP_NF_DECL)
-    type_chain(ctx, node->decl.body);
-  if (fam == LIBCP_NF_CTRL) {
-    for (LibcpNode* n = node->ctrl.args; n; n = n->next)
-      libcp_node_annotate_type(ctx, n);
+  // 子节点顺序由公共枚举决定; 列表字段沿 next 走链, 单个字段只标注
+  // 一个节点. ND_CAS 的三个操作数也在这里下降, 下面的分支只做结论与
+  // 检查; 重复调用因 node->ty 守卫而幂等.
+  for (int i = 0, count = libcp_node_child_count(node); i < count; i++) {
+    LibcpNodeChild child = libcp_node_child_at(node, i);
+    if (child.is_list)
+      type_chain(ctx, (LibcpNode*)child.node);
+    else
+      libcp_node_annotate_type(ctx, (LibcpNode*)child.node);
   }
 
   switch (node->kind) {
@@ -2691,26 +2672,14 @@ static void resolve_init_record(LibcpContext* ctx, LibcpInitializer* rec) {
 }
 
 static void resolve_children(LibcpContext* ctx, LibcpNode* node) {
-  // 递归解析节点拥有的全部子树, 覆盖语句与表达式两类字段.
-  LibcpNodeFamily fam = libcp_node_family(node->kind);
-
-  resolve_node(ctx, node->lhs);
-  resolve_node(ctx, node->rhs);
-  if (fam == LIBCP_NF_CTRL) {
-    resolve_node(ctx, node->ctrl.cond);
-    resolve_node(ctx, node->ctrl.then);
-    resolve_node(ctx, node->ctrl.els);
-    resolve_chain(ctx, node->ctrl.init);
-    resolve_node(ctx, node->ctrl.inc);
-  }
-  if (fam == LIBCP_NF_DECL)
-    resolve_chain(ctx, node->decl.body);
-  if (fam == LIBCP_NF_CTRL)
-    resolve_chain(ctx, node->ctrl.args);
-  if (fam == LIBCP_NF_CAS) {
-    resolve_node(ctx, node->cas.cas_addr);
-    resolve_node(ctx, node->cas.cas_old);
-    resolve_node(ctx, node->cas.cas_new);
+  // 递归解析节点拥有的全部子树, 覆盖语句与表达式两类字段. 列表字段
+  // 沿 next 走链, 单个字段只解析一个节点.
+  for (int i = 0, count = libcp_node_child_count(node); i < count; i++) {
+    LibcpNodeChild child = libcp_node_child_at(node, i);
+    if (child.is_list)
+      resolve_chain(ctx, (LibcpNode*)child.node);
+    else
+      resolve_node(ctx, (LibcpNode*)child.node);
   }
 }
 

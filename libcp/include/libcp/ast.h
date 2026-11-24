@@ -377,6 +377,25 @@ typedef enum {
 // 返回 kind 所属的字段族. 未列出的 kind 返回 LIBCP_NF_NONE.
 LIBCP_API LibcpNodeFamily libcp_node_family(LibcpNodeKind kind);
 
+// 一个结构子节点. `is_list` 为 true 表示 node 是链表的头节点, 兄弟
+// 节点沿 next 访问, 枚举本身不返回它们. 枚举顺序固定为 lhs, rhs,
+// 活动族的节点字段, spec_decls, 不是源码顺序; next 永远不是子节点.
+// 列表字段 decl.body, ctrl.init, ctrl.args 与 spec_decls 只返回头节点.
+// 枚举排除 generic_sel (某个关联结果的别名), decl_init,
+// init_resolved, attr.align_expr, 以及类型载荷里的节点.
+typedef struct {
+  const LibcpNode* node;
+  bool is_list;
+} LibcpNodeChild;
+
+// 只读子节点枚举: count 返回存在子节点的个数 (node 为 NULL 时为 0),
+// at 返回第 index 个 (index 是存在子节点的序号, 0..count-1); 越界返回
+// {NULL, false}. 不分配, 不诊断, 不需要 context, 也不触碰 per-TU 状态.
+// 树被修改后序号不稳定. 它回答下降顺序; 载荷是否有效由
+// libcp_node_family 回答.
+LIBCP_API int libcp_node_child_count(const LibcpNode* node);
+LIBCP_API LibcpNodeChild libcp_node_child_at(const LibcpNode* node, int index);
+
 // 控制流, 函数调用与 _Generic 的载荷. 条件, 分支, 循环头与实参共享
 // 一组槽位; _Generic 用 cond 保存控制表达式, args 保存关联链.
 typedef struct {

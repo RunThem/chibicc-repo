@@ -552,6 +552,256 @@ static int check_backend_unique_name(LibcpContext *ctx) {
   return 0;
 }
 
+// Child enumeration (issue #19): the structural children in the fixed
+// order lhs, rhs, active family fields, spec_decls. next is a sibling
+// link, never a child; list fields report only their head with is_list.
+static LibcpNode *parse_only(LibcpContext *ctx, char *src) {
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<children>", src);
+  if (!tok)
+    return NULL;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok)
+    return NULL;
+  LibcpNode *ast = libcp_parse(ctx, tok);
+  if (libcp_context_failed(ctx))
+    return NULL;
+  return ast;
+}
+
+static int child_count(const LibcpNode *node) {
+  return libcp_node_child_count(node);
+}
+
+static const LibcpNode *child_at(const LibcpNode *node, int index) {
+  return libcp_node_child_at(node, index).node;
+}
+
+static int child_is_list(const LibcpNode *node, int index) {
+  return libcp_node_child_at(node, index).is_list;
+}
+
+static const LibcpNode *find_stmt(const LibcpNode *head, LibcpNodeKind kind) {
+  for (const LibcpNode *n = head; n; n = n->next)
+    if (n->kind == kind)
+      return n;
+  return NULL;
+}
+
+static const LibcpNode *find_expr(const LibcpNode *head, LibcpNodeKind kind) {
+  for (const LibcpNode *n = head; n; n = n->next)
+    if (n->kind == ND_EXPR_STMT && n->lhs && n->lhs->kind == kind)
+      return n->lhs;
+  return NULL;
+}
+
+static int check_node_children(LibcpContext *ctx) {
+  // Parsed but not resolved: case ranges, spec_decls and generic_sel are
+  // still in their faithful form.
+  char *src = "int f(void) {\n"
+              "  for (enum E { A } i = A, j = A; i < j; i++) ;\n"
+              "  { int a = 2, b = 3; }\n"
+              "  g(1, 2, 3);\n"
+              "  if (1) ; else ;\n"
+              "  switch (1) { case 1: break; case 2 ... 3: break; }\n"
+              "  p->m;\n"
+              "  __builtin_compare_and_swap(p, o, n);\n"
+              "  return sizeof(enum E2 { B });\n"
+              "}\n";
+  LibcpNode *ast = parse_only(ctx, src);
+  if (!ast || ast->kind != ND_FUNCDEF || !ast->decl.body)
+    return 1;
+
+  const LibcpNode *body = ast->decl.body;
+  if (body->kind != ND_BLOCK)
+    return 1;
+
+  // The function body's statement chain is a decl.body list: the enum
+  // yields the head once and sets is_list; the siblings stay on next.
+  if (child_count(body) != 1)
+    return 1;
+  if (child_at(body, 0) != body->decl.body || !child_is_list(body, 0))
+    return 1;
+  if (!body->decl.body->next)
+    return 1;
+
+  // for: cond, then, init (list), inc in that order; init chain holds the
+  // enum spec records followed by the two ND_DECL records.
+  const LibcpNode *for_node = find_stmt(body->decl.body, ND_FOR);
+  if (!for_node)
+    return 1;
+  if (child_count(for_node) != 4)
+    return 1;
+  if (child_at(for_node, 0) != for_node->ctrl.cond || child_is_list(for_node, 0))
+    return 1;
+  if (child_at(for_node, 1) != for_node->ctrl.then || child_is_list(for_node, 1))
+    return 1;
+  if (child_at(for_node, 2) != for_node->ctrl.init || !child_is_list(for_node, 2))
+    return 1;
+  if (child_at(for_node, 3) != for_node->ctrl.inc || child_is_list(for_node, 3))
+    return 1;
+  if (child_at(for_node, 4) || libcp_node_child_at(for_node, 4).is_list)
+    return 1;
+  if (libcp_node_child_at(for_node, -1).node)
+    return 1;
+
+  const LibcpNode *init = for_node->ctrl.init;
+  if (!init || init->kind != ND_ENUM_CONST || !init->next ||
+      init->next->kind != ND_DECL || !init->next->next ||
+      init->next->next->kind != ND_DECL || init->next->next->next)
+    return 1;
+  // The declared names are not children of the enum record: next is a
+  // sibling link.
+  if (child_count(init) != 0)
+    return 1;
+  if (child_count(init->next) != 0 || child_count(init->next->next) != 0)
+    return 1;
+
+  // block: decl.body is a list head; the two declarations are siblings,
+  // not two children.
+  const LibcpNode *block = find_stmt(body->decl.body, ND_BLOCK);
+  if (!block || !block->decl.body || block->decl.body->kind != ND_DECL)
+    return 1;
+  if (child_count(block) != 1 || child_at(block, 0) != block->decl.body ||
+      !child_is_list(block, 0))
+    return 1;
+  if (!block->decl.body->next || block->decl.body->next->kind != ND_DECL)
+    return 1;
+  if (child_count(block->decl.body) != 0)
+    return 1;
+
+  // funcall: the callee is an ordinary child, the argument chain a list
+  // head; three arguments still count as one child slot.
+  const LibcpNode *call = find_expr(body->decl.body, ND_FUNCALL);
+  if (!call || !call->ctrl.args)
+    return 1;
+  if (child_count(call) != 2)
+    return 1;
+  if (child_at(call, 0) != call->lhs || child_is_list(call, 0))
+    return 1;
+  if (child_at(call, 1) != call->ctrl.args || !child_is_list(call, 1))
+    return 1;
+  if (!call->ctrl.args->next || !call->ctrl.args->next->next ||
+      call->ctrl.args->next->next->next)
+    return 1;
+
+  // if: cond, then, els.
+  const LibcpNode *if_node = find_stmt(body->decl.body, ND_IF);
+  if (!if_node || child_count(if_node) != 3)
+    return 1;
+  if (child_at(if_node, 0) != if_node->ctrl.cond ||
+      child_at(if_node, 1) != if_node->ctrl.then ||
+      child_at(if_node, 2) != if_node->ctrl.els)
+    return 1;
+  if (child_is_list(if_node, 0) || child_is_list(if_node, 1) ||
+      child_is_list(if_node, 2))
+    return 1;
+
+  // switch and case: the case payload fields follow lhs; the range case
+  // adds end_expr.
+  const LibcpNode *sw = find_stmt(body->decl.body, ND_SWITCH);
+  if (!sw || child_count(sw) != 2)
+    return 1;
+  if (child_at(sw, 0) != sw->ctrl.cond || child_at(sw, 1) != sw->ctrl.then)
+    return 1;
+
+  const LibcpNode *cases = sw->ctrl.then->decl.body;
+  if (!cases || cases->kind != ND_CASE || !cases->case_.begin_expr ||
+      cases->case_.end_expr)
+    return 1;
+  if (child_count(cases) != 2)
+    return 1;
+  if (child_at(cases, 0) != cases->lhs ||
+      child_at(cases, 1) != cases->case_.begin_expr)
+    return 1;
+  if (child_is_list(cases, 0) || child_is_list(cases, 1))
+    return 1;
+
+  const LibcpNode *range = cases->next;
+  if (!range || range->kind != ND_CASE || !range->case_.begin_expr ||
+      !range->case_.end_expr)
+    return 1;
+  if (child_count(range) != 3)
+    return 1;
+  if (child_at(range, 0) != range->lhs ||
+      child_at(range, 1) != range->case_.begin_expr ||
+      child_at(range, 2) != range->case_.end_expr)
+    return 1;
+
+  // member: only lhs is structural; the member record is not a node.
+  const LibcpNode *member = find_expr(body->decl.body, ND_MEMBER);
+  if (!member || !member->lhs || child_count(member) != 1 ||
+      child_at(member, 0) != member->lhs || child_is_list(member, 0))
+    return 1;
+
+  // cas: cas_addr, cas_old, cas_new.
+  const LibcpNode *cas = find_expr(body->decl.body, ND_CAS);
+  if (!cas || child_count(cas) != 3)
+    return 1;
+  if (child_at(cas, 0) != cas->cas.cas_addr ||
+      child_at(cas, 1) != cas->cas.cas_old ||
+      child_at(cas, 2) != cas->cas.cas_new)
+    return 1;
+
+  // sizeof(type): spec_decls is the only child and is a list head.
+  const LibcpNode *ret = find_stmt(body->decl.body, ND_RETURN);
+  if (!ret || !ret->lhs || ret->lhs->kind != ND_SIZEOF)
+    return 1;
+  const LibcpNode *sz = ret->lhs;
+  if (!sz->spec_decls || sz->spec_decls->kind != ND_ENUM_CONST)
+    return 1;
+  if (child_count(sz) != 1 || child_at(sz, 0) != sz->spec_decls ||
+      !child_is_list(sz, 0))
+    return 1;
+
+  // NULL node and out-of-range indexes: empty results.
+  if (child_count(NULL) != 0)
+    return 1;
+  if (libcp_node_child_at(NULL, 0).node ||
+      libcp_node_child_at(NULL, 0).is_list)
+    return 1;
+  if (libcp_node_child_at(ret, 100).node)
+    return 1;
+
+  libcp_context_reset(ctx);
+
+  // _Generic excludes generic_sel: it aliases one association's result
+  // expression, which the enumeration already reaches through args.
+  LibcpObj *prog = NULL;
+  ast = compile(ctx, "int f(void) { return _Generic(1, int: 2, default: 3); }\n",
+                &prog);
+  if (!ast || !prog)
+    return 1;
+  ret = ast->decl.body->decl.body;
+  if (!ret || ret->kind != ND_RETURN || !ret->lhs)
+    return 1;
+  const LibcpNode *expr = ret->lhs;
+  while (expr->kind == ND_CAST)
+    expr = expr->lhs;
+  if (!expr || expr->kind != ND_GENERIC || !expr->ctrl.generic_sel)
+    return 1;
+  if (child_count(expr) != 2)
+    return 1;
+  if (child_at(expr, 0) != expr->ctrl.cond || child_at(expr, 1) != expr->ctrl.args)
+    return 1;
+  if (!child_is_list(expr, 1))
+    return 1;
+  for (int i = 0; i < child_count(expr); i++)
+    if (child_at(expr, i) == expr->ctrl.generic_sel)
+      return 1;
+
+  int assocs = 0;
+  for (const LibcpNode *a = expr->ctrl.args; a; a = a->next) {
+    if (a->kind != ND_GENERIC_ASSOC || child_count(a) != 1 ||
+        !child_at(a, 0))
+      return 1;
+    assocs++;
+  }
+  if (assocs != 2)
+    return 1;
+
+  return 0;
+}
+
 static int rep_hits;
 static LibcpDiagnosticSeverity rep_severity;
 static const char *rep_filename;
@@ -1226,6 +1476,8 @@ int main(int argc, char **argv) {
   if (check_backend_labels(ctx))
     return 1;
   if (check_backend_unique_name(ctx))
+    return 1;
+  if (check_node_children(ctx))
     return 1;
   if (check_diagnostic_report(ctx))
     return 1;
