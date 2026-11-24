@@ -163,6 +163,7 @@ test: $(TESTS)
 	test/library.sh
 	test/allocator.sh
 	test/self-test.sh
+	test/outside.sh
 	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
 	$(MAKE) fmt-tool
 	test/fmt.sh ./chibicc ./fmt
@@ -233,6 +234,7 @@ test-stage2: libcp.a stage2/libcp.a $(TESTS:test/%=stage2/test/%)
 	test/expand.sh ./stage2/chibicc
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/library.sh
 	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/self-test.sh
+	LIBCP_LIB="$(CURDIR)/stage2/libcp.a" test/outside.sh
 	$(MAKE) stage2/fmt
 	test/fmt.sh ./stage2/chibicc ./stage2/fmt
 	$(MAKE) stage2/c2c

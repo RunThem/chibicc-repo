@@ -197,7 +197,7 @@ make test-stage2
 1. 用宿主 `cc` 构建 `chibicc`.
 2. 用 `chibicc` 编译库源码, 产出 `stage2/libcp.a`.
 3. 用 `chibicc` 编译驱动器和测试.
-4. 跑 `test-stage2` 的行为测试套件, 包括 `test/library.sh` 链接 `stage2/libcp.a`, `test/self-test.sh`, 以及 `stage2/fmt` / `stage2/c2c`; 后两者由宿主 `cc` 链接 `stage2/libcp.a` 构建. 它不跑 `test/allocator.sh`, 打包闸门 `public-api.sh` / `install.sh`, 隐式 context 审计 `test/context-audit.sh` 与 `test/docs-links.sh`.
+4. 跑 `test-stage2` 的行为测试套件, 包括 `test/library.sh` 链接 `stage2/libcp.a`, `test/self-test.sh`, `test/outside.sh` (用 `LIBCP_LIB` 选择 `stage2/libcp.a`), 以及 `stage2/fmt` / `stage2/c2c`; 后两者由宿主 `cc` 链接 `stage2/libcp.a` 构建. 它不跑 `test/allocator.sh`, 打包闸门 `public-api.sh` / `install.sh`, 隐式 context 审计 `test/context-audit.sh` 与 `test/docs-links.sh`.
 
 自举证明库代码能被自己编译. `setjmp` 与 `va_copy` 都在这条路径上被验证.
 
@@ -220,6 +220,7 @@ make test-stage2
 | `test/library.sh` | 公共面消费者, 错误路径, 双 context, token / AST dump, ASan/UBSan |
 | `test/allocator.sh` | 用替换分配器重编库, 活块归零 |
 | `test/self-test.sh` | 库内自测: hashmap / per-TU 分配 / sema 状态重置 |
+| `test/outside.sh` | 树外消费者: 只用临时公共头目录与归档, 完成一次降级与 x86-64 发射并走通诊断回调; 默认与 stage2 归档各跑一遍 |
 | `test/context-audit.sh` | 隐式 context 审计 (`--strict`, 由 `make test` 调用) |
 | `test/docs-links.sh` | 本地 markdown 链接与 AGENTS 章节引用 (由 `make test` 调用) |
 | `test/style.sh` | 全部 tracked 文本文件的中文标点与 HEAD 提交信息检查 (无 `.git` 时用 `find` 扫描并跳过提交检查) |
@@ -280,7 +281,7 @@ make check-library
 3. `test/public-api.sh`: 验证:
    - 每个公共头单独 `-fsyntax-only -Wall -Wextra`.
    - 只看到公共头的消费者能编译链接.
-   - 消费者对象不引用内部符号.
+   - 消费者对象不引用内部符号; deny list 与 `test/outside.sh` 共用 `test/public-api.deny`.
    - `.a` 中 D7 全部存在.
    - Linux `.so` 只导出 D7.
 4. `test/install.sh`: 验证安装布局与 pkg-config; 没有 `pkg-config` 时跳过 `.pc` 版本与消费者检查并成功返回.

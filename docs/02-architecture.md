@@ -320,6 +320,8 @@ codegen(ctx, prog, out);
 
 依赖文本 (`-M` / `-MD` / `-MMD` / `-MF` / `-MT` / `-MQ` / `-MP`) 由驱动器生成, 不属于库. `-MMD` 省略 `SYSTEM` 与 `AFTER` 目录中的头文件, `USER` (`-I`) 目录中的头文件仍然列出; 分类只查公共的 `libcp_context_include_is_system`, 驱动器不保存系统目录快照.
 
+树外消费者 `test/outside/consumer.c` 不是参考消费者的一部分: 它是公共 seam 的验收闸门, 只包含公共头并链接 `libcp.a`, 完成一次真实降级与 x86-64 发射, 并走通诊断回调. 它不进入 `all`, 不安装, 不链接 `codegen.c`; `test/outside.sh` 把公共头复制到临时目录作为唯一 include path, 由 `make test` 与 `make test-stage2` 用默认或 stage2 归档各跑一遍, 并与 `test/public-api.sh` 共用 `test/public-api.deny`. 见 10.8 与 10.9.
+
 ## 2.10 目录与文件地图
 
 ```text
