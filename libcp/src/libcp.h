@@ -105,7 +105,17 @@ bool libcp_file_is_synthetic(const LibcpFile* file);
 // 进实现).
 //
 
-char* libcp_search_include_paths(LibcpContext* ctx, char* filename);
+// include.c: include 搜索的单一 owner. 路径表 (path + origin), 搜索顺序,
+// 搜索缓存, 系统目录判定与 reset / free 语义都由它独占. preprocess.c 只
+// 提交 include 请求; 驱动器只按 origin 注册路径并做 -MMD 分类.
+
+void libcp_include_add_path(LibcpContext* ctx, char* path, LibcpIncludeOrigin origin);
+char* libcp_include_resolve_quoted(LibcpContext* ctx, LibcpFile* current, char* filename);
+char* libcp_include_resolve_angled(LibcpContext* ctx, char* filename);
+char* libcp_include_resolve_next(LibcpContext* ctx, char* filename);
+void libcp_include_reset(LibcpContext* ctx);
+void libcp_include_free(LibcpContext* ctx);
+
 void libcp_init_macros(LibcpContext* ctx);
 void libcp_define_macro(LibcpContext* ctx, char* name, char* buf);
 void libcp_undef_macro(LibcpContext* ctx, char* name);
@@ -277,14 +287,29 @@ typedef struct libcp_cond_incl LibcpCondIncl;
 typedef struct libcp_parse_scope LibcpParseScope;
 typedef struct libcp_sema_scope LibcpSemaScope;
 
+// include 搜索的路径项. 路径表按 origin 分桶连续存放, 所以数组顺序
+// 就是搜索顺序: USER 桶在前, AFTER 其次, SYSTEM 最后.
+typedef struct {
+  char* path;
+  LibcpIncludeOrigin origin;
+} LibcpIncludePath;
+
+// include 搜索状态. 路径表是配置, 跨 reset 保留; 缓存与 #include_next
+// 游标是 per-TU 状态, reset 清空. module 独占全部字段的读写.
+typedef struct {
+  LibcpIncludePath* paths;
+  int len;
+  int cap;
+  LibcpHashMap cache;
+  int next_idx;
+} LibcpIncludeSearch;
+
 struct LibcpContext {
   // 本翻译单元所有分配组成的登记链. 链只保存 free 需要的地址.
   LibcpTuAlloc* tu_allocs;
 
   // 配置. 跨 reset 保留, 由 LIBCP_* 拥有, 由 libcp_context_free 释放.
-  char** include_paths;
-  int include_paths_len;
-  int include_paths_cap;
+  LibcpIncludeSearch include_search;
   // 按顺序记录的命令行宏操作: "D:name=body" 或 "U:name".
   char** macro_ops;
   int macro_ops_len;
@@ -321,12 +346,10 @@ struct LibcpContext {
   int predefined_len;
   LibcpCondIncl* cond_incl;
   LibcpHashMap pragma_once;
-  LibcpHashMap search_cache;
   LibcpHashMap include_guards;
   LibcpHashMap keyword_map;
   LibcpHashMap typename_map;
   int counter;
-  int include_next_idx;
   int include_count;
   int parse_depth;
 

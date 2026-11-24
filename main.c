@@ -38,7 +38,6 @@ static char* opt_MT;
 static char* opt_o;
 
 static LibcpStringArray ld_extra_args;
-static LibcpStringArray std_include_paths;
 
 char* base_file;
 static char* output_file;
@@ -162,16 +161,18 @@ static bool take_arg(char* arg) {
 
 static void add_default_include_paths(char* argv0) {
   // 假定 chibicc 专用的 include 文件安装在相对于 argv[0] 的 ./include 下.
-  libcp_context_add_include_path(ctx, libcp_format(ctx, "%s/include", dirname(strdup(argv0))));
+  libcp_context_add_include_path_with_origin(
+      ctx,
+      libcp_format(ctx, "%s/include", dirname(strdup(argv0))),
+      LIBCP_INCLUDE_SYSTEM);
 
-  // 添加标准 include 路径.
-  libcp_context_add_include_path(ctx, "/usr/local/include");
-  libcp_context_add_include_path(ctx, "/usr/include/x86_64-linux-gnu");
-  libcp_context_add_include_path(ctx, "/usr/include");
-
-  // 为 -MMD 选项保留一份当前 include 路径的副本.
-  for (int i = 0; i < ctx->include_paths_len; i++)
-    libcp_strarray_push(ctx, &std_include_paths, ctx->include_paths[i]);
+  // 添加标准 include 路径. 它们与 chibicc 自带的 include 目录都属于
+  // SYSTEM 桶, 排在 -I 与 -idirafter 之后.
+  libcp_context_add_include_path_with_origin(ctx, "/usr/local/include", LIBCP_INCLUDE_SYSTEM);
+  libcp_context_add_include_path_with_origin(ctx,
+                                             "/usr/include/x86_64-linux-gnu",
+                                             LIBCP_INCLUDE_SYSTEM);
+  libcp_context_add_include_path_with_origin(ctx, "/usr/include", LIBCP_INCLUDE_SYSTEM);
 }
 
 static void define(char* str) {
@@ -231,8 +232,6 @@ static void parse_args(int argc, char** argv) {
     if (take_arg(argv[i]))
       if (!argv[++i])
         usage(1);
-
-  LibcpStringArray idirafter = {};
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-###")) {
@@ -437,7 +436,8 @@ static void parse_args(int argc, char** argv) {
     }
 
     if (!strcmp(argv[i], "-idirafter")) {
-      libcp_strarray_push(ctx, &idirafter, argv[++i]);
+      // 路径表按 origin 分桶, 不需要再收集后置缓冲.
+      libcp_context_add_include_path_with_origin(ctx, argv[++i], LIBCP_INCLUDE_AFTER);
       continue;
     }
 
@@ -478,9 +478,6 @@ static void parse_args(int argc, char** argv) {
 
     libcp_strarray_push(ctx, &input_paths, argv[i]);
   }
-
-  for (int i = 0; i < idirafter.len; i++)
-    libcp_context_add_include_path(ctx, idirafter.data[i]);
 
   if (input_paths.len == 0)
     libcp_error(ctx, "no input files");
@@ -697,16 +694,6 @@ static void print_token_dump(LibcpToken* tok) {
   }
 }
 
-static bool in_std_include_path(char* path) {
-  for (int i = 0; i < std_include_paths.len; i++) {
-    char* dir = std_include_paths.data[i];
-    int len   = strlen(dir);
-    if (strncmp(dir, path, len) == 0 && path[len] == '/')
-      return true;
-  }
-  return false;
-}
-
 // 给出 -M 或 -MD 时, 编译器按 make 能读的格式输出输入文件列表, 用于自动
 // 管理文件依赖. 输出位置按 -MF, -MD 时的 .d 文件, -o, stdout 的顺序选择.
 static void print_dependencies(void) {
@@ -730,7 +717,7 @@ static void print_dependencies(void) {
 
   for (int i = 0; i < count; i++) {
     LibcpFile* file = libcp_context_input_file_at(ctx, i);
-    if (opt_MMD && in_std_include_path(file->name))
+    if (opt_MMD && libcp_context_include_is_system(ctx, file->name))
       continue;
     fprintf(out, " \\\n  %s", file->name);
   }
@@ -740,7 +727,7 @@ static void print_dependencies(void) {
   if (opt_MP) {
     for (int i = 1; i < count; i++) {
       LibcpFile* file = libcp_context_input_file_at(ctx, i);
-      if (opt_MMD && in_std_include_path(file->name))
+      if (opt_MMD && libcp_context_include_is_system(ctx, file->name))
         continue;
       fprintf(out, "%s:\n\n", quote_makefile(file->name));
     }
@@ -1227,14 +1214,11 @@ static int cc1(void) {
   for (int i = 0; i < opt_include.len; i++) {
     char* incl = opt_include.data[i];
 
-    char* path;
-    if (libcp_file_exists(incl)) {
-      path = incl;
-    } else {
-      path = libcp_search_include_paths(ctx, incl);
-      if (!path)
-        libcp_error(ctx, "-include: %s: %s", incl, strerror(errno));
-    }
+    // -include 走公共的 include 解析: 先按原样查文件, 再按 origin 顺序
+    // 查路径表; 搜索细节归库内 include 模块.
+    char* path = libcp_context_resolve_include(ctx, incl);
+    if (!path)
+      libcp_error(ctx, "-include: %s: %s", incl, strerror(errno));
 
     LibcpToken* tok2 = must_tokenize_file(path);
     if (!tok2)

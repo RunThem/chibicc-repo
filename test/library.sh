@@ -27,6 +27,13 @@ printf 'int a;\000int b;\n' > "$tmp/nul.c"
 printf '#include "self.h"\n' > "$tmp/self.h"
 printf 'int stdin_a;\nint stdin_b;\n' > "$tmp/stdin.c"
 
+# The same header name in three origin buckets, so the search order is
+# observable from the public API (issue #23).
+mkdir -p "$tmp/user" "$tmp/after" "$tmp/system"
+printf '#define PICK 1\n' > "$tmp/user/pick.h"
+printf '#define PICK 2\n' > "$tmp/after/pick.h"
+printf '#define PICK 3\n' > "$tmp/system/pick.h"
+
 cat > "$tmp/consumer.c" <<'EOF'
 #include <libcp/libcp.h>
 #include <pthread.h>
@@ -1236,6 +1243,88 @@ static int check_provenance(LibcpContext *ctx) {
   return 0;
 }
 
+// Include search ownership (issue #23): registered paths are bucketed by
+// origin and searched USER -> AFTER -> SYSTEM, keeping insertion order
+// inside a bucket. The legacy add is USER. resolve_include tries the
+// literal path first and then the table; include_is_system reports only
+// SYSTEM and AFTER. The path table survives reset; the search cache does
+// not need to be observable for this check.
+static int check_include_origin(char *user, char *after, char *systemdir,
+                                char *literal) {
+  char upath[4096], apath[4096], spath[4096];
+  int n1 = snprintf(upath, sizeof upath, "%s/pick.h", user);
+  int n2 = snprintf(apath, sizeof apath, "%s/pick.h", after);
+  int n3 = snprintf(spath, sizeof spath, "%s/pick.h", systemdir);
+  if (n1 < 0 || n1 >= (int)sizeof upath || n2 < 0 ||
+      n2 >= (int)sizeof apath || n3 < 0 || n3 >= (int)sizeof spath)
+    return 1;
+
+  char *p;
+  int rc = 1;
+  LibcpContext *c1 = libcp_context_new();
+  LibcpContext *c2 = libcp_context_new();
+  if (!c1 || !c2)
+    goto out;
+
+  // Registration order does not matter: USER wins over AFTER and SYSTEM.
+  libcp_context_add_include_path_with_origin(c1, systemdir,
+                                             LIBCP_INCLUDE_SYSTEM);
+  libcp_context_add_include_path_with_origin(c1, after, LIBCP_INCLUDE_AFTER);
+  libcp_context_add_include_path_with_origin(c1, user, LIBCP_INCLUDE_USER);
+  p = libcp_context_resolve_include(c1, "pick.h");
+  if (!p || strcmp(p, upath) != 0)
+    goto out;
+
+  // A path that exists as given wins over the table.
+  p = libcp_context_resolve_include(c1, literal);
+  if (!p || strcmp(p, literal) != 0)
+    goto out;
+
+  // AFTER beats SYSTEM; the legacy add is USER and beats both.
+  libcp_context_add_include_path_with_origin(c2, systemdir,
+                                             LIBCP_INCLUDE_SYSTEM);
+  libcp_context_add_include_path_with_origin(c2, after, LIBCP_INCLUDE_AFTER);
+  p = libcp_context_resolve_include(c2, "pick.h");
+  if (!p || strcmp(p, apath) != 0)
+    goto out;
+  libcp_context_add_include_path(c2, user);
+  p = libcp_context_resolve_include(c2, "pick.h");
+  if (!p || strcmp(p, upath) != 0)
+    goto out;
+
+  // The path table is configuration: it survives reset.
+  libcp_context_reset(c2);
+  p = libcp_context_resolve_include(c2, "pick.h");
+  if (!p || strcmp(p, upath) != 0)
+    goto out;
+
+  // SYSTEM and AFTER are system directories; USER and untracked paths are
+  // not.
+  if (libcp_context_include_is_system(c2, upath) ||
+      !libcp_context_include_is_system(c2, apath) ||
+      !libcp_context_include_is_system(c2, spath) ||
+      libcp_context_include_is_system(c2, literal))
+    goto out;
+
+  if (libcp_context_resolve_include(c2, "no-such-libcp-include.h") != NULL)
+    goto out;
+
+  // Preprocessing submits the same request and sees the same order.
+  LibcpToken *tok = libcp_tokenize_buffer(
+      c2, "<include-origin>", "#include <pick.h>\nint pick = PICK;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(c2, tok);
+  if (!tok || !find_num(tok, 1))
+    goto out;
+
+  rc = 0;
+out:
+  libcp_context_free(c1);
+  libcp_context_free(c2);
+  return rc;
+}
+
 // tokenize_file + the context's include path.
 static int check_include(LibcpContext *ctx, char *path, char *dir) {
   libcp_context_add_include_path(ctx, dir);
@@ -1601,6 +1690,8 @@ int main(int argc, char **argv) {
   libcp_context_reset(ctx);
   if (argc > 2 && check_include(ctx, argv[1], argv[2]))
     return 1;
+  if (argc > 8 && check_include_origin(argv[6], argv[7], argv[8], argv[1]))
+    return 1;
   libcp_context_reset(ctx);
   if (check_define(ctx))
     return 1;
@@ -1657,7 +1748,8 @@ EOF
 
 "$cc" -std=c11 -Werror=implicit-function-declaration -pthread \
   -I"$root/libcp/include" "$tmp/consumer.c" "$lib" -o "$tmp/consumer"
-"$tmp/consumer" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
+"$tmp/consumer" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c" \
+  "$tmp/user" "$tmp/after" "$tmp/system"
 
 # The sanitizer gate (PLAN L3.0/L3.4c). The library sources themselves are
 # rebuilt with ASan and UBSan, so the coverage reaches CST, parse, sema and
@@ -1677,12 +1769,14 @@ ar rcs "$tmp/libcp-asan.a" $asan_objs
   "$tmp/libcp-asan.a" -o "$tmp/consumer-asan"
 ASAN_OPTIONS=detect_leaks=0 \
   UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-  "$tmp/consumer-asan" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
+  "$tmp/consumer-asan" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c" \
+  "$tmp/user" "$tmp/after" "$tmp/system"
 
 # The shared library (PLAN L3.3b, Linux only): the same consumer links
 # against it and runs.
 if [ -z "${LIBCP_LIB:-}" ] && [ -f "$root/libcp.so" ]; then
   "$cc" -std=c11 -pthread -I"$root/libcp/include" "$tmp/consumer.c" \
     -L"$root" -lcp -Wl,-rpath,"$root" -o "$tmp/consumer-so"
-  "$tmp/consumer-so" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
+  "$tmp/consumer-so" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c" \
+    "$tmp/user" "$tmp/after" "$tmp/system"
 fi

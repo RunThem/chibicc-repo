@@ -375,7 +375,7 @@ L0 到 L4, 每步一提交:
 ### 产物
 
 - `libcp.a`, Linux `libcp.so.0`.
-- 9 个公共头, 36 个公共函数 (L5 之后为 10 个头, 38 个函数, 见 12.14; 0.2.0 追加 `libcp_node_family`, 后端支持面追加 `backend.h` 与 17 个函数, 源坐标追加 4 个函数, 子节点枚举追加 2 个函数, 当前 11 个头, 62 个函数).
+- 9 个公共头, 36 个公共函数 (L5 之后为 10 个头, 38 个函数, 见 12.14; 0.2.0 追加 `libcp_node_family`, 后端支持面追加 `backend.h` 与 17 个函数, 源坐标追加 4 个函数, 子节点枚举追加 2 个函数, include 搜索追加 3 个函数, 当前 11 个头, 65 个函数).
 - `LibcpContext` 三态.
 - `test/library.sh`, `test/public-api.sh`, `test/install.sh`.
 - `make check-library`.
@@ -476,7 +476,7 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 | token 有 trivia 和 raw 坐标 | trivia 线 | 逐字节重建 |
 | provenance 链 | provenance 线 | 宏来源不可从 AST 恢复 |
 | `LibcpContext` 不透明 | 库边界 L3 | 公共面不泄漏内部布局 |
-| 62 个公共函数 | 库边界 D7 + L5 | 唯一的公共 API 清单(L5 追加 seed 与 range; 0.2.0 追加 node_family; 后端支持面追加 17 个; 源坐标追加 4 个; 子节点枚举追加 2 个) |
+| 65 个公共函数 | 库边界 D7 + L5 | 唯一的公共 API 清单(L5 追加 seed 与 range; 0.2.0 追加 node_family; 后端支持面追加 17 个; 源坐标追加 4 个; 子节点枚举追加 2 个; include 搜索追加 3 个) |
 | `LibcpNode` 的十个字段族与 `libcp_node_family` | 字段族线 | 0.2.0 把 46 个平铺字段收进匿名 union |
 | per-TU 分配替换 arena | 分配线 | 每对象独立 `LIBCP_*` 分配, reset 沿登记链归还 |
 | 表达式层是一个绑定力循环 | Pratt 线 + Pratt 单一路径线 | 级联已删, Pratt 是唯一实现 |
