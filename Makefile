@@ -347,4 +347,12 @@ docker-snapshot-diff: docker-image
 	@rc=0; diff -ru .cache/snapshot .cache/snapshot.new || rc=1; rm -rf .cache/snapshot.new; \
 	  [ $$rc -eq 0 ] && echo "snapshot diff: empty" || { echo "snapshot diff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: all fmt-tool format test clean test-stage2 test-all test-thirdparty check-library check-context check-style install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff bench bench-tool
+# 汇编等价性闸门(原生 Linux 路径): 在 BASE 的临时 worktree 里构建 chibicc,
+# 与当前树对同一批 test/*.c 的 -S 产物逐字节比较. 时间宏沿用上面的
+# SNAPSHOT_DATEFLAGS. 用法: make asm-diff BASE=<ref>.
+
+asm-diff:
+	@[ -n '$(BASE)' ] || { echo "asm-diff: BASE=<ref> required"; exit 2; }
+	@tools/asm-diff.sh '$(BASE)' $(SNAPSHOT_DATEFLAGS)
+
+.PHONY: all fmt-tool format test clean test-stage2 test-all test-thirdparty asm-diff check-library check-context check-style install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff bench bench-tool

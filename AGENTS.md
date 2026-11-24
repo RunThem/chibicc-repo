@@ -58,7 +58,7 @@
 
 测试前先运行 `uname -s` 与 `uname -m`, 在汇报中写明宿主与选择的路径; 不得跳过判定直接测试.
 
-- `Linux` + `x86_64`: 原生路径. 全量测试用 `make test-all`; 第三方用 `make test-thirdparty`; 汇编等价性用同一 commit 的临时 worktree 生成 `test/*.c` 基线快照并逐字节 diff; `make bench` 只在此路径运行. 禁止在此宿主运行 `make docker-image`, `make docker-test`, `make docker-test-thirdparty`, `make docker-snapshot-diff`.
+- `Linux` + `x86_64`: 原生路径. 全量测试用 `make test-all`; 第三方用 `make test-thirdparty`; 汇编等价性用 `make asm-diff BASE=<ref>`; `make bench` 只在此路径运行. 禁止在此宿主运行 `make docker-image`, `make docker-test`, `make docker-test-thirdparty`, `make docker-snapshot-diff`.
 - 其它宿主: Docker 路径. 首次 `make docker-image`; 全量测试用 `make docker-test`; 第三方用 `make docker-test-thirdparty`; 汇编等价性用 `make docker-snapshot-diff`. 非 x86-64 宿主可用 `-E` / `-S` / `-dump-*` 只验前端, 见 `docs/10-build-install.md` 10.8.
 - Rosetta 下 tcc 的 106_pthread / 112_backtrace / 113_btdll 会不稳定 SIGSEGV, 与 chibicc 无关; `test/thirdparty/make` 是 PATH shim, 真 x86-64 Linux 不需要.
 - 容器内构建与测试必须在可写层 `/work`: tcc 的 `-run`/bcheck 只认 overlayfs, virtiofs 或 docker volume 上确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存.
