@@ -149,6 +149,7 @@ bench: bench-tool
 
 test: $(TESTS)
 	test/docs-links.sh
+	test/style.sh
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./chibicc
 	test/diagnostic.sh ./chibicc
@@ -184,6 +185,11 @@ check-library: $(CHECK_LIBS) libcp.pc
 # own. Run by test and available on its own.
 check-context: libcp.a
 	LIBCP_LIB="$(CURDIR)/libcp.a" test/context-audit.sh --strict
+
+# 风格闸门: 全部 tracked 文本文件不得含中文标点, HEAD 提交信息须为大写
+# 开头, 无结尾句号的纯 ASCII.
+check-style:
+	test/style.sh
 
 # Stage 2
 
@@ -341,4 +347,12 @@ docker-snapshot-diff: docker-image
 	@rc=0; diff -ru .cache/snapshot .cache/snapshot.new || rc=1; rm -rf .cache/snapshot.new; \
 	  [ $$rc -eq 0 ] && echo "snapshot diff: empty" || { echo "snapshot diff: NON-EMPTY (see diff above)"; exit 1; }
 
-.PHONY: all fmt-tool format test clean test-stage2 test-all test-thirdparty check-library check-context install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff bench bench-tool
+# 汇编等价性闸门(原生 Linux 路径): 在 BASE 的临时 worktree 里构建 chibicc,
+# 与当前树对同一批 test/*.c 的 -S 产物逐字节比较. 时间宏沿用上面的
+# SNAPSHOT_DATEFLAGS. 用法: make asm-diff BASE=<ref>.
+
+asm-diff:
+	@[ -n '$(BASE)' ] || { echo "asm-diff: BASE=<ref> required"; exit 2; }
+	@tools/asm-diff.sh '$(BASE)' $(SNAPSHOT_DATEFLAGS)
+
+.PHONY: all fmt-tool format test clean test-stage2 test-all test-thirdparty asm-diff check-library check-context check-style install docker-image docker-test docker-test-thirdparty docker-snapshot docker-snapshot-diff bench bench-tool

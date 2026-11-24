@@ -65,6 +65,8 @@ BENCH_CFLAGS=-std=c11 -O2 -g -fno-common -Wall -Wno-switch \
 | `test-thirdparty` | 本机真实项目构建(仅 x86-64 Linux) |
 | `check-library` | 公共面与打包闸门 |
 | `check-context` | 隐式上下文审计 |
+| `check-style` | 全部 tracked 文本文件的中文标点闸门与 HEAD 提交信息检查 |
+| `asm-diff` | 比较 `BASE=<ref>` 构建的 `chibicc` 与当前工作树构建的 `chibicc` 的 `-S` 产物 |
 | `install` | 安装头文件, 库, pkg-config 文件与 LICENSE |
 | `clean` | 清理构建产物 |
 | `docker-image` | 构建 amd64 测试镜像 |
@@ -201,7 +203,7 @@ make test-stage2
 
 ## 10.8 测试矩阵
 
-`make test` 覆盖以下类别. 表按类别列出, 不表示执行顺序; 实际第一条是 `test/docs-links.sh`, 随后按 `TESTS` 顺序跑 C 测试, 再跑行为脚本, 其中 `$(MAKE) fmt-tool` 与 `$(MAKE) c2c` 是两个显式构建步骤.
+`make test` 覆盖以下类别. 表按类别列出, 不表示执行顺序; 实际最先跑的是 `test/docs-links.sh` 与 `test/style.sh`, 随后按 `TESTS` 顺序跑 C 测试, 再跑行为脚本, 其中 `$(MAKE) fmt-tool` 与 `$(MAKE) c2c` 是两个显式构建步骤.
 
 | 测试 | 内容 |
 |---|---|
@@ -220,6 +222,7 @@ make test-stage2
 | `test/self-test.sh` | 库内自测: hashmap / per-TU 分配 / sema 状态重置 |
 | `test/context-audit.sh` | 隐式 context 审计 (`--strict`, 由 `make test` 调用) |
 | `test/docs-links.sh` | 本地 markdown 链接与 AGENTS 章节引用 (由 `make test` 调用) |
+| `test/style.sh` | 全部 tracked 文本文件的中文标点与 HEAD 提交信息检查 (无 `.git` 时用 `find` 扫描并跳过提交检查) |
 | `test/fmt.sh` | formatter 幂等 / 行数 / 注释数量 / 有系统头时执行 `-S` 等价 (`make fmt-tool` 构建; 容器内为权威, 原生 x86-64 Linux 也执行) |
 | `test/c2c.sh` | C 转 C 打印回归 (`make c2c` 构建) |
 
@@ -322,7 +325,9 @@ make test-thirdparty
 THIRDPARTY="tinycc libpng" make test-thirdparty
 ```
 
-本地版不把 `test/thirdparty` 放进 PATH (那个 `make` shim 只为 Rosetta 跳过 tcc 的三个不稳定用例), 也不把源码拷到 `/work`.
+本地版不把 `test/thirdparty` 放进 PATH, 也不把源码拷到 `/work`. Rosetta 下 tcc 的 106_pthread / 112_backtrace / 113_btdll 会不稳定 SIGSEGV, 与 chibicc 无关, 因此 `test/thirdparty/make` 是只为 Rosetta 服务的 PATH shim, 真 x86-64 Linux 不需要.
+
+容器内构建与测试必须在容器可写层 `/work` 进行: tcc 的 `-run`/bcheck 只认 overlayfs, 在 virtiofs 或 docker volume 上会确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存.
 
 ### 10.10.1 CI 闸门
 
@@ -334,6 +339,8 @@ THIRDPARTY="tinycc libpng" make test-thirdparty
 | `test.yml` | `make test-thirdparty THIRDPARTY="tinycc libpng git sqlite"` | 真实项目子集; 依赖前一个 job, 超时 120 分钟, 缓存 `thirdparty/` |
 | `format.yml` | 安装 `clang-format==20.1.8` 后 `make format-check` | 只读格式闸门 |
 | `docs.yml` | `bash test/docs-links.sh` | 文档链接与 AGENTS 章节引用 |
+
+`make test-all` 覆盖 `test/style.sh` (由 `make test` 调用).
 
 cpython 只在手工 Docker 闸门里跑, 不进 CI. 没有 macOS job.
 

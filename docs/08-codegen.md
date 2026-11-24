@@ -109,7 +109,7 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 | `goto` / `ND_LABEL_VAL` | 留给 `resolve_label_refs`, 与 label 配对并写入 `unique_label` |
 | `for` 的 init 链 | 多于一条语句时包成 `ND_BLOCK`, 适配发射器的单语句 init 槽 |
 | 声明记录链 | `shape_chain` 摘除 `ND_TYPEDEF` / `ND_ENUM_CONST` / `ND_GVAR_DECL` / `ND_FUNCDEF`; `ND_DECL` 原位保留 |
-| VLA 声明 | `expand_decl` 展开成尺寸计算、`alloca` 与初始化链 |
+| VLA 声明 | `expand_decl` 展开成尺寸计算, `alloca` 与初始化链 |
 | 复合赋值 `assign.op != 0` | `to_assign` 改写成读改写, 处理成员和原子形式 |
 | `ND_INCDEC` | 改写成复合赋值; 后缀形式再用 `new_add(..., -addend)` 反向加减并 cast |
 | 结构体/联合返回值调用 | 建 `ret_buffer` 临时槽 |
