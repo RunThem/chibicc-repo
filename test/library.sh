@@ -34,6 +34,18 @@ printf '#define PICK 1\n' > "$tmp/user/pick.h"
 printf '#define PICK 2\n' > "$tmp/after/pick.h"
 printf '#define PICK 3\n' > "$tmp/system/pick.h"
 
+# Per-file #include_next continuation (issue #24): chain.h lives in all
+# three buckets, and the wrappers cover the table index recorded for the
+# file that holds the directive.
+printf '#define FROM_USER 1\n' > "$tmp/user/chain.h"
+printf '#define FROM_AFTER 2\n' > "$tmp/after/chain.h"
+printf '#define FROM_SYSTEM 3\n' > "$tmp/system/chain.h"
+printf '#include_next "chain.h"\n' > "$tmp/user/wrap.h"
+printf '#include_next "chain.h"\n' > "$tmp/after/wrap_after.h"
+mkdir -p "$tmp/user/local"
+printf '#include_next "chain.h"\n' > "$tmp/user/local/wrap_self.h"
+printf '#include_next "chain.h"\n' > "$tmp/user/abs_wrap.h"
+
 cat > "$tmp/consumer.c" <<'EOF'
 #include <libcp/libcp.h>
 #include <pthread.h>
@@ -1325,6 +1337,92 @@ out:
   return rc;
 }
 
+// #include_next continuation (issue #24): the search resumes at the path
+// table index recorded for the file that holds the directive. A cached
+// target must not lose that position, and files that did not come from
+// the path table (the main file, a quoted current-directory hit, an
+// absolute path) start at the first path.
+static int check_include_next(char *user, char *after, char *systemdir) {
+  char name[4096], abs_wrap[4096], abs_src[8192];
+  int n = snprintf(name, sizeof name, "%s/main.c", user);
+  int m = snprintf(abs_wrap, sizeof abs_wrap, "%s/abs_wrap.h", user);
+  if (n < 0 || n >= (int)sizeof name || m < 0 || m >= (int)sizeof abs_wrap)
+    return 1;
+  m = snprintf(abs_src, sizeof abs_src,
+               "#include <wrap_after.h>\n#include \"%s\"\n"
+               "int g = FROM_SYSTEM;\nint h = FROM_USER;\n",
+               abs_wrap);
+  if (m < 0 || m >= (int)sizeof abs_src)
+    return 1;
+
+  LibcpContext *ctx = libcp_context_new();
+  if (!ctx)
+    return 1;
+  int rc = 1;
+
+  libcp_context_add_include_path_with_origin(ctx, systemdir,
+                                             LIBCP_INCLUDE_SYSTEM);
+  libcp_context_add_include_path_with_origin(ctx, after, LIBCP_INCLUDE_AFTER);
+  libcp_context_add_include_path(ctx, user);
+
+  // A plain include caches chain.h at start 0; the wrapper lives in the
+  // user bucket, so its #include_next continues in the after bucket.
+  LibcpToken *tok = libcp_tokenize_buffer(
+      ctx, name,
+      "#include <chain.h>\n#include <wrap.h>\n"
+      "int a = FROM_USER;\nint b = FROM_AFTER;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 1) || !find_num(tok, 2) ||
+      libcp_context_failed(ctx))
+    goto out;
+  libcp_context_reset(ctx);
+
+  // wrap_after.h was found in the after bucket, so it continues in
+  // system; the main file has no recorded index, so it starts at user.
+  tok = libcp_tokenize_buffer(
+      ctx, name,
+      "#include <wrap_after.h>\n#include_next <chain.h>\n"
+      "int c = FROM_SYSTEM;\nint d = FROM_USER;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 3) || !find_num(tok, 1) ||
+      libcp_context_failed(ctx))
+    goto out;
+  libcp_context_reset(ctx);
+
+  // A quoted include that hits the current directory has no recorded
+  // index either, and its start-0 search does not reuse the start-2
+  // cache entry left by the wrapper.
+  tok = libcp_tokenize_buffer(
+      ctx, name,
+      "#include <wrap_after.h>\n#include \"local/wrap_self.h\"\n"
+      "int e = FROM_SYSTEM;\nint f = FROM_USER;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 3) || !find_num(tok, 1) ||
+      libcp_context_failed(ctx))
+    goto out;
+  libcp_context_reset(ctx);
+
+  // An absolute path has no recorded index either.
+  tok = libcp_tokenize_buffer(ctx, name, abs_src);
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 3) || !find_num(tok, 1) ||
+      libcp_context_failed(ctx))
+    goto out;
+
+  rc = 0;
+out:
+  libcp_context_free(ctx);
+  return rc;
+}
+
 // tokenize_file + the context's include path.
 static int check_include(LibcpContext *ctx, char *path, char *dir) {
   libcp_context_add_include_path(ctx, dir);
@@ -1691,6 +1789,8 @@ int main(int argc, char **argv) {
   if (argc > 2 && check_include(ctx, argv[1], argv[2]))
     return 1;
   if (argc > 8 && check_include_origin(argv[6], argv[7], argv[8], argv[1]))
+    return 1;
+  if (argc > 8 && check_include_next(argv[6], argv[7], argv[8]))
     return 1;
   libcp_context_reset(ctx);
   if (check_define(ctx))

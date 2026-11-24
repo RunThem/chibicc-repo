@@ -995,18 +995,19 @@ static LibcpToken* preprocess2(LibcpContext* ctx, LibcpToken* tok) {
       char* filename = read_include_filename(ctx, &tok, tok->next, &is_dquote);
 
       // 搜索归 include 模块所有; 这里只提交请求. 引号形式先查当前
-      // 文件目录的规则也在模块里.
-      char* path = is_dquote ? libcp_include_resolve_quoted(ctx, start->file, filename) :
-                               libcp_include_resolve_angled(ctx, filename);
-      tok        = include_file(ctx, tok, path ? path : filename, start->next->next, start->file);
+      // 文件目录的规则, 以及命中下标与 per-file 续查位置, 都在模块里.
+      LibcpIncludeHit hit = is_dquote ? libcp_include_resolve_quoted(ctx, start->file, filename) :
+                                        libcp_include_resolve_angled(ctx, filename);
+      tok = include_file(ctx, tok, hit.path ? hit.path : filename, start->next->next, start->file);
       continue;
     }
 
     if (libcp_equal(tok, "include_next")) {
       bool ignore;
-      char* filename = read_include_filename(ctx, &tok, tok->next, &ignore);
-      char* path     = libcp_include_resolve_next(ctx, filename);
-      tok = include_file(ctx, tok, path ? path : filename, start->next->next, start->file);
+      char* filename      = read_include_filename(ctx, &tok, tok->next, &ignore);
+      // 续查位置来自包含这条指令的文件自身, 不是全局游标.
+      LibcpIncludeHit hit = libcp_include_resolve_next(ctx, start->file, filename);
+      tok = include_file(ctx, tok, hit.path ? hit.path : filename, start->next->next, start->file);
       continue;
     }
 
