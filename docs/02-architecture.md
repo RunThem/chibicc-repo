@@ -104,7 +104,7 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 - 输出的每个宏展开产物 token 都带 `prov` 链; 直接来自源码的 token (包括非 EOF token) 的 `prov` 为 NULL.
 - 宏展开遵循 hideset 规则, 保证递归宏一定停止.
 - 条件编译的未选中分支被丢弃, 不进入输出.
-- `#include` 通过文件系统读取, 搜索路径来自 context 配置.
+- `#include` 通过文件系统读取; 搜索路径表由内部 include 模块独占, 按 `USER` -> `AFTER` -> `SYSTEM` 的顺序查找.
 - 错误经回调报告, 入口返回 NULL.
 
 ### 2.4.3 第 2 层的契约
@@ -318,6 +318,8 @@ codegen(ctx, prog, out);
 
 驱动器还提供 `-h` / `--help`, 打印按类别分组的全部选项 (模式, 预处理, 依赖, 链接, 代码生成, 兼容性, 只读通道与内部选项). 该输出是选项清单的权威位置; 选项的解析与行为由 `main.c` 与 `test/driver.sh` 锁定.
 
+依赖文本 (`-M` / `-MD` / `-MMD` / `-MF` / `-MT` / `-MQ` / `-MP`) 由驱动器生成, 不属于库. `-MMD` 省略 `SYSTEM` 与 `AFTER` 目录中的头文件, `USER` (`-I`) 目录中的头文件仍然列出; 分类只查公共的 `libcp_context_include_is_system`, 驱动器不保存系统目录快照.
+
 ## 2.10 目录与文件地图
 
 ```text
@@ -337,7 +339,8 @@ libcp/
   src/
     tokenize.c       词法, trivia, 诊断格式化
     source.c         源坐标: LibcpFile 构造, 扫描缓冲, raw / 扫描偏移 / 物理行换算, synthetic 判定, input file 表
-    preprocess.c     指令, 宏展开, include, provenance 记录
+    include.c        include 搜索: 路径表 (path + origin), 搜索顺序与缓存, 系统目录判定, reset / free 语义
+    preprocess.c     指令, 宏展开, provenance 记录; include 只提交解析请求
     provenance.c     展开链的 dump / verify
     cst.c            lossless CST 的建树, dump, verify
     parse.c          递归下降解析器

@@ -159,6 +159,9 @@ libcp_context_reset
 libcp_context_set_diagnostic
 libcp_context_failed
 libcp_context_add_include_path
+libcp_context_add_include_path_with_origin
+libcp_context_resolve_include
+libcp_context_include_is_system
 libcp_context_set_base_file
 libcp_context_define
 libcp_context_undef

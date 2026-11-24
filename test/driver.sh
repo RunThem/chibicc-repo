@@ -280,6 +280,15 @@ echo bar | $chibicc -include $tmp/out.h -E -o- -xc - | grep -q -z 'foo.*bar'
 check -include
 echo NULL | $chibicc -Iinclude -include stdio.h -E -o- -xc - | grep -q 0
 check -include
+# -include goes through the context include search, so -I and -idirafter
+# directories both resolve it.
+echo foo > $tmp/include-user.h
+echo bar | $chibicc -I$tmp -include include-user.h -E -o- -xc - | grep -q -z 'foo.*bar'
+check '-include searches -I'
+mkdir -p $tmp/include-after
+echo foo > $tmp/include-after/include-after.h
+echo bar | $chibicc -idirafter $tmp/include-after -include include-after.h -E -o- -xc - | grep -q -z 'foo.*bar'
+check '-include searches -idirafter'
 
 # -x
 echo 'int x;' | $chibicc -c -xc -o $tmp/foo.o -
@@ -353,6 +362,37 @@ check -MD
 $chibicc -c -MD -MF $tmp/md-mf.d -I. $tmp/md2.c
 grep -q -z '^md2.o:.*md2\.c .*/out2\.h' $tmp/md-mf.d
 check -MD
+
+# -MMD classifies headers by include origin: a -I directory is a user
+# directory and must be listed, while -idirafter and system directories
+# are omitted.
+mkdir -p $tmp/mmd/inc $tmp/mmd/after
+echo 'int mmd_local;' > $tmp/mmd/inc/mmd-local.h
+echo 'int mmd_after;' > $tmp/mmd/after/mmd-after.h
+printf '#include "mmd-local.h"\nint main(void) { return mmd_local; }\n' > $tmp/mmd/local.c
+$chibicc -c -MMD -MF $tmp/mmd/local.d -o $tmp/mmd/local.o -I$tmp/mmd/inc $tmp/mmd/local.c
+[ -f $tmp/mmd/local.d ] && grep -q 'mmd-local\.h' $tmp/mmd/local.d
+check '-MMD lists a -I header'
+
+# The same with a relative -I directory: the recorded dependency keeps the
+# spelling it was opened with (inc/mmd-rel.h).
+echo 'int mmd_rel;' > $tmp/mmd/inc/mmd-rel.h
+printf '#include "mmd-rel.h"\nint main(void) { return mmd_rel; }\n' > $tmp/mmd/rel.c
+(cd $tmp/mmd && $OLDPWD/$chibicc -c -MMD -Iinc rel.c)
+[ -f $tmp/mmd/rel.d ] && grep -q 'inc/mmd-rel\.h' $tmp/mmd/rel.d
+check '-MMD lists a relative -I header'
+
+printf '#include "mmd-after.h"\nint main(void) { return mmd_after; }\n' > $tmp/mmd/after.c
+$chibicc -c -MMD -MF $tmp/mmd/after.d -o $tmp/mmd/after.o -idirafter $tmp/mmd/after $tmp/mmd/after.c
+[ -f $tmp/mmd/after.d ] && ! grep -q 'mmd-after\.h' $tmp/mmd/after.d
+check '-MMD omits a -idirafter header'
+
+# -Iinclude supplies the compiler's own stddef.h so the host system header
+# can be preprocessed in both the stage1 and stage2 runs.
+printf '#include <stdio.h>\nint main(void) { return 0; }\n' > $tmp/mmd/system.c
+$chibicc -Iinclude -c -MMD -MF $tmp/mmd/system.d -o $tmp/mmd/system.o $tmp/mmd/system.c
+[ -f $tmp/mmd/system.d ] && ! grep -q '/usr/include' $tmp/mmd/system.d
+check '-MMD omits system headers'
 
 echo 'extern int bar; int foo() { return bar; }' | $chibicc -fPIC -xc -c -o $tmp/foo.o -
 cc -shared -o $tmp/foo.so $tmp/foo.o

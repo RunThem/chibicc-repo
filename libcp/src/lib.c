@@ -144,15 +144,6 @@ static void config_push(char*** arr, int* len, int* cap, char* s) {
   (*arr)[*len]     = NULL;
 }
 
-// 追加一个 #include 搜索目录; 参数字符串被复制, 调用方的缓冲区可以
-// 立刻释放. 该配置跨 reset 保留.
-void libcp_context_add_include_path(LibcpContext* ctx, char* path) {
-  config_push(&ctx->include_paths,
-              &ctx->include_paths_len,
-              &ctx->include_paths_cap,
-              config_strdup(path));
-}
-
 // PLAN-l5 W2: 由被包含头文件提供的 typedef 名对 CST 的预处理前扫描
 // 不可见; 消费者知道自己的目标头文件, 因此由它预置这些名字, 而不是
 // 让库去猜.
@@ -249,30 +240,29 @@ static void free_tu_allocs(LibcpContext* ctx) {
 // typedef 名, 诊断回调). 必须在 free_tu_allocs 之后调用: 这里丢弃的
 // 指针都指向刚归还的 per-TU 分配.
 static void clear_state(LibcpContext* ctx) {
-  ctx->base_file        = NULL;
-  ctx->current_file     = NULL;
-  ctx->input_files      = NULL;
-  ctx->input_files_len  = 0;
-  ctx->input_files_cap  = 0;
-  ctx->next_file_no     = 0;
-  ctx->stdin_text       = NULL;
-  ctx->stdin_len        = 0;
-  ctx->at_bol           = false;
-  ctx->has_space        = false;
-  ctx->macros           = (LibcpHashMap){};
-  ctx->predefined       = NULL;
-  ctx->predefined_len   = 0;
-  ctx->cond_incl        = NULL;
-  ctx->pragma_once      = (LibcpHashMap){};
-  ctx->search_cache     = (LibcpHashMap){};
-  ctx->include_guards   = (LibcpHashMap){};
-  ctx->keyword_map      = (LibcpHashMap){};
-  ctx->typename_map     = (LibcpHashMap){};
-  ctx->counter          = 0;
-  ctx->include_next_idx = 0;
-  ctx->include_count    = 0;
-  ctx->parse_depth      = 0;
-  ctx->scope            = NULL;
+  ctx->base_file       = NULL;
+  ctx->current_file    = NULL;
+  ctx->input_files     = NULL;
+  ctx->input_files_len = 0;
+  ctx->input_files_cap = 0;
+  ctx->next_file_no    = 0;
+  ctx->stdin_text      = NULL;
+  ctx->stdin_len       = 0;
+  ctx->at_bol          = false;
+  ctx->has_space       = false;
+  ctx->macros          = (LibcpHashMap){};
+  ctx->predefined      = NULL;
+  ctx->predefined_len  = 0;
+  ctx->cond_incl       = NULL;
+  ctx->pragma_once     = (LibcpHashMap){};
+  ctx->include_guards  = (LibcpHashMap){};
+  ctx->keyword_map     = (LibcpHashMap){};
+  ctx->typename_map    = (LibcpHashMap){};
+  ctx->counter         = 0;
+  libcp_include_reset(ctx);
+  ctx->include_count = 0;
+  ctx->parse_depth   = 0;
+  ctx->scope         = NULL;
   libcp_sema_state_clear(ctx);
   ctx->failed  = false;
   ctx->jmp_top = NULL;
@@ -304,9 +294,7 @@ void libcp_context_free(LibcpContext* ctx) {
   if (!ctx)
     return;
   free_tu_allocs(ctx);
-  for (int i = 0; i < ctx->include_paths_len; i++)
-    LIBCP_FREE(ctx->include_paths[i]);
-  LIBCP_FREE(ctx->include_paths);
+  libcp_include_free(ctx);
   for (int i = 0; i < ctx->macro_ops_len; i++)
     LIBCP_FREE(ctx->macro_ops[i]);
   LIBCP_FREE(ctx->macro_ops);
