@@ -1139,38 +1139,18 @@ static void ast_node(FILE* out, LibcpNode* node, int depth) {
   ast_fields(out, node);
   fputc('\n', out);
 
-  LibcpNodeFamily fam = libcp_node_family(node->kind);
+  // 子节点顺序由公共枚举决定: 列表字段沿 next 走链, 单个字段只打印
+  // 一个节点. 初始化器记录与属性侧对齐表达式不是结构子节点, 在枚举
+  // 之后单独打印.
+  for (int i = 0, count = libcp_node_child_count(node); i < count; i++) {
+    LibcpNodeChild child = libcp_node_child_at(node, i);
+    if (child.is_list)
+      ast_chain(out, (LibcpNode*)child.node, depth + 1);
+    else
+      ast_node(out, (LibcpNode*)child.node, depth + 1);
+  }
 
-  if (node->lhs)
-    ast_node(out, node->lhs, depth + 1);
-  if (node->rhs)
-    ast_node(out, node->rhs, depth + 1);
-  if (fam == LIBCP_NF_CTRL && node->ctrl.cond)
-    ast_node(out, node->ctrl.cond, depth + 1);
-  if (fam == LIBCP_NF_CTRL && node->ctrl.then)
-    ast_node(out, node->ctrl.then, depth + 1);
-  if (fam == LIBCP_NF_CTRL && node->ctrl.els)
-    ast_node(out, node->ctrl.els, depth + 1);
-  if (fam == LIBCP_NF_CTRL && node->ctrl.init)
-    ast_chain(out, node->ctrl.init, depth + 1);
-  if (fam == LIBCP_NF_CTRL && node->ctrl.inc)
-    ast_node(out, node->ctrl.inc, depth + 1);
-  if (fam == LIBCP_NF_DECL && node->decl.body)
-    ast_chain(out, node->decl.body, depth + 1);
-  if (fam == LIBCP_NF_CTRL && node->ctrl.args)
-    ast_chain(out, node->ctrl.args, depth + 1);
-  if (node->spec_decls)
-    ast_chain(out, node->spec_decls, depth + 1);
-  if (fam == LIBCP_NF_CASE && node->case_.begin_expr)
-    ast_node(out, node->case_.begin_expr, depth + 1);
-  if (fam == LIBCP_NF_CASE && node->case_.end_expr)
-    ast_node(out, node->case_.end_expr, depth + 1);
-  if (fam == LIBCP_NF_CAS && node->cas.cas_addr)
-    ast_node(out, node->cas.cas_addr, depth + 1);
-  if (fam == LIBCP_NF_CAS && node->cas.cas_old)
-    ast_node(out, node->cas.cas_old, depth + 1);
-  if (fam == LIBCP_NF_CAS && node->cas.cas_new)
-    ast_node(out, node->cas.cas_new, depth + 1);
+  LibcpNodeFamily fam = libcp_node_family(node->kind);
   if (fam == LIBCP_NF_DECL && node->decl.decl_init)
     ast_initializer(out, node->decl.decl_init, depth + 1);
   if ((node->kind == ND_DECL || node->kind == ND_GVAR_DECL || node->kind == ND_FUNCDEF) &&
