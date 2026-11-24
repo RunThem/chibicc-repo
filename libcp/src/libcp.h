@@ -113,7 +113,6 @@ void libcp_include_add_path(LibcpContext* ctx, char* path, LibcpIncludeOrigin or
 char* libcp_include_resolve_quoted(LibcpContext* ctx, LibcpFile* current, char* filename);
 char* libcp_include_resolve_angled(LibcpContext* ctx, char* filename);
 char* libcp_include_resolve_next(LibcpContext* ctx, char* filename);
-bool libcp_include_in_path_table(LibcpContext* ctx, char* path);
 void libcp_include_reset(LibcpContext* ctx);
 void libcp_include_free(LibcpContext* ctx);
 

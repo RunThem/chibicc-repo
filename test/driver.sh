@@ -363,6 +363,29 @@ $chibicc -c -MD -MF $tmp/md-mf.d -I. $tmp/md2.c
 grep -q -z '^md2.o:.*md2\.c .*/out2\.h' $tmp/md-mf.d
 check -MD
 
+# -MMD classifies headers by include origin: a -I directory is a user
+# directory and must be listed, while -idirafter and system directories
+# are omitted.
+mkdir -p $tmp/mmd/inc $tmp/mmd/after
+echo 'int mmd_local;' > $tmp/mmd/inc/mmd-local.h
+echo 'int mmd_after;' > $tmp/mmd/after/mmd-after.h
+printf '#include "mmd-local.h"\nint main(void) { return mmd_local; }\n' > $tmp/mmd/local.c
+$chibicc -c -MMD -MF $tmp/mmd/local.d -o $tmp/mmd/local.o -I$tmp/mmd/inc $tmp/mmd/local.c
+[ -f $tmp/mmd/local.d ] && grep -q 'mmd-local\.h' $tmp/mmd/local.d
+check '-MMD lists a -I header'
+
+printf '#include "mmd-after.h"\nint main(void) { return mmd_after; }\n' > $tmp/mmd/after.c
+$chibicc -c -MMD -MF $tmp/mmd/after.d -o $tmp/mmd/after.o -idirafter $tmp/mmd/after $tmp/mmd/after.c
+[ -f $tmp/mmd/after.d ] && ! grep -q 'mmd-after\.h' $tmp/mmd/after.d
+check '-MMD omits a -idirafter header'
+
+# -Iinclude supplies the compiler's own stddef.h so the host system header
+# can be preprocessed in both the stage1 and stage2 runs.
+printf '#include <stdio.h>\nint main(void) { return 0; }\n' > $tmp/mmd/system.c
+$chibicc -Iinclude -c -MMD -MF $tmp/mmd/system.d -o $tmp/mmd/system.o $tmp/mmd/system.c
+[ -f $tmp/mmd/system.d ] && ! grep -q '/usr/include' $tmp/mmd/system.d
+check '-MMD omits system headers'
+
 echo 'extern int bar; int foo() { return bar; }' | $chibicc -fPIC -xc -c -o $tmp/foo.o -
 cc -shared -o $tmp/foo.so $tmp/foo.o
 echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/main.c

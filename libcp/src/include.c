@@ -139,16 +139,6 @@ char* libcp_include_resolve_next(LibcpContext* ctx, char* filename) {
   return NULL;
 }
 
-// 任何来源的路径表前缀匹配. 只服务本 ticket 的第一阶段: 在 -MMD 分类
-// 修复之前保留旧行为 (所有注册过的目录都算"标准目录"). 下一提交删除.
-bool libcp_include_in_path_table(LibcpContext* ctx, char* path) {
-  LibcpIncludeSearch* s = &ctx->include_search;
-  for (int i = 0; i < s->len; i++)
-    if (path_under(s->paths[i].path, path))
-      return true;
-  return false;
-}
-
 // 既有入口保留原签名, 等同 USER 来源.
 void libcp_context_add_include_path(LibcpContext* ctx, char* path) {
   libcp_include_add_path(ctx, path, LIBCP_INCLUDE_USER);

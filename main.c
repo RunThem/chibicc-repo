@@ -717,7 +717,7 @@ static void print_dependencies(void) {
 
   for (int i = 0; i < count; i++) {
     LibcpFile* file = libcp_context_input_file_at(ctx, i);
-    if (opt_MMD && libcp_include_in_path_table(ctx, file->name))
+    if (opt_MMD && libcp_context_include_is_system(ctx, file->name))
       continue;
     fprintf(out, " \\\n  %s", file->name);
   }
@@ -727,7 +727,7 @@ static void print_dependencies(void) {
   if (opt_MP) {
     for (int i = 1; i < count; i++) {
       LibcpFile* file = libcp_context_input_file_at(ctx, i);
-      if (opt_MMD && libcp_include_in_path_table(ctx, file->name))
+      if (opt_MMD && libcp_context_include_is_system(ctx, file->name))
         continue;
       fprintf(out, "%s:\n\n", quote_makefile(file->name));
     }
