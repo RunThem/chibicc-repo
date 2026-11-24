@@ -392,15 +392,16 @@ static LibcpToken*
   return tok;
 }
 
-// 读一个 UTF-8 编码的字符串字面量, 并把它转码为 UTF-16.
+// 把 quote 处的字符串字面量转码为 UTF-16 载荷, 返回数组类型; 载荷与
+// 收尾引号后的位置分别通过 *str_out 与 *end_out 返回.
 //
 // UTF-16 是 Unicode 的另一种变长编码. 小于 U+10000 的码点用 2 字节
 // 编码. 大于或等于该值的码点用 4 字节编码. 4 字节序列中的每个 2 字节
 // 称为 "surrogate", 整个 4 字节序列称为 "surrogate pair".
-static LibcpToken*
-    read_utf16_string_literal(LibcpContext* ctx, char* start, char* quote, int raw_trivia) {
+static LibcpType*
+    scan_utf16_string(LibcpContext* ctx, char* quote, char** end_out, char** str_out) {
   char* end     = string_literal_end(ctx, quote + 1);
-  uint16_t* buf = libcp_tu_calloc(ctx, 2, end - start);
+  uint16_t* buf = libcp_tu_calloc(ctx, 2, end - quote);
   int len       = 0;
 
   for (char* p = quote + 1; p < end;) {
@@ -421,20 +422,32 @@ static LibcpToken*
     }
   }
 
+  *end_out = end;
+  *str_out = (char*)buf;
+  return libcp_array_of(ctx, libcp_ty_ushort, len + 1);
+}
+
+// 读一个 UTF-8 编码的字符串字面量, 并把它转码为 UTF-16.
+static LibcpToken*
+    read_utf16_string_literal(LibcpContext* ctx, char* start, char* quote, int raw_trivia) {
+  char* end;
+  char* str;
+  LibcpType* ty   = scan_utf16_string(ctx, quote, &end, &str);
   LibcpToken* tok = new_token(ctx, TK_STR, start, end + 1, raw_trivia);
-  tok->ty         = libcp_array_of(ctx, libcp_ty_ushort, len + 1);
-  tok->str        = (char*)buf;
+  tok->ty         = ty;
+  tok->str        = str;
   return tok;
 }
 
-// 读一个 UTF-8 编码的字符串字面量, 并把它转码为 UTF-32.
+// 把 quote 处的字符串字面量转码为 UTF-32 载荷, 返回数组类型; 载荷与
+// 收尾引号后的位置分别通过 *str_out 与 *end_out 返回.
 //
 // UTF-32 是 Unicode 的定长编码. 每个码点占 4 字节.
-static LibcpToken* read_utf32_string_literal(LibcpContext* ctx,
-                                             char* start,
-                                             char* quote,
-                                             LibcpType* ty,
-                                             int raw_trivia) {
+static LibcpType* scan_utf32_string(LibcpContext* ctx,
+                                    char* quote,
+                                    LibcpType* ty,
+                                    char** end_out,
+                                    char** str_out) {
   char* end     = string_literal_end(ctx, quote + 1);
   uint32_t* buf = libcp_tu_calloc(ctx, 4, end - quote);
   int len       = 0;
@@ -446,9 +459,23 @@ static LibcpToken* read_utf32_string_literal(LibcpContext* ctx,
       buf[len++] = libcp_decode_utf8(ctx, &p, p);
   }
 
+  *end_out = end;
+  *str_out = (char*)buf;
+  return libcp_array_of(ctx, ty, len + 1);
+}
+
+// 读一个 UTF-8 编码的字符串字面量, 并把它转码为 UTF-32.
+static LibcpToken* read_utf32_string_literal(LibcpContext* ctx,
+                                             char* start,
+                                             char* quote,
+                                             LibcpType* ty,
+                                             int raw_trivia) {
+  char* end;
+  char* str;
+  LibcpType* arr  = scan_utf32_string(ctx, quote, ty, &end, &str);
   LibcpToken* tok = new_token(ctx, TK_STR, start, end + 1, raw_trivia);
-  tok->ty         = libcp_array_of(ctx, ty, len + 1);
-  tok->str        = (char*)buf;
+  tok->ty         = arr;
+  tok->str        = str;
   return tok;
 }
 
@@ -612,25 +639,26 @@ static void add_line_numbers(LibcpToken* tok) {
     tok->line_no = libcp_token_physical_line(tok);
 }
 
-LibcpToken* libcp_tokenize_string_literal(LibcpContext* ctx, LibcpToken* tok, LibcpType* basety) {
-  // 重新扫描需要被替换 token 的 raw 坐标, 因此要对它所属的文件扫描
-  // (当前的 `current_file` 是最后被 tokenize 的那个文件). 扫描结束后恢复
-  // `current_file`, 新 token 的 `file` 与 `filename` 则设为 `save` 与
-  // `save->display_name`: 它们可能是陈旧的值, 这一既有行为暂时保留.
-  LibcpFile* save   = ctx->current_file;
-  ctx->current_file = tok->file;
+// 把一个已有字符串字面量就地重新扫描为目标基类型: 只写回 kind, 类型与
+// 字符串载荷. file, loc, len, raw 坐标, 行号, trivia 与 provenance 都属于
+// 源码中的那个 token, 全部保留.
+void libcp_tokenize_string_literal(LibcpContext* ctx, LibcpToken* tok, LibcpType* basety) {
+  // `loc` 指向拼写的起点; quote 要跳过 u8 / u / U / L 前缀.
+  char* quote = tok->loc;
+  if (quote[0] == 'u' && quote[1] == '8')
+    quote += 2;
+  else if (quote[0] != '"')
+    quote += 1;
 
-  LibcpToken* t;
+  char* end;
+  char* str;
   if (basety->size == 2)
-    t = read_utf16_string_literal(ctx, tok->loc, tok->loc, tok->trivia - tok->file->raw);
+    tok->ty = scan_utf16_string(ctx, quote, &end, &str);
   else
-    t = read_utf32_string_literal(ctx, tok->loc, tok->loc, basety, tok->trivia - tok->file->raw);
+    tok->ty = scan_utf32_string(ctx, quote, basety, &end, &str);
 
-  ctx->current_file = save;
-  t->file           = save;
-  t->filename       = save->display_name;
-  t->next           = tok->next;
-  return t;
+  tok->kind = TK_STR;
+  tok->str  = str;
 }
 
 // 对给定的文本做词法分析, 返回新的 token 流.

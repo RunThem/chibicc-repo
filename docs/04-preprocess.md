@@ -138,7 +138,7 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 4. 如果是 `#`, 按指令名分派.
 5. 结束后检查有没有未闭合的条件指令.
 6. `convert_pp_tokens`: 把 `TK_IDENT` 中的关键字改成 `TK_KEYWORD`, 把 `TK_PP_NUM` 转成 `TK_NUM`.
-7. `join_adjacent_string_literals`: 拼接相邻字符串字面量, 并保留 provenance.
+7. `join_adjacent_string_literals`: 拼接相邻字符串字面量, 保留第一个 token 的坐标与 provenance.
 8. 给每个 token 的 `line_no` 加上 `line_delta`, 让 `#line` 生效.
 
 ### 4.4.2 指令
@@ -190,7 +190,7 @@ include 的文件会做 include guard 检测和 `#pragma once` 记录. `include_
 
 内建宏与对象宏的产物在 `expand_macro` 里直接创建 `new_prov`, 不经过 `subst`.
 
-`join_adjacent_string_literals` 会重扫字符串, 它保存并恢复 `prov`, 保证拼接后的 token 仍能追到来源.
+`join_adjacent_string_literals` 会把普通字符串字面量就地重扫成宽类型, 只写回 kind, 类型与载荷, 坐标, 物理行与 provenance 都留在原来的 token 上. 拼接结果保留第一个 token 的坐标与 provenance, 后续 token 从链上摘除.
 
 ### 4.4.4 预定义宏
 

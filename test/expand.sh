@@ -357,6 +357,31 @@ T adjacent_strings.c:1 str "a" A@adjacent_strings.c:3:body:adjacent_strings.c:1
 T adjacent_strings.c:3 punct ; -
 '
 
+# 相邻字符串拼接: 第一个 literal 的坐标与 provenance 保留, 后续 token 摘除;
+# 普通 literal 被就地重扫成宽类型时, 物理行仍是 1, 输出不出现 :0.
+exp_dump wide_plain 'const int *u = "x" L"y";\n' \
+'T wide_plain.c:1 keyword const -
+T wide_plain.c:1 keyword int -
+T wide_plain.c:1 punct * -
+T wide_plain.c:1 ident u -
+T wide_plain.c:1 punct = -
+T wide_plain.c:1 str "x" -
+T wide_plain.c:1 punct ; -
+'
+
+# 同上, 但拼接发生在被 include 的文件里: file 也保留, 位置指向原来的
+# 头文件, 而不是最后切词的主文件.
+printf 'const int *u = "x" L"y";\n' > "$tmp/wide.h"
+exp_dump wide_hdr '#include "wide.h"\n' \
+'T ./wide.h:1 keyword const -
+T ./wide.h:1 keyword int -
+T ./wide.h:1 punct * -
+T ./wide.h:1 ident u -
+T ./wide.h:1 punct = -
+T ./wide.h:1 str "x" -
+T ./wide.h:1 punct ; -
+'
+
 # 取直不稳定的内建宏(__DATE__ / __TIMESTAMP__)只锁记录形状, 不断言文本.
 n_c=0
 exp_chain() {
@@ -373,8 +398,8 @@ exp_chain date_shape 'char *d = __DATE__;\n' \
 exp_chain timestamp_shape 'char *t = __TIMESTAMP__;\n' \
 '^T timestamp_shape\.c:@synth str .* __TIMESTAMP__@timestamp_shape\.c:1:body:\?:\?$'
 
-# 宽字符串合并前, 普通 literal 会被就地重扫成宽字面量; 重扫不得丢掉 provenance.
-# (重扫出的 token 没设 line_no, 位置沿用既有的 0, 这里只锁链.)
+# 宽字符串合并前, 普通 literal 会被就地重扫成宽字面量; 重扫不得丢掉 provenance,
+# 也不得改动坐标与物理行.
 exp_chain wide_concat '#define A "a"\nchar *s = A L"b";\n' \
 ' A@wide_concat\.c:2:body:wide_concat\.c:1$'
 

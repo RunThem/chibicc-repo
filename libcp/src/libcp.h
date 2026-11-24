@@ -69,7 +69,7 @@ bool libcp_equal(LibcpToken* tok, char* op);
 LibcpToken* libcp_skip(LibcpContext* ctx, LibcpToken* tok, char* op);
 bool libcp_consume(LibcpToken** rest, LibcpToken* tok, char* str);
 void libcp_convert_pp_tokens(LibcpContext* ctx, LibcpToken* tok);
-LibcpToken* libcp_tokenize_string_literal(LibcpContext* ctx, LibcpToken* tok, LibcpType* basety);
+void libcp_tokenize_string_literal(LibcpContext* ctx, LibcpToken* tok, LibcpType* basety);
 LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file);
 LibcpToken* libcp_tokenize_file_impl(LibcpContext* ctx, char* filename);
 
