@@ -93,3 +93,14 @@ Issues 与计划存于 GitHub Issues (`RunThem/chibicc-repo`), 通过 `gh` CLI �
 ### Domain docs
 
 single-context: 根 `GLOSSARY.md` 与 `docs/adr/`. 详见 `docs/agents/domain.md`.
+
+### 架构报告预览
+
+本机是远程服务器, 没有本地浏览器, `/improve-codebase-architecture` 产出的 HTML 报告无法用 `xdg-open` 查看. 每次该技能写出报告后, 用 Python 在局域网内临时提供预览:
+
+- 报告路径是 `<tmpdir>/architecture-review-<timestamp>.html`, `<tmpdir>` 取 `$TMPDIR`, 未设置时回退 `/tmp`.
+- 把报告复制进一个新建的独立临时目录, 服务目录中只有该报告文件.
+- 后台启动 `python3 -m http.server <port> --bind 0.0.0.0 --directory <dir>`; 端口被占用时换一个.
+- 用 `hostname -I` 取本机局域网地址, 向用户给出 `http://<ip>:<port>/<file>`.
+- 用户看完后停止服务进程, 不长期驻留.
+- 不得 serve 整个 `$TMPDIR` 或仓库根目录, 服务目录只放要预览的报告.
