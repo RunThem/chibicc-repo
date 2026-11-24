@@ -154,15 +154,6 @@ LibcpType* libcp_array_of(LibcpContext* ctx, LibcpType* base, int len) {
   return ty;
 }
 
-// VLA: 记录元素类型与长度表达式; 布局在运行时按实际长度决定,
-// 类型记录本身按 8 字节大小与对齐记账.
-LibcpType* libcp_vla_of(LibcpContext* ctx, LibcpType* base, LibcpNode* len) {
-  LibcpType* ty = new_type(ctx, TY_VLA, 8, 8);
-  ty->base      = base;
-  ty->vla_len   = len;
-  return ty;
-}
-
 // 维度尚未由解析器决定的数组: `dim` 是长度表达式, sema 会把它求值成
 // 长度; 当它不是常量表达式时, sema 把该类型改判为 VLA.
 LibcpType* libcp_array_of_dim(LibcpContext* ctx, LibcpType* base, LibcpNode* dim) {

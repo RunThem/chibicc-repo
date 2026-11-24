@@ -164,9 +164,6 @@ LibcpNode* libcp_conditional(LibcpContext* ctx, LibcpToken** rest, LibcpToken* t
 void libcp_usual_arith_conv(LibcpContext* ctx, LibcpNode** lhs, LibcpNode** rhs);
 LibcpType* libcp_get_common_type(LibcpContext* ctx, LibcpType* ty1, LibcpType* ty2);
 
-// 匿名名字计数器接下来会给出的值, 但不消耗它 (Phase 4 删除).
-int libcp_unique_name_next(LibcpContext* ctx);
-
 // type.c: 内建类型与类型构造
 
 extern LibcpType* libcp_ty_void;
@@ -193,7 +190,6 @@ bool libcp_is_compatible(LibcpType* t1, LibcpType* t2);
 LibcpType* libcp_copy_type(LibcpContext* ctx, LibcpType* ty);
 LibcpType* libcp_func_type(LibcpContext* ctx, LibcpType* return_ty);
 LibcpType* libcp_array_of(LibcpContext* ctx, LibcpType* base, int size);
-LibcpType* libcp_vla_of(LibcpContext* ctx, LibcpType* base, LibcpNode* expr);
 LibcpType* libcp_array_of_dim(LibcpContext* ctx, LibcpType* base, LibcpNode* dim);
 LibcpType* libcp_typeof_placeholder(LibcpContext* ctx);
 LibcpType* libcp_enum_type(LibcpContext* ctx);
