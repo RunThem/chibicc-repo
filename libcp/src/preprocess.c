@@ -1444,13 +1444,8 @@ static void join_adjacent_string_literals(LibcpContext* ctx, LibcpToken* tok) {
 
     if (basety->size > 1)
       for (LibcpToken* t = tok1; t->kind == TK_STR; t = t->next)
-        if (t->ty->base->size == 1) {
-          // 重新切词会整体覆盖 token (且不会设置 line_no); provenance
-          // 属于源码中的那个 token, 因此先取出再写回.
-          LibcpMacroProv* prov = t->prov;
-          *t                   = *libcp_tokenize_string_literal(ctx, t, basety);
-          t->prov              = prov;
-        }
+        if (t->ty->base->size == 1)
+          libcp_tokenize_string_literal(ctx, t, basety);
 
     while (tok1->kind == TK_STR)
       tok1 = tok1->next;
@@ -1480,7 +1475,8 @@ static void join_adjacent_string_literals(LibcpContext* ctx, LibcpToken* tok) {
       i = i + t->ty->size - t->ty->base->size;
     }
 
-    *tok1      = *copy_token(ctx, tok1);
+    // 只写回类型与载荷: 第一个 token 的坐标, 行号与 provenance 保持不变,
+    // 后续 token 从链上摘除.
     tok1->ty   = libcp_array_of(ctx, tok1->ty->base, len);
     tok1->str  = buf;
     tok1->next = tok2;
