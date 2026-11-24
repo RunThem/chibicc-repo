@@ -400,14 +400,50 @@ echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/main.c
 $chibicc -o $tmp/foo $tmp/main.c $tmp/foo.so
 check -fPIC
 
-# #include_next
+# #include_next (issue #24): the continuation belongs to the file that
+# contains the directive, not to a global cursor.
 mkdir -p $tmp/next1 $tmp/next2 $tmp/next3
-echo '#include "file1.h"' > $tmp/file.c
-echo '#include_next "file1.h"' > $tmp/next1/file1.h
-echo '#include_next "file2.h"' > $tmp/next2/file1.h
-echo 'foo' > $tmp/next3/file2.h
-$chibicc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/file.c | grep -q foo
-check '#include_next'
+printf 'int chain_next1;\n#include_next "chain.h"\n' > $tmp/next1/chain.h
+printf 'int chain_next2;\n#include_next "chain.h"\n' > $tmp/next2/chain.h
+echo 'int chain_next3;' > $tmp/next3/chain.h
+
+# A same-name chain next1 -> next2 -> next3.
+printf '#include "chain.h"\n' > $tmp/next.c
+$chibicc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/next.c > $tmp/next.out
+grep -q chain_next3 $tmp/next.out
+check '#include_next chain'
+
+# The target was cached by a plain include at start 0; #include_next from
+# a file in the second directory still continues in the third.
+echo '#include_next "chain.h"' > $tmp/next2/cached.h
+printf '#include <chain.h>\n#include <cached.h>\n' > $tmp/next-cached.c
+$chibicc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/next-cached.c > $tmp/next-cached.out
+grep -q chain_next1 $tmp/next-cached.out && grep -q chain_next3 $tmp/next-cached.out
+check '#include_next after a cached include'
+
+# The main file is not in the path table: its #include_next starts at the
+# first directory even after a deeper include moved the search.
+echo '#include_next "chain.h"' > $tmp/next2/target.h
+printf '#include <target.h>\n#include_next <chain.h>\n' > $tmp/next-main.c
+$chibicc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/next-main.c > $tmp/next-main.out
+grep -q chain_next3 $tmp/next-main.out && grep -q chain_next1 $tmp/next-main.out
+check '#include_next from the main file'
+
+# A quoted include that hits the current directory is not in the path
+# table either; #include_next from it starts at the first directory.
+echo '#include_next "chain.h"' > $tmp/local_next.h
+printf '#include <target.h>\n#include "local_next.h"\n' > $tmp/next-quoted.c
+$chibicc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/next-quoted.c > $tmp/next-quoted.out
+grep -q chain_next1 $tmp/next-quoted.out
+check '#include_next from a quoted current-directory file'
+
+# The path table is exhausted after the only directory: the existing
+# cannot-open diagnostic is kept.
+echo '#include_next "chain.h"' > $tmp/next1/exhaust.h
+printf '#include <exhaust.h>\n' > $tmp/next-exhaust.c
+$chibicc -I$tmp/next1 -E $tmp/next-exhaust.c > /dev/null 2> $tmp/next-exhaust.err
+[ $? -ne 0 ] && grep -q 'cannot open file' $tmp/next-exhaust.err
+check '#include_next table exhausted'
 
 # -static
 echo 'extern int bar; int foo() { return bar; }' > $tmp/foo.c

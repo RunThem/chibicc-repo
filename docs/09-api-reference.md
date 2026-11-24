@@ -209,7 +209,7 @@ char *libcp_context_resolve_include(LibcpContext *ctx, char *filename);
 - 否则按 `USER` -> `AFTER` -> `SYSTEM` 遍历路径表.
 - 绝对路径不会与路径表拼接; 表内也找不到时返回 NULL.
 - 返回 per-TU 分配的路径; 有效期到下一次 `reset` 或 `free`.
-- 命中路径表时与 `#include` 一样更新内部搜索状态.
+- 命中路径表时记录该文件在路径表中的命中下标, 供它内部的 `#include_next` 续查; 按原样命中的文件没有下标. 这与 `#include` 使用同一套搜索与缓存状态.
 
 ### 9.3.9 libcp_context_include_is_system
 
