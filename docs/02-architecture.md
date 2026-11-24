@@ -325,9 +325,9 @@ libcp/
   include/libcp/
     libcp.h        伞头, 唯一需要 include 的文件
     allocator.h     构建期可替换的分配器宏: LIBCP_DEFAULT_ALLOCATOR 或全部四个 LIBCP_* 宏, 只在重编库时生效
-    context.h        context, 诊断回调, 配置, 预定义宏
+    context.h        context, 诊断回调, 配置, base file, 预定义宏
     diagnostic.h     LibcpDiagnostic 与 severity
-    token.h          LibcpToken, LibcpFile, 第 1 层入口
+    token.h          LibcpToken, LibcpFile, 第 1 层入口, input file 枚举与 synthetic 判定
     preprocess.h     libcp_preprocess
     provenance.h     宏展开访问器与两个只读通道
     cst.h            第 2 层: LibcpCstKind, LibcpCstNode
@@ -335,7 +335,8 @@ libcp/
     backend.h        后端支持面: 节点构造, LibcpBuiltinType, 类型标注, 标签引用, 唯一名与诊断
     sema.h           libcp_sema
   src/
-    tokenize.c       词法, trivia, raw 坐标, 诊断格式化
+    tokenize.c       词法, trivia, 诊断格式化
+    source.c         源坐标: LibcpFile 构造, 扫描缓冲, raw / 扫描偏移 / 物理行换算, synthetic 判定, input file 表
     preprocess.c     指令, 宏展开, include, provenance 记录
     provenance.c     展开链的 dump / verify
     cst.c            lossless CST 的建树, dump, verify

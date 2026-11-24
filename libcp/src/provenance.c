@@ -22,20 +22,14 @@
 
 #include "libcp.h"
 
-// 合成缓冲区 (拼接, 字符串化, 内建值) 的 raw 就是它自身的文本;
-// 真实文件的 raw 则是另一块分配.
-static bool is_synthetic(LibcpToken* tok) {
-  return tok->file->raw == tok->file->contents;
-}
-
 // 把 token 位置打印为 <file>:<line>; 位置不是真实文件的行时打印
-// <file>:@synth. phys-line = line_no - line_delta, 因为
-// libcp_preprocess() 最后会把 #line 偏移加到每个 token 的行号上.
+// <file>:@synth. 物理行与 file 级 synthetic 判定都由 source.c 提供:
+// 物理行取自文件的 lines / map 表, 不依赖 line_no - line_delta.
 static void print_pos(FILE* out, LibcpToken* tok) {
-  if (is_synthetic(tok))
+  if (libcp_token_is_synthetic(tok))
     fprintf(out, "%s:@synth", tok->file->name);
   else
-    fprintf(out, "%s:%d", tok->file->name, tok->line_no - tok->line_delta);
+    fprintf(out, "%s:%d", tok->file->name, libcp_token_physical_line(tok));
 }
 
 // 按行打印展开流: 位置, 种类, 拼写与展开链 (无链时打印 "-").

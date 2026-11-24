@@ -37,6 +37,11 @@ LIBCP_API void libcp_context_set_diagnostic(LibcpContext* ctx, LibcpDiagnosticFn
 LIBCP_API bool libcp_context_failed(LibcpContext* ctx);
 
 LIBCP_API void libcp_context_add_include_path(LibcpContext* ctx, char* path);
+
+// 设置 __BASE_FILE__ 的路径. 这是 per-TU 状态: reset 清空; 未设置时,
+// 第一个被词法分析的输入文件充当它. 字符串被复制进 per-TU 分配.
+LIBCP_API void libcp_context_set_base_file(LibcpContext* ctx, char* path);
+
 LIBCP_API void libcp_context_define(LibcpContext* ctx, char* name, char* buf);
 LIBCP_API void libcp_context_undef(LibcpContext* ctx, char* name);
 

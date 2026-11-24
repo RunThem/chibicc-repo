@@ -138,7 +138,9 @@ struct libcp_file {
 
 `map` 和 `lines` 的长度是字节数加 1, 最后一项覆盖文件末尾.
 
-对 `libcp_tokenize_buffer` 的输入, 没有磁盘文件, 也没有改写: `file->raw == file->contents`, `map` 是恒等映射, `lines` 直接数换行. 这类 token 在 provenance dump 里显示为 `@synth`, 见第 4 章.
+`LibcpFile` 的构造与这四张表的换算由内部模块 `libcp/src/source.c` 独占: raw / 扫描偏移 / 物理行之间的换算, file 级 synthetic 判定与 input file 表登记都在那里. 第 3 层的 `libcp_node_source_range` 与 provenance 通道共用同一套入口, 不再各自计算 `loc - contents` 或 `line_no - line_delta`.
+
+对 `libcp_tokenize_buffer` 的输入, 没有磁盘文件, 也没有改写: `file->raw == file->contents`, `map` 是恒等映射, `lines` 直接数换行. 这类 token 在 provenance dump 里显示为 `@synth`, 公共的 `libcp_token_is_synthetic` 对它返回 true, 见第 4 章.
 
 ### 3.3.3 关键字的时机
 
@@ -162,13 +164,13 @@ struct libcp_file {
 1. 调用 `read_file` 读入整个文件. 读 stdin 时只读一次, 内容缓存在 context 里, 第二次 tokenize `-` 会拿到同一份文本.
 2. 检查文件大小不超过 `INT32_MAX`, 因为词法器用 `int` 存偏移.
 3. 检查 NUL 字节. 源文件里出现 NUL 是诊断, 不是静默截断.
-4. 分配 `LibcpFile`, 编号并登记到 context 的输入文件表.
+4. 由 `source.c` 的 `libcp_new_file_from_raw` 构造 `LibcpFile` (编号), 再经 `libcp_source_register_input_file` 登记到 context 的输入文件表.
 
-`tokenize_buffer(name, contents)` 走另一条路: 把传入的字节复制进 per-TU 分配, 直接构造一个没有改写的 `LibcpFile`. 内存中的输入不经过 `make_scan_buffer`.
+`tokenize_buffer(name, contents)` 走另一条路: 把传入的字节复制进 per-TU 分配, 用 `source.c` 的 `libcp_new_file_len` 直接构造一个没有改写的 `LibcpFile`. 内存中的输入不经过 `make_scan_buffer`, 也不登记为 input file.
 
 ### 3.4.2 构造扫描缓冲
 
-`make_scan_buffer(raw, len, &map, &lines)` 一遍扫描完成五件事:
+`source.c` 的 `make_scan_buffer(raw, len, &map, &lines)` 一遍扫描完成五件事:
 
 1. 跳过开头的 BOM.
 2. 把 `\r\n` 和孤立的 `\r` 归一成 `\n`.
@@ -181,7 +183,7 @@ struct libcp_file {
 - `map[scan_offset] = raw_offset`.
 - `lines[raw_offset] = 行号`.
 
-对多字节改写, `map` 把同一个 raw 偏移映射给多个扫描偏移; 反向的"扫描位置对应的 raw 结束位置"由 `raw_end_of` 计算, 它认识换行和 universal character name 的长度.
+对多字节改写, `map` 把同一个 raw 偏移映射给多个扫描偏移; 反向的"扫描位置对应的 raw 结束位置"由 `libcp_file_raw_end_of` 计算, 它认识换行和 universal character name 的长度.
 
 ### 3.4.3 切 token
 
@@ -200,9 +202,9 @@ struct libcp_file {
    - `raw_loc` / `raw_len`: 拼写, raw 坐标
    - `file`, `filename`, `at_bol`, `has_space`
 4. 循环结束时追加 `TK_EOF`, 它的前置 trivia 是文件末尾的全部字节.
-5. `add_line_numbers` 给每个 token 填物理行号.
+5. `add_line_numbers` 经 `libcp_token_physical_line` 给每个 token 填物理行号, 行号取自文件的 `lines` / `map` 表.
 
-`new_token` 里有一个细节: `raw_len` 不是简单的 `len`. 扫描缓冲中的最后一个字节可能对应 raw 文本中的多个字节, 例如一个 universal character name. `raw_end_of` 负责算对结束位置.
+`new_token` 里有一个细节: `raw_len` 不是简单的 `len`. 扫描缓冲中的最后一个字节可能对应 raw 文本中的多个字节, 例如一个 universal character name. `libcp_file_raw_end_of` 负责算对结束位置.
 
 ### 3.4.4 重建
 

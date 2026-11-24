@@ -65,9 +65,11 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out);
 void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
   output_file = out;
 
-  LibcpFile **files = libcp_get_input_files(ctx);
-  for (int i = 0; files[i]; i++)
-    println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
+  int file_count = libcp_context_input_file_count(ctx);
+  for (int i = 0; i < file_count; i++) {
+    LibcpFile *file = libcp_context_input_file_at(ctx, i);
+    println("  .file %d \"%s\"", file->file_no, file->name);
+  }
 
   label_base = libcp_unique_name_next(ctx);
   shape(ctx, prog);

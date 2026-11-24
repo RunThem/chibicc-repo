@@ -10,32 +10,22 @@
 //
 #include "libcp.h"
 
-// token 位置: 所在文件加文件内偏移, 比较先后时用.
-typedef struct {
-  LibcpFile* file;
-  long off;
-} LibcpPos;
-
-// 取 token 的 (file, offset) 位置.
-static LibcpPos pos_of(LibcpToken* tok) {
-  return (LibcpPos){tok->file, tok->loc - tok->file->contents};
-}
-
 // 按 (file, offset) 判断 a 是否位于 b 之前; 文件指针比较结果稳定,
 // 但不同合成缓冲区之间的先后是任意的.
-static int pos_lt(LibcpPos a, LibcpPos b) {
+static int pos_lt(LibcpSourcePos a, LibcpSourcePos b) {
   if (a.file != b.file)
     return a.file < b.file;
-  return a.off < b.off;
+  return a.offset < b.offset;
 }
 
 // 用一个锚点 token 更新当前的起止极值; NULL 锚点直接忽略.
 static void consider(LibcpToken* tok, LibcpToken** start, LibcpToken** end) {
   if (!tok)
     return;
-  if (!*start || pos_lt(pos_of(tok), pos_of(*start)))
+  LibcpSourcePos pos = libcp_token_source_pos(tok);
+  if (!*start || pos_lt(pos, libcp_token_source_pos(*start)))
     *start = tok;
-  if (!*end || pos_lt(pos_of(*end), pos_of(tok)))
+  if (!*end || pos_lt(libcp_token_source_pos(*end), pos))
     *end = tok;
 }
 
