@@ -180,6 +180,8 @@ libcp_cst_dump
 libcp_cst_verify
 libcp_parse
 libcp_node_family
+libcp_node_child_count
+libcp_node_child_at
 libcp_node_source_range
 libcp_node_new
 libcp_node_binary

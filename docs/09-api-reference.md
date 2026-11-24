@@ -1,6 +1,6 @@
 # 09 API 参考与用法
 
-本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 60 个公共函数与公共宏, 不列内部函数.
+本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 62 个公共函数与公共宏, 不列内部函数.
 
 ## 9.1 头文件, 链接与命名
 
@@ -48,7 +48,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 
 `LIBCP_API` 在 GCC/Clang 下展开为 `__attribute__((visibility("default")))`, 用于共享库导出. 消费者不需要关心它.
 
-`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 60 个函数.
+`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 62 个函数.
 
 ## 9.2 函数总表
 
@@ -60,7 +60,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 | 源坐标 | `libcp_context_input_file_count`, `libcp_context_input_file_at`, `libcp_token_is_synthetic` |
 | 预处理 | `libcp_preprocess` |
 | 第 2 层 | `libcp_cst_parse`, `libcp_cst_seed_typedef`, `libcp_cst_reconstruct`, `libcp_cst_dump`, `libcp_cst_verify` |
-| 第 3 层 | `libcp_parse`, `libcp_node_family`, `libcp_node_source_range` |
+| 第 3 层 | `libcp_parse`, `libcp_node_family`, `libcp_node_child_count`, `libcp_node_child_at`, `libcp_node_source_range` |
 | 第 4 层 | `libcp_sema` |
 | 后端支持面 | `libcp_node_new`, `_binary`, `_unary`, `_num`, `_long`, `_arith`, `_var`, `_vla_ptr`, `_alloca`, `_cast` |
 | 后端支持面 | `libcp_type_builtin`, `libcp_node_annotate_type`, `libcp_type_pointer_to` |
@@ -493,6 +493,56 @@ LibcpNodeFamily libcp_node_family(LibcpNodeKind kind);
 union 中, 访问形式为 `node->ctrl.cond`, `node->decl.attr`. `LIBCP_NF_NONE` 表示
 该 kind 只使用公共头. 每个 kind 只使用一个族; 读取非活动族是未定义行为.
 族的字段与 kind 对应见 `docs/06-layer3-parse.md` 的 6.3.2.
+
+### 9.7.4 libcp_node_child_count / libcp_node_child_at
+
+```c
+typedef struct {
+  const LibcpNode *node;
+  bool is_list;
+} LibcpNodeChild;
+
+int libcp_node_child_count(const LibcpNode *node);
+LibcpNodeChild libcp_node_child_at(const LibcpNode *node, int index);
+```
+
+只读结构子节点枚举, 供树外消费者的通用 walker 使用. 它回答 "下降哪些
+子节点, 顺序如何"; 判断 union 载荷是否有效仍用 `libcp_node_family`.
+
+- 顺序固定为 `lhs`, `rhs`, 活动族的节点字段, `spec_decls`, 不是源码
+  顺序: ctrl 的 `cond / then / els / init / inc / args`, decl 的 `body`,
+  case 的 `begin_expr / end_expr`, cas 的三个操作数.
+- `index` 是存在子节点的序号 `0..count-1`, 不是字段槽位; 越界返回
+  `{NULL, false}`. `node` 为 NULL 时 count 为 0.
+- `next` 是兄弟链接, 永远不是子节点. 列表字段 `decl.body`, `ctrl.init`,
+  `ctrl.args`, `spec_decls` 只返回头节点并置 `is_list = true`, 调用者
+  沿 `next` 访问兄弟; 其他字段返回单个节点并置 `is_list = false`.
+- 排除 `generic_sel` (它是 `ctrl.args` 中某个关联结果的别名),
+  `decl.decl_init`, `decl.init_resolved`, `decl.attr.align_expr`, 以及
+  类型载荷里的节点 (`ty->dim_len`, `ty->typeof_expr`, `ty->vla_len`,
+  `member->width_expr` 等).
+- 不分配, 不诊断, 不需要 `LibcpContext`, 也不触碰 per-TU 状态. 树被
+  修改后 `index` 不稳定.
+- 空翻译单元或叶子节点: count 为 0, 任何 index 都返回
+  `{NULL, false}`.
+
+例:
+
+```c
+static void walk(const LibcpNode *node) {
+  if (!node)
+    return;
+  visit(node);
+  for (int i = 0, n = libcp_node_child_count(node); i < n; i++) {
+    LibcpNodeChild c = libcp_node_child_at(node, i);
+    if (c.is_list)
+      for (const LibcpNode *s = c.node; s; s = s->next)
+        walk(s);
+    else
+      walk(c.node);
+  }
+}
+```
 
 ## 9.8 第 4 层 API
 

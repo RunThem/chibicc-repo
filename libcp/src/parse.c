@@ -135,6 +135,123 @@ LibcpNodeFamily libcp_node_family(LibcpNodeKind kind) {
   }
 }
 
+// 按固定顺序列出节点的结构子节点槽位: lhs, rhs, 活动族的节点字段,
+// spec_decls. 列表字段照常占一个槽位, 由 lists 标出. 槽位可能为 NULL,
+// 调用者跳过它们, 因此 index 是存在子节点的序号, 不是字段槽位.
+#define MAX_CHILD_SLOTS 8
+
+static int child_slots(const LibcpNode* node, const LibcpNode** slots, bool* lists) {
+  int n      = 0;
+  slots[n]   = node->lhs;
+  lists[n++] = false;
+  slots[n]   = node->rhs;
+  lists[n++] = false;
+
+  switch (libcp_node_family(node->kind)) {
+    case LIBCP_NF_CTRL:
+      switch (node->kind) {
+        case ND_COND:
+        case ND_IF:
+          slots[n]   = node->ctrl.cond;
+          lists[n++] = false;
+          slots[n]   = node->ctrl.then;
+          lists[n++] = false;
+          slots[n]   = node->ctrl.els;
+          lists[n++] = false;
+          break;
+        case ND_FOR:
+          slots[n]   = node->ctrl.cond;
+          lists[n++] = false;
+          slots[n]   = node->ctrl.then;
+          lists[n++] = false;
+          slots[n]   = node->ctrl.init;
+          lists[n++] = true;
+          slots[n]   = node->ctrl.inc;
+          lists[n++] = false;
+          break;
+        case ND_WHILE:
+        case ND_DO:
+        case ND_SWITCH:
+          slots[n]   = node->ctrl.cond;
+          lists[n++] = false;
+          slots[n]   = node->ctrl.then;
+          lists[n++] = false;
+          break;
+        case ND_FUNCALL:
+          slots[n]   = node->ctrl.args;
+          lists[n++] = true;
+          break;
+        case ND_GENERIC:
+          // generic_sel 是 args 中某个关联结果的别名, 不重复返回.
+          slots[n]   = node->ctrl.cond;
+          lists[n++] = false;
+          slots[n]   = node->ctrl.args;
+          lists[n++] = true;
+          break;
+        default: break;
+      }
+      break;
+    case LIBCP_NF_DECL:
+      if (node->kind == ND_BLOCK || node->kind == ND_STMT_EXPR || node->kind == ND_FUNCDEF) {
+        slots[n]   = node->decl.body;
+        lists[n++] = true;
+      }
+      break;
+    case LIBCP_NF_CASE:
+      slots[n]   = node->case_.begin_expr;
+      lists[n++] = false;
+      slots[n]   = node->case_.end_expr;
+      lists[n++] = false;
+      break;
+    case LIBCP_NF_CAS:
+      slots[n]   = node->cas.cas_addr;
+      lists[n++] = false;
+      slots[n]   = node->cas.cas_old;
+      lists[n++] = false;
+      slots[n]   = node->cas.cas_new;
+      lists[n++] = false;
+      break;
+    default: break;
+  }
+
+  // decl_init, init_resolved, attr.align_expr 与类型载荷里的节点不是
+  // 结构子节点, 因此不出现在这里.
+  slots[n]   = node->spec_decls;
+  lists[n++] = true;
+  return n;
+}
+
+int libcp_node_child_count(const LibcpNode* node) {
+  if (!node)
+    return 0;
+
+  const LibcpNode* slots[MAX_CHILD_SLOTS];
+  bool lists[MAX_CHILD_SLOTS];
+  int slots_n = child_slots(node, slots, lists);
+  int count   = 0;
+  for (int i = 0; i < slots_n; i++)
+    if (slots[i])
+      count++;
+  return count;
+}
+
+LibcpNodeChild libcp_node_child_at(const LibcpNode* node, int index) {
+  LibcpNodeChild none = {NULL, false};
+  if (!node || index < 0)
+    return none;
+
+  const LibcpNode* slots[MAX_CHILD_SLOTS];
+  bool lists[MAX_CHILD_SLOTS];
+  int slots_n = child_slots(node, slots, lists);
+  for (int i = 0; i < slots_n; i++) {
+    if (!slots[i])
+      continue;
+    if (index-- == 0)
+      return (LibcpNodeChild){slots[i], lists[i]};
+  }
+  return none;
+}
+
 LibcpNode* libcp_node_new(LibcpContext* ctx, LibcpNodeKind kind, LibcpToken* tok) {
   LibcpNode* node = libcp_tu_calloc(ctx, 1, sizeof(LibcpNode));
   node->kind      = kind;

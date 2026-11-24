@@ -69,7 +69,7 @@
 - 记录编译期结论.
 - 标注初始化器表达式. 声明记录的初始化器不会被普通遍历到达, 所以单独走 `decl.init_resolved`.
 
-在标注之后, `analyze_function` 还调用 `check_control_flow` 做一次独立的控制流检查: `break` / `continue` / `case` / `default` 的位置, 以及 `goto` / label 配对. 这些检查不在 `libcp_node_annotate_type` 里.
+在标注之后, `analyze_function` 还调用 `check_control_flow` 做一次独立的检查: `break` / `continue` / `case` / `default` 的位置, `goto` / label 配对, 以及 `for` init 声明链中的同名重复声明. 这些检查不在 `libcp_node_annotate_type` 里.
 
 两遍分开的原因是: 第一遍建立名字和类型, 第二遍才能定型. 例如 `a + b` 的类型取决于 `a` 和 `b` 的声明, 而声明可能写在后面.
 
@@ -458,8 +458,9 @@ static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
 
 - `break` / `continue` / `case` / `default` 的位置.
 - `goto` / label 配对.
+- `for` init 声明链中的同名重复声明.
 
-诊断文案与插入符锚点由 `test/diagnostic.sh` 逐字节锁定, 68 例.
+诊断文案与插入符锚点由 `test/diagnostic.sh` 逐字节锁定, 69 例.
 
 ### 7.4.6 全局数据序列化
 
