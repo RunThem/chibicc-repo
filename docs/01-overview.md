@@ -32,6 +32,7 @@
 此外还有:
 
 - `libcp_reconstruct`: 从第 1 层的 token 流重建原始字节.
+- 四个只读 dump 入口: `libcp_token_dump` (第 1 层 token 与 trivia), `libcp_ast_dump` (第 3 层 AST), `libcp_cst_dump` (第 2 层 CST) 与 `libcp_expansion_dump` (宏展开 provenance). 文本格式都是公共契约, 由 golden 脚本逐字节锁定.
 - 宏展开 provenance 的 11 个访问器, 以及 `libcp_expansion_dump` / `_verify`.
 - 一个不透明的 `LibcpContext`, 管理一个翻译单元的全部状态和内存.
 - 一套可替换的分配器宏 (`<libcp/allocator.h>`).
@@ -39,7 +40,7 @@
 - 按稳定顺序枚举一个翻译单元读入的文件, 设置 `__BASE_FILE__`, 判断 token 是否来自合成文件 (`libcp_context_input_file_count` / `_at`, `libcp_context_set_base_file`, `libcp_token_is_synthetic`).
 - 按固定顺序枚举一个节点的结构子节点, 不需要复制库内 walker 的字段 switch (`libcp_node_child_count` / `_at`, 见 9.7.4).
 - include 搜索的单一 owner: 按来源 (`USER` / `AFTER` / `SYSTEM`) 注册路径, 解析 include 文件名并判定系统目录 (`libcp_context_add_include_path_with_origin`, `libcp_context_resolve_include`, `libcp_context_include_is_system`).
-- 11 个公共头, 65 个公共函数(L5 起含 `libcp_cst_seed_typedef` 与 `libcp_node_source_range`; 0.2.0 起含 `libcp_node_family`; 后端支持面追加 17 个; 源坐标追加 4 个; 子节点枚举追加 2 个; include 搜索追加 3 个). 公共符号一律 `libcp_` / `Libcp` 前缀.
+- 11 个公共头, 67 个公共函数(L5 起含 `libcp_cst_seed_typedef` 与 `libcp_node_source_range`; 0.2.0 起含 `libcp_node_family`; 后端支持面追加 17 个; 源坐标追加 4 个; 子节点枚举追加 2 个; include 搜索追加 3 个; dump 追加 2 个). 公共符号一律 `libcp_` / `Libcp` 前缀.
 
 库的实现约 1.1 万行 C, 公共头约 1050 行(11 个头文件). 它没有外部依赖, 除 C 标准库外只要求 POSIX 的文件与线程基础能力.
 

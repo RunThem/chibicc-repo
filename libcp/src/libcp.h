@@ -86,8 +86,8 @@ LibcpFile* libcp_new_file(LibcpContext* ctx, char* name, int file_no, char* cont
 LibcpFile* libcp_new_file_len(LibcpContext* ctx, char* name, int file_no, char* contents, int len);
 LibcpFile* libcp_new_file_from_raw(LibcpContext* ctx, char* name, char* raw, int len);
 void libcp_source_register_input_file(LibcpContext* ctx, LibcpFile* file);
-bool libcp_is_line_break(char* p);
-int libcp_line_break_len(char* p);
+bool libcp_is_line_break(const char* p);
+int libcp_line_break_len(const char* p);
 int libcp_file_raw_offset(const LibcpFile* file, const char* p);
 int libcp_file_raw_end_of(const LibcpFile* file, int scan_off);
 int libcp_file_physical_line(const LibcpFile* file, int raw_offset);
@@ -222,7 +222,7 @@ void libcp_hashmap_delete2(LibcpContext* ctx, LibcpHashMap* map, char* key, int 
 //
 
 bool libcp_file_exists(char* path);
-void libcp_print_escaped(FILE* out, char* p, int len);
+void libcp_print_escaped(FILE* out, const char* p, int len);
 char* libcp_token_kind_name(LibcpContext* ctx, LibcpTokenKind kind);
 
 // context / per-TU 分配 / 诊断 (PLAN L2)
