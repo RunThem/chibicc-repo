@@ -322,7 +322,9 @@ make test-thirdparty
 THIRDPARTY="tinycc libpng" make test-thirdparty
 ```
 
-本地版不把 `test/thirdparty` 放进 PATH (那个 `make` shim 只为 Rosetta 跳过 tcc 的三个不稳定用例), 也不把源码拷到 `/work`.
+本地版不把 `test/thirdparty` 放进 PATH, 也不把源码拷到 `/work`. Rosetta 下 tcc 的 106_pthread / 112_backtrace / 113_btdll 会不稳定 SIGSEGV, 与 chibicc 无关, 因此 `test/thirdparty/make` 是只为 Rosetta 服务的 PATH shim, 真 x86-64 Linux 不需要.
+
+容器内构建与测试必须在容器可写层 `/work` 进行: tcc 的 `-run`/bcheck 只认 overlayfs, 在 virtiofs 或 docker volume 上会确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存.
 
 ### 10.10.1 CI 闸门
 
