@@ -157,7 +157,7 @@ libcp_context_add_include_path(ctx, "/usr/include");
 
 ### 11.5.4 内存中的输入被标记为 `@synth`
 
-`libcp_tokenize_buffer` 的 `raw == contents`, provenance dump 会把它当成合成缓冲, 位置显示 `@synth`.
+`libcp_tokenize_buffer` 的 `raw == contents`, 公共的 `libcp_token_is_synthetic` 对所有 token (包括 EOF) 返回 true, provenance dump 会把它当成合成缓冲, 位置显示 `@synth`.
 
 规避: 需要真实的文件与行号时用 `libcp_tokenize_file`.
 
@@ -235,6 +235,8 @@ libcp_context_add_include_path(ctx, "/usr/include");
 ### 11.7.5 合成位置
 
 粘贴, 字符串化, 内建宏产生的 token 位置是合成的. dump 显示 `@synth`, 诊断可能指向宏定义或合成位置.
+
+这里的 `@synth` 按 token 的 provenance 判断 (宏展开产物), 与 `libcp_token_is_synthetic` 的 file 级判定 (文件缓冲区是否合成) 是两个不同的概念.
 
 ### 11.7.6 不能做宏内手术
 
@@ -407,13 +409,13 @@ filename = NULL, line = 0, column = 0
 
 ### 11.11.2 `.a` 暴露内部符号
 
-2026-10-25 起归档内全部外部符号统一 `libcp_` 前缀 (当前 138 个, 其中 58 个是公共函数), 与宿主符号碰撞的风险基本消除; 但内部符号仍然对该归档可见.
+2026-10-25 起归档内全部外部符号统一 `libcp_` 前缀 (当前 149 个, 其中 62 个是公共函数), 与宿主符号碰撞的风险基本消除; 但内部符号仍然对该归档可见.
 
 - 公共头不声明它们.
 - 消费者不得调用.
 - 与公共 API 同前缀, `nm` 不能再靠前缀区分内外 - 判据是"公共头是否声明".
 
-规避: Linux 下优先用 `.so`, 它只导出 58 个 D7 函数. 或者把库放到独立命名空间 / 单独进程.
+规避: Linux 下优先用 `.so`, 它只导出 62 个 D7 函数. 或者把库放到独立命名空间 / 单独进程.
 
 ### 11.11.3 公共头没有 `extern "C"`, 字符串类参数不是 const
 
@@ -435,9 +437,9 @@ extern "C" {
 
 观察: `context.h` 在 `LibcpPredefinedMacro` 上说 `name` / `value` "归 context 所有, 并会被 `libcp_context_reset` 失效". 实现里静态表的 `name` 与固定 `value` 是字符串字面量, reset 不会让它们失效; 只有 `predefined` 数组本身与 per-TU 构造的 `value` 会失效.
 
-冲突契约: `docs/09-api-reference.md` 9.3.10 与 9.12 已经按实现写明静态部分不失效.
+冲突契约: `docs/09-api-reference.md` 9.3.11 与 9.12 已经按实现写明静态部分不失效.
 
-规避: 不要 `free` 这些指针, 也不要依赖 reset 后继续可用; 需要长期保存就复制. 以 docs/09 9.3.10 与 9.12 为准. 建议修复方向: 改 `context.h` 注释, 或在 reset 时统一把静态项复制进 per-TU 分配.
+规避: 不要 `free` 这些指针, 也不要依赖 reset 后继续可用; 需要长期保存就复制. 以 docs/09 9.3.11 与 9.12 为准. 建议修复方向: 改 `context.h` 注释, 或在 reset 时统一把静态项复制进 per-TU 分配.
 
 ## 11.12 性能
 
@@ -469,7 +471,8 @@ extern "C" {
 | 空翻译单元 | `parse` / `sema` 返回 NULL, `failed` 为 false |
 | 打不开文件 | 返回 NULL, 诊断 filename 为 NULL, line/column 为 0 |
 | 预处理后 `reconstruct` | 输出展开流, 不是原文件 |
-| 内存输入 provenance | 位置显示 `@synth` |
+| 内存输入 provenance | 位置显示 `@synth`; `libcp_token_is_synthetic` 返回 true |
+| 真实文件 token | `libcp_token_is_synthetic` 返回 false |
 | 文件输入带 BOM | BOM 在第一个 token 的前置 trivia 里 |
 | 内存输入带 BOM | BOM 留在第一个 token 的拼写里, 不跳过 |
 | 内存输入带 BOM 后接 `int` | `int` 可能被读成标识符的一部分 |

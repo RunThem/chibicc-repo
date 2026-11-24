@@ -136,7 +136,7 @@ EOF
 # underscore on Darwin. Since the symbol-prefix line every internal
 # symbol carries the libcp_ prefix too, the deny list is anchored on it.
 nm -u "$tmp/consumer.o" | awk '{print $NF}' > "$tmp/undef"
-bad=$(grep -E '^_?(libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|error|error_at|error_tok|warn_tok|diagnostic_vreport|strarray_push|nodearray_push|format|ctx|conditional|context_activate|context_set_base_file|get_input_files|unique_name_next)|libcp_(hashmap|sema|ty|tu)_[a-z_0-9]+)$' "$tmp/undef" || true)
+bad=$(grep -E '^_?(libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|error|error_at|error_tok|warn_tok|diagnostic_vreport|strarray_push|nodearray_push|format|ctx|conditional|context_activate|unique_name_next)|libcp_(hashmap|sema|ty|tu)_[a-z_0-9]+)$' "$tmp/undef" || true)
 if [ -n "$bad" ]; then
   echo "public-api: the consumer references internal symbols:" >&2
   echo "$bad" >&2
@@ -159,6 +159,7 @@ libcp_context_reset
 libcp_context_set_diagnostic
 libcp_context_failed
 libcp_context_add_include_path
+libcp_context_set_base_file
 libcp_context_define
 libcp_context_undef
 libcp_context_set_predefined_macros
@@ -168,6 +169,9 @@ libcp_tokenize_file
 libcp_tokenize_buffer
 libcp_tokenize_buffer_len
 libcp_reconstruct
+libcp_context_input_file_count
+libcp_context_input_file_at
+libcp_token_is_synthetic
 libcp_preprocess
 libcp_cst_parse
 libcp_cst_seed_typedef

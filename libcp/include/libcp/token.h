@@ -89,6 +89,18 @@ struct libcp_token {
                           // 拥有; 下面的访问器是公共接口)
 };
 
+// 枚举当前翻译单元已读入的文件, 顺序是首次读取顺序; 主文件通常是
+// 索引 0. count 在 ctx 为 NULL 时为 0; at 在 index 越界或 ctx 为 NULL
+// 时返回 NULL. 返回的 LibcpFile 归 context 所有, 消费者只读.
+LIBCP_API int libcp_context_input_file_count(LibcpContext* ctx);
+LIBCP_API LibcpFile* libcp_context_input_file_at(LibcpContext* ctx, int index);
+
+// token 是否来自合成文件 (内存输入或宏展开产生的缓冲区): 文件的
+// raw == contents. 这是 file 级判定, 内存输入也满足它; 宏展开产物的
+// @synth 标记按 token 的 provenance 判断, 是另一回事. tok 为 NULL 时
+// 返回 false.
+LIBCP_API bool libcp_token_is_synthetic(const LibcpToken* tok);
+
 LIBCP_API LibcpToken* libcp_tokenize_file(LibcpContext* ctx, char* path);
 LIBCP_API LibcpToken* libcp_tokenize_buffer(LibcpContext* ctx, char* name, char* contents);
 

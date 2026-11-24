@@ -199,6 +199,8 @@ context 默认安装 47 个预定义宏, 分四类:
 - **类型与关键字别名**: `__SIZE_TYPE__`, `__alignof__`, `__const__`, `__inline__`, `__typeof__`, `__volatile__` 等.
 - **动态与内建**: `__DATE__`, `__TIME__`, `__TIMESTAMP__`, `__FILE__`, `__LINE__`, `__BASE_FILE__`, `__COUNTER__`.
 
+`__BASE_FILE__` 的值由 `libcp_context_set_base_file` 设置; 未设置时取第一个被词法分析的输入文件名.
+
 注意 `__chibicc__` 默认定义. 被预处理代码如果检查这个宏, 会走 chibicc 分支.
 
 `libcp_context_set_predefined_macros(ctx, false)` 关闭整个集合, 但**下一次 reset 才生效**. 关闭后, `libcp_context_predefined_count` 返回 0.

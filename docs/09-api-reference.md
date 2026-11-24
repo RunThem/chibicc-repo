@@ -1,6 +1,6 @@
 # 09 API 参考与用法
 
-本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 58 个公共函数与公共宏, 不列内部函数.
+本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 62 个公共函数与公共宏, 不列内部函数.
 
 ## 9.1 头文件, 链接与命名
 
@@ -15,9 +15,9 @@
 ```text
 libcp.h       伞头, LIBCP_VERSION, libcp_version
 allocator.h     可替换的分配器宏
-context.h       context, 诊断回调, 配置, 预定义宏
+context.h       context, 诊断回调, 配置, base file, 预定义宏
 diagnostic.h    LibcpDiagnostic, severity
-token.h         LibcpToken, LibcpFile, 第 1 层入口
+token.h         LibcpToken, LibcpFile, 第 1 层入口, input file 枚举与 synthetic 判定
 preprocess.h    libcp_preprocess
 provenance.h    宏展开访问器, dump / verify
 cst.h           第 2 层
@@ -48,15 +48,16 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 
 `LIBCP_API` 在 GCC/Clang 下展开为 `__attribute__((visibility("default")))`, 用于共享库导出. 消费者不需要关心它.
 
-`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 58 个函数.
+`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 62 个函数.
 
 ## 9.2 函数总表
 
 | 组 | 函数 |
 |---|---|
 | context | `libcp_context_new`, `_free`, `_reset`, `_set_diagnostic`, `_failed` |
-| 配置 | `libcp_context_add_include_path`, `_define`, `_undef`, `_set_predefined_macros`, `_predefined_count`, `_predefined_at` |
+| 配置 | `libcp_context_add_include_path`, `libcp_context_set_base_file`, `_define`, `_undef`, `_set_predefined_macros`, `_predefined_count`, `_predefined_at` |
 | 第 1 层 | `libcp_tokenize_file`, `libcp_tokenize_buffer`, `libcp_tokenize_buffer_len`, `libcp_reconstruct` |
+| 源坐标 | `libcp_context_input_file_count`, `libcp_context_input_file_at`, `libcp_token_is_synthetic` |
 | 预处理 | `libcp_preprocess` |
 | 第 2 层 | `libcp_cst_parse`, `libcp_cst_seed_typedef`, `libcp_cst_reconstruct`, `libcp_cst_dump`, `libcp_cst_verify` |
 | 第 3 层 | `libcp_parse`, `libcp_node_family`, `libcp_node_child_count`, `libcp_node_child_at`, `libcp_node_source_range` |
@@ -178,7 +179,19 @@ void libcp_context_add_include_path(LibcpContext *ctx, char *path);
 
 库本身不读环境变量, 不加编译器的默认路径.
 
-### 9.3.7 libcp_context_define
+### 9.3.7 libcp_context_set_base_file
+
+```c
+void libcp_context_set_base_file(LibcpContext *ctx, char *path);
+```
+
+设置 `__BASE_FILE__` 的路径.
+
+- 内部复制字符串, 调用者可以释放 `path`.
+- per-TU 状态: reset 清空, 与 include 路径和宏操作不同 (后者跨 reset 保留).
+- 未显式设置时, 第一个被词法分析的输入文件 (文件或内存输入) 充当它.
+
+### 9.3.8 libcp_context_define
 
 ```c
 void libcp_context_define(LibcpContext *ctx, char *name, char *buf);
@@ -193,7 +206,7 @@ void libcp_context_define(LibcpContext *ctx, char *name, char *buf);
 - 顺序很重要, 后定义的覆盖先定义的.
 - 已知缺陷: 这样定义的对象宏, `libcp_macro_expansion_macro` 当前返回 `NAME=body`, 不是 `NAME`; 源码里的 `#define` 正常. 见 11.7.8, 不要依赖 `-D` 宏的 `macro` 名.
 
-### 9.3.8 libcp_context_undef
+### 9.3.9 libcp_context_undef
 
 ```c
 void libcp_context_undef(LibcpContext *ctx, char *name);
@@ -205,7 +218,7 @@ void libcp_context_undef(LibcpContext *ctx, char *name);
 - 记录在配置里, reset 后重新应用.
 - 对未定义的宏是空操作.
 
-### 9.3.9 libcp_context_set_predefined_macros
+### 9.3.10 libcp_context_set_predefined_macros
 
 ```c
 void libcp_context_set_predefined_macros(LibcpContext *ctx, bool enabled);
@@ -217,7 +230,7 @@ void libcp_context_set_predefined_macros(LibcpContext *ctx, bool enabled);
 - 设置在**下一次 reset** 生效; setter 本身不改当前 TU 已安装的集合.
 - 关闭后, 预定义宏不安装, 但 `-D` / `-U` 仍然应用.
 
-### 9.3.10 libcp_context_predefined_count / _at
+### 9.3.11 libcp_context_predefined_count / _at
 
 ```c
 int libcp_context_predefined_count(LibcpContext *ctx);
@@ -239,7 +252,7 @@ typedef struct libcp_predefined_macro {
 - 越界返回 `{NULL, NULL}`.
 - 关闭预定义宏并 reset 之后 count 为 0; 只调用 setter 而未 reset 时, 当前 TU 的集合仍在.
 
-### 9.3.11 分配器宏
+### 9.3.12 分配器宏
 
 `allocator.h` 定义库的分配面, 选择方式是一个构建期开关:
 
@@ -275,7 +288,7 @@ LibcpToken *libcp_tokenize_file(LibcpContext *ctx, char *path);
 - `-` 表示 stdin. 内容只读一次, 同一 TU (即 reset 之前) 内第二次 tokenize `-` 会拿到缓存. reset 会清空缓存; reset 后再次 tokenize `-` 读到空流, 因为 stdin 的 EOF 标志是粘滞的.
 - 返回以 `TK_EOF` 结尾的链.
 - 失败返回 NULL 并报告诊断. 失败原因: 打不开, 文件过大, 含 NUL, 非法 token.
-- 第一次调用会设置 `__BASE_FILE__` 的文件名.
+- 未调用 `libcp_context_set_base_file` 时, 第一次调用会设置 `__BASE_FILE__` 的文件名.
 
 ### 9.4.2 libcp_tokenize_buffer
 
@@ -317,6 +330,33 @@ void libcp_reconstruct(LibcpContext *ctx, LibcpToken *tok, FILE *out);
 - 对预处理后的流, 结果不是原文件. 宏体替代了调用点, 指令行消失.
 - `out` 由调用者打开和关闭.
 - 不需要先预处理.
+
+### 9.4.5 libcp_context_input_file_count / _at
+
+```c
+int libcp_context_input_file_count(LibcpContext *ctx);
+LibcpFile *libcp_context_input_file_at(LibcpContext *ctx, int index);
+```
+
+枚举当前翻译单元已读入的文件.
+
+- 顺序是首次读取顺序; 主文件通常是索引 0, 由 `#include` 打开的文件随后.
+- 只登记顶层输入与 include 读入的真实文件; 内存输入与宏展开产生的合成缓冲区不登记.
+- `count` 在 `ctx` 为 NULL 时为 0; `at` 在 `index` 越界或 `ctx` 为 NULL 时为 NULL.
+- 返回的 `LibcpFile` 归 context 所有, 下一次 reset 失效; 字段是只读的公共数据.
+- 表是 per-TU 状态: reset 清空.
+
+### 9.4.6 libcp_token_is_synthetic
+
+```c
+bool libcp_token_is_synthetic(const LibcpToken *tok);
+```
+
+判断 token 是否来自合成文件.
+
+- 这是 file 级判定: `tok->file->raw == tok->file->contents`. 内存输入 (`libcp_tokenize_buffer*`) 也满足它; 真实文件不满足.
+- 宏展开产物的 `@synth` 标记是另一回事, 按 token 的 provenance 判断 (见 9.9).
+- `tok` 为 NULL 时返回 false.
 
 ## 9.5 预处理 API
 
@@ -424,6 +464,7 @@ span 的最小接口. 注意事项:
 - `next` 链是兄弟, 不被跟随; 初始化器树不被下降.
 - 极值取自各节点的代表 token, 并额外收集 `decl.name_tok`, `access.arrow_tok` 与 `case_.colon_tok`: 例如 `ND_FUNCDEF` 的代表 token 是函数体的 `{`, 但 `range.c` 还会收集 `name_tok`, 所以整个函数定义的 range 从它的名字 token 开始, 不从声明说明符开始. `spec_decls` 只保存 declspec 中产生的声明记录 (如 enum 常量), 不是说明符 token, 不能用来取得更早边界; 需要更早边界时请回到 token / CST.
 - 子树完全没有 token 时, `*start` 与 `*end` 都为 NULL.
+- 坐标换算由内部 source 模块的 `libcp_token_source_pos` 统一提供; 需要物理行时用 `libcp_token_physical_line`, 它取文件的 `lines` / `map` 表, 不依赖 `line_no - line_delta`.
 - 宏展开产物 token 的坐标在合成缓冲里, 跨文件比较按文件指针先序, 稳定
   但无语义.
 
@@ -619,6 +660,7 @@ if (!ast) {
 - 输入参数:
   - `tokenize_buffer*`: 复制输入字节, 调用者可以立即释放.
   - `add_include_path`: 复制路径.
+  - `set_base_file`: 复制路径.
   - `define` / `undef`: 复制名字和替换文本.
   - `FILE *out`: 调用者拥有, 库不关闭.
 - 诊断回调里的 `filename` / `message`: context 拥有, 到下一次 reset.
