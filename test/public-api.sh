@@ -43,10 +43,33 @@ int main(void) { return 0; }
 EOF
 "$cc" -std=c11 -fsyntax-only -Wall -Wextra -I"$tmp/pubinc" "$tmp/stdio_first.c"
 
+# The returning diagnostic entry carries a printf format check: a
+# format mismatch must fail the compile.
+cat > "$tmp/badfmt.c" <<'EOF'
+#include <libcp/libcp.h>
+void f(LibcpContext *ctx) {
+  libcp_diagnostic_report(ctx, 0, LIBCP_DIAG_WARNING, "%d", "not an int");
+}
+EOF
+if "$cc" -std=c11 -Wall -Wextra -Werror=format -fsyntax-only \
+  -I"$tmp/pubinc" "$tmp/badfmt.c" 2>/dev/null; then
+  echo "public-api: libcp_diagnostic_report lacks a printf format check" >&2
+  exit 1
+fi
+echo "public-api: libcp_diagnostic_report format check ok"
+
 cat > "$tmp/consumer.c" <<'EOF'
 #include <stdio.h>
 #include <string.h>
 #include <libcp/libcp.h>
+
+static int warnings;
+
+static void quiet(void *user, const LibcpDiagnostic *d) {
+  (void)user;
+  if (d->severity == LIBCP_DIAG_WARNING)
+    warnings++;
+}
 
 int main(void) {
   char *src = "int x = 1;\n";
@@ -65,6 +88,18 @@ int main(void) {
     return 1;
   LibcpObj *prog = libcp_sema(ctx, ast);
   if (!prog || libcp_context_failed(ctx))
+    return 1;
+
+  // The backend support face links from the public headers alone: a
+  // label-ref query, a fresh unique name, and a returning diagnostic.
+  if (libcp_label_ref_count(ctx, prog) != 0 ||
+      libcp_label_ref_at(ctx, prog, 0) != NULL)
+    return 1;
+  if (libcp_context_take_unique_name(ctx) < 0)
+    return 1;
+  libcp_context_set_diagnostic(ctx, quiet, NULL);
+  libcp_diagnostic_report(ctx, tok, LIBCP_DIAG_WARNING, "warn %d", 1);
+  if (warnings != 1 || libcp_context_failed(ctx))
     return 1;
 
   LibcpToken *raw = libcp_tokenize_buffer(ctx, "<public-api>", src);
@@ -101,7 +136,7 @@ EOF
 # underscore on Darwin. Since the symbol-prefix line every internal
 # symbol carries the libcp_ prefix too, the deny list is anchored on it.
 nm -u "$tmp/consumer.o" | awk '{print $NF}' > "$tmp/undef"
-bad=$(grep -E '^_?(libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|error|error_at|error_tok|warn_tok|strarray_push|nodearray_push|format|ctx|conditional|context_activate|context_set_base_file|get_input_files|unique_name_next)|libcp_(hashmap|sema|ty|tu)_[a-z_0-9]+)$' "$tmp/undef" || true)
+bad=$(grep -E '^_?(libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|error|error_at|error_tok|warn_tok|diagnostic_vreport|strarray_push|nodearray_push|format|ctx|conditional|context_activate|context_set_base_file|get_input_files|unique_name_next)|libcp_(hashmap|sema|ty|tu)_[a-z_0-9]+)$' "$tmp/undef" || true)
 if [ -n "$bad" ]; then
   echo "public-api: the consumer references internal symbols:" >&2
   echo "$bad" >&2
@@ -155,6 +190,10 @@ libcp_node_cast
 libcp_type_builtin
 libcp_node_annotate_type
 libcp_type_pointer_to
+libcp_label_ref_count
+libcp_label_ref_at
+libcp_context_take_unique_name
+libcp_diagnostic_report
 libcp_sema
 libcp_token_provenance
 libcp_macro_prov_next

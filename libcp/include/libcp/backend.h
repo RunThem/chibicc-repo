@@ -76,4 +76,29 @@ LIBCP_API void libcp_node_annotate_type(LibcpContext* ctx, LibcpNode* node);
 // 从基础类型构造指向它的指针类型 (8 字节大小与对齐, 标记无符号).
 LIBCP_API LibcpType* libcp_type_pointer_to(LibcpContext* ctx, LibcpType* base);
 
+// 函数体内的标签引用. sema 为每个定义函数收集 goto 语句与 [GNU]
+// 标签值 (`&&label`) 节点, 顺序是标注遍历的访问顺序; count 返回个数,
+// 没有记录时为 0, at 取第 index 个, 越界 (含负数) 返回 NULL. 数组归
+// context 所有, 活到 reset. 引用是节点链的一部分, 不要释放或改写.
+LIBCP_API int libcp_label_ref_count(LibcpContext* ctx, LibcpObj* fn);
+LIBCP_API LibcpNode* libcp_label_ref_at(LibcpContext* ctx, LibcpObj* fn, int index);
+
+// 取一个新的唯一编号并消耗它: 同一个号不会再从同一个 context 发出.
+// 编号与库为字符串字面量全局对象, 块作用域 static, 复合字面量与
+// 控制流标签所用的编号来自同一个计数器, 所以消费者按返回的号构造
+// 自己的名字 (例如 `.L.<id>`) 不会与库生成的对象冲突. 计数器随
+// libcp_context_reset 回到起点.
+LIBCP_API int libcp_context_take_unique_name(LibcpContext* ctx);
+
+// 返回式诊断. 与库内部的 error / warn 路径共用同一套格式化与回调交付,
+// 但它不 longjmp: 调用者拿到控制权后自行决定如何处理. 错误把 context
+// 标记为失败 (libcp_context_failed 为 true), 警告不标记. tok 为锚点
+// token, 可以为 NULL, 此时诊断没有文件与行列, 回调的 filename 为 NULL.
+// fmt 走 printf 格式检查.
+LIBCP_API void libcp_diagnostic_report(LibcpContext* ctx,
+                                       LibcpToken* tok,
+                                       LibcpDiagnosticSeverity severity,
+                                       const char* fmt,
+                                       ...) __attribute__((format(printf, 4, 5)));
+
 #endif
