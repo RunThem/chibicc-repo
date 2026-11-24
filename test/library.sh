@@ -470,6 +470,158 @@ static int check_backend_support(LibcpContext *ctx) {
   return 0;
 }
 
+// The label references a backend reads (issue #18): after sema, a
+// function's goto and [GNU] label-value references are available by
+// count / at without touching the library's internal arrays.
+static int check_backend_labels(LibcpContext *ctx) {
+  LibcpObj *prog = NULL;
+  LibcpNode *ast = compile(ctx,
+                           "int f(int x) {\n"
+                           "  if (x) goto done;\n"
+                           "  goto done;\n"
+                           "done:\n"
+                           "  return 0;\n"
+                           "}\n"
+                           "int g(void) { return 1; }\n"
+                           "int h;\n",
+                           &prog);
+  if (!ast || !prog)
+    return 1;
+
+  LibcpObj *f = NULL, *g = NULL, *h = NULL;
+  for (LibcpObj *o = prog; o; o = o->next) {
+    if (o->name && strcmp(o->name, "f") == 0)
+      f = o;
+    if (o->name && strcmp(o->name, "g") == 0)
+      g = o;
+    if (o->name && strcmp(o->name, "h") == 0)
+      h = o;
+  }
+  if (!f || !g || !h)
+    return 1;
+
+  // Two gotos, both naming `done`; the array only carries references, so
+  // the label itself is not among them.
+  if (libcp_label_ref_count(ctx, f) != 2)
+    return 1;
+  for (int i = 0; i < 2; i++) {
+    LibcpNode *ref = libcp_label_ref_at(ctx, f, i);
+    if (!ref || ref->kind != ND_GOTO || !ref->jump.label ||
+        strcmp(ref->jump.label, "done") != 0)
+      return 1;
+  }
+  // Out-of-range indexes and functions without references give NULL.
+  if (libcp_label_ref_at(ctx, f, 2) || libcp_label_ref_at(ctx, f, -1))
+    return 1;
+  if (libcp_label_ref_count(ctx, g) != 0 || libcp_label_ref_at(ctx, g, 0))
+    return 1;
+  // A non-function object never collected references.
+  if (libcp_label_ref_count(ctx, h) != 0 || libcp_label_ref_at(ctx, h, 0))
+    return 1;
+
+  return 0;
+}
+
+// Unique names (issue #18): the counter behind sema's anonymous `.L..N`
+// objects is exposed as take. Every call consumes a fresh id, so a
+// consumer's labels never collide with the library's.
+static int check_backend_unique_name(LibcpContext *ctx) {
+  LibcpObj *prog = NULL;
+  if (!compile(ctx, "char *s = \"x\";\n", &prog) || !prog)
+    return 1;
+
+  // The string literal already consumed `.L..0`, so the next id must be
+  // past every suffix sema minted in this translation unit.
+  int max_seen = -1;
+  for (LibcpObj *o = prog; o; o = o->next) {
+    if (o->name && strncmp(o->name, ".L..", 4) == 0) {
+      int v = atoi(o->name + 4);
+      if (v > max_seen)
+        max_seen = v;
+    }
+  }
+  if (max_seen < 0)
+    return 1;
+
+  int first = libcp_context_take_unique_name(ctx);
+  int second = libcp_context_take_unique_name(ctx);
+  int third = libcp_context_take_unique_name(ctx);
+  if (first <= max_seen || second == first || third == first ||
+      third == second)
+    return 1;
+  return 0;
+}
+
+static int rep_hits;
+static LibcpDiagnosticSeverity rep_severity;
+static const char *rep_filename;
+static const char *rep_message;
+static int rep_line;
+static int rep_column;
+static const LibcpToken *rep_tok;
+static const struct libcp_macro_prov *rep_prov;
+
+static void rep_diag(void *user, const LibcpDiagnostic *d) {
+  (void)user;
+  rep_hits++;
+  rep_severity = d->severity;
+  rep_filename = d->filename;
+  rep_message = d->message;
+  rep_line = d->line;
+  rep_column = d->column;
+  rep_tok = d->tok;
+  rep_prov = d->prov;
+}
+
+// The returning diagnostic entry (issue #18): report never longjmps,
+// still calls the callback, and only errors mark the context failed.
+// The error wrappers built on it keep the old unwinding behavior.
+static int check_diagnostic_report(LibcpContext *ctx) {
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<report>", "int x;\n");
+  if (!tok)
+    return 1;
+
+  libcp_context_set_diagnostic(ctx, rep_diag, NULL);
+
+  int before = rep_hits;
+  libcp_diagnostic_report(ctx, tok, LIBCP_DIAG_WARNING, "warn %d", 7);
+  if (rep_hits != before + 1 || libcp_context_failed(ctx))
+    return 1;
+  if (rep_severity != LIBCP_DIAG_WARNING || !rep_message ||
+      strcmp(rep_message, "warn 7") != 0)
+    return 1;
+  if (!rep_filename || strcmp(rep_filename, "<report>") != 0 ||
+      rep_line != 1 || rep_column != 1 || rep_tok != tok || rep_prov)
+    return 1;
+
+  // An error report returns too, but marks the context failed and
+  // carries no location when it has no token.
+  libcp_diagnostic_report(ctx, NULL, LIBCP_DIAG_ERROR, "boom");
+  if (rep_hits != before + 2 || !libcp_context_failed(ctx))
+    return 1;
+  if (rep_severity != LIBCP_DIAG_ERROR || rep_filename || rep_line != 0 ||
+      rep_column != 0 || rep_tok || !rep_message ||
+      strcmp(rep_message, "boom") != 0)
+    return 1;
+
+  // The error wrappers still longjmp: a parse error unwinds the public
+  // entry (it returns NULL) instead of continuing.
+  libcp_context_reset(ctx);
+  libcp_context_set_diagnostic(ctx, diag, NULL);
+  LibcpToken *bad = libcp_tokenize_buffer(ctx, "<report>", "int y = ;\n");
+  if (!bad)
+    return 1;
+  bad = libcp_preprocess(ctx, bad);
+  if (!bad)
+    return 1;
+  int errors_before = errors;
+  if (libcp_parse(ctx, bad) != NULL || !libcp_context_failed(ctx) ||
+      errors != errors_before + 1)
+    return 1;
+  libcp_context_reset(ctx);
+  return 0;
+}
+
 static LibcpToken *exp_diag_tok;
 static const struct libcp_macro_prov *exp_diag_prov;
 
@@ -1070,6 +1222,12 @@ int main(int argc, char **argv) {
   if (check_source_range(ctx))
     return 1;
   if (check_backend_support(ctx))
+    return 1;
+  if (check_backend_labels(ctx))
+    return 1;
+  if (check_backend_unique_name(ctx))
+    return 1;
+  if (check_diagnostic_report(ctx))
     return 1;
   libcp_context_reset(ctx);
   if (check_diag_expansion(ctx))

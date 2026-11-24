@@ -59,7 +59,7 @@ static int raw_end_of(LibcpFile* file, int off) {
 }
 
 // 把诊断消息格式化进 per-TU 分配.
-static char* vformat(LibcpContext* ctx, char* fmt, va_list ap) {
+static char* vformat(LibcpContext* ctx, const char* fmt, va_list ap) {
   va_list ap2;
   va_copy(ap2, ap);
   int n = vsnprintf(NULL, 0, fmt, ap2);
@@ -93,7 +93,7 @@ static void verror_at(LibcpContext* ctx,
                       char* loc,
                       LibcpToken* tok,
                       LibcpDiagnosticSeverity severity,
-                      char* fmt,
+                      const char* fmt,
                       va_list ap) {
 
   // 找到包含 `loc` 的那一行.
@@ -131,20 +131,58 @@ static void verror_at(LibcpContext* ctx,
   fprintf(stderr, "\n");
 }
 
+// 报告的核心 (公共 libcp_diagnostic_report 与内部 error / warn 入口共用):
+// 有锚点 token 时按位置报告, 没有时只报告消息. 只交付诊断, 不 longjmp,
+// 也不改 context 状态.
+void libcp_diagnostic_vreport(LibcpContext* ctx,
+                              LibcpToken* tok,
+                              LibcpDiagnosticSeverity severity,
+                              const char* fmt,
+                              va_list ap) {
+  if (tok) {
+    verror_at(ctx,
+              tok->file->name,
+              tok->file->contents,
+              tok->line_no,
+              tok->loc,
+              tok,
+              severity,
+              fmt,
+              ap);
+    return;
+  }
+
+  if (ctx && ctx->diag_fn) {
+    char* msg         = vformat(ctx, fmt, ap);
+    LibcpDiagnostic d = {NULL, 0, 0, severity, msg, NULL, NULL};
+    ctx->diag_fn(ctx->diag_user, &d);
+    return;
+  }
+  vfprintf(stderr, fmt, ap);
+  fprintf(stderr, "\n");
+}
+
+// 公共的返回式诊断 (issue #18): 与 error / warn 入口走同一条报告路径,
+// 但不中断调用者; 错误把 context 标记为失败, 警告不标记.
+void libcp_diagnostic_report(LibcpContext* ctx,
+                             LibcpToken* tok,
+                             LibcpDiagnosticSeverity severity,
+                             const char* fmt,
+                             ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  libcp_diagnostic_vreport(ctx, tok, severity, fmt, ap);
+  va_end(ap);
+
+  if (severity == LIBCP_DIAG_ERROR && ctx)
+    ctx->failed = true;
+}
+
 // 报告错误; 回退到当前公共入口, 若驱动器不在任何公共入口内则直接退出.
 void libcp_error(LibcpContext* ctx, char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-
-  if (ctx && ctx->diag_fn) {
-    char* msg         = vformat(ctx, fmt, ap);
-    LibcpDiagnostic d = {NULL, 0, 0, LIBCP_DIAG_ERROR, msg, NULL, NULL};
-    ctx->diag_fn(ctx->diag_user, &d);
-  } else {
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
-  }
-
+  libcp_diagnostic_vreport(ctx, NULL, LIBCP_DIAG_ERROR, fmt, ap);
   va_end(ap);
   raise_error(ctx);
 }
@@ -170,15 +208,7 @@ void libcp_error_at(LibcpContext* ctx, char* loc, char* fmt, ...) {
 void libcp_error_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  verror_at(ctx,
-            tok->file->name,
-            tok->file->contents,
-            tok->line_no,
-            tok->loc,
-            tok,
-            LIBCP_DIAG_ERROR,
-            fmt,
-            ap);
+  libcp_diagnostic_vreport(ctx, tok, LIBCP_DIAG_ERROR, fmt, ap);
   va_end(ap);
   raise_error(ctx);
 }
@@ -186,15 +216,7 @@ void libcp_error_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...) {
 void libcp_warn_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  verror_at(ctx,
-            tok->file->name,
-            tok->file->contents,
-            tok->line_no,
-            tok->loc,
-            tok,
-            LIBCP_DIAG_WARNING,
-            fmt,
-            ap);
+  libcp_diagnostic_vreport(ctx, tok, LIBCP_DIAG_WARNING, fmt, ap);
   va_end(ap);
 }
 

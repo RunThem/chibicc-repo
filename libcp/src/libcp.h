@@ -58,6 +58,13 @@ noreturn void libcp_error_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...
     __attribute__((format(printf, 3, 4)));
 void libcp_warn_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...)
     __attribute__((format(printf, 3, 4)));
+// 公共 libcp_diagnostic_report 与上面的内部入口共用的报告核心: 只交付
+// 诊断, 不 longjmp, 不改 context 状态.
+void libcp_diagnostic_vreport(LibcpContext* ctx,
+                              LibcpToken* tok,
+                              LibcpDiagnosticSeverity severity,
+                              const char* fmt,
+                              va_list ap);
 bool libcp_equal(LibcpToken* tok, char* op);
 LibcpToken* libcp_skip(LibcpContext* ctx, LibcpToken* tok, char* op);
 bool libcp_consume(LibcpToken** rest, LibcpToken* tok, char* str);
@@ -113,9 +120,8 @@ LibcpNode* libcp_conditional(LibcpContext* ctx, LibcpToken** rest, LibcpToken* t
 // _var, _vla_ptr, _alloca. 这里只声明库内部共用, 不对外承诺的辅助.
 void libcp_usual_arith_conv(LibcpContext* ctx, LibcpNode** lhs, LibcpNode** rhs);
 LibcpType* libcp_get_common_type(LibcpContext* ctx, LibcpType* ty1, LibcpType* ty2);
-LibcpNode* libcp_new_ulong(LibcpContext* ctx, long val, LibcpToken* tok);
 
-// 匿名名字计数器接下来会给出的值, 但不消耗它.
+// 匿名名字计数器接下来会给出的值, 但不消耗它 (Phase 4 删除).
 int libcp_unique_name_next(LibcpContext* ctx);
 
 // type.c: 内建类型与类型构造

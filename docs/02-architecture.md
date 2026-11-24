@@ -57,7 +57,7 @@
 
 每一层的"产物"不是抽象概念, 而是具体的内存结构: token 链, CST 树, AST 树, 标注树和全局对象链. 这些结构体在公共头里定义, 字段直接可读.
 
-`<libcp/backend.h>` 不在这五层里, 它是给库外后端使用的支持面: 节点构造 (`libcp_node_new` / `_binary` / `_unary` / `_num` / `_long` / `_arith` / `_var` / `_vla_ptr` / `_alloca` / `_cast`), 内建类型查询 (`LibcpBuiltinType` 与 `libcp_type_builtin`), 类型标注 (`libcp_node_annotate_type`) 与指针类型构造 (`libcp_type_pointer_to`). 支持面只公开"读取第 4 层标注树并降级"所需的最小构造能力, 不拥有层间的数据契约: 构造出的节点与类型归 context 所有, 内建类型是跨 context 共享的只读单例, 标注仍走 sema 的规则.
+`<libcp/backend.h>` 不在这五层里, 它是给库外后端使用的支持面: 节点构造 (`libcp_node_new` / `_binary` / `_unary` / `_num` / `_long` / `_arith` / `_var` / `_vla_ptr` / `_alloca` / `_cast`), 内建类型查询 (`LibcpBuiltinType` 与 `libcp_type_builtin`), 类型标注 (`libcp_node_annotate_type`), 指针类型构造 (`libcp_type_pointer_to`), 标签引用 (`libcp_label_ref_count` / `libcp_label_ref_at`), 唯一名 (`libcp_context_take_unique_name`) 与返回式诊断 (`libcp_diagnostic_report`). 支持面只公开"读取第 4 层标注树并降级"所需的最小构造能力, 不拥有层间的数据契约: 构造出的节点与类型归 context 所有, 内建类型是跨 context 共享的只读单例, 标注仍走 sema 的规则. 标签引用与唯一名读的是 sema 到后端的交接数据; 诊断报告与库内部的 error / warn 走同一条格式化与回调路径, 区别只在它返回而不 longjmp.
 
 ## 2.3 两条路径为什么分开
 
@@ -224,6 +224,8 @@ libcp_context_set_diagnostic(ctx, on_diagnostic, user);
 - 入口返回自己的失败值: 指针函数返回 NULL, `bool` 函数返回 false, `void` 函数直接返回.
 - context 的 `failed` 标志置位, 直到 reset.
 
+例外是返回式入口 `libcp_diagnostic_report`: 它走同一条报告路径, 报告后返回调用者, 错误情形下自行把 `failed` 置位. 它用于库外后端已经能自行处理错误, 不需要 unwind 的路径.
+
 `libcp_context_failed(ctx)` 是判断"上一次调用是成功还是出错"的可靠方式. 返回 NULL 本身不一定是错误: 空翻译单元的 `libcp_parse` 也返回 NULL, 但 `failed` 为 false.
 
 一旦出错, context 处于不一致状态. 库不保证部分树可用. 复用前必须 reset.
@@ -330,7 +332,7 @@ libcp/
     provenance.h     宏展开访问器与两个只读通道
     cst.h            第 2 层: LibcpCstKind, LibcpCstNode
     ast.h            第 3/4 层: LibcpNode 与 LibcpNodeFamily, LibcpType, LibcpObj, 初始化器, 类型种类
-    backend.h        后端支持面: 节点构造, LibcpBuiltinType 与类型标注
+    backend.h        后端支持面: 节点构造, LibcpBuiltinType, 类型标注, 标签引用, 唯一名与诊断
     sema.h           libcp_sema
   src/
     tokenize.c       词法, trivia, raw 坐标, 诊断格式化

@@ -1,6 +1,6 @@
 # 09 API 参考与用法
 
-本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 52 个公共函数与公共宏, 不列内部函数.
+本章是公共 API 的逐项说明. 函数原型以 `libcp/include/libcp/` 下的头文件为准. 本章只列 56 个公共函数与公共宏, 不列内部函数.
 
 ## 9.1 头文件, 链接与命名
 
@@ -22,7 +22,7 @@ preprocess.h    libcp_preprocess
 provenance.h    宏展开访问器, dump / verify
 cst.h           第 2 层
 ast.h           第 3/4 层的数据类型与 libcp_parse
-backend.h       后端支持面: 节点构造, LibcpBuiltinType 与类型标注
+backend.h       后端支持面: 节点构造, LibcpBuiltinType, 类型标注, 标签引用, 唯一名与诊断
 sema.h          libcp_sema
 ```
 
@@ -48,7 +48,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 
 `LIBCP_API` 在 GCC/Clang 下展开为 `__attribute__((visibility("default")))`, 用于共享库导出. 消费者不需要关心它.
 
-`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 52 个函数.
+`.a` 里还有内部符号(未在任何公共头声明的 `libcp_` 前缀名字, 2026-10-25 起与公共 API 同族). 它们对该归档可见, 但不属于 API: 内部函数以 `LibcpContext *ctx` 为首参这一形态也不承诺源码兼容, 换版本时就地改变; 契约只有公共头与本章的 56 个函数.
 
 ## 9.2 函数总表
 
@@ -63,6 +63,9 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 | 第 4 层 | `libcp_sema` |
 | 后端支持面 | `libcp_node_new`, `_binary`, `_unary`, `_num`, `_long`, `_arith`, `_var`, `_vla_ptr`, `_alloca`, `_cast` |
 | 后端支持面 | `libcp_type_builtin`, `libcp_node_annotate_type`, `libcp_type_pointer_to` |
+| 后端支持面 | `libcp_label_ref_count`, `libcp_label_ref_at` |
+| 后端支持面 | `libcp_context_take_unique_name` |
+| 后端支持面 | `libcp_diagnostic_report` |
 | provenance | `libcp_token_provenance`, `libcp_macro_prov_next`, `_expansion`, `_arg_index` |
 | provenance | `libcp_macro_expansion_name`, `_end`, `_macro`, `_def`, `_arg`, `_arg_count`, `_is_builtin` |
 | provenance | `libcp_expansion_dump`, `libcp_expansion_verify` |
@@ -154,6 +157,7 @@ bool libcp_context_failed(LibcpContext *ctx);
 返回上一次操作是否出错.
 
 - 错误经 longjmp 回到公共入口时置位.
+- 返回式入口 `libcp_diagnostic_report` 报错误时也置位 (见 9.15.5).
 - 警告不置位.
 - `reset` 清除.
 
@@ -810,7 +814,7 @@ extern "C" {
 
 ## 9.15 后端支持面
 
-`<libcp/backend.h>` 服务库外后端: 它提供构造第 4 层节点, 取内建类型, 标注子树与构造指针类型所需的最小入口. 它不是库自带的第 5 层, 也不拥有层间的数据契约; 构造与标注规则仍由库实现.
+`<libcp/backend.h>` 服务库外后端: 它提供构造第 4 层节点, 取内建类型, 标注子树, 构造指针类型, 读取标签引用, 取唯一名与报告诊断所需的最小入口. 它不是库自带的第 5 层, 也不拥有层间的数据契约; 构造, 标注与诊断规则仍由库实现.
 
 ### 9.15.1 内建类型
 
@@ -861,6 +865,33 @@ LibcpType *libcp_type_pointer_to(LibcpContext *ctx, LibcpType *base);
 
 - `libcp_node_annotate_type` 用 sema 的规则标注一棵子树: 填 `node->ty`, 插入标准要求的隐式转换, 运行需要已定型树的检查. 幂等: 已带 `ty` 的节点直接返回.
 - `libcp_type_pointer_to` 从基础类型构造指针类型: `kind` 为 `TY_PTR`, 8 字节大小与对齐, `is_unsigned` 为 true, `base` 指向传入类型.
+
+### 9.15.4 标签引用与唯一名
+
+```c
+int libcp_label_ref_count(LibcpContext *ctx, LibcpObj *fn);
+LibcpNode *libcp_label_ref_at(LibcpContext *ctx, LibcpObj *fn, int index);
+int libcp_context_take_unique_name(LibcpContext *ctx);
+```
+
+- sema 为每个已定义的函数收集 `goto` 语句与 [GNU] 标签值 (`&&label`) 节点, 顺序是标注遍历的访问顺序. `libcp_label_ref_count` 返回个数, 没有记录 (非函数对象或没有引用) 时为 0; `libcp_label_ref_at` 取第 `index` 个, 越界或负数返回 NULL.
+- 引用节点仍是树的一部分: `kind` 为 `ND_GOTO` 或 `ND_LABEL_VAL`, `jump.label` 是源码里的标签名; 未声明标签的检查已由 sema 完成, 后端只需把名字映射到自己的跳转目标.
+- 数组归 context 所有, 活到 reset; 消费者不要释放或改写节点.
+- `libcp_context_take_unique_name` 取一个新编号并消耗它, 同一个号不会再从同一个 context 发出. 它与库为字符串字面量全局对象, 块作用域 static, 复合字面量和控制流标签生成 `.L..N` 名字所用的计数器是同一个, 所以消费者按返回的号构造自己的名字不会与库生成的对象冲突. 计数器随 `libcp_context_reset` 回到起点.
+
+### 9.15.5 返回式诊断
+
+```c
+void libcp_diagnostic_report(LibcpContext *ctx, LibcpToken *tok,
+                             LibcpDiagnosticSeverity severity,
+                             const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
+```
+
+- 与库内部的 error / warn 路径共用同一套格式化与回调交付: 注册过回调时回调收到 `LibcpDiagnostic`, 没注册时按默认格式打印到 stderr; `tok` 作为锚点 token 与 `prov` 来源.
+- 它返回, 不 longjmp. 错误把 context 标记为失败 (`libcp_context_failed` 为 true), 警告不标记. 消费者拿到控制权后自行决定后续动作.
+- `tok` 可以为 NULL: 此时诊断没有文件与行列, 回调的 `filename` 为 NULL, `line` 与 `column` 为 0, 默认处理器只打印消息一行.
+- `fmt` 走 printf 格式检查 (GCC/Clang 的 `format` 属性).
 
 ## 9.16 API 的边界
 

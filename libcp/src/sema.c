@@ -107,13 +107,6 @@ LibcpNode* libcp_node_long(LibcpContext* ctx, int64_t val, LibcpToken* tok) {
   return node;
 }
 
-LibcpNode* libcp_new_ulong(LibcpContext* ctx, long val, LibcpToken* tok) {
-  LibcpNode* node = libcp_node_new(ctx, ND_NUM, tok);
-  node->value.val = val;
-  node->ty        = libcp_ty_ulong;
-  return node;
-}
-
 // 隐式转换唯一的构建点: sema 插入的每个转换 - 常规算术转换, 赋值,
 // return 或实参转换到目标类型, 降级后的自增恢复操作数类型所用的
 // 转换 - 都经过这里, 因此标记节点只需一次赋值. 源码写出的 cast 由
@@ -868,6 +861,12 @@ static char* new_unique_name(LibcpContext* ctx) {
 // shaping pass) 从这里继续编号.
 int libcp_unique_name_next(LibcpContext* ctx) {
   return unique_name_id;
+}
+
+// 对计数器的消耗式读取 (公共后端支持面, issue #18): 返回的号不会再
+// 发出, 因此消费者用它构造的名字与库的匿名对象不会冲突.
+int libcp_context_take_unique_name(LibcpContext* ctx) {
+  return unique_name_id++;
 }
 
 static LibcpObj* new_anon_gvar(LibcpContext* ctx, LibcpType* ty) {
@@ -2953,6 +2952,20 @@ LibcpNodeArray* libcp_sema_label_gotos(LibcpContext* ctx, LibcpObj* fn) {
     if (l->fn == fn)
       return &l->refs;
   return NULL;
+}
+
+// 公共的标签引用读取 (issue #18): 与 libcp_sema_label_gotos 是同一份
+// 数据, 但只按 count / at 暴露, 不把内部的 LibcpNodeArray 交给消费者.
+int libcp_label_ref_count(LibcpContext* ctx, LibcpObj* fn) {
+  LibcpNodeArray* refs = libcp_sema_label_gotos(ctx, fn);
+  return refs ? refs->len : 0;
+}
+
+LibcpNode* libcp_label_ref_at(LibcpContext* ctx, LibcpObj* fn, int index) {
+  LibcpNodeArray* refs = libcp_sema_label_gotos(ctx, fn);
+  if (!refs || index < 0 || index >= refs->len)
+    return NULL;
+  return refs->data[index];
 }
 
 static void analyze_function(LibcpContext* ctx, LibcpObj* fn) {
