@@ -152,20 +152,31 @@ may not work on systems other than Ubuntu 20.04.
 
 ## Internals
 
-chibicc consists of the following stages:
+chibicc consists of the following five layers. The first four are the
+`libcp` library; the fifth is the driver's x86-64 backend (`codegen.c`),
+which is not part of the library.
 
-- Tokenize: A tokenizer takes a string as an input, breaks it into a list
-  of tokens and returns them.
+- Layer 1 - token stream: A tokenizer takes a string as an input, breaks
+  it into a list of lossless tokens (comments and whitespace are kept as
+  trivia) and returns them. A preprocessor takes that list and outputs a
+  new list of macro-expanded tokens, interpreting preprocessor directives
+  while expanding macros.
 
-- Preprocess: A preprocessor takes as an input a list of tokens and output
-  a new list of macro-expanded tokens. It interprets preprocessor
-  directives while expanding macros.
+- Layer 2 - concrete syntax tree: A lossless CST is built directly from
+  the raw token stream, before preprocessing. It records every token,
+  comment and whitespace byte, so it reconstructs the input exactly. It
+  is meant for source-level tools and is not the compiler's input.
 
-- Parse: A recursive descendent parser constructs abstract syntax trees
-  from the output of the preprocessor. It also adds a type to each AST
-  node.
+- Layer 3 - syntax tree: A recursive descent parser constructs a faithful
+  syntax-only AST from the preprocessed token stream. It records the
+  grammar, not the semantics; most nodes carry no type at this layer.
 
-- Codegen: A code generator emits an assembly text for given AST nodes.
+- Layer 4 - sema-annotated tree: A semantic pass resolves names, records
+  types on the AST nodes and reports C diagnostics. Its product is the
+  annotated tree that a backend consumes.
+
+- Layer 5 - assembly: A code generator emits an x86-64 assembly text for
+  the annotated tree.
 
 ## Contributing
 
