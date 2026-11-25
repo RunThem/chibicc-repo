@@ -671,10 +671,6 @@ static void print_dependencies(void) {
   }
 }
 
-static LibcpToken* must_tokenize_file(char* path) {
-  return libcp_tokenize_file(ctx, path);
-}
-
 static LibcpToken* append_tokens(LibcpToken* tok1, LibcpToken* tok2) {
   if (!tok1 || tok1->kind == TK_EOF)
     return tok2;
@@ -691,7 +687,7 @@ static int cc1(void) {
   // trivia 契约以及建在它上面的 CST 都作用于 tokenize 的直接输出,
   // 即预处理之前的内容.
   if (opt_dump_tokens || opt_reconstruct || opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
-    LibcpToken* tok = must_tokenize_file(base_file);
+    LibcpToken* tok = libcp_tokenize_file(ctx, base_file);
     if (!tok)
       return 1;
     if (opt_dump_tokens)
@@ -724,14 +720,14 @@ static int cc1(void) {
     if (!path)
       driver_error(ctx, NULL, "-include: %s: %s", incl, strerror(errno));
 
-    LibcpToken* tok2 = must_tokenize_file(path);
+    LibcpToken* tok2 = libcp_tokenize_file(ctx, path);
     if (!tok2)
       return 1;
     tok = append_tokens(tok, tok2);
   }
 
   // 词法分析并预处理.
-  LibcpToken* tok2 = must_tokenize_file(base_file);
+  LibcpToken* tok2 = libcp_tokenize_file(ctx, base_file);
   if (!tok2)
     return 1;
   tok = append_tokens(tok, tok2);
