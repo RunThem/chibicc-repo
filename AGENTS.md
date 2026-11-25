@@ -36,7 +36,7 @@
 ## 面向库的硬性规则
 
 - 不新增 `exit()`: 库层错误走诊断回调 + longjmp 到公共入口; 默认处理器逐字节复现旧输出; 新代码不得引入新的 exit 点(驱动器与默认处理器路径除外).
-- 不新增静态全局状态: 语义状态全部在 `LibcpContext`(parse.c 只剩只读关键字表缓存); 新代码把状态放进 context.
+- 不新增静态全局状态: 语义状态全部在 `LibcpContext`(parse.c 只剩只读常量表); 新代码把状态放进 context.
 - 库层无隐式上下文: 新增或修改的内部函数若直接或传递地触碰 per-TU 分配, 格式化, 容器, 诊断或 context 字段, 必须以 `LibcpContext *ctx` 作首参. 不得新增 `libcp_ctx()` 或 TLS; `make check-context` 是必跑门; `codegen.c` 不得有 `cg_ctx`.
 - API 纪律: 公共头(`libcp/include/libcp/`)与内部头(`libcp/src/libcp.h`)分离, 不泄漏编译器内部假设(Linux 路径, 单次进程生命周期, 直接 exit 等).
 - 后端整形只允许出现在 codegen.c: 指针缩放, 读写回环, 临时槽, 语句重排与标签整形都不是库层的事; 库层只做标注与语义结论. 唯一名计数器是库层资源: 库为物化对象(字符串字面量全局对象, 块作用域 static, 复合字面量)用 per-TU 计数器发号, 并通过 `libcp_context_take_unique_name` 公开; 后端可以消费同一个计数器为自己的标签取号, 但标签命名与整形仍留在后端.
