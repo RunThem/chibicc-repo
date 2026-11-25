@@ -185,7 +185,7 @@ CST 进一步把每个标点变成叶子, 保证叶子按序重建等于输入. 
 **已经做到的部分**:
 
 - 阶段 5 的闸门全绿: Docker 内完整测试与自举, 汇编快照零 diff, 公共头独立编译, 符号白名单, ASan/UBSan 无报告, install 与 pkg-config 可用.
-- 第 1 层到第 4 层的产物有逐字节或结构级锁定: trivia 48 个语料文件重建, CST 覆盖 48 个 round-trip 文件 / 48 个 verify 文件 / 15 个边界样本 / 65 个 dump 样本 (`test/cst.sh` 共 313 次 check), AST 85 例, 诊断 68 例, 形状 34 段.
+- 第 1 层到第 4 层的产物有逐字节或结构级锁定: trivia 48 个语料文件重建, CST 覆盖 48 个 round-trip 文件 / 48 个 verify 文件 / 15 个边界样本 / 65 个 dump 样本 (`test/cst.sh` 共 313 次 check), AST 86 例, 诊断 69 例, 形状 34 段.
 - L5 产品化验证已完成 (2026-10-25): `tools/fmt.c` 是真实 formatter 消费者, AST 源码范围由 `libcp_node_source_range` 提供, `LibcpDiagnostic` 带 `tok` / `prov` 诊断展开点.
 - Pratt 表达式解析在成为唯一路径之前, 与旧级联的 AST 与汇编在 41 个语料文件和 tinycc 真实构建上逐字节一致 (PLAN-pratt-parse); 单一路径化后由汇编快照基线继续锁定.
 
