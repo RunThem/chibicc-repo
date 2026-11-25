@@ -408,7 +408,7 @@ filename = NULL, line = 0, column = 0
 
 ### 11.10.6 诊断文案是锁定文本
 
-`test/diagnostic.sh` 逐字节锁定 69 例. 升级版本时文案可能变. 不要依赖文案做程序判断, 依赖返回值和 `failed`.
+`test/diagnostic.sh` 逐字节锁定 73 例. 升级版本时文案可能变. 不要依赖文案做程序判断, 依赖返回值和 `failed`.
 
 ## 11.11 公共面与 ABI
 
