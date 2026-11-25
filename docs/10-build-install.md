@@ -44,7 +44,7 @@ BENCH_CFLAGS=-std=c11 -O2 -g -fno-common -Wall -Wno-switch \
   -include bench/alloc_shim.h
 ```
 
-`LIB_CFLAGS` 用于库对象, 带内部 include; `DRIVER_CFLAGS` 用于 `main.c` / `codegen.c`, 只带公共 include. 两者都带 `ALLOCATOR_CFLAGS`, 因为驱动器包含公共伞头, 分配器配置必须与库一致. `CFLAGS` 保留为 `LIB_CFLAGS` 的别名, 供链接命令与测试工具使用. stage2 规则按同样的方式拆分 include, 并同样带上 `ALLOCATOR_CFLAGS`. 驱动器这一侧的约束由 `test/driver-seam.sh` 锁定: 它检查三个驱动器源文件不含内部 include, 再用只含公共头的临时目录重编驱动器对象.
+`LIB_CFLAGS` 用于库对象, 带内部 include; `DRIVER_CFLAGS` 用于 `main.c` / `codegen.c`, 只带公共 include. 两者都带 `ALLOCATOR_CFLAGS`, 因为驱动器包含公共伞头, 分配器配置必须与库一致. `CFLAGS` 保留为 `LIB_CFLAGS` 的别名, 供链接命令与测试工具使用. stage2 规则按同样的方式拆分 include, 并同样带上 `ALLOCATOR_CFLAGS`. 驱动器这一侧的约束由 `test/driver-seam.sh` 锁定: 它检查四个驱动器源文件不含内部 include, 再用只含公共头的临时目录重编驱动器对象.
 
 `BENCH_CFLAGS` 刻意不含 `ALLOCATOR_CFLAGS`: benchmark 的库对象必须走 `bench/alloc_shim.h` 的四个 `LIBCP_*` 宏, 而不是 `LIBCP_DEFAULT_ALLOCATOR`.
 
@@ -98,6 +98,7 @@ $PREFIX/include/libcp/
   provenance.h
   cst.h
   ast.h
+  backend.h
   sema.h
 $PREFIX/lib/libcp.a
 $PREFIX/lib/libcp.so.0        (Linux)
@@ -213,14 +214,14 @@ make test-stage2
 | `test/*.exe` | 每个特性一个 C 测试, 覆盖语言功能 |
 | `test/driver-seam.sh` | 驱动器 seam: `main.c` / `codegen.c` / `driver.h` / `driver-util.h` 不含内部 include, 驱动器对象只用临时公共头目录编译; `make test` 用宿主 `cc`, `make test-stage2` 用 `stage2/chibicc` |
 | `test/driver.sh` | 命令行选项 |
-| `test/diagnostic.sh` | 68 例诊断文案与插入符逐字节 |
+| `test/diagnostic.sh` | 69 例诊断文案与插入符逐字节 |
 | `test/warning.sh` | 警告文案与插入符 |
 | `test/shape.sh` | 34 段发射形状回归 |
-| `test/ast.sh` | 85 例第 3 层 AST 形态逐字节 |
+| `test/ast.sh` | 86 例第 3 层 AST 形态逐字节 |
 | `test/trivia.sh` | token / trivia / 重建 / `-E` 锚点 |
 | `test/cst.sh` | 48 个文件 round-trip / 48 个 verify / 15 个边界样本 / 65 个 dump 样本 |
 | `test/cst-stats.sh` | CST `UNPARSED` 计数与 `test/cst-stats.golden` 逐行比对 |
-| `test/expand.sh` | 29 个 provenance dump 样本, 3 个链形状样本, 17 个 verify 样本, 全量语料 |
+| `test/expand.sh` | 31 个 provenance dump 样本, 3 个链形状样本, 17 个 verify 样本, 全量语料 |
 | `test/library.sh` | 公共面消费者, 错误路径, 双 context, token / AST dump, ASan/UBSan |
 | `test/allocator.sh` | 用替换分配器重编库, 活块归零 |
 | `test/self-test.sh` | 库内自测: hashmap / per-TU 分配 / sema 状态重置 |
