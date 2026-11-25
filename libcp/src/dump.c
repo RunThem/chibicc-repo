@@ -100,7 +100,7 @@ static void print_token_dump(LibcpContext* ctx, const LibcpToken* tok, FILE* out
 
     print_dump_line(out,
                     "T",
-                    tok->line_no,
+                    libcp_token_physical_line(tok),
                     tok->raw_loc - raw,
                     libcp_token_kind_name(ctx, tok->kind),
                     tok->raw_loc,
@@ -287,7 +287,11 @@ static void ast_span(FILE* out, const LibcpToken* tok) {
   const char* line = tok->loc;
   while (line > tok->file->contents && line[-1] != '\n')
     line--;
-  fprintf(out, "@%s:%d:%d", tok->file->name, tok->line_no, (int)(tok->loc - line) + 1);
+  fprintf(out,
+          "@%s:%d:%d",
+          tok->file->name,
+          libcp_token_physical_line(tok),
+          (int)(tok->loc - line) + 1);
 }
 
 static void ast_token(FILE* out, const LibcpToken* tok) {

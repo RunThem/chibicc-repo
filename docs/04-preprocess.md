@@ -383,7 +383,7 @@ libcp_context_reset(ctx);   /* 生效 */
 - **`#if` 的分支丢弃**. 未选中分支不进 output. 需要保留全部分支时用第 2 层 CST.
 - **实参之间的 trivia 丢失**. 宏调用 `M(a, b)` 中逗号两边的空白和注释不进入展开流. 产物的 trivia 指向宏体或实参内部.
 - **合成位置**. 粘贴或字符串化产生的 token 位置是合成缓冲. dump 显示 `@synth`, 诊断位置可能指向宏定义或合成位置, 而不是调用点.
-- **内存中的输入也被标成 `@synth`**. `libcp_tokenize_buffer` 的 `raw == contents`, provenance 的 `is_synthetic` 判定会把它当作合成缓冲. 用文件输入才有真实行号.
+- **内存中的输入也被标成 `@synth`**. `libcp_tokenize_buffer` 的 `raw == contents`, provenance 的合成判定 (公共的 `libcp_token_is_synthetic`, 按文件缓冲区判定) 会把它当作合成缓冲. 用文件输入才有真实行号.
 - **`#include_next` 的续查记录按路径字符串键控**. 续查从当前文件自己的路径表命中下标 + 1 开始, 不是全局游标. 同一个文件用不同拼写 (例如 `./a.h` 与 `a.h`) 包含时会被当成不同文件, 与 include guard / `#pragma once` 的限制一致. 路径表在预处理开始后追加会清空续查记录; 应在处理翻译单元之前注册完路径.
 - **不支持的指令**. `#warning` 等未知指令报 `invalid preprocessor directive`. `#pragma` 除 `once` 外忽略.
 - **include 只走文件系统**. 没有虚拟文件系统或内存 include 回调. 内存中的源码可以 `#include` 磁盘上的头, 但不能 include 另一个内存字符串.

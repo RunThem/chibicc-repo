@@ -1537,13 +1537,22 @@ static LibcpInitTree* resolve_initializer(LibcpContext* ctx,
   resolve_value(ctx, rec, init, &cursor);
 
   if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && ty->is_flexible) {
-    ty = copy_struct_type(ctx, ty);
+    LibcpMember* last = ty->members;
+    while (last->next)
+      last = last->next;
 
-    LibcpMember* mem = ty->members;
-    while (mem->next)
-      mem = mem->next;
-    mem->ty = init->children[mem->idx]->ty;
-    ty->size += mem->ty->size;
+    // 只有柔性成员确实被初始化时, 它的子槽才不再是 is_flexible 骨架.
+    // 骨架的 ty 只是"按实际大小处理"的占位 (仍可能是不完整数组), 用它
+    // 改写声明类型会连大小一起改写; 未初始化时保持原类型与原大小.
+    if (!init->children[last->idx]->is_flexible) {
+      ty = copy_struct_type(ctx, ty);
+
+      LibcpMember* mem = ty->members;
+      while (mem->next)
+        mem = mem->next;
+      mem->ty = init->children[mem->idx]->ty;
+      ty->size += mem->ty->size;
+    }
 
     *new_ty = ty;
     return init;

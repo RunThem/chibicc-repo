@@ -1,14 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "driver-util.h"
 #include "driver.h"
 
 #include <assert.h>
 #include <errno.h>
 #include <glob.h>
 #include <libgen.h>
-#include <stdarg.h>
 #include <stdlib.h>
-#include <stdnoreturn.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -62,23 +61,8 @@ static LibcpStringArray tmpfiles;
 
 // 驱动器本地工具 (issue #28): 公共面只暴露翻译单元需要的入口. printf
 // 风格格式化, 字符串数组增长, 文件存在判定与致命诊断留在驱动器, 内存
-// 随进程生命周期, 不进入库的 per-TU 登记链.
-static char* format(char* fmt, ...) __attribute__((format(printf, 1, 2)));
-
-static char* format(char* fmt, ...) {
-  va_list ap;
-  va_list ap2;
-  va_start(ap, fmt);
-  va_copy(ap2, ap);
-  int len = vsnprintf(NULL, 0, fmt, ap2);
-  va_end(ap2);
-
-  char* buf = calloc(1, len + 1);
-  vsnprintf(buf, len + 1, fmt, ap);
-  va_end(ap);
-  return buf;
-}
-
+// 随进程生命周期, 不进入库的 per-TU 登记链. 格式化与致命诊断在
+// driver-util.h 里与 codegen.c 共用.
 static void strarray_push(LibcpStringArray* arr, char* s) {
   if (!arr->data) {
     arr->data     = calloc(8, sizeof(char*));
@@ -96,26 +80,6 @@ static void strarray_push(LibcpStringArray* arr, char* s) {
 static bool file_exists(char* path) {
   struct stat st;
   return !stat(path, &st);
-}
-
-// 致命诊断: 与库内部的 error 路径共用同一套格式化与回调交付, 但驱动器
-// 不在公共入口内, 出错时没有可以返回的翻译单元, 因此报告后结束进程.
-static noreturn void error(char* fmt, ...) __attribute__((format(printf, 1, 2)));
-
-static noreturn void error(char* fmt, ...) {
-  va_list ap;
-  va_list ap2;
-  va_start(ap, fmt);
-  va_copy(ap2, ap);
-  int len = vsnprintf(NULL, 0, fmt, ap2);
-  va_end(ap2);
-
-  char* msg = calloc(1, len + 1);
-  vsnprintf(msg, len + 1, fmt, ap);
-  va_end(ap);
-
-  libcp_diagnostic_report(ctx, NULL, LIBCP_DIAG_ERROR, "%s", msg);
-  exit(1);
 }
 
 static void usage(int status) {
@@ -234,7 +198,7 @@ static bool take_arg(char* arg) {
 static void add_default_include_paths(char* argv0) {
   // 假定 chibicc 专用的 include 文件安装在相对于 argv[0] 的 ./include 下.
   libcp_context_add_include_path_with_origin(ctx,
-                                             format("%s/include", dirname(strdup(argv0))),
+                                             driver_format("%s/include", dirname(strdup(argv0))),
                                              LIBCP_INCLUDE_SYSTEM);
 
   // 添加标准 include 路径. 它们与 chibicc 自带的 include 目录都属于
@@ -263,7 +227,7 @@ static FileType parse_opt_x(char* s) {
     return FILE_ASM;
   if (!strcmp(s, "none"))
     return FILE_NONE;
-  error("<command line>: unknown argument for -x: %s", s);
+  driver_error(ctx, NULL, "<command line>: unknown argument for -x: %s", s);
 }
 
 static char* quote_makefile(char* s) {
@@ -469,7 +433,7 @@ static void parse_args(int argc, char** argv) {
       if (opt_MT == NULL)
         opt_MT = argv[++i];
       else
-        opt_MT = format("%s %s", opt_MT, argv[++i]);
+        opt_MT = driver_format("%s %s", opt_MT, argv[++i]);
       continue;
     }
 
@@ -482,7 +446,7 @@ static void parse_args(int argc, char** argv) {
       if (opt_MT == NULL)
         opt_MT = quote_makefile(argv[++i]);
       else
-        opt_MT = format("%s %s", opt_MT, quote_makefile(argv[++i]));
+        opt_MT = driver_format("%s %s", opt_MT, quote_makefile(argv[++i]));
       continue;
     }
 
@@ -545,13 +509,13 @@ static void parse_args(int argc, char** argv) {
       continue;
 
     if (argv[i][0] == '-' && argv[i][1] != '\0')
-      error("unknown argument: %s", argv[i]);
+      driver_error(ctx, NULL, "unknown argument: %s", argv[i]);
 
     strarray_push(&input_paths, argv[i]);
   }
 
   if (input_paths.len == 0)
-    error("no input files");
+    driver_error(ctx, NULL, "no input files");
 
   // -E 意味着输入是 C 宏语言, 因此按 C 源文件处理.
   if (opt_E)
@@ -564,7 +528,7 @@ static FILE* open_file(char* path) {
 
   FILE* out = fopen(path, "w");
   if (!out)
-    error("cannot open output file: %s: %s", path, strerror(errno));
+    driver_error(ctx, NULL, "cannot open output file: %s: %s", path, strerror(errno));
   return out;
 }
 
@@ -580,7 +544,7 @@ static char* replace_extn(char* tmpl, char* extn) {
   char* dot      = strrchr(filename, '.');
   if (dot)
     *dot = '\0';
-  return format("%s%s", filename, extn);
+  return driver_format("%s%s", filename, extn);
 }
 
 static void cleanup(void) {
@@ -592,7 +556,7 @@ static char* create_tmpfile(void) {
   char* path = strdup("/tmp/chibicc-XXXXXX");
   int fd     = mkstemp(path);
   if (fd == -1)
-    error("mkstemp failed: %s", strerror(errno));
+    driver_error(ctx, NULL, "mkstemp failed: %s", strerror(errno));
   close(fd);
 
   strarray_push(&tmpfiles, path);
@@ -610,7 +574,7 @@ static void run_subprocess(char** argv) {
 
   pid_t pid = fork();
   if (pid < 0)
-    error("fork failed: %s", strerror(errno));
+    driver_error(ctx, NULL, "fork failed: %s", strerror(errno));
 
   if (pid == 0) {
     // 子进程: 运行新命令.
@@ -625,7 +589,7 @@ static void run_subprocess(char** argv) {
   int status;
   while (waitpid(pid, &status, 0) == -1) {
     if (errno != EINTR)
-      error("waitpid failed: %s", strerror(errno));
+      driver_error(ctx, NULL, "waitpid failed: %s", strerror(errno));
   }
 
   // 被信号终止和退出状态非零一样算失败.
@@ -707,10 +671,6 @@ static void print_dependencies(void) {
   }
 }
 
-static LibcpToken* must_tokenize_file(char* path) {
-  return libcp_tokenize_file(ctx, path);
-}
-
 static LibcpToken* append_tokens(LibcpToken* tok1, LibcpToken* tok2) {
   if (!tok1 || tok1->kind == TK_EOF)
     return tok2;
@@ -727,7 +687,7 @@ static int cc1(void) {
   // trivia 契约以及建在它上面的 CST 都作用于 tokenize 的直接输出,
   // 即预处理之前的内容.
   if (opt_dump_tokens || opt_reconstruct || opt_dump_cst || opt_reconstruct_cst || opt_verify_cst) {
-    LibcpToken* tok = must_tokenize_file(base_file);
+    LibcpToken* tok = libcp_tokenize_file(ctx, base_file);
     if (!tok)
       return 1;
     if (opt_dump_tokens)
@@ -758,16 +718,16 @@ static int cc1(void) {
     // 查路径表; 搜索细节归库内 include 模块.
     char* path = libcp_context_resolve_include(ctx, incl);
     if (!path)
-      error("-include: %s: %s", incl, strerror(errno));
+      driver_error(ctx, NULL, "-include: %s: %s", incl, strerror(errno));
 
-    LibcpToken* tok2 = must_tokenize_file(path);
+    LibcpToken* tok2 = libcp_tokenize_file(ctx, path);
     if (!tok2)
       return 1;
     tok = append_tokens(tok, tok2);
   }
 
   // 词法分析并预处理.
-  LibcpToken* tok2 = must_tokenize_file(base_file);
+  LibcpToken* tok2 = libcp_tokenize_file(ctx, base_file);
   if (!tok2)
     return 1;
   tok = append_tokens(tok, tok2);
@@ -849,7 +809,7 @@ static char* find_libpath(void) {
     return "/usr/lib/x86_64-linux-gnu";
   if (file_exists("/usr/lib64/crti.o"))
     return "/usr/lib64";
-  error("library path is not found");
+  driver_error(ctx, NULL, "library path is not found");
 }
 
 static char* find_gcc_libpath(void) {
@@ -865,7 +825,7 @@ static char* find_gcc_libpath(void) {
       return dirname(path);
   }
 
-  error("gcc library path is not found");
+  driver_error(ctx, NULL, "gcc library path is not found");
 }
 
 static void run_linker(LibcpStringArray* inputs, char* output) {
@@ -881,15 +841,15 @@ static void run_linker(LibcpStringArray* inputs, char* output) {
   char* gcc_libpath = find_gcc_libpath();
 
   if (opt_shared) {
-    strarray_push(&arr, format("%s/crti.o", libpath));
-    strarray_push(&arr, format("%s/crtbeginS.o", gcc_libpath));
+    strarray_push(&arr, driver_format("%s/crti.o", libpath));
+    strarray_push(&arr, driver_format("%s/crtbeginS.o", gcc_libpath));
   } else {
-    strarray_push(&arr, format("%s/crt1.o", libpath));
-    strarray_push(&arr, format("%s/crti.o", libpath));
-    strarray_push(&arr, format("%s/crtbegin.o", gcc_libpath));
+    strarray_push(&arr, driver_format("%s/crt1.o", libpath));
+    strarray_push(&arr, driver_format("%s/crti.o", libpath));
+    strarray_push(&arr, driver_format("%s/crtbegin.o", gcc_libpath));
   }
 
-  strarray_push(&arr, format("-L%s", gcc_libpath));
+  strarray_push(&arr, driver_format("-L%s", gcc_libpath));
   strarray_push(&arr, "-L/usr/lib/x86_64-linux-gnu");
   strarray_push(&arr, "-L/usr/lib64");
   strarray_push(&arr, "-L/lib64");
@@ -925,11 +885,11 @@ static void run_linker(LibcpStringArray* inputs, char* output) {
   }
 
   if (opt_shared)
-    strarray_push(&arr, format("%s/crtendS.o", gcc_libpath));
+    strarray_push(&arr, driver_format("%s/crtendS.o", gcc_libpath));
   else
-    strarray_push(&arr, format("%s/crtend.o", gcc_libpath));
+    strarray_push(&arr, driver_format("%s/crtend.o", gcc_libpath));
 
-  strarray_push(&arr, format("%s/crtn.o", libpath));
+  strarray_push(&arr, driver_format("%s/crtn.o", libpath));
   strarray_push(&arr, NULL);
 
   run_subprocess(arr.data);
@@ -950,7 +910,7 @@ static FileType get_file_type(char* filename) {
   if (endswith(filename, ".s"))
     return FILE_ASM;
 
-  error("<command line>: unknown file extension: %s", filename);
+  driver_error(ctx, NULL, "<command line>: unknown file extension: %s", filename);
 }
 
 int main(int argc, char** argv) {
@@ -970,7 +930,7 @@ int main(int argc, char** argv) {
   }
 
   if (input_paths.len > 1 && opt_o && (opt_c || opt_S || opt_E))
-    error("cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
+    driver_error(ctx, NULL, "cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
 
   LibcpStringArray ld_args = {};
 

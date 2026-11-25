@@ -217,7 +217,7 @@ for (; tok; tok = tok->next) {
 }
 ```
 
-在 `tokenize_file` 的直接输出上, 以及输入本已处于扫描缓冲形态 (没有原始 `\uXXXX` 序列) 的 `tokenize_buffer_len` 输出上, 重建结果等于输入字节. 原始 `\uXXXX` 的内存输入不满足该契约: 扫描路径不重写它, 但 `raw_end_of` 会把它当成一个 UCN 计算 `raw_len`, 导致后续 token 的 `trivia_len` 为负. 见第 11 章 11.5.8; 规避方式是先把这类文本转成 UTF-8, 或改用 `tokenize_file`.
+在 `libcp_tokenize_file` 的直接输出上, 以及输入本已处于扫描缓冲形态 (没有原始 `\uXXXX` 序列) 的 `libcp_tokenize_buffer_len` 输出上, 重建结果等于输入字节. 原始 `\uXXXX` 的内存输入不满足该契约: 扫描路径不重写它, 但 `libcp_file_raw_end_of` 会把它当成一个 UCN 计算 `raw_len`, 导致后续 token 的 `trivia_len` 为负. 见第 11 章 11.5.8; 规避方式是先把这类文本转成 UTF-8, 或改用 `libcp_tokenize_file`.
 
 ## 3.5 阶段产物
 
@@ -305,7 +305,7 @@ fclose(out);
 cmp input.c rebuilt.c
 ```
 
-`-dump-tokens` 对每个 token 打印一行 T(行号, raw 偏移, 种类, 拼写); 在该 T 行之前, 按 trivia 片段打印零或多行 R(bom / lc / bc / nl / ws / cont). R 行与 T 行合起来逐字节平铺原始文件. 具体形状由 `test/trivia.sh` 锁定.
+`-dump-tokens` 对每个 token 打印一行 T(物理行号, raw 偏移, 种类, 拼写); 在该 T 行之前, 按 trivia 片段打印零或多行 R(bom / lc / bc / nl / ws / cont). R 行与 T 行合起来逐字节平铺原始文件. 具体形状由 `test/trivia.sh` 锁定.
 
 ## 3.8 边界与已知限制
 
@@ -315,6 +315,6 @@ cmp input.c rebuilt.c
 - **`loc` 不是 C 字符串**. 它是扫描缓冲里的切片, 可能没有 NUL. 用 `len` 限界, 或复制出来.
 - **`#line` 不修改 `file->name`, 但会改显示名**. 它设置 `file->display_name`, 预处理后的 token 的 `filename` 与 `__FILE__` 随之改变; 诊断仍使用物理路径 `file->name`, 行号叠加 `#line` 偏移. 见第 11 章.
 - **内存中的输入被复制**. `tokenize_buffer` 会把字节复制进 per-TU 分配, 调用者的缓冲区可以立即释放. 代价是同一份源码在内存里有两份.
-- **内存输入不经过扫描缓冲改写**. `libcp_tokenize_buffer*` 按字节扫描: 不跳过 BOM, 不删除反斜杠续行, 不把 `\uXXXX` 改写成 UTF-8, 不做换行归一 (CRLF 仍能扫描, 孤立 CR 的行号会错), 不补末尾换行. 反斜杠续行会变成一个 `\` token, `\u00e9` 会变成 `\` 加 `u00e9`. 真实源码优先用 `libcp_tokenize_file`; 内存输入应当是已经处于"扫描缓冲形态"的文本. 原始 `\uXXXX` 的内存输入还会破坏 raw 坐标: `raw_end_of` 按 UCN 长度计算, 后续 token 的 `trivia_len` 会变成负数, 重建结果错位, 见 11.5.8.
+- **内存输入不经过扫描缓冲改写**. `libcp_tokenize_buffer*` 按字节扫描: 不跳过 BOM, 不删除反斜杠续行, 不把 `\uXXXX` 改写成 UTF-8, 不做换行归一 (CRLF 仍能扫描, 孤立 CR 的行号会错), 不补末尾换行. 反斜杠续行会变成一个 `\` token, `\u00e9` 会变成 `\` 加 `u00e9`. 真实源码优先用 `libcp_tokenize_file`; 内存输入应当是已经处于"扫描缓冲形态"的文本. 原始 `\uXXXX` 的内存输入还会破坏 raw 坐标: `libcp_file_raw_end_of` 按 UCN 长度计算, 后续 token 的 `trivia_len` 会变成负数, 重建结果错位, 见 11.5.8.
 - **文件大小上限**. 超过 `INT32_MAX` 字节的文件被拒绝, 不是分块处理.
 - **没有字符集转换**. 文件按字节读入, 标识符支持 UTF-8. 其他编码需要调用者先转成 UTF-8.

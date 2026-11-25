@@ -481,7 +481,7 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 - 公共 `libcp_token_dump` / `libcp_ast_dump` (#25).
 - typed 初始化器只读交接: `init_resolved` 保留到 reset, 带锚点 token 与 child_count (#26).
 - 树外消费者验收 (#27): `test/outside/consumer.c` 只含公共头并链接归档, 完成降级发射与诊断回调; `test/outside.sh` 把公共头复制到临时目录, 在默认与 stage2 归档上各跑一遍, 未定义符号与公共 API 闸门共用 `test/public-api.deny`.
-- 驱动器整体迁移 (#28): `main.c`, `codegen.c` 与 `driver.h` 只包含公共头, 用公共构造器, 子节点枚举, include 解析, dump, 坐标与 typed 初始化器完成原有工作.
+- 驱动器整体迁移 (#28): `main.c`, `codegen.c`, `driver.h` 与 `driver-util.h` 只包含公共头, 用公共构造器, 子节点枚举, include 解析, dump, 坐标与 typed 初始化器完成原有工作.
 - seam 收口 (#29): Makefile 拆出 `LIB_CFLAGS` 与 `DRIVER_CFLAGS`, stage1 与 stage2 都为驱动器对象只给公共 include; `test/driver-seam.sh` 检查驱动器源码并 public-only 重编驱动器对象; `test-stage2` 另跑一遍 `test/public-api.sh`; 删除无调用者的内部入口 `libcp_unique_name_next` 与 `libcp_vla_of`; 版本升到 0.3.0.
 
 ### 产物可以干什么

@@ -181,9 +181,9 @@ libcp_context_add_include_path_with_origin(ctx, "/usr/include",
 
 ### 11.5.8 原始 `\uXXXX` 的内存输入破坏 raw 坐标
 
-`tokenize_buffer*` 不做扫描缓冲改写, 所以原始 `\u00e9` 被扫描成 `\` 加 `u00e9`. 但 `raw_end_of` 会把这个 `\` 当成 universal character name, 让 `\` token 的 `raw_len` 覆盖整个转义; 后一个 token 的 `trivia_len` 因此变成负数, `libcp_reconstruct` 输出错位. 实测 `"\\u00e9 x\n"` 的第二个 token `trivia_len = -5`.
+`libcp_tokenize_buffer*` 不做扫描缓冲改写, 所以原始 `\u00e9` 被扫描成 `\` 加 `u00e9`. 但 `libcp_file_raw_end_of` 会把这个 `\` 当成 universal character name, 让 `\` token 的 `raw_len` 覆盖整个转义; 后一个 token 的 `trivia_len` 因此变成负数, `libcp_reconstruct` 输出错位. 实测 `"\\u00e9 x\n"` 的第二个 token `trivia_len = -5`.
 
-规避: 先把这类文本转成 UTF-8, 或改用 `tokenize_file`. 建议修复方向: 让 `raw_end_of` 只在扫描缓冲形态下按 UCN 计算, 或统一走 `make_scan_buffer`.
+规避: 先把这类文本转成 UTF-8, 或改用 `libcp_tokenize_file`. 建议修复方向: 让 `libcp_file_raw_end_of` 只在扫描缓冲形态下按 UCN 计算, 或统一走 `make_scan_buffer`.
 
 ### 11.5.9 `#include_next` 的续查记录按路径字符串键控
 

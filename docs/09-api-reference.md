@@ -410,7 +410,7 @@ void libcp_token_dump(LibcpContext *ctx, const LibcpToken *tok, FILE *out);
 
 把 token 流与 token 之间的 trivia 打印为文本 dump.
 
-- 每个 `T` 行是一个 token: 行号, 文件内字节偏移, 种类与转义后的拼写. 每个 `R` 行是它前面被跳过的原始字节, 按词法分析器跳过的片段拆分 (`lc` 行注释, `bc` 块注释, `nl` 换行, `ws` 空白, `cont` 反斜杠续行, `bom` 文件开头的 BOM).
+- 每个 `T` 行是一个 token: 物理行号, 文件内字节偏移, 种类与转义后的拼写. 每个 `R` 行是它前面被跳过的原始字节, 按词法分析器跳过的片段拆分 (`lc` 行注释, `bc` 块注释, `nl` 换行, `ws` 空白, `cont` 反斜杠续行, `bom` 文件开头的 BOM).
 - 文本按 C 字面量风格转义: `\n`, `\t`, `\r`, `\\`, 其余控制字符, 0x7f 及以上的字节与空格打印为 `\xHH`.
 - 输入是 `libcp_tokenize_file` / `libcp_tokenize_buffer*` 的直接输出, 即预处理之前; 输出与驱动器的 `-dump-tokens` 逐字节相同.
 - 只读: 接受 `const` 输入, 不分配对象, 不选择处理阶段, 不退出. `ctx` 用于 token 种类名与错误边界.
@@ -523,7 +523,7 @@ span 的最小接口. 注意事项:
 - `next` 链是兄弟, 不被跟随; 初始化器树不被下降.
 - 极值取自各节点的代表 token, 并额外收集 `decl.name_tok`, `access.arrow_tok` 与 `case_.colon_tok`: 例如 `ND_FUNCDEF` 的代表 token 是函数体的 `{`, 但 `range.c` 还会收集 `name_tok`, 所以整个函数定义的 range 从它的名字 token 开始, 不从声明说明符开始. `spec_decls` 只保存 declspec 中产生的声明记录 (如 enum 常量), 不是说明符 token, 不能用来取得更早边界; 需要更早边界时请回到 token / CST.
 - 子树完全没有 token 时, `*start` 与 `*end` 都为 NULL.
-- 坐标换算由内部 source 模块的 `libcp_token_source_pos` 统一提供; 需要物理行时用 `libcp_token_physical_line`, 它取文件的 `lines` / `map` 表, 不依赖 `line_no - line_delta`.
+- 坐标换算与物理行入口是库内部实现 (`libcp_token_source_pos` / `libcp_token_physical_line` 不在公共头与 D7 清单里); 公共面只通过 `libcp_node_source_range` 这类入口交付 token, 不承诺物理行 accessor. 需要区分内存输入与真实文件时用公共的 `libcp_token_is_synthetic`.
 - 宏展开产物 token 的坐标在合成缓冲里, 跨文件比较按文件指针先序, 稳定
   但无语义.
 
@@ -613,7 +613,7 @@ void libcp_ast_dump(LibcpContext *ctx, const LibcpNode *node, FILE *out);
 把第 3 层忠实语法树打印为文本 dump.
 
 - 顶层沿 `next` 兄弟链逐个打印, 每个节点一行, 每层缩进两格; 子节点按 `libcp_node_child_at` 的顺序下降, 列表字段沿 `next` 走链.
-- 节点行包含种类, 代表 token (`@<文件>:<行>:<列> "拼写"`), 以及该 kind 的字段 (`ty_op`, `val`, `attr`, `name` 等). 宏展开产生的 token 打印为 `@synth`.
+- 节点行包含种类, 代表 token (`@<文件>:<物理行>:<列> "拼写"`), 以及该 kind 的字段 (`ty_op`, `val`, `attr`, `name` 等). 位置是物理行, 不受 `#line` 的逻辑行号影响. 宏展开产生的 token 打印为 `@synth`.
 - 初始化器记录 (`INIT`) 与属性侧 `align_expr` 是记录而不是结构子节点, 在枚举之后单独打印.
 - 输入是 `libcp_parse` 的输出, 在 `libcp_sema` 之前; 输出与驱动器的 `-dump-ast` 逐字节相同.
 - 只读: 接受 `const` 输入, 不分配对象, 不选择处理阶段, 不退出. 输出格式是公共契约, 由 `test/ast.sh` 逐字节锁定; 格式变化属于行为变化.

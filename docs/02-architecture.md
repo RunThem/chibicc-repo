@@ -59,7 +59,7 @@
 
 `<libcp/backend.h>` 不在这五层里, 它是给库外后端使用的支持面: 节点构造 (`libcp_node_new` / `_binary` / `_unary` / `_num` / `_long` / `_arith` / `_var` / `_vla_ptr` / `_alloca` / `_cast`), 内建类型查询 (`LibcpBuiltinType` 与 `libcp_type_builtin`), 类型标注 (`libcp_node_annotate_type`), 指针类型构造 (`libcp_type_pointer_to`), 标签引用 (`libcp_label_ref_count` / `libcp_label_ref_at`), 唯一名 (`libcp_context_take_unique_name`) 与返回式诊断 (`libcp_diagnostic_report`). 支持面只公开"读取第 4 层标注树并降级"所需的最小构造能力, 不拥有层间的数据契约: 构造出的节点与类型归 context 所有, 内建类型是跨 context 共享的只读单例, 标注仍走 sema 的规则. 标签引用与唯一名读的是 sema 到后端的交接数据; 诊断报告与库内部的 error / warn 走同一条格式化与回调路径, 区别只在它返回而不 longjmp.
 
-驱动器 (`main.c`, `codegen.c`, `driver.h`) 不是库的一部分, 它与树外消费者走同一个公共 seam: 只包含 `<libcp/libcp.h>`, 不包含内部伞头, 也不依赖任何 `libcp/src` 路径. 这条边界由构建标志与 `test/driver-seam.sh` 共同锁定, 见 2.10 与 10.8.
+驱动器 (`main.c`, `codegen.c`, `driver.h`, `driver-util.h`) 不是库的一部分, 它与树外消费者走同一个公共 seam: 只包含 `<libcp/libcp.h>`, 不包含内部伞头, 也不依赖任何 `libcp/src` 路径. 这条边界由构建标志与 `test/driver-seam.sh` 共同锁定, 见 2.10 与 10.8.
 
 ## 2.3 两条路径为什么分开
 
@@ -360,6 +360,7 @@ libcp/
 main.c               驱动器, 参考消费者
 codegen.c            x86-64 代码生成器, 参考消费者
 driver.h             驱动器内部头
+driver-util.h        驱动器共用工具 (格式化与致命诊断)
 tools/fmt.c          CST formatter MVP (make fmt-tool, 不安装)
 tools/c2c.c          C 转 C 打印器 (make c2c, 仅测试回归闸门)
 tools/asm-diff.sh    汇编等价性闸门 (make asm-diff BASE=<ref>)
@@ -377,4 +378,4 @@ LICENSE              许可证
 
 公共头只包含标准头和彼此, 不包含 `libcp/src/libcp.h`, 不声明内部函数, 不定义 `_POSIX_C_SOURCE`, 不包含 `glob.h` 或 `sys/wait.h`. 每个公共头都能单独用 `cc -std=c11 -fsyntax-only -Wall -Wextra` 编译. 这条卫生规则由 `test/public-api.sh` 锁定.
 
-驱动器一侧的边界更具体: `main.c`, `codegen.c` 与 `driver.h` 只包含 `<libcp/libcp.h>`. Makefile 的 `LIB_CFLAGS` 为库对象提供公共与内部 include, `DRIVER_CFLAGS` 只为驱动器对象提供公共 include; `test/driver-seam.sh` 检查三个源文件不含内部 include, 并用只含公共头的临时目录重编驱动器对象. 内部伞头因此只服务库实现, 不是消费者 seam.
+驱动器一侧的边界更具体: `main.c`, `codegen.c`, `driver.h` 与 `driver-util.h` 只包含 `<libcp/libcp.h>`. Makefile 的 `LIB_CFLAGS` 为库对象提供公共与内部 include, `DRIVER_CFLAGS` 只为驱动器对象提供公共 include; `test/driver-seam.sh` 检查四个文件不含内部 include, 并用只含公共头的临时目录重编驱动器对象. 内部伞头因此只服务库实现, 不是消费者 seam.
