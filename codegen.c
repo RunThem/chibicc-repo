@@ -1682,13 +1682,12 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
 // 原先附带的检查 - 游离诊断, 未声明标签的配对和操作数检查 - 留在 sema,
 // 所以这个 pass 只处理通过检查的树. 它遵循的六条不变式写在文件开头.
 //
-// 标签名保持 `.L..%d` 格式, 沿用 sema 匿名对象所用的同一个编号空间, 从
-// 库计数器停下的地方继续 (入口处调用 libcp_context_take_unique_name, 此后
-// 没有别的消费者取号): 快照归一化器只重编号这种后缀形状, 所以换一个前缀
-// 即使只是纯重编号也会表现为 diff, 而从零开始的新序列会与 sema 已经分配
-// 的对象名冲突.
-static int label_base;  // 计数器停下处的取值, 只在入口取一次
-static int label_seq;   // 此后发出的标签数
+// 标签名保持 `.L..%d` 格式, 沿用 sema 匿名对象所用的同一个编号空间:
+// 每个标签都向 context 取一个号, 取到即消耗, 因此后端自己发出的号不会
+// 与库下一次会发出的号重叠 (backend.h 的契约). 整形与发射期间没有别的
+// 取号者, 所以序列就是计数器从这里开始的连续值. 快照归一化器只重编号
+// 这种后缀形状, 所以换一个前缀即使只是纯重编号也会表现为 diff, 而从零
+// 开始的新序列会与 sema 已经分配的对象名冲突.
 
 static LibcpNode* current_switch;
 
@@ -1717,7 +1716,7 @@ static void cg_labels_push(LibcpNode* node) {
 }
 
 static char* new_label(LibcpContext* ctx) {
-  return format(".L..%d", label_base + label_seq++);
+  return format(".L..%d", libcp_context_take_unique_name(ctx));
 }
 
 static void shape_node(LibcpContext* ctx, LibcpNode* node);
@@ -2829,8 +2828,8 @@ void codegen(LibcpContext* ctx, LibcpObj* prog, FILE* out) {
   }
 
   // 整形遍最先运行: 它填充 gen_stmt 读取的标签字段并解析 goto 引用,
-  // 在它之前不得进行任何分配或发射 (PLAN 契约 3).
-  label_base = libcp_context_take_unique_name(ctx);
+  // 在它之前不得进行任何分配或发射 (PLAN 契约 3). 标签的名字在分配时
+  // 逐个向 context 取号, 入口不预取.
   shape(ctx, prog);
 
   assign_lvar_offsets(prog);
