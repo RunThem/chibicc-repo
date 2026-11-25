@@ -163,6 +163,7 @@ bench: bench-tool
 test: $(TESTS)
 	test/docs-links.sh
 	test/style.sh
+	test/docs-facts.sh
 	test/driver-seam.sh "$(CC)"
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./chibicc

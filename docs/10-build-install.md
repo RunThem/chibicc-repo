@@ -214,7 +214,7 @@ make test-stage2
 | `test/*.exe` | 每个特性一个 C 测试, 覆盖语言功能 |
 | `test/driver-seam.sh` | 驱动器 seam: `main.c` / `codegen.c` / `driver.h` / `driver-util.h` 不含内部 include, 驱动器对象只用临时公共头目录编译; `make test` 用宿主 `cc`, `make test-stage2` 用 `stage2/chibicc` |
 | `test/driver.sh` | 命令行选项 |
-| `test/diagnostic.sh` | 69 例诊断文案与插入符逐字节 |
+| `test/diagnostic.sh` | 73 例诊断文案与插入符逐字节 |
 | `test/warning.sh` | 警告文案与插入符 |
 | `test/shape.sh` | 34 段发射形状回归 |
 | `test/ast.sh` | 86 例第 3 层 AST 形态逐字节 |
