@@ -1905,57 +1905,64 @@ static void annotate_init_exprs(LibcpContext* ctx, LibcpInitTree* init) {
     annotate_init_exprs(ctx, init->children[mem->idx]);
 }
 
-// 可修改左值的类型条件 (C11 6.3.2.1p1): 数组 (含变长数组) 与函数类型
-// 都不能作为赋值目标. 库不跟踪 const 限定, 因此类型侧只有这一条.
+// 赋值目标的类型条件: 数组与变长数组不是可修改左值 (C11 6.3.2.1p1).
+// 函数标识符本身不是左值 (6.3.2.1p1 要求对象类型), 这里按类型一并拒绝.
+// 不完整类型由标注遍的专门检查负责, const 限定也未跟踪, 因此这里只是
+// 可修改性的一个子集, 不是完整的 6.3.2.1p1 判定.
 static bool is_modifiable_type(LibcpType* ty) {
   return ty->kind != TY_ARRAY && ty->kind != TY_VLA && ty->kind != TY_FUNC;
 }
 
-// gen_addr 能走到的赋值目标形态, 不论类型的可修改性. 复合赋值与 ++/--
-// 的旧诊断由整形后的临时量解引用节点发出, 该形态用来复刻它的锚点.
-static bool is_addressable_kind(LibcpNode* node) {
+// 左值分类. 一次判定同时回答两件事: 能否作为赋值目标, 以及类型不可
+// 修改时是否仍是 gen_addr 能走到的形态 (复合形式的锚点需要后者).
+typedef enum {
+  LV_NONE,         // 不是左值
+  LV_ADDRESSABLE,  // 可寻址, 但类型不可修改
+  LV_MODIFIABLE,   // 可修改左值
+} LibcpLvalueClass;
+
+// 变量, 解引用, 成员访问, 下标, 复合字面量与字符串字面量的匿名对象都是
+// 左值 (复合字面量的对象由 resolve pass 物化); 类型不可修改时降为
+// LV_ADDRESSABLE. 逗号表达式与 _Generic 继承结果表达式的分类: 逗号是
+// GNU 扩展的兼容例外 (C11 不把逗号结果当左值, test/control.c 锁定 gcc
+// 行为); _Generic 的继承是 C11 6.5.1.1p5 的规定. VLA 指示符代表对象
+// 自身的栈槽. 其余节点 - 字面量, 算术与比较结果, 调用, cast 等 - 都不是
+// 左值.
+static LibcpLvalueClass classify_lvalue(LibcpNode* node) {
   switch (node->kind) {
+    case ND_VLA_PTR: return LV_MODIFIABLE;
     case ND_STRING:
     case ND_VAR:
     case ND_DEREF:
     case ND_MEMBER:
     case ND_SUBSCRIPT:
-    case ND_COMPOUND_LITERAL:
-    case ND_VLA_PTR: return true;
-    case ND_COMMA: return is_addressable_kind(node->rhs);
-    case ND_GENERIC: return is_addressable_kind(node->ctrl.generic_sel);
-    default: return false;
+    case ND_COMPOUND_LITERAL: return is_modifiable_type(node->ty) ? LV_MODIFIABLE : LV_ADDRESSABLE;
+    case ND_COMMA: return classify_lvalue(node->rhs);
+    case ND_GENERIC: return classify_lvalue(node->ctrl.generic_sel);
+    default: return LV_NONE;
   }
 }
 
-// 普通赋值, 复合赋值与 ++/-- 共用的左值判定. 变量, 解引用, 成员访问,
-// 下标与复合字面量是左值 (后者的对象由 resolve pass 物化); 逗号表达式
-// 与 _Generic 继承其结果表达式的左值性, 与 codegen 的 gen_addr 规则
-// 一致 (逗号的情形由 test/control.c 锁定); VLA 指示符代表对象自身的
-// 栈槽. 其余节点 - 字面量, 算术与比较结果, 调用, cast 等 - 都不是
-// 左值. codegen 的 gen_addr 仍保留为后端防御.
-static bool is_modifiable_lvalue(LibcpNode* node) {
-  switch (node->kind) {
-    case ND_VAR:
-    case ND_DEREF:
-    case ND_MEMBER:
-    case ND_SUBSCRIPT:
-    case ND_COMPOUND_LITERAL: return is_modifiable_type(node->ty);
-    case ND_COMMA: return is_modifiable_lvalue(node->rhs);
-    case ND_GENERIC: return is_modifiable_lvalue(node->ctrl.generic_sel);
-    case ND_VLA_PTR: return true;
-    default: return false;
-  }
-}
-
-// 非左值赋值的诊断锚点. 普通赋值锚左操作数. 复合赋值与 ++/-- 在左操作数
-// 形态可寻址但类型不可修改 (数组, VLA, 函数) 时, 旧诊断来自整形后的
+// 检查形式, 决定诊断锚点. 普通赋值锚左操作数. 复合赋值与 ++/-- 在左
+// 操作数可寻址但类型不可修改 (数组, VLA, 函数) 时, 旧诊断来自整形后的
 // 临时量解引用节点, 其 token 是运算符本身; 其余情形旧诊断也锚在原左
 // 操作数上. 这条分流让既有 diagnostic 金样逐字节不变.
-static LibcpToken* lvalue_anchor(LibcpNode* lhs, LibcpToken* op_tok, bool compound) {
-  if (compound && is_addressable_kind(lhs) && !is_modifiable_type(lhs->ty))
-    return op_tok;
-  return lhs->tok;
+typedef enum {
+  LV_PLAIN,
+  LV_COMPOUND,
+} LibcpLvalueForm;
+
+// 普通赋值, 复合赋值与 ++/-- 共用的左值检查.
+static void
+    check_lvalue(LibcpContext* ctx, LibcpNode* lhs, LibcpToken* op_tok, LibcpLvalueForm form) {
+  LibcpLvalueClass class = classify_lvalue(lhs);
+  if (class == LV_MODIFIABLE)
+    return;
+
+  if (form == LV_COMPOUND && class == LV_ADDRESSABLE)
+    libcp_error_tok(ctx, op_tok, "not an lvalue");
+  else
+    libcp_error_tok(ctx, lhs->tok, "not an lvalue");
 }
 
 // 标注 pass: 为节点及其拥有的每棵子树定型, 插入标准要求的隐式转换,
@@ -2060,10 +2067,7 @@ void libcp_node_annotate_type(LibcpContext* ctx, LibcpNode* node) {
       return;
     }
     case ND_ASSIGN:
-      if (!is_modifiable_lvalue(node->lhs))
-        libcp_error_tok(ctx,
-                        lvalue_anchor(node->lhs, node->tok, node->assign.op != 0),
-                        "not an lvalue");
+      check_lvalue(ctx, node->lhs, node->tok, node->assign.op ? LV_COMPOUND : LV_PLAIN);
       if (node->assign.op) {
         // 复合赋值保持解析器记录的样子: 读改写重写属于消费者的 shaping
         // pass (PLAN A5.1). 左值性由上面的通用检查锁定; 该重写产生的
@@ -2080,8 +2084,7 @@ void libcp_node_annotate_type(LibcpContext* ctx, LibcpNode* node) {
       // 保持解析器记录的样子; 复合赋值重写属于消费者的 shaping pass
       // (PLAN A5.1). 左值性由上面的通用检查锁定. 前置与后置形态都携带
       // 操作数的类型 - 后置形态转回该类型的 cast 在那里构建.
-      if (!is_modifiable_lvalue(node->lhs))
-        libcp_error_tok(ctx, lvalue_anchor(node->lhs, node->tok, true), "not an lvalue");
+      check_lvalue(ctx, node->lhs, node->tok, LV_COMPOUND);
       node->ty = node->lhs->ty;
       return;
     case ND_GT:

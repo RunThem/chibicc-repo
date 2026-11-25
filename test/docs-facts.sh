@@ -30,12 +30,13 @@ first_version() {
   awk 'match($0, /[0-9]+\.[0-9]+\.[0-9]+/) { print substr($0, RSTART, RLENGTH); exit }'
 }
 
-# check_count <fact> <expected> <pattern>...
-# 每个 pattern 在当前矩阵文档中的每个匹配都必须带 expected 这个数,
+# check_fact <fact> <expected> <extractor> <pattern>...
+# extractor 是 first_number 或 first_version: 从每个匹配里取出要比对的
+# 那个值. 每个 pattern 在当前矩阵文档中的每个匹配都必须带 expected,
 # 且该事实至少匹配一次, 避免事实被悄悄删掉.
-check_count() {
-  local fact=$1 expected=$2
-  shift 2
+check_fact() {
+  local fact=$1 expected=$2 extractor=$3
+  shift 3
   local file pattern matched value seen=0
 
   for file in docs/*.md; do
@@ -45,34 +46,7 @@ check_count() {
     for pattern in "$@"; do
       while IFS= read -r matched; do
         [ -n "$matched" ] || continue
-        value=$(printf '%s\n' "$matched" | first_number)
-        seen=$((seen + 1))
-        checked=$((checked + 1))
-        [ "$value" = "$expected" ] ||
-          report "$file: $fact is $value, expected $expected"
-      done < <(grep -oE -- "$pattern" "$file" || true)
-    done
-  done
-
-  if [ "$seen" -eq 0 ]; then
-    report "$fact: no current-doc count found"
-  fi
-}
-
-# check_version <fact> <expected> <pattern>...
-check_version() {
-  local fact=$1 expected=$2
-  shift 2
-  local file pattern matched value seen=0
-
-  for file in docs/*.md; do
-    case $file in
-      docs/12-project-stages.md) continue ;;
-    esac
-    for pattern in "$@"; do
-      while IFS= read -r matched; do
-        [ -n "$matched" ] || continue
-        value=$(printf '%s\n' "$matched" | first_version)
+        value=$(printf '%s\n' "$matched" | "$extractor")
         seen=$((seen + 1))
         checked=$((checked + 1))
         [ "$value" = "$expected" ] ||
@@ -82,7 +56,7 @@ check_version() {
   done
 
   if [ "$seen" -eq 0 ]; then
-    report "$fact: no current-doc version found"
+    report "$fact: no current-doc match found"
   fi
 }
 
@@ -99,17 +73,17 @@ d7_count=$(sed -n '/^d7="/,/^libcp_version"$/p' test/public-api.sh |
   report "test/expand.sh: no exp_dump cases found"
 [ "$d7_count" -gt 0 ] || report "test/public-api.sh: no D7 list found"
 
-check_count "diagnostic case count" "$diagnostic_count" \
+check_fact "diagnostic case count" "$diagnostic_count" first_number \
   '诊断套件当前锁定 [0-9]+ 例' \
   '[0-9]+ 例诊断' \
   '逐字节锁定,? [0-9]+ 例' \
   '诊断 [0-9]+ 例'
 
-check_count "AST case count" "$ast_count" \
+check_fact "AST case count" "$ast_count" first_number \
   'AST [0-9]+ 例' \
   'test/ast\.sh.*[0-9]+ 例'
 
-check_count "expand dump sample count" "$expand_dump_count" \
+check_fact "expand dump sample count" "$expand_dump_count" first_number \
   '[0-9]+ 个 provenance dump 样本' \
   'test/expand\.sh.*[0-9]+ 个'
 
@@ -117,10 +91,10 @@ check_count "expand dump sample count" "$expand_dump_count" \
 header_names=$(cd libcp/include/libcp && ls -1 *.h | sort)
 header_count=$(printf '%s\n' "$header_names" | wc -l | tr -d ' ')
 
-check_count "public header count" "$header_count" \
+check_fact "public header count" "$header_count" first_number \
   '[0-9]+ 个公共头,' \
   '恰好 [0-9]+ 个公共头'
-check_count "umbrella sibling header count" "$((header_count - 1))" \
+check_fact "umbrella sibling header count" "$((header_count - 1))" first_number \
   '其余 [0-9]+ 个公共头'
 
 install_count=$(awk '/-ne [0-9]+/ {
@@ -163,7 +137,7 @@ if [ -z "$header_version" ]; then
 elif [ "$make_version" != "$header_version" ]; then
   report "Makefile VERSION is ${make_version:-<none>}, LIBCP_VERSION is $header_version"
 else
-  check_version "library version" "$header_version" \
+  check_fact "library version" "$header_version" first_version \
     '库版本: `[0-9]+\.[0-9]+\.[0-9]+`' \
     '#define LIBCP_VERSION "[0-9]+\.[0-9]+\.[0-9]+"' \
     'modversion libcp.*# [0-9]+\.[0-9]+\.[0-9]+' \
@@ -172,7 +146,7 @@ else
 fi
 
 # D7 数量: test/public-api.sh 的白名单是事实.
-check_count "D7 function count" "$d7_count" \
+check_fact "D7 function count" "$d7_count" first_number \
   '[0-9]+ 个公共函数' \
   '[0-9]+ 个是公共函数' \
   '[0-9]+ 个 D7 函数' \
