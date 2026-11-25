@@ -72,6 +72,8 @@ static int errors;
 static int diag_fields_ok = 1;
 static int diag_located;
 static const char *last_message;
+static int last_line;
+static int last_column;
 
 static void diag(void *user, const LibcpDiagnostic *d) {
   (void)user;
@@ -83,6 +85,8 @@ static void diag(void *user, const LibcpDiagnostic *d) {
       diag_fields_ok = 0;
     diag_located++;
   }
+  last_line = d->line;
+  last_column = d->column;
   if (d->severity == LIBCP_DIAG_ERROR)
     errors++;
 }
@@ -1776,6 +1780,66 @@ static int check_errors(LibcpContext *ctx) {
   return 0;
 }
 
+// libcp_sema alone must reject scalar non-lvalues as assignment targets
+// (issue #32): plain assignment, compound assignment and ++/-- share one
+// check, so no codegen pass is needed to see the diagnostic. The anchor
+// is the left operand (column 14 in every snippet below), and valid
+// lvalues - variable, dereference, member and subscript - still pass.
+static int check_sema_lvalue(LibcpContext *ctx) {
+  static char *bad[] = {
+    "int main() { 1 = 2; }\n",
+    "int main() { 1 += 2; }\n",
+    "int main() { 1++; }\n",
+    "int main() { 1--; }\n",
+  };
+
+  for (int i = 0; i < (int)(sizeof(bad) / sizeof(bad[0])); i++) {
+    int before = errors;
+    LibcpToken *t = libcp_tokenize_buffer(ctx, "<libtest>", bad[i]);
+    if (!t)
+      return 1;
+    t = libcp_preprocess(ctx, t);
+    LibcpNode *ast = t ? libcp_parse(ctx, t) : NULL;
+    if (!ast || libcp_context_failed(ctx))
+      return 1;
+    if (libcp_sema(ctx, ast) != NULL)
+      return 1;
+    if (!libcp_context_failed(ctx) || errors != before + 1)
+      return 1;
+    if (!last_message || strcmp(last_message, "not an lvalue") != 0)
+      return 1;
+    if (last_line != 1 || last_column != 14)
+      return 1;
+    libcp_context_reset(ctx);
+  }
+
+  int before = errors;
+  LibcpObj *prog = NULL;
+  if (!compile(ctx,
+               "static int g;\n"
+               "struct S { int a; };\n"
+               "int f(int *p, struct S *sp, int *arr) {\n"
+               "  struct S v;\n"
+               "  g = 1;\n"
+               "  *p = 2;\n"
+               "  sp->a = 3;\n"
+               "  v.a = 4;\n"
+               "  arr[0] = 5;\n"
+               "  g += 1;\n"
+               "  sp->a += 6;\n"
+               "  arr[0]++;\n"
+               "  g--;\n"
+               "  return g + v.a + *p;\n"
+               "}\n",
+               &prog) ||
+      !prog)
+    return 1;
+  if (libcp_context_failed(ctx) || errors != before)
+    return 1;
+  libcp_context_reset(ctx);
+  return 0;
+}
+
 // Two contexts in one thread: a diagnostic callback of one context runs a
 // public entry of the other while the first is unwinding (PLAN L3.4b).
 static LibcpContext *nested_target;
@@ -2039,6 +2103,8 @@ int main(int argc, char **argv) {
     return 1;
   libcp_context_reset(ctx);
   if (check_errors(ctx))
+    return 1;
+  if (check_sema_lvalue(ctx))
     return 1;
   if (check_nested(ctx))
     return 1;
