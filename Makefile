@@ -3,10 +3,10 @@
 # ALLOCATOR_CFLAGS with an -include shim header plus the four
 # LIBCP_* macros and leaves LIBCP_DEFAULT_ALLOCATOR undefined.
 ALLOCATOR_CFLAGS ?= -DLIBCP_DEFAULT_ALLOCATOR
-# 库对象可以看见内部伞头 (libcp/src); 驱动器对象 (main.c / codegen.c /
-# driver.h) 只允许公共 include. 两者都带 ALLOCATOR_CFLAGS: 驱动器包含
-# 公共伞头, 分配器配置必须与库一致. test/driver-seam.sh 用 public-only
-# 路径重编驱动器对象, 锁住第二个约束.
+# 库对象可以看见内部伞头 (libcp/src); 驱动器对象与驱动器头 (main.c /
+# codegen.c / driver.h / driver-util.h) 只允许公共 include. 两者都带
+# ALLOCATOR_CFLAGS: 驱动器包含公共伞头, 分配器配置必须与库一致.
+# test/driver-seam.sh 用 public-only 路径重编驱动器对象, 锁住第二个约束.
 BASE_CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch
 LIB_CFLAGS=$(BASE_CFLAGS) $(ALLOCATOR_CFLAGS) -Ilibcp/include -Ilibcp/src
 DRIVER_CFLAGS=$(BASE_CFLAGS) $(ALLOCATOR_CFLAGS) -Ilibcp/include
@@ -24,11 +24,12 @@ LIB_OBJS=$(LIB_SRCS:.c=.o)
 LIB_HDR=$(LIB_DIR)/libcp.h
 DRIVER_SRCS=main.c codegen.c
 DRIVER_OBJS=$(DRIVER_SRCS:.c=.o)
+DRIVER_HDRS=driver.h driver-util.h
 PUBLIC_HDRS=$(wildcard libcp/include/libcp/*.h)
 
 # clang-format scope: the library (sources and headers) plus the driver.
 # Tests and tools are deliberately out of scope.
-FMT_SRCS=$(LIB_SRCS) $(LIB_HDR) $(PUBLIC_HDRS) $(DRIVER_SRCS)
+FMT_SRCS=$(LIB_SRCS) $(LIB_HDR) $(PUBLIC_HDRS) $(DRIVER_SRCS) $(DRIVER_HDRS)
 
 TEST_SRCS=$(wildcard test/*.c)
 TESTS=$(TEST_SRCS:.c=.exe)
@@ -80,7 +81,7 @@ endif
 $(LIB_OBJS): $(LIB_DIR)/%.o: $(LIB_DIR)/%.c $(LIB_HDR) $(PUBLIC_HDRS)
 	$(CC) $(LIB_CFLAGS) -c -o $@ $<
 
-$(DRIVER_OBJS): %.o: %.c driver.h $(PUBLIC_HDRS)
+$(DRIVER_OBJS): %.o: %.c $(DRIVER_HDRS) $(PUBLIC_HDRS)
 	$(CC) $(DRIVER_CFLAGS) -c -o $@ $<
 
 test/%.exe: chibicc test/%.c test/common test/test.h
@@ -222,7 +223,7 @@ $(STAGE2_LIB_OBJS): stage2/$(LIB_DIR)/%.o: $(LIB_DIR)/%.c chibicc $(LIB_HDR) $(P
 	mkdir -p $(@D)
 	./chibicc $(STAGE2_LIB_FLAGS) -c -o $@ $<
 
-stage2/main.o stage2/codegen.o: stage2/%.o: %.c chibicc driver.h $(PUBLIC_HDRS)
+stage2/main.o stage2/codegen.o: stage2/%.o: %.c chibicc $(DRIVER_HDRS) $(PUBLIC_HDRS)
 	mkdir -p $(@D)
 	./chibicc $(STAGE2_DRIVER_FLAGS) -c -o $@ $<
 

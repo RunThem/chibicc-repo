@@ -25,41 +25,19 @@
 // 它们保存在 codegen 私有的 per-node / per-type 表中 (见上文, PLAN L1).
 // 以下全部是发射器: 按设计没有优化 pass.
 
+#include "driver-util.h"
 #include "driver.h"
 
 #include <assert.h>
 #include <stdarg.h>
 #include <stdlib.h>
-#include <stdnoreturn.h>
 #include <string.h>
-
-#ifndef __GNUC__
-#  define __attribute__(x)
-#endif
 
 #define GP_MAX 6
 #define FP_MAX 8
 
 #define MAX(x, y) ((x) < (y) ? (y) : (x))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
-
-// 本消费者本地的工具 (issue #28): 公共面不暴露 printf 风格格式化,
-// 对齐取整, 类型谓词与致命诊断, 它们只服务 codegen 的整形与发射.
-static char* format(char* fmt, ...) __attribute__((format(printf, 1, 2)));
-
-static char* format(char* fmt, ...) {
-  va_list ap;
-  va_list ap2;
-  va_start(ap, fmt);
-  va_copy(ap2, ap);
-  int len = vsnprintf(NULL, 0, fmt, ap2);
-  va_end(ap2);
-
-  char* buf = calloc(1, len + 1);
-  vsnprintf(buf, len + 1, fmt, ap);
-  va_end(ap);
-  return buf;
-}
 
 // 把非负的 `n` 向上取整到 `align` 的最近倍数.
 static int align_to(int n, int align) {
@@ -80,47 +58,9 @@ static bool is_numeric(LibcpType* ty) {
   return is_integer(ty) || is_flonum(ty);
 }
 
-// 致命诊断: 与库内部的 error 路径共用同一套格式化与回调交付, 但
-// codegen 不在公共入口内, 出错时没有可以返回的翻译单元, 因此报告后
-// 结束进程.
-static noreturn void error(LibcpContext* ctx, char* fmt, ...) __attribute__((format(printf, 2, 3)));
-
-static noreturn void error(LibcpContext* ctx, char* fmt, ...) {
-  va_list ap;
-  va_list ap2;
-  va_start(ap, fmt);
-  va_copy(ap2, ap);
-  int len = vsnprintf(NULL, 0, fmt, ap2);
-  va_end(ap2);
-
-  char* msg = calloc(1, len + 1);
-  vsnprintf(msg, len + 1, fmt, ap);
-  va_end(ap);
-
-  libcp_diagnostic_report(ctx, NULL, LIBCP_DIAG_ERROR, "%s", msg);
-  exit(1);
-}
-
-static noreturn void error_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...)
-    __attribute__((format(printf, 3, 4)));
-
-static noreturn void error_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...) {
-  va_list ap;
-  va_list ap2;
-  va_start(ap, fmt);
-  va_copy(ap2, ap);
-  int len = vsnprintf(NULL, 0, fmt, ap2);
-  va_end(ap2);
-
-  char* msg = calloc(1, len + 1);
-  vsnprintf(msg, len + 1, fmt, ap);
-  va_end(ap);
-
-  libcp_diagnostic_report(ctx, tok, LIBCP_DIAG_ERROR, "%s", msg);
-  exit(1);
-}
-
-#define unreachable() error(ctx, "internal error at %s:%d", __FILE__, __LINE__)
+// 本消费者本地的工具 (issue #28): 公共面不暴露对齐取整与类型谓词,
+// 它们只服务 codegen 的整形与发射; 格式化与致命诊断在 driver-util.h
+// 里与 main.c 共用.
 
 static FILE* output_file;
 static int depth;
@@ -288,7 +228,7 @@ static char* reg_dx(LibcpContext* ctx, int sz) {
     case 4: return "%edx";
     case 8: return "%rdx";
   }
-  unreachable();
+  driver_unreachable(ctx);
 }
 
 static char* reg_ax(LibcpContext* ctx, int sz) {
@@ -298,7 +238,7 @@ static char* reg_ax(LibcpContext* ctx, int sz) {
     case 4: return "%eax";
     case 8: return "%rax";
   }
-  unreachable();
+  driver_unreachable(ctx);
 }
 
 // 计算给定节点的绝对地址.
@@ -416,7 +356,7 @@ static void gen_addr(LibcpContext* ctx, LibcpNode* node) {
     case ND_VLA_PTR: println("  lea %d(%%rbp), %%rax", obj_offset(node->decl.var)); return;
   }
 
-  error_tok(ctx, node->tok, "not an lvalue");
+  driver_error(ctx, node->tok, "not an lvalue");
 }
 
 // 从 %rax 指向的位置加载值.
@@ -1340,7 +1280,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
           return;
       }
 
-      error_tok(ctx, node->tok, "invalid expression");
+      driver_error(ctx, node->tok, "invalid expression");
     }
     case TY_LDOUBLE: {
       gen_expr(ctx, node->lhs);
@@ -1371,7 +1311,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
           return;
       }
 
-      error_tok(ctx, node->tok, "invalid expression");
+      driver_error(ctx, node->tok, "invalid expression");
     }
   }
 
@@ -1452,7 +1392,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
       return;
   }
 
-  error_tok(ctx, node->tok, "invalid expression");
+  driver_error(ctx, node->tok, "invalid expression");
 }
 
 static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
@@ -1666,7 +1606,7 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
     case ND_ASM: println("  %s", node->asm_.asm_str); return;
   }
 
-  error_tok(ctx, node->tok, "invalid statement");
+  driver_error(ctx, node->tok, "invalid statement");
 }
 
 // shaping pass 的最终形态: 它是 sema 在标注后下降中做过的控制流那一半
@@ -1716,7 +1656,7 @@ static void cg_labels_push(LibcpNode* node) {
 }
 
 static char* new_label(LibcpContext* ctx) {
-  return format(".L..%d", libcp_context_take_unique_name(ctx));
+  return driver_format(".L..%d", libcp_context_take_unique_name(ctx));
 }
 
 static void shape_node(LibcpContext* ctx, LibcpNode* node);
@@ -1808,7 +1748,7 @@ static void shape_children(LibcpContext* ctx, LibcpNode* node) {
 
     LibcpNode** head = list_head(node, child.node);
     if (!head)
-      unreachable();
+      driver_unreachable(ctx);
     shape_chain(ctx, head);
   }
 }
@@ -1863,7 +1803,7 @@ static LibcpNode* new_add(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, Lib
     return mark_lowered(libcp_node_arith(ctx, ND_ADD, lhs, rhs, tok));
 
   if (lhs->ty->base && rhs->ty->base)
-    error_tok(ctx, tok, "invalid operands");
+    driver_error(ctx, tok, "invalid operands");
 
   // 把 `num + ptr` 规范化为 `ptr + num`.
   if (!lhs->ty->base && rhs->ty->base) {
@@ -1903,7 +1843,7 @@ static LibcpNode* new_sub(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, Lib
     return libcp_node_arith(ctx, ND_DIV, node, libcp_node_num(ctx, lhs->ty->base->size, tok), tok);
   }
 
-  error_tok(ctx, tok, "invalid operands");
+  driver_error(ctx, tok, "invalid operands");
 }
 
 // 为计算 VLA 大小生成代码: 类型持有的每个 VLA 一条赋值, 最内层
@@ -2690,7 +2630,7 @@ static void store_fp(LibcpContext* ctx, int r, int offset, int sz) {
     case 4: println("  movss %%xmm%d, %d(%%rbp)", r, offset); return;
     case 8: println("  movsd %%xmm%d, %d(%%rbp)", r, offset); return;
   }
-  unreachable();
+  driver_unreachable(ctx);
 }
 
 static void store_gp(int r, int offset, int sz) {
