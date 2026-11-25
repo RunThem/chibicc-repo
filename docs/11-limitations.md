@@ -241,9 +241,9 @@ libcp_context_add_include_path_with_origin(ctx, "/usr/include",
 
 `#define E` 后面的 `E` 展开成空, 不产生 token, 因此没有 token 可以挂 provenance. 这类展开在展开流里完全不可见.
 
-### 11.7.4 实参间的 trivia 丢失
+### 11.7.4 实参分隔符的 trivia 丢失
 
-`M(a, b)` 里逗号两边的空白和注释不进入展开流. 产物的 trivia 指向宏体或实参内部.
+`M(a, b)` 会丢弃分隔逗号及其前置 trivia, 逗号左侧的空白和注释不进入展开流; 逗号右侧的 trivia 挂在下一实参 token 上, 随它保留. 例如 `M(1 /*c*/, /*d*/ 2)` 的 `2` 带 ` /*d*/ `, `/*c*/` 丢失. 产物的 trivia 仍指向宏体或实参内部.
 
 ### 11.7.5 合成位置
 
