@@ -280,6 +280,15 @@ echo bar | $chibicc -include $tmp/out.h -E -o- -xc - | grep -q -z 'foo.*bar'
 check -include
 echo NULL | $chibicc -Iinclude -include stdio.h -E -o- -xc - | grep -q 0
 check -include
+# -include goes through the context include search, so -I and -idirafter
+# directories both resolve it.
+echo foo > $tmp/include-user.h
+echo bar | $chibicc -I$tmp -include include-user.h -E -o- -xc - | grep -q -z 'foo.*bar'
+check '-include searches -I'
+mkdir -p $tmp/include-after
+echo foo > $tmp/include-after/include-after.h
+echo bar | $chibicc -idirafter $tmp/include-after -include include-after.h -E -o- -xc - | grep -q -z 'foo.*bar'
+check '-include searches -idirafter'
 
 # -x
 echo 'int x;' | $chibicc -c -xc -o $tmp/foo.o -
@@ -354,20 +363,87 @@ $chibicc -c -MD -MF $tmp/md-mf.d -I. $tmp/md2.c
 grep -q -z '^md2.o:.*md2\.c .*/out2\.h' $tmp/md-mf.d
 check -MD
 
+# -MMD classifies headers by include origin: a -I directory is a user
+# directory and must be listed, while -idirafter and system directories
+# are omitted.
+mkdir -p $tmp/mmd/inc $tmp/mmd/after
+echo 'int mmd_local;' > $tmp/mmd/inc/mmd-local.h
+echo 'int mmd_after;' > $tmp/mmd/after/mmd-after.h
+printf '#include "mmd-local.h"\nint main(void) { return mmd_local; }\n' > $tmp/mmd/local.c
+$chibicc -c -MMD -MF $tmp/mmd/local.d -o $tmp/mmd/local.o -I$tmp/mmd/inc $tmp/mmd/local.c
+[ -f $tmp/mmd/local.d ] && grep -q 'mmd-local\.h' $tmp/mmd/local.d
+check '-MMD lists a -I header'
+
+# The same with a relative -I directory: the recorded dependency keeps the
+# spelling it was opened with (inc/mmd-rel.h).
+echo 'int mmd_rel;' > $tmp/mmd/inc/mmd-rel.h
+printf '#include "mmd-rel.h"\nint main(void) { return mmd_rel; }\n' > $tmp/mmd/rel.c
+(cd $tmp/mmd && $OLDPWD/$chibicc -c -MMD -Iinc rel.c)
+[ -f $tmp/mmd/rel.d ] && grep -q 'inc/mmd-rel\.h' $tmp/mmd/rel.d
+check '-MMD lists a relative -I header'
+
+printf '#include "mmd-after.h"\nint main(void) { return mmd_after; }\n' > $tmp/mmd/after.c
+$chibicc -c -MMD -MF $tmp/mmd/after.d -o $tmp/mmd/after.o -idirafter $tmp/mmd/after $tmp/mmd/after.c
+[ -f $tmp/mmd/after.d ] && ! grep -q 'mmd-after\.h' $tmp/mmd/after.d
+check '-MMD omits a -idirafter header'
+
+# -Iinclude supplies the compiler's own stddef.h so the host system header
+# can be preprocessed in both the stage1 and stage2 runs.
+printf '#include <stdio.h>\nint main(void) { return 0; }\n' > $tmp/mmd/system.c
+$chibicc -Iinclude -c -MMD -MF $tmp/mmd/system.d -o $tmp/mmd/system.o $tmp/mmd/system.c
+[ -f $tmp/mmd/system.d ] && ! grep -q '/usr/include' $tmp/mmd/system.d
+check '-MMD omits system headers'
+
 echo 'extern int bar; int foo() { return bar; }' | $chibicc -fPIC -xc -c -o $tmp/foo.o -
 cc -shared -o $tmp/foo.so $tmp/foo.o
 echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/main.c
 $chibicc -o $tmp/foo $tmp/main.c $tmp/foo.so
 check -fPIC
 
-# #include_next
+# #include_next (issue #24): the continuation belongs to the file that
+# contains the directive, not to a global cursor.
 mkdir -p $tmp/next1 $tmp/next2 $tmp/next3
-echo '#include "file1.h"' > $tmp/file.c
-echo '#include_next "file1.h"' > $tmp/next1/file1.h
-echo '#include_next "file2.h"' > $tmp/next2/file1.h
-echo 'foo' > $tmp/next3/file2.h
-$chibicc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/file.c | grep -q foo
-check '#include_next'
+printf 'int chain_next1;\n#include_next "chain.h"\n' > $tmp/next1/chain.h
+printf 'int chain_next2;\n#include_next "chain.h"\n' > $tmp/next2/chain.h
+echo 'int chain_next3;' > $tmp/next3/chain.h
+
+# A same-name chain next1 -> next2 -> next3.
+printf '#include "chain.h"\n' > $tmp/next.c
+$chibicc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/next.c > $tmp/next.out
+grep -q chain_next3 $tmp/next.out
+check '#include_next chain'
+
+# The target was cached by a plain include at start 0; #include_next from
+# a file in the second directory still continues in the third.
+echo '#include_next "chain.h"' > $tmp/next2/cached.h
+printf '#include <chain.h>\n#include <cached.h>\n' > $tmp/next-cached.c
+$chibicc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/next-cached.c > $tmp/next-cached.out
+grep -q chain_next1 $tmp/next-cached.out && grep -q chain_next3 $tmp/next-cached.out
+check '#include_next after a cached include'
+
+# The main file is not in the path table: its #include_next starts at the
+# first directory even after a deeper include moved the search.
+echo '#include_next "chain.h"' > $tmp/next2/target.h
+printf '#include <target.h>\n#include_next <chain.h>\n' > $tmp/next-main.c
+$chibicc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/next-main.c > $tmp/next-main.out
+grep -q chain_next3 $tmp/next-main.out && grep -q chain_next1 $tmp/next-main.out
+check '#include_next from the main file'
+
+# A quoted include that hits the current directory is not in the path
+# table either; #include_next from it starts at the first directory.
+echo '#include_next "chain.h"' > $tmp/local_next.h
+printf '#include <target.h>\n#include "local_next.h"\n' > $tmp/next-quoted.c
+$chibicc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/next-quoted.c > $tmp/next-quoted.out
+grep -q chain_next1 $tmp/next-quoted.out
+check '#include_next from a quoted current-directory file'
+
+# The path table is exhausted after the only directory: the existing
+# cannot-open diagnostic is kept.
+echo '#include_next "chain.h"' > $tmp/next1/exhaust.h
+printf '#include <exhaust.h>\n' > $tmp/next-exhaust.c
+$chibicc -I$tmp/next1 -E $tmp/next-exhaust.c > /dev/null 2> $tmp/next-exhaust.err
+[ $? -ne 0 ] && grep -q 'cannot open file' $tmp/next-exhaust.err
+check '#include_next table exhausted'
 
 # -static
 echo 'extern int bar; int foo() { return bar; }' > $tmp/foo.c

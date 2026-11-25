@@ -27,6 +27,25 @@ printf 'int a;\000int b;\n' > "$tmp/nul.c"
 printf '#include "self.h"\n' > "$tmp/self.h"
 printf 'int stdin_a;\nint stdin_b;\n' > "$tmp/stdin.c"
 
+# The same header name in three origin buckets, so the search order is
+# observable from the public API (issue #23).
+mkdir -p "$tmp/user" "$tmp/after" "$tmp/system"
+printf '#define PICK 1\n' > "$tmp/user/pick.h"
+printf '#define PICK 2\n' > "$tmp/after/pick.h"
+printf '#define PICK 3\n' > "$tmp/system/pick.h"
+
+# Per-file #include_next continuation (issue #24): chain.h lives in all
+# three buckets, and the wrappers cover the table index recorded for the
+# file that holds the directive.
+printf '#define FROM_USER 1\n' > "$tmp/user/chain.h"
+printf '#define FROM_AFTER 2\n' > "$tmp/after/chain.h"
+printf '#define FROM_SYSTEM 3\n' > "$tmp/system/chain.h"
+printf '#include_next "chain.h"\n' > "$tmp/user/wrap.h"
+printf '#include_next "chain.h"\n' > "$tmp/after/wrap_after.h"
+mkdir -p "$tmp/user/local"
+printf '#include_next "chain.h"\n' > "$tmp/user/local/wrap_self.h"
+printf '#include_next "chain.h"\n' > "$tmp/user/abs_wrap.h"
+
 cat > "$tmp/consumer.c" <<'EOF'
 #include <libcp/libcp.h>
 #include <pthread.h>
@@ -332,6 +351,800 @@ static int check_source_range(LibcpContext *ctx) {
   return 0;
 }
 
+// The source-coordinate module (issue #21): a translation unit enumerates
+// the files it read, in first-read order, through count / at. The main
+// file comes first; an included header follows. Reset empties the table.
+static int check_input_files(LibcpContext *ctx, char *path, char *dir) {
+  libcp_context_add_include_path(ctx, dir);
+  LibcpToken *tok = libcp_tokenize_file(ctx, path);
+  if (!tok)
+    return 1;
+
+  if (libcp_context_input_file_count(ctx) != 1)
+    return 1;
+  LibcpFile *main_file = libcp_context_input_file_at(ctx, 0);
+  if (!main_file || !main_file->name || strcmp(main_file->name, path) != 0)
+    return 1;
+  if (libcp_context_input_file_at(ctx, -1) ||
+      libcp_context_input_file_at(ctx, 1))
+    return 1;
+
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || libcp_context_failed(ctx))
+    return 1;
+  if (libcp_context_input_file_count(ctx) != 2)
+    return 1;
+  if (libcp_context_input_file_at(ctx, 0) != main_file)
+    return 1;
+  LibcpFile *header = libcp_context_input_file_at(ctx, 1);
+  if (!header || !header->name || !strstr(header->name, "header.h"))
+    return 1;
+
+  libcp_context_reset(ctx);
+  if (libcp_context_input_file_count(ctx) != 0 ||
+      libcp_context_input_file_at(ctx, 0) != NULL)
+    return 1;
+  return 0;
+}
+
+// File-level synthetic judgment (issue #21): tokens from a real file are
+// not synthetic; every token from memory input is, including EOF.
+static int check_synthetic(LibcpContext *ctx, char *path) {
+  LibcpToken *tok = libcp_tokenize_file(ctx, path);
+  if (!tok)
+    return 1;
+  for (LibcpToken *t = tok; t; t = t->next)
+    if (libcp_token_is_synthetic(t))
+      return 1;
+  libcp_context_reset(ctx);
+
+  tok = libcp_tokenize_buffer(ctx, "<memory>", "int x;\n");
+  if (!tok)
+    return 1;
+  for (LibcpToken *t = tok; t; t = t->next)
+    if (!libcp_token_is_synthetic(t))
+      return 1;
+  libcp_context_reset(ctx);
+  return 0;
+}
+
+// The base file is per-TU: set_base_file wins over the tokenized name,
+// and reset forgets it, so the next input names itself again.
+static int check_base_file(LibcpContext *ctx) {
+  char *src = "char *b = __BASE_FILE__;\n";
+  libcp_context_set_base_file(ctx, "<chosen>");
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<buffer>", src);
+  if (!tok)
+    return 1;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || libcp_context_failed(ctx))
+    return 1;
+  LibcpToken *str = NULL;
+  for (LibcpToken *t = tok; t && t->kind != TK_EOF; t = t->next)
+    if (t->kind == TK_STR)
+      str = t;
+  if (!str || !str->str || strcmp(str->str, "<chosen>") != 0)
+    return 1;
+  libcp_context_reset(ctx);
+
+  tok = libcp_tokenize_buffer(ctx, "<fallback>", src);
+  if (!tok)
+    return 1;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || libcp_context_failed(ctx))
+    return 1;
+  str = NULL;
+  for (LibcpToken *t = tok; t && t->kind != TK_EOF; t = t->next)
+    if (t->kind == TK_STR)
+      str = t;
+  if (!str || !str->str || strcmp(str->str, "<fallback>") != 0)
+    return 1;
+  libcp_context_reset(ctx);
+  return 0;
+}
+
+// The backend support face (issue #17): a consumer that sees only the
+// public headers builds every node a backend needs, reads back kind and
+// fields, and gets sema's type conclusions through libcp_node_annotate_type.
+static int check_backend_support(LibcpContext *ctx) {
+  LibcpObj *prog = NULL;
+  LibcpNode *ast = compile(ctx, "int g; int f(int a) { return a; }\n", &prog);
+  if (!ast || !prog)
+    return 1;
+
+  LibcpObj *g = NULL;
+  for (LibcpObj *o = prog; o; o = o->next)
+    if (o->name && strcmp(o->name, "g") == 0)
+      g = o;
+  if (!g || !g->ty || g->ty->kind != TY_INT)
+    return 1;
+
+  LibcpToken *tok = ast->tok;
+  if (!tok)
+    return 1;
+
+  // All 13 builtin kinds map to the shared singleton; a second call
+  // returns the same record.
+  static const struct {
+    LibcpBuiltinType bt;
+    LibcpTypeKind kind;
+    int size;
+    int align;
+    int is_unsigned;
+  } builtins[] = {
+    {BT_VOID, TY_VOID, 1, 1, 0},
+    {BT_BOOL, TY_BOOL, 1, 1, 0},
+    {BT_CHAR, TY_CHAR, 1, 1, 0},
+    {BT_UCHAR, TY_CHAR, 1, 1, 1},
+    {BT_SHORT, TY_SHORT, 2, 2, 0},
+    {BT_USHORT, TY_SHORT, 2, 2, 1},
+    {BT_INT, TY_INT, 4, 4, 0},
+    {BT_UINT, TY_INT, 4, 4, 1},
+    {BT_LONG, TY_LONG, 8, 8, 0},
+    {BT_ULONG, TY_LONG, 8, 8, 1},
+    {BT_FLOAT, TY_FLOAT, 4, 4, 0},
+    {BT_DOUBLE, TY_DOUBLE, 8, 8, 0},
+    {BT_LDOUBLE, TY_LDOUBLE, 16, 16, 0},
+  };
+  if (sizeof(builtins) / sizeof(builtins[0]) != 13)
+    return 1;
+  for (size_t i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++) {
+    LibcpType *ty = libcp_type_builtin(builtins[i].bt);
+    if (!ty || ty->kind != builtins[i].kind || ty->size != builtins[i].size ||
+        ty->align != builtins[i].align ||
+        ty->is_unsigned != (builtins[i].is_unsigned != 0))
+      return 1;
+    if (libcp_type_builtin(builtins[i].bt) != ty)
+      return 1;
+  }
+
+  LibcpType *ptr = libcp_type_pointer_to(ctx, libcp_type_builtin(BT_INT));
+  if (!ptr || ptr->kind != TY_PTR || ptr->size != 8 || ptr->align != 8 ||
+      !ptr->is_unsigned || ptr->base != libcp_type_builtin(BT_INT))
+    return 1;
+
+  // libcp_node_new leaves the payload zeroed and records kind and tok.
+  LibcpNode *plain = libcp_node_new(ctx, ND_EXPR_STMT, tok);
+  if (!plain || plain->kind != ND_EXPR_STMT || plain->tok != tok || plain->ty ||
+      plain->lhs || plain->rhs || plain->next)
+    return 1;
+
+  LibcpNode *num = libcp_node_num(ctx, 42, tok);
+  if (!num || num->kind != ND_NUM || num->value.val != 42 || num->tok != tok)
+    return 1;
+
+  LibcpNode *lng = libcp_node_long(ctx, 7, tok);
+  if (!lng || lng->kind != ND_NUM || lng->value.val != 7 ||
+      lng->ty != libcp_type_builtin(BT_LONG))
+    return 1;
+
+  LibcpNode *operand = libcp_node_num(ctx, 9, tok);
+  LibcpNode *un = libcp_node_unary(ctx, ND_NEG, operand, tok);
+  if (!un || un->kind != ND_NEG || un->lhs != operand || un->rhs ||
+      un->tok != tok)
+    return 1;
+
+  LibcpNode *blhs = libcp_node_num(ctx, 1, tok);
+  LibcpNode *brhs = libcp_node_num(ctx, 2, tok);
+  LibcpNode *bin = libcp_node_binary(ctx, ND_ADD, blhs, brhs, tok);
+  if (!bin || bin->kind != ND_ADD || bin->lhs != blhs || bin->rhs != brhs ||
+      bin->tok != tok)
+    return 1;
+  libcp_node_annotate_type(ctx, bin);
+  if (bin->ty != libcp_type_builtin(BT_INT) ||
+      blhs->ty != libcp_type_builtin(BT_INT) ||
+      brhs->ty != libcp_type_builtin(BT_INT))
+    return 1;
+
+  LibcpNode *ai = libcp_node_num(ctx, 3, tok);
+  LibcpNode *al = libcp_node_long(ctx, 4, tok);
+  // The usual arithmetic conversions wrap both operands in casts to the
+  // common result type; each cast carries a copy whose origin is the
+  // shared long type, and the node takes the left operand's copy.
+  LibcpNode *arith = libcp_node_arith(ctx, ND_ADD, ai, al, tok);
+  if (!arith || arith->kind != ND_ADD || !arith->ty ||
+      arith->ty->kind != TY_LONG ||
+      arith->ty->origin != libcp_type_builtin(BT_LONG) ||
+      arith->lhs->ty != arith->ty || arith->rhs->ty->kind != TY_LONG ||
+      arith->rhs->ty->origin != libcp_type_builtin(BT_LONG))
+    return 1;
+
+  LibcpNode *var = libcp_node_var(ctx, g, tok);
+  if (!var || var->kind != ND_VAR || var->decl.var != g || var->tok != tok)
+    return 1;
+  libcp_node_annotate_type(ctx, var);
+  if (var->ty != g->ty)
+    return 1;
+
+  LibcpNode *vla = libcp_node_vla_ptr(ctx, g, tok);
+  if (!vla || vla->kind != ND_VLA_PTR || vla->decl.var != g || vla->tok != tok)
+    return 1;
+
+  LibcpNode *size = libcp_node_num(ctx, 8, tok);
+  LibcpNode *alloc = libcp_node_alloca(ctx, size);
+  if (!alloc || alloc->kind != ND_FUNCALL || alloc->ctrl.args != size ||
+      !alloc->ctrl.func_ty || alloc->ty != alloc->ctrl.func_ty->return_ty)
+    return 1;
+  if (!alloc->lhs || alloc->lhs->kind != ND_VAR || !alloc->lhs->decl.var ||
+      !alloc->lhs->decl.var->name ||
+      strcmp(alloc->lhs->decl.var->name, "alloca") != 0)
+    return 1;
+
+  LibcpNode *src = libcp_node_num(ctx, 5, tok);
+  LibcpType *target = libcp_type_builtin(BT_ULONG);
+  LibcpNode *cast = libcp_node_cast(ctx, src, target);
+  if (!cast || cast->kind != ND_CAST || cast->lhs != src || cast->tok != tok ||
+      !cast->value.is_implicit || !cast->ty || cast->ty->origin != target ||
+      cast->ty->kind != TY_LONG || !cast->ty->is_unsigned)
+    return 1;
+
+  return 0;
+}
+
+// The label references a backend reads (issue #18): after sema, a
+// function's goto and [GNU] label-value references are available by
+// count / at without touching the library's internal arrays.
+static int check_backend_labels(LibcpContext *ctx) {
+  LibcpObj *prog = NULL;
+  LibcpNode *ast = compile(ctx,
+                           "int f(int x) {\n"
+                           "  if (x) goto done;\n"
+                           "  goto done;\n"
+                           "done:\n"
+                           "  return 0;\n"
+                           "}\n"
+                           "int g(void) { return 1; }\n"
+                           "int h;\n",
+                           &prog);
+  if (!ast || !prog)
+    return 1;
+
+  LibcpObj *f = NULL, *g = NULL, *h = NULL;
+  for (LibcpObj *o = prog; o; o = o->next) {
+    if (o->name && strcmp(o->name, "f") == 0)
+      f = o;
+    if (o->name && strcmp(o->name, "g") == 0)
+      g = o;
+    if (o->name && strcmp(o->name, "h") == 0)
+      h = o;
+  }
+  if (!f || !g || !h)
+    return 1;
+
+  // Two gotos, both naming `done`; the array only carries references, so
+  // the label itself is not among them.
+  if (libcp_label_ref_count(ctx, f) != 2)
+    return 1;
+  for (int i = 0; i < 2; i++) {
+    LibcpNode *ref = libcp_label_ref_at(ctx, f, i);
+    if (!ref || ref->kind != ND_GOTO || !ref->jump.label ||
+        strcmp(ref->jump.label, "done") != 0)
+      return 1;
+  }
+  // Out-of-range indexes and functions without references give NULL.
+  if (libcp_label_ref_at(ctx, f, 2) || libcp_label_ref_at(ctx, f, -1))
+    return 1;
+  if (libcp_label_ref_count(ctx, g) != 0 || libcp_label_ref_at(ctx, g, 0))
+    return 1;
+  // A non-function object never collected references.
+  if (libcp_label_ref_count(ctx, h) != 0 || libcp_label_ref_at(ctx, h, 0))
+    return 1;
+
+  return 0;
+}
+
+// Unique names (issue #18): the counter behind sema's anonymous `.L..N`
+// objects is exposed as take. Every call consumes a fresh id, so a
+// consumer's labels never collide with the library's.
+static int check_backend_unique_name(LibcpContext *ctx) {
+  LibcpObj *prog = NULL;
+  if (!compile(ctx, "char *s = \"x\";\n", &prog) || !prog)
+    return 1;
+
+  // The string literal already consumed `.L..0`, so the next id must be
+  // past every suffix sema minted in this translation unit.
+  int max_seen = -1;
+  for (LibcpObj *o = prog; o; o = o->next) {
+    if (o->name && strncmp(o->name, ".L..", 4) == 0) {
+      int v = atoi(o->name + 4);
+      if (v > max_seen)
+        max_seen = v;
+    }
+  }
+  if (max_seen < 0)
+    return 1;
+
+  int first = libcp_context_take_unique_name(ctx);
+  int second = libcp_context_take_unique_name(ctx);
+  int third = libcp_context_take_unique_name(ctx);
+  if (first <= max_seen || second == first || third == first ||
+      third == second)
+    return 1;
+  return 0;
+}
+
+static const LibcpNode *find_stmt(const LibcpNode *head, LibcpNodeKind kind);
+
+static int tok_is(const LibcpToken *tok, const char *s) {
+  size_t n = strlen(s);
+  return tok && tok->kind == TK_IDENT && tok->len == (int)n &&
+         memcmp(tok->loc, s, n) == 0;
+}
+
+static int tok_is_punct(const LibcpToken *tok, char c) {
+  return tok && tok->kind == TK_PUNCT && tok->len == 1 && tok->loc[0] == c;
+}
+
+// Typed initializer handoff (issue #26): sema builds the resolved tree,
+// clears the layer-3 faithful record, and keeps the tree readable until
+// reset. The tree is public read-only data: child_count bounds children
+// and tok is the initializer anchor, so a backend can walk arrays, structs,
+// unions and flexible members without the sema source.
+static int check_init_resolved(LibcpContext *ctx) {
+  char *src = "struct Inner { int a; int b; };\n"
+              "struct Outer { struct Inner in; int arr[2]; };\n"
+              "union U { int i; long l; };\n"
+              "struct Flex { int n; char tail[]; };\n"
+              "int g = 7;\n"
+              "int garr[2] = {1, 2};\n"
+              "union U gu = {.l = 5};\n"
+              "struct Flex gf = {3, {'a', 'b'}};\n"
+              "int f(int x) {\n"
+              "  struct Outer o = {{1, 2}, {3, 4}};\n"
+              "  union U u = {.l = 5};\n"
+              "  int a[2][3] = {{1, 2, 3}, {4, 5, 6}};\n"
+              "  int s = x + 1;\n"
+              "  return a[1][2] + o.arr[1] + s + u.i;\n"
+              "}\n";
+  LibcpObj *prog = NULL;
+  LibcpNode *ast = compile(ctx, src, &prog);
+  if (!ast || !prog)
+    return 1;
+
+  const LibcpNode *fn = find_stmt(ast, ND_FUNCDEF);
+  if (!fn || !fn->decl.body || fn->decl.body->kind != ND_BLOCK)
+    return 1;
+
+  const LibcpNode *a = NULL, *o = NULL, *u = NULL, *s = NULL;
+  for (const LibcpNode *n = fn->decl.body->decl.body; n; n = n->next) {
+    if (n->kind != ND_DECL)
+      continue;
+    if (tok_is(n->decl.name_tok, "a"))
+      a = n;
+    else if (tok_is(n->decl.name_tok, "o"))
+      o = n;
+    else if (tok_is(n->decl.name_tok, "u"))
+      u = n;
+    else if (tok_is(n->decl.name_tok, "s"))
+      s = n;
+  }
+  if (!a || !o || !u || !s)
+    return 1;
+
+  // Locals lose the faithful record; the resolved tree stays.
+  if (a->decl.decl_init || o->decl.decl_init || u->decl.decl_init ||
+      s->decl.decl_init)
+    return 1;
+
+  // Nested array: child_count is the array length at every level; tok is
+  // the brace that opened the initializer for that slot.
+  const LibcpInitTree *ai = a->decl.init_resolved;
+  if (!ai || ai->ty->kind != TY_ARRAY || ai->child_count != 2 || !ai->tok ||
+      !tok_is_punct(ai->tok, '{'))
+    return 1;
+  if (!ai->children || !ai->children[0] || !ai->children[1] ||
+      ai->children[0]->child_count != 3 || ai->children[1]->child_count != 3)
+    return 1;
+  if (!tok_is_punct(ai->children[0]->tok, '{') ||
+      !ai->children[0]->children[2] ||
+      !ai->children[0]->children[2]->expr ||
+      ai->children[0]->children[2]->expr->value.val != 3 ||
+      !ai->children[1]->children[2] ||
+      !ai->children[1]->children[2]->expr ||
+      ai->children[1]->children[2]->expr->value.val != 6)
+    return 1;
+
+  // struct: one child per member; a scalar leaf carries expr and no
+  // children.
+  const LibcpInitTree *oi = o->decl.init_resolved;
+  if (!oi || oi->ty->kind != TY_STRUCT || oi->child_count != 2 || !oi->tok)
+    return 1;
+  if (!oi->children[0]->children[1]->expr ||
+      oi->children[0]->children[1]->expr->value.val != 2 ||
+      !oi->children[1]->children[1]->expr ||
+      oi->children[1]->children[1]->expr->value.val != 4)
+    return 1;
+  if (oi->children[0]->children[0]->child_count != 0 ||
+      oi->children[0]->children[0]->children)
+    return 1;
+
+  // union: mem names the initialized member; the other slot is a zero
+  // skeleton.
+  const LibcpInitTree *ui = u->decl.init_resolved;
+  if (!ui || ui->ty->kind != TY_UNION || ui->child_count != 2 || !ui->mem ||
+      ui->mem->idx != 1 || !tok_is(ui->mem->name, "l"))
+    return 1;
+  if (ui->children[0]->expr || !ui->children[1]->expr ||
+      ui->children[1]->expr->value.val != 5)
+    return 1;
+
+  // Scalar: no children, expr holds the value.
+  const LibcpInitTree *si = s->decl.init_resolved;
+  if (!si || si->child_count != 0 || si->children || !si->expr ||
+      si->ty->kind != TY_INT)
+    return 1;
+
+  const LibcpNode *g = NULL, *garr = NULL, *gu = NULL, *gf = NULL;
+  for (const LibcpNode *n = ast; n; n = n->next) {
+    if (n->kind != ND_GVAR_DECL)
+      continue;
+    if (tok_is(n->decl.name_tok, "g"))
+      g = n;
+    else if (tok_is(n->decl.name_tok, "garr"))
+      garr = n;
+    else if (tok_is(n->decl.name_tok, "gu"))
+      gu = n;
+    else if (tok_is(n->decl.name_tok, "gf"))
+      gf = n;
+  }
+  if (!g || !garr || !gu || !gf)
+    return 1;
+
+  // Globals keep the resolved tree after sema serialized init_data; the
+  // layer-3 record is gone here too.
+  if (g->decl.decl_init || !g->decl.init_resolved || !g->decl.var ||
+      !g->decl.var->init_data || g->decl.init_resolved->child_count != 0 ||
+      !g->decl.init_resolved->expr ||
+      g->decl.init_resolved->expr->value.val != 7)
+    return 1;
+
+  const LibcpInitTree *gi = garr->decl.init_resolved;
+  if (garr->decl.decl_init || !gi || gi->ty->kind != TY_ARRAY ||
+      gi->child_count != 2 || !gi->children[1]->expr ||
+      gi->children[1]->expr->value.val != 2)
+    return 1;
+
+  const LibcpInitTree *gui = gu->decl.init_resolved;
+  if (gu->decl.decl_init || !gui || gui->child_count != 2 || !gui->mem ||
+      gui->mem->idx != 1 || !gui->children[1]->expr ||
+      gui->children[1]->expr->value.val != 5)
+    return 1;
+
+  // A flexible array member that received elements is completed in place,
+  // like a top-level `[]` initializer: the array length becomes the child
+  // count.
+  const LibcpInitTree *gfi = gf->decl.init_resolved;
+  if (gf->decl.decl_init || !gfi || gfi->child_count != 2 ||
+      !gfi->children[1] || gfi->children[1]->is_flexible ||
+      gfi->children[1]->child_count != 2 ||
+      !gfi->children[1]->children[1] ||
+      !gfi->children[1]->children[1]->expr ||
+      gfi->children[1]->children[1]->expr->value.val != 'b')
+    return 1;
+
+  return 0;
+}
+
+// Child enumeration (issue #19): the structural children in the fixed
+// order lhs, rhs, active family fields, spec_decls. next is a sibling
+// link, never a child; list fields report only their head with is_list.
+static LibcpNode *parse_only(LibcpContext *ctx, char *src) {
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<children>", src);
+  if (!tok)
+    return NULL;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok)
+    return NULL;
+  LibcpNode *ast = libcp_parse(ctx, tok);
+  if (libcp_context_failed(ctx))
+    return NULL;
+  return ast;
+}
+
+static int child_count(const LibcpNode *node) {
+  return libcp_node_child_count(node);
+}
+
+static const LibcpNode *child_at(const LibcpNode *node, int index) {
+  return libcp_node_child_at(node, index).node;
+}
+
+static int child_is_list(const LibcpNode *node, int index) {
+  return libcp_node_child_at(node, index).is_list;
+}
+
+static const LibcpNode *find_stmt(const LibcpNode *head, LibcpNodeKind kind) {
+  for (const LibcpNode *n = head; n; n = n->next)
+    if (n->kind == kind)
+      return n;
+  return NULL;
+}
+
+static const LibcpNode *find_expr(const LibcpNode *head, LibcpNodeKind kind) {
+  for (const LibcpNode *n = head; n; n = n->next)
+    if (n->kind == ND_EXPR_STMT && n->lhs && n->lhs->kind == kind)
+      return n->lhs;
+  return NULL;
+}
+
+static int check_node_children(LibcpContext *ctx) {
+  // Parsed but not resolved: case ranges, spec_decls and generic_sel are
+  // still in their faithful form.
+  char *src = "int f(void) {\n"
+              "  for (enum E { A } i = A, j = A; i < j; i++) ;\n"
+              "  { int a = 2, b = 3; }\n"
+              "  g(1, 2, 3);\n"
+              "  if (1) ; else ;\n"
+              "  switch (1) { case 1: break; case 2 ... 3: break; }\n"
+              "  p->m;\n"
+              "  __builtin_compare_and_swap(p, o, n);\n"
+              "  return sizeof(enum E2 { B });\n"
+              "}\n";
+  LibcpNode *ast = parse_only(ctx, src);
+  if (!ast || ast->kind != ND_FUNCDEF || !ast->decl.body)
+    return 1;
+
+  const LibcpNode *body = ast->decl.body;
+  if (body->kind != ND_BLOCK)
+    return 1;
+
+  // The function body's statement chain is a decl.body list: the enum
+  // yields the head once and sets is_list; the siblings stay on next.
+  if (child_count(body) != 1)
+    return 1;
+  if (child_at(body, 0) != body->decl.body || !child_is_list(body, 0))
+    return 1;
+  if (!body->decl.body->next)
+    return 1;
+
+  // for: cond, then, init (list), inc in that order; init chain holds the
+  // enum spec records followed by the two ND_DECL records.
+  const LibcpNode *for_node = find_stmt(body->decl.body, ND_FOR);
+  if (!for_node)
+    return 1;
+  if (child_count(for_node) != 4)
+    return 1;
+  if (child_at(for_node, 0) != for_node->ctrl.cond || child_is_list(for_node, 0))
+    return 1;
+  if (child_at(for_node, 1) != for_node->ctrl.then || child_is_list(for_node, 1))
+    return 1;
+  if (child_at(for_node, 2) != for_node->ctrl.init || !child_is_list(for_node, 2))
+    return 1;
+  if (child_at(for_node, 3) != for_node->ctrl.inc || child_is_list(for_node, 3))
+    return 1;
+  if (child_at(for_node, 4) || libcp_node_child_at(for_node, 4).is_list)
+    return 1;
+  if (libcp_node_child_at(for_node, -1).node)
+    return 1;
+
+  const LibcpNode *init = for_node->ctrl.init;
+  if (!init || init->kind != ND_ENUM_CONST || !init->next ||
+      init->next->kind != ND_DECL || !init->next->next ||
+      init->next->next->kind != ND_DECL || init->next->next->next)
+    return 1;
+  // The declared names are not children of the enum record: next is a
+  // sibling link.
+  if (child_count(init) != 0)
+    return 1;
+  if (child_count(init->next) != 0 || child_count(init->next->next) != 0)
+    return 1;
+
+  // block: decl.body is a list head; the two declarations are siblings,
+  // not two children.
+  const LibcpNode *block = find_stmt(body->decl.body, ND_BLOCK);
+  if (!block || !block->decl.body || block->decl.body->kind != ND_DECL)
+    return 1;
+  if (child_count(block) != 1 || child_at(block, 0) != block->decl.body ||
+      !child_is_list(block, 0))
+    return 1;
+  if (!block->decl.body->next || block->decl.body->next->kind != ND_DECL)
+    return 1;
+  if (child_count(block->decl.body) != 0)
+    return 1;
+
+  // funcall: the callee is an ordinary child, the argument chain a list
+  // head; three arguments still count as one child slot.
+  const LibcpNode *call = find_expr(body->decl.body, ND_FUNCALL);
+  if (!call || !call->ctrl.args)
+    return 1;
+  if (child_count(call) != 2)
+    return 1;
+  if (child_at(call, 0) != call->lhs || child_is_list(call, 0))
+    return 1;
+  if (child_at(call, 1) != call->ctrl.args || !child_is_list(call, 1))
+    return 1;
+  if (!call->ctrl.args->next || !call->ctrl.args->next->next ||
+      call->ctrl.args->next->next->next)
+    return 1;
+
+  // if: cond, then, els.
+  const LibcpNode *if_node = find_stmt(body->decl.body, ND_IF);
+  if (!if_node || child_count(if_node) != 3)
+    return 1;
+  if (child_at(if_node, 0) != if_node->ctrl.cond ||
+      child_at(if_node, 1) != if_node->ctrl.then ||
+      child_at(if_node, 2) != if_node->ctrl.els)
+    return 1;
+  if (child_is_list(if_node, 0) || child_is_list(if_node, 1) ||
+      child_is_list(if_node, 2))
+    return 1;
+
+  // switch and case: the case payload fields follow lhs; the range case
+  // adds end_expr.
+  const LibcpNode *sw = find_stmt(body->decl.body, ND_SWITCH);
+  if (!sw || child_count(sw) != 2)
+    return 1;
+  if (child_at(sw, 0) != sw->ctrl.cond || child_at(sw, 1) != sw->ctrl.then)
+    return 1;
+
+  const LibcpNode *cases = sw->ctrl.then->decl.body;
+  if (!cases || cases->kind != ND_CASE || !cases->case_.begin_expr ||
+      cases->case_.end_expr)
+    return 1;
+  if (child_count(cases) != 2)
+    return 1;
+  if (child_at(cases, 0) != cases->lhs ||
+      child_at(cases, 1) != cases->case_.begin_expr)
+    return 1;
+  if (child_is_list(cases, 0) || child_is_list(cases, 1))
+    return 1;
+
+  const LibcpNode *range = cases->next;
+  if (!range || range->kind != ND_CASE || !range->case_.begin_expr ||
+      !range->case_.end_expr)
+    return 1;
+  if (child_count(range) != 3)
+    return 1;
+  if (child_at(range, 0) != range->lhs ||
+      child_at(range, 1) != range->case_.begin_expr ||
+      child_at(range, 2) != range->case_.end_expr)
+    return 1;
+
+  // member: only lhs is structural; the member record is not a node.
+  const LibcpNode *member = find_expr(body->decl.body, ND_MEMBER);
+  if (!member || !member->lhs || child_count(member) != 1 ||
+      child_at(member, 0) != member->lhs || child_is_list(member, 0))
+    return 1;
+
+  // cas: cas_addr, cas_old, cas_new.
+  const LibcpNode *cas = find_expr(body->decl.body, ND_CAS);
+  if (!cas || child_count(cas) != 3)
+    return 1;
+  if (child_at(cas, 0) != cas->cas.cas_addr ||
+      child_at(cas, 1) != cas->cas.cas_old ||
+      child_at(cas, 2) != cas->cas.cas_new)
+    return 1;
+
+  // sizeof(type): spec_decls is the only child and is a list head.
+  const LibcpNode *ret = find_stmt(body->decl.body, ND_RETURN);
+  if (!ret || !ret->lhs || ret->lhs->kind != ND_SIZEOF)
+    return 1;
+  const LibcpNode *sz = ret->lhs;
+  if (!sz->spec_decls || sz->spec_decls->kind != ND_ENUM_CONST)
+    return 1;
+  if (child_count(sz) != 1 || child_at(sz, 0) != sz->spec_decls ||
+      !child_is_list(sz, 0))
+    return 1;
+
+  // NULL node and out-of-range indexes: empty results.
+  if (child_count(NULL) != 0)
+    return 1;
+  if (libcp_node_child_at(NULL, 0).node ||
+      libcp_node_child_at(NULL, 0).is_list)
+    return 1;
+  if (libcp_node_child_at(ret, 100).node)
+    return 1;
+
+  libcp_context_reset(ctx);
+
+  // _Generic excludes generic_sel: it aliases one association's result
+  // expression, which the enumeration already reaches through args.
+  LibcpObj *prog = NULL;
+  ast = compile(ctx, "int f(void) { return _Generic(1, int: 2, default: 3); }\n",
+                &prog);
+  if (!ast || !prog)
+    return 1;
+  ret = ast->decl.body->decl.body;
+  if (!ret || ret->kind != ND_RETURN || !ret->lhs)
+    return 1;
+  const LibcpNode *expr = ret->lhs;
+  while (expr->kind == ND_CAST)
+    expr = expr->lhs;
+  if (!expr || expr->kind != ND_GENERIC || !expr->ctrl.generic_sel)
+    return 1;
+  if (child_count(expr) != 2)
+    return 1;
+  if (child_at(expr, 0) != expr->ctrl.cond || child_at(expr, 1) != expr->ctrl.args)
+    return 1;
+  if (!child_is_list(expr, 1))
+    return 1;
+  for (int i = 0; i < child_count(expr); i++)
+    if (child_at(expr, i) == expr->ctrl.generic_sel)
+      return 1;
+
+  int assocs = 0;
+  for (const LibcpNode *a = expr->ctrl.args; a; a = a->next) {
+    if (a->kind != ND_GENERIC_ASSOC || child_count(a) != 1 ||
+        !child_at(a, 0))
+      return 1;
+    assocs++;
+  }
+  if (assocs != 2)
+    return 1;
+
+  return 0;
+}
+
+static int rep_hits;
+static LibcpDiagnosticSeverity rep_severity;
+static const char *rep_filename;
+static const char *rep_message;
+static int rep_line;
+static int rep_column;
+static const LibcpToken *rep_tok;
+static const struct libcp_macro_prov *rep_prov;
+
+static void rep_diag(void *user, const LibcpDiagnostic *d) {
+  (void)user;
+  rep_hits++;
+  rep_severity = d->severity;
+  rep_filename = d->filename;
+  rep_message = d->message;
+  rep_line = d->line;
+  rep_column = d->column;
+  rep_tok = d->tok;
+  rep_prov = d->prov;
+}
+
+// The returning diagnostic entry (issue #18): report never longjmps,
+// still calls the callback, and only errors mark the context failed.
+// The error wrappers built on it keep the old unwinding behavior.
+static int check_diagnostic_report(LibcpContext *ctx) {
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<report>", "int x;\n");
+  if (!tok)
+    return 1;
+
+  libcp_context_set_diagnostic(ctx, rep_diag, NULL);
+
+  int before = rep_hits;
+  libcp_diagnostic_report(ctx, tok, LIBCP_DIAG_WARNING, "warn %d", 7);
+  if (rep_hits != before + 1 || libcp_context_failed(ctx))
+    return 1;
+  if (rep_severity != LIBCP_DIAG_WARNING || !rep_message ||
+      strcmp(rep_message, "warn 7") != 0)
+    return 1;
+  if (!rep_filename || strcmp(rep_filename, "<report>") != 0 ||
+      rep_line != 1 || rep_column != 1 || rep_tok != tok || rep_prov)
+    return 1;
+
+  // An error report returns too, but marks the context failed and
+  // carries no location when it has no token.
+  libcp_diagnostic_report(ctx, NULL, LIBCP_DIAG_ERROR, "boom");
+  if (rep_hits != before + 2 || !libcp_context_failed(ctx))
+    return 1;
+  if (rep_severity != LIBCP_DIAG_ERROR || rep_filename || rep_line != 0 ||
+      rep_column != 0 || rep_tok || !rep_message ||
+      strcmp(rep_message, "boom") != 0)
+    return 1;
+
+  // The error wrappers still longjmp: a parse error unwinds the public
+  // entry (it returns NULL) instead of continuing.
+  libcp_context_reset(ctx);
+  libcp_context_set_diagnostic(ctx, diag, NULL);
+  LibcpToken *bad = libcp_tokenize_buffer(ctx, "<report>", "int y = ;\n");
+  if (!bad)
+    return 1;
+  bad = libcp_preprocess(ctx, bad);
+  if (!bad)
+    return 1;
+  int errors_before = errors;
+  if (libcp_parse(ctx, bad) != NULL || !libcp_context_failed(ctx) ||
+      errors != errors_before + 1)
+    return 1;
+  libcp_context_reset(ctx);
+  return 0;
+}
+
 static LibcpToken *exp_diag_tok;
 static const struct libcp_macro_prov *exp_diag_prov;
 
@@ -559,6 +1372,75 @@ static int check_reconstruct(LibcpContext *ctx) {
   return strcmp(buf, text) != 0;
 }
 
+// The public token and AST dump entries (issue #25): both write the
+// driver's channel text to a caller-owned FILE, accept const inputs, and
+// allocate nothing. The expected bytes are the ones test/trivia.sh and
+// test/ast.sh lock through the driver.
+static int check_token_dump(LibcpContext *ctx) {
+  const LibcpToken *tok = libcp_tokenize_buffer(ctx, "<libtest>", "int x=1;\n");
+  FILE *f = tmpfile();
+  if (!tok || !f)
+    return 1;
+  libcp_token_dump(ctx, tok, f);
+  if (libcp_context_failed(ctx)) {
+    fclose(f);
+    return 1;
+  }
+  fflush(f);
+  rewind(f);
+  char buf[512];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+
+  char *want =
+    "T 1 0 ident int\n"
+    "R 1 3 ws \\x20\n"
+    "T 1 4 ident x\n"
+    "T 1 5 punct =\n"
+    "T 1 6 pp-num 1\n"
+    "T 1 7 punct ;\n"
+    "R 1 8 nl \\n\n"
+    "T 2 9 eof\n";
+  return strcmp(buf, want) != 0;
+}
+
+static int check_ast_dump(LibcpContext *ctx) {
+  LibcpToken *tok = libcp_tokenize_buffer(ctx, "<libtest>", "int f(int a){return a+1;}\n");
+  if (!tok)
+    return 1;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok)
+    return 1;
+  const LibcpNode *ast = libcp_parse(ctx, tok);
+  if (!ast || libcp_context_failed(ctx))
+    return 1;
+
+  FILE *f = tmpfile();
+  if (!f)
+    return 1;
+  libcp_ast_dump(ctx, ast, f);
+  if (libcp_context_failed(ctx)) {
+    fclose(f);
+    return 1;
+  }
+  fflush(f);
+  rewind(f);
+  char buf[1024];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+
+  char *want =
+    "ND_FUNCDEF @<libtest>:1:13 \"{\" ty_op=func(int) name=\"f\" attr=none\n"
+    "  ND_BLOCK @<libtest>:1:14 \"return\" is_scope_block=1\n"
+    "    ND_RETURN @<libtest>:1:14 \"return\"\n"
+    "      ND_ADD @<libtest>:1:22 \"+\"\n"
+    "        ND_IDENT @<libtest>:1:21 \"a\"\n"
+    "        ND_NUM @<libtest>:1:23 \"1\" val=1\n";
+  return strcmp(buf, want) != 0;
+}
+
 // The provenance accessors (PLAN L3.4a): an argument expansion and a
 // builtin expansion.
 static int check_provenance(LibcpContext *ctx) {
@@ -602,6 +1484,174 @@ static int check_provenance(LibcpContext *ctx) {
       !libcp_macro_expansion_is_builtin(libcp_macro_prov_expansion(p)))
     return 1;
   return 0;
+}
+
+// Include search ownership (issue #23): registered paths are bucketed by
+// origin and searched USER -> AFTER -> SYSTEM, keeping insertion order
+// inside a bucket. The legacy add is USER. resolve_include tries the
+// literal path first and then the table; include_is_system reports only
+// SYSTEM and AFTER. The path table survives reset; the search cache does
+// not need to be observable for this check.
+static int check_include_origin(char *user, char *after, char *systemdir,
+                                char *literal) {
+  char upath[4096], apath[4096], spath[4096];
+  int n1 = snprintf(upath, sizeof upath, "%s/pick.h", user);
+  int n2 = snprintf(apath, sizeof apath, "%s/pick.h", after);
+  int n3 = snprintf(spath, sizeof spath, "%s/pick.h", systemdir);
+  if (n1 < 0 || n1 >= (int)sizeof upath || n2 < 0 ||
+      n2 >= (int)sizeof apath || n3 < 0 || n3 >= (int)sizeof spath)
+    return 1;
+
+  char *p;
+  int rc = 1;
+  LibcpContext *c1 = libcp_context_new();
+  LibcpContext *c2 = libcp_context_new();
+  if (!c1 || !c2)
+    goto out;
+
+  // Registration order does not matter: USER wins over AFTER and SYSTEM.
+  libcp_context_add_include_path_with_origin(c1, systemdir,
+                                             LIBCP_INCLUDE_SYSTEM);
+  libcp_context_add_include_path_with_origin(c1, after, LIBCP_INCLUDE_AFTER);
+  libcp_context_add_include_path_with_origin(c1, user, LIBCP_INCLUDE_USER);
+  p = libcp_context_resolve_include(c1, "pick.h");
+  if (!p || strcmp(p, upath) != 0)
+    goto out;
+
+  // A path that exists as given wins over the table.
+  p = libcp_context_resolve_include(c1, literal);
+  if (!p || strcmp(p, literal) != 0)
+    goto out;
+
+  // AFTER beats SYSTEM; the legacy add is USER and beats both.
+  libcp_context_add_include_path_with_origin(c2, systemdir,
+                                             LIBCP_INCLUDE_SYSTEM);
+  libcp_context_add_include_path_with_origin(c2, after, LIBCP_INCLUDE_AFTER);
+  p = libcp_context_resolve_include(c2, "pick.h");
+  if (!p || strcmp(p, apath) != 0)
+    goto out;
+  libcp_context_add_include_path(c2, user);
+  p = libcp_context_resolve_include(c2, "pick.h");
+  if (!p || strcmp(p, upath) != 0)
+    goto out;
+
+  // The path table is configuration: it survives reset.
+  libcp_context_reset(c2);
+  p = libcp_context_resolve_include(c2, "pick.h");
+  if (!p || strcmp(p, upath) != 0)
+    goto out;
+
+  // SYSTEM and AFTER are system directories; USER and untracked paths are
+  // not.
+  if (libcp_context_include_is_system(c2, upath) ||
+      !libcp_context_include_is_system(c2, apath) ||
+      !libcp_context_include_is_system(c2, spath) ||
+      libcp_context_include_is_system(c2, literal))
+    goto out;
+
+  if (libcp_context_resolve_include(c2, "no-such-libcp-include.h") != NULL)
+    goto out;
+
+  // Preprocessing submits the same request and sees the same order.
+  LibcpToken *tok = libcp_tokenize_buffer(
+      c2, "<include-origin>", "#include <pick.h>\nint pick = PICK;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(c2, tok);
+  if (!tok || !find_num(tok, 1))
+    goto out;
+
+  rc = 0;
+out:
+  libcp_context_free(c1);
+  libcp_context_free(c2);
+  return rc;
+}
+
+// #include_next continuation (issue #24): the search resumes at the path
+// table index recorded for the file that holds the directive. A cached
+// target must not lose that position, and files that did not come from
+// the path table (the main file, a quoted current-directory hit, an
+// absolute path) start at the first path.
+static int check_include_next(char *user, char *after, char *systemdir) {
+  char name[4096], abs_wrap[4096], abs_src[8192];
+  int n = snprintf(name, sizeof name, "%s/main.c", user);
+  int m = snprintf(abs_wrap, sizeof abs_wrap, "%s/abs_wrap.h", user);
+  if (n < 0 || n >= (int)sizeof name || m < 0 || m >= (int)sizeof abs_wrap)
+    return 1;
+  m = snprintf(abs_src, sizeof abs_src,
+               "#include <wrap_after.h>\n#include \"%s\"\n"
+               "int g = FROM_SYSTEM;\nint h = FROM_USER;\n",
+               abs_wrap);
+  if (m < 0 || m >= (int)sizeof abs_src)
+    return 1;
+
+  LibcpContext *ctx = libcp_context_new();
+  if (!ctx)
+    return 1;
+  int rc = 1;
+
+  libcp_context_add_include_path_with_origin(ctx, systemdir,
+                                             LIBCP_INCLUDE_SYSTEM);
+  libcp_context_add_include_path_with_origin(ctx, after, LIBCP_INCLUDE_AFTER);
+  libcp_context_add_include_path(ctx, user);
+
+  // A plain include caches chain.h at start 0; the wrapper lives in the
+  // user bucket, so its #include_next continues in the after bucket.
+  LibcpToken *tok = libcp_tokenize_buffer(
+      ctx, name,
+      "#include <chain.h>\n#include <wrap.h>\n"
+      "int a = FROM_USER;\nint b = FROM_AFTER;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 1) || !find_num(tok, 2) ||
+      libcp_context_failed(ctx))
+    goto out;
+  libcp_context_reset(ctx);
+
+  // wrap_after.h was found in the after bucket, so it continues in
+  // system; the main file has no recorded index, so it starts at user.
+  tok = libcp_tokenize_buffer(
+      ctx, name,
+      "#include <wrap_after.h>\n#include_next <chain.h>\n"
+      "int c = FROM_SYSTEM;\nint d = FROM_USER;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 3) || !find_num(tok, 1) ||
+      libcp_context_failed(ctx))
+    goto out;
+  libcp_context_reset(ctx);
+
+  // A quoted include that hits the current directory has no recorded
+  // index either, and its start-0 search does not reuse the start-2
+  // cache entry left by the wrapper.
+  tok = libcp_tokenize_buffer(
+      ctx, name,
+      "#include <wrap_after.h>\n#include \"local/wrap_self.h\"\n"
+      "int e = FROM_SYSTEM;\nint f = FROM_USER;\n");
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 3) || !find_num(tok, 1) ||
+      libcp_context_failed(ctx))
+    goto out;
+  libcp_context_reset(ctx);
+
+  // An absolute path has no recorded index either.
+  tok = libcp_tokenize_buffer(ctx, name, abs_src);
+  if (!tok)
+    goto out;
+  tok = libcp_preprocess(ctx, tok);
+  if (!tok || !find_num(tok, 3) || !find_num(tok, 1) ||
+      libcp_context_failed(ctx))
+    goto out;
+
+  rc = 0;
+out:
+  libcp_context_free(ctx);
+  return rc;
 }
 
 // tokenize_file + the context's include path.
@@ -931,6 +1981,27 @@ int main(int argc, char **argv) {
     return 1;
   if (check_source_range(ctx))
     return 1;
+  if (argc > 2 && check_input_files(ctx, argv[1], argv[2]))
+    return 1;
+  if (argc > 1 && check_synthetic(ctx, argv[1]))
+    return 1;
+  if (check_base_file(ctx))
+    return 1;
+  if (check_backend_support(ctx))
+    return 1;
+  if (check_backend_labels(ctx))
+    return 1;
+  if (check_backend_unique_name(ctx))
+    return 1;
+  if (check_node_children(ctx))
+    return 1;
+  libcp_context_reset(ctx);
+  if (check_init_resolved(ctx))
+    return 1;
+  libcp_context_reset(ctx);
+  if (check_diagnostic_report(ctx))
+    return 1;
+  libcp_context_reset(ctx);
   if (check_diag_expansion(ctx))
     return 1;
   if (check_utf8(ctx))
@@ -947,10 +2018,18 @@ int main(int argc, char **argv) {
   // macro operations (PLAN L3.4a).
   if (check_reconstruct(ctx))
     return 1;
+  if (check_token_dump(ctx))
+    return 1;
+  if (check_ast_dump(ctx))
+    return 1;
   if (check_provenance(ctx))
     return 1;
   libcp_context_reset(ctx);
   if (argc > 2 && check_include(ctx, argv[1], argv[2]))
+    return 1;
+  if (argc > 8 && check_include_origin(argv[6], argv[7], argv[8], argv[1]))
+    return 1;
+  if (argc > 8 && check_include_next(argv[6], argv[7], argv[8]))
     return 1;
   libcp_context_reset(ctx);
   if (check_define(ctx))
@@ -1006,8 +2085,10 @@ int main(int argc, char **argv) {
 }
 EOF
 
-"$cc" -std=c11 -pthread -I"$root/libcp/include" "$tmp/consumer.c" "$lib" -o "$tmp/consumer"
-"$tmp/consumer" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
+"$cc" -std=c11 -Werror=implicit-function-declaration -pthread \
+  -I"$root/libcp/include" "$tmp/consumer.c" "$lib" -o "$tmp/consumer"
+"$tmp/consumer" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c" \
+  "$tmp/user" "$tmp/after" "$tmp/system"
 
 # The sanitizer gate (PLAN L3.0/L3.4c). The library sources themselves are
 # rebuilt with ASan and UBSan, so the coverage reaches CST, parse, sema and
@@ -1027,12 +2108,14 @@ ar rcs "$tmp/libcp-asan.a" $asan_objs
   "$tmp/libcp-asan.a" -o "$tmp/consumer-asan"
 ASAN_OPTIONS=detect_leaks=0 \
   UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-  "$tmp/consumer-asan" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
+  "$tmp/consumer-asan" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c" \
+  "$tmp/user" "$tmp/after" "$tmp/system"
 
 # The shared library (PLAN L3.3b, Linux only): the same consumer links
 # against it and runs.
 if [ -z "${LIBCP_LIB:-}" ] && [ -f "$root/libcp.so" ]; then
   "$cc" -std=c11 -pthread -I"$root/libcp/include" "$tmp/consumer.c" \
     -L"$root" -lcp -Wl,-rpath,"$root" -o "$tmp/consumer-so"
-  "$tmp/consumer-so" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c"
+  "$tmp/consumer-so" "$tmp/input.c" "$tmp/inc" "$tmp/nul.c" "$tmp/self.h" "$tmp/stdin.c" \
+    "$tmp/user" "$tmp/after" "$tmp/system"
 fi

@@ -138,7 +138,9 @@ struct libcp_file {
 
 `map` 和 `lines` 的长度是字节数加 1, 最后一项覆盖文件末尾.
 
-对 `libcp_tokenize_buffer` 的输入, 没有磁盘文件, 也没有改写: `file->raw == file->contents`, `map` 是恒等映射, `lines` 直接数换行. 这类 token 在 provenance dump 里显示为 `@synth`, 见第 4 章.
+`LibcpFile` 的构造与这四张表的换算由内部模块 `libcp/src/source.c` 独占: raw / 扫描偏移 / 物理行之间的换算, file 级 synthetic 判定与 input file 表登记都在那里. 第 3 层的 `libcp_node_source_range` 与 provenance 通道共用同一套入口, 不再各自计算 `loc - contents` 或 `line_no - line_delta`.
+
+对 `libcp_tokenize_buffer` 的输入, 没有磁盘文件, 也没有改写: `file->raw == file->contents`, `map` 是恒等映射, `lines` 直接数换行. 这类 token 在 provenance dump 里显示为 `@synth`, 公共的 `libcp_token_is_synthetic` 对它返回 true, 见第 4 章.
 
 ### 3.3.3 关键字的时机
 
@@ -162,13 +164,13 @@ struct libcp_file {
 1. 调用 `read_file` 读入整个文件. 读 stdin 时只读一次, 内容缓存在 context 里, 第二次 tokenize `-` 会拿到同一份文本.
 2. 检查文件大小不超过 `INT32_MAX`, 因为词法器用 `int` 存偏移.
 3. 检查 NUL 字节. 源文件里出现 NUL 是诊断, 不是静默截断.
-4. 分配 `LibcpFile`, 编号并登记到 context 的输入文件表.
+4. 由 `source.c` 的 `libcp_new_file_from_raw` 构造 `LibcpFile` (编号), 再经 `libcp_source_register_input_file` 登记到 context 的输入文件表.
 
-`tokenize_buffer(name, contents)` 走另一条路: 把传入的字节复制进 per-TU 分配, 直接构造一个没有改写的 `LibcpFile`. 内存中的输入不经过 `make_scan_buffer`.
+`tokenize_buffer(name, contents)` 走另一条路: 把传入的字节复制进 per-TU 分配, 用 `source.c` 的 `libcp_new_file_len` 直接构造一个没有改写的 `LibcpFile`. 内存中的输入不经过 `make_scan_buffer`, 也不登记为 input file.
 
 ### 3.4.2 构造扫描缓冲
 
-`make_scan_buffer(raw, len, &map, &lines)` 一遍扫描完成五件事:
+`source.c` 的 `make_scan_buffer(raw, len, &map, &lines)` 一遍扫描完成五件事:
 
 1. 跳过开头的 BOM.
 2. 把 `\r\n` 和孤立的 `\r` 归一成 `\n`.
@@ -181,7 +183,7 @@ struct libcp_file {
 - `map[scan_offset] = raw_offset`.
 - `lines[raw_offset] = 行号`.
 
-对多字节改写, `map` 把同一个 raw 偏移映射给多个扫描偏移; 反向的"扫描位置对应的 raw 结束位置"由 `raw_end_of` 计算, 它认识换行和 universal character name 的长度.
+对多字节改写, `map` 把同一个 raw 偏移映射给多个扫描偏移; 反向的"扫描位置对应的 raw 结束位置"由 `libcp_file_raw_end_of` 计算, 它认识换行和 universal character name 的长度.
 
 ### 3.4.3 切 token
 
@@ -200,9 +202,9 @@ struct libcp_file {
    - `raw_loc` / `raw_len`: 拼写, raw 坐标
    - `file`, `filename`, `at_bol`, `has_space`
 4. 循环结束时追加 `TK_EOF`, 它的前置 trivia 是文件末尾的全部字节.
-5. `add_line_numbers` 给每个 token 填物理行号.
+5. `add_line_numbers` 经 `libcp_token_physical_line` 给每个 token 填物理行号, 行号取自文件的 `lines` / `map` 表.
 
-`new_token` 里有一个细节: `raw_len` 不是简单的 `len`. 扫描缓冲中的最后一个字节可能对应 raw 文本中的多个字节, 例如一个 universal character name. `raw_end_of` 负责算对结束位置.
+`new_token` 里有一个细节: `raw_len` 不是简单的 `len`. 扫描缓冲中的最后一个字节可能对应 raw 文本中的多个字节, 例如一个 universal character name. `libcp_file_raw_end_of` 负责算对结束位置.
 
 ### 3.4.4 重建
 
@@ -215,7 +217,7 @@ for (; tok; tok = tok->next) {
 }
 ```
 
-在 `tokenize_file` 的直接输出上, 以及输入本已处于扫描缓冲形态 (没有原始 `\uXXXX` 序列) 的 `tokenize_buffer_len` 输出上, 重建结果等于输入字节. 原始 `\uXXXX` 的内存输入不满足该契约: 扫描路径不重写它, 但 `raw_end_of` 会把它当成一个 UCN 计算 `raw_len`, 导致后续 token 的 `trivia_len` 为负. 见第 11 章 11.5.8; 规避方式是先把这类文本转成 UTF-8, 或改用 `tokenize_file`.
+在 `libcp_tokenize_file` 的直接输出上, 以及输入本已处于扫描缓冲形态 (没有原始 `\uXXXX` 序列) 的 `libcp_tokenize_buffer_len` 输出上, 重建结果等于输入字节. 原始 `\uXXXX` 的内存输入不满足该契约: 扫描路径不重写它, 但 `libcp_file_raw_end_of` 会把它当成一个 UCN 计算 `raw_len`, 导致后续 token 的 `trivia_len` 为负. 见第 11 章 11.5.8; 规避方式是先把这类文本转成 UTF-8, 或改用 `libcp_tokenize_file`.
 
 ## 3.5 阶段产物
 
@@ -303,7 +305,7 @@ fclose(out);
 cmp input.c rebuilt.c
 ```
 
-`-dump-tokens` 对每个 token 打印一行 T(行号, raw 偏移, 种类, 拼写); 在该 T 行之前, 按 trivia 片段打印零或多行 R(bom / lc / bc / nl / ws / cont). R 行与 T 行合起来逐字节平铺原始文件. 具体形状由 `test/trivia.sh` 锁定.
+`-dump-tokens` 对每个 token 打印一行 T(物理行号, raw 偏移, 种类, 拼写); 在该 T 行之前, 按 trivia 片段打印零或多行 R(bom / lc / bc / nl / ws / cont). R 行与 T 行合起来逐字节平铺原始文件. 具体形状由 `test/trivia.sh` 锁定.
 
 ## 3.8 边界与已知限制
 
@@ -313,6 +315,6 @@ cmp input.c rebuilt.c
 - **`loc` 不是 C 字符串**. 它是扫描缓冲里的切片, 可能没有 NUL. 用 `len` 限界, 或复制出来.
 - **`#line` 不修改 `file->name`, 但会改显示名**. 它设置 `file->display_name`, 预处理后的 token 的 `filename` 与 `__FILE__` 随之改变; 诊断仍使用物理路径 `file->name`, 行号叠加 `#line` 偏移. 见第 11 章.
 - **内存中的输入被复制**. `tokenize_buffer` 会把字节复制进 per-TU 分配, 调用者的缓冲区可以立即释放. 代价是同一份源码在内存里有两份.
-- **内存输入不经过扫描缓冲改写**. `libcp_tokenize_buffer*` 按字节扫描: 不跳过 BOM, 不删除反斜杠续行, 不把 `\uXXXX` 改写成 UTF-8, 不做换行归一 (CRLF 仍能扫描, 孤立 CR 的行号会错), 不补末尾换行. 反斜杠续行会变成一个 `\` token, `\u00e9` 会变成 `\` 加 `u00e9`. 真实源码优先用 `libcp_tokenize_file`; 内存输入应当是已经处于"扫描缓冲形态"的文本. 原始 `\uXXXX` 的内存输入还会破坏 raw 坐标: `raw_end_of` 按 UCN 长度计算, 后续 token 的 `trivia_len` 会变成负数, 重建结果错位, 见 11.5.8.
+- **内存输入不经过扫描缓冲改写**. `libcp_tokenize_buffer*` 按字节扫描: 不跳过 BOM, 不删除反斜杠续行, 不把 `\uXXXX` 改写成 UTF-8, 不做换行归一 (CRLF 仍能扫描, 孤立 CR 的行号会错), 不补末尾换行. 反斜杠续行会变成一个 `\` token, `\u00e9` 会变成 `\` 加 `u00e9`. 真实源码优先用 `libcp_tokenize_file`; 内存输入应当是已经处于"扫描缓冲形态"的文本. 原始 `\uXXXX` 的内存输入还会破坏 raw 坐标: `libcp_file_raw_end_of` 按 UCN 长度计算, 后续 token 的 `trivia_len` 会变成负数, 重建结果错位, 见 11.5.8.
 - **文件大小上限**. 超过 `INT32_MAX` 字节的文件被拒绝, 不是分块处理.
 - **没有字符集转换**. 文件按字节读入, 标识符支持 UTF-8. 其他编码需要调用者先转成 UTF-8.

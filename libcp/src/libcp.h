@@ -58,18 +58,43 @@ noreturn void libcp_error_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...
     __attribute__((format(printf, 3, 4)));
 void libcp_warn_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...)
     __attribute__((format(printf, 3, 4)));
+// 公共 libcp_diagnostic_report 与上面的内部入口共用的报告核心: 只交付
+// 诊断, 不 longjmp, 不改 context 状态.
+void libcp_diagnostic_vreport(LibcpContext* ctx,
+                              LibcpToken* tok,
+                              LibcpDiagnosticSeverity severity,
+                              const char* fmt,
+                              va_list ap);
 bool libcp_equal(LibcpToken* tok, char* op);
 LibcpToken* libcp_skip(LibcpContext* ctx, LibcpToken* tok, char* op);
 bool libcp_consume(LibcpToken** rest, LibcpToken* tok, char* str);
 void libcp_convert_pp_tokens(LibcpContext* ctx, LibcpToken* tok);
-LibcpFile** libcp_get_input_files(LibcpContext* ctx);
-LibcpFile* libcp_new_file(LibcpContext* ctx, char* name, int file_no, char* contents);
-LibcpFile* libcp_new_file_len(LibcpContext* ctx, char* name, int file_no, char* contents, int len);
-bool libcp_is_line_break(char* p);
-int libcp_line_break_len(char* p);
-LibcpToken* libcp_tokenize_string_literal(LibcpContext* ctx, LibcpToken* tok, LibcpType* basety);
+void libcp_tokenize_string_literal(LibcpContext* ctx, LibcpToken* tok, LibcpType* basety);
 LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file);
 LibcpToken* libcp_tokenize_file_impl(LibcpContext* ctx, char* filename);
+
+// source.c: 源坐标模块. LibcpFile 构造, 扫描缓冲构造, raw / 扫描偏移 /
+// 物理行换算, file 级 synthetic 判定与 input file 表登记都由它独占.
+// 公共的 input file 枚举与 libcp_token_is_synthetic 也在这里实现.
+
+typedef struct {
+  LibcpFile* file;
+  long offset;
+} LibcpSourcePos;
+
+LibcpFile* libcp_new_file(LibcpContext* ctx, char* name, int file_no, char* contents);
+LibcpFile* libcp_new_file_len(LibcpContext* ctx, char* name, int file_no, char* contents, int len);
+LibcpFile* libcp_new_file_from_raw(LibcpContext* ctx, char* name, char* raw, int len);
+void libcp_source_register_input_file(LibcpContext* ctx, LibcpFile* file);
+bool libcp_is_line_break(const char* p);
+int libcp_line_break_len(const char* p);
+int libcp_file_raw_offset(const LibcpFile* file, const char* p);
+int libcp_file_raw_end_of(const LibcpFile* file, int scan_off);
+int libcp_file_physical_line(const LibcpFile* file, int raw_offset);
+int libcp_token_raw_end(const LibcpToken* tok);
+int libcp_token_physical_line(const LibcpToken* tok);
+LibcpSourcePos libcp_token_source_pos(const LibcpToken* tok);
+bool libcp_file_is_synthetic(const LibcpFile* file);
 
 #define unreachable() libcp_error(ctx, "internal error at %s:%d", __FILE__, __LINE__)
 
@@ -80,24 +105,40 @@ LibcpToken* libcp_tokenize_file_impl(LibcpContext* ctx, char* filename);
 // 进实现).
 //
 
-char* libcp_search_include_paths(LibcpContext* ctx, char* filename);
+// include.c: include 搜索的单一 owner. 路径表 (path + origin), 搜索顺序,
+// 搜索缓存, 系统目录判定, per-file 续查与 reset / free 语义都由它独占.
+// preprocess.c 只提交 include 请求; 驱动器只按 origin 注册路径并做
+// -MMD 分类.
+
+// 一次 include 解析的结果. path 为 NULL 表示未命中; index 是路径表中的
+// 命中下标, -1 表示不是从路径表命中 (引号当前目录, 绝对路径, 主文件).
+typedef struct {
+  char* path;
+  int index;
+} LibcpIncludeHit;
+
+// per-file 续查位置: file 是 LibcpFile.name, index 是它自己的命中下标.
+// #include_next 从 index + 1 开始; 没有记录时从 0 开始.
+typedef struct {
+  char* file;
+  int index;
+} LibcpIncludeFileIndex;
+
+void libcp_include_add_path(LibcpContext* ctx, char* path, LibcpIncludeOrigin origin);
+LibcpIncludeHit libcp_include_resolve_quoted(LibcpContext* ctx, LibcpFile* current, char* filename);
+LibcpIncludeHit libcp_include_resolve_angled(LibcpContext* ctx, char* filename);
+LibcpIncludeHit libcp_include_resolve_next(LibcpContext* ctx, LibcpFile* current, char* filename);
+void libcp_include_reset(LibcpContext* ctx);
+void libcp_include_free(LibcpContext* ctx);
+
 void libcp_init_macros(LibcpContext* ctx);
 void libcp_define_macro(LibcpContext* ctx, char* name, char* buf);
 void libcp_undef_macro(LibcpContext* ctx, char* name);
 
-// parse.c: 节点构造函数与解析器状态
+// parse.c: 解析器状态
 
-// 忠实树节点的构造函数. 定义在 parse.c 中; sema 用它们构建其降级过程
-// 引入的节点. 只有降级才会产生的形态 - 已绑定名字, VLA 指示符,
-// 创建时即定型的数值字面量 - 由 sema 自己构造.
-LibcpNode* libcp_new_node(LibcpContext* ctx, LibcpNodeKind kind, LibcpToken* tok);
-LibcpNode* libcp_new_binary(LibcpContext* ctx,
-                            LibcpNodeKind kind,
-                            LibcpNode* lhs,
-                            LibcpNode* rhs,
-                            LibcpToken* tok);
-LibcpNode* libcp_new_unary(LibcpContext* ctx, LibcpNodeKind kind, LibcpNode* expr, LibcpToken* tok);
-LibcpNode* libcp_new_num(LibcpContext* ctx, int64_t val, LibcpToken* tok);
+// 忠实树节点的构造函数属于公共后端支持面 (<libcp/backend.h>):
+// libcp_node_new / _binary / _unary / _num. 这里不重复声明.
 
 // 标识符拼写, sema 在声明解析器声明记录所指称的对象时使用.
 char* libcp_get_ident(LibcpContext* ctx, LibcpToken* tok);
@@ -117,25 +158,11 @@ int64_t libcp_const_expr(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok);
 // 求值的表达式.
 LibcpNode* libcp_conditional(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok);
 
-// 消费者构建已定型节点所需的类型层工具: 标注入口, 只有 sema 才会
-// 产生的形态的构造函数, 以及承载 sema 决策的转换.
-void libcp_add_type(LibcpContext* ctx, LibcpNode* node);
-LibcpNode* libcp_new_arith(LibcpContext* ctx,
-                           LibcpNodeKind kind,
-                           LibcpNode* lhs,
-                           LibcpNode* rhs,
-                           LibcpToken* tok);
+// 只有 sema 才会产生的形态的构造函数与类型工具属于公共后端支持面
+// (<libcp/backend.h>): libcp_node_annotate_type, _arith, _cast, _long,
+// _var, _vla_ptr, _alloca. 这里只声明库内部共用, 不对外承诺的辅助.
 void libcp_usual_arith_conv(LibcpContext* ctx, LibcpNode** lhs, LibcpNode** rhs);
 LibcpType* libcp_get_common_type(LibcpContext* ctx, LibcpType* ty1, LibcpType* ty2);
-LibcpNode* libcp_new_cast(LibcpContext* ctx, LibcpNode* expr, LibcpType* ty);
-LibcpNode* libcp_new_long(LibcpContext* ctx, int64_t val, LibcpToken* tok);
-LibcpNode* libcp_new_ulong(LibcpContext* ctx, long val, LibcpToken* tok);
-LibcpNode* libcp_new_var_node(LibcpContext* ctx, LibcpObj* var, LibcpToken* tok);
-LibcpNode* libcp_new_vla_ptr(LibcpContext* ctx, LibcpObj* var, LibcpToken* tok);
-LibcpNode* libcp_new_alloca(LibcpContext* ctx, LibcpNode* sz);
-
-// 匿名名字计数器接下来会给出的值, 但不消耗它.
-int libcp_unique_name_next(LibcpContext* ctx);
 
 // type.c: 内建类型与类型构造
 
@@ -161,10 +188,8 @@ bool libcp_is_flonum(LibcpType* ty);
 bool libcp_is_numeric(LibcpType* ty);
 bool libcp_is_compatible(LibcpType* t1, LibcpType* t2);
 LibcpType* libcp_copy_type(LibcpContext* ctx, LibcpType* ty);
-LibcpType* libcp_pointer_to(LibcpContext* ctx, LibcpType* base);
 LibcpType* libcp_func_type(LibcpContext* ctx, LibcpType* return_ty);
 LibcpType* libcp_array_of(LibcpContext* ctx, LibcpType* base, int size);
-LibcpType* libcp_vla_of(LibcpContext* ctx, LibcpType* base, LibcpNode* expr);
 LibcpType* libcp_array_of_dim(LibcpContext* ctx, LibcpType* base, LibcpNode* dim);
 LibcpType* libcp_typeof_placeholder(LibcpContext* ctx);
 LibcpType* libcp_enum_type(LibcpContext* ctx);
@@ -208,7 +233,7 @@ void libcp_hashmap_delete2(LibcpContext* ctx, LibcpHashMap* map, char* key, int 
 //
 
 bool libcp_file_exists(char* path);
-void libcp_print_escaped(FILE* out, char* p, int len);
+void libcp_print_escaped(FILE* out, const char* p, int len);
 char* libcp_token_kind_name(LibcpContext* ctx, LibcpTokenKind kind);
 
 // context / per-TU 分配 / 诊断 (PLAN L2)
@@ -273,14 +298,31 @@ typedef struct libcp_cond_incl LibcpCondIncl;
 typedef struct libcp_parse_scope LibcpParseScope;
 typedef struct libcp_sema_scope LibcpSemaScope;
 
+// include 搜索的路径项. 路径表按 origin 分桶连续存放, 所以数组顺序
+// 就是搜索顺序: USER 桶在前, AFTER 其次, SYSTEM 最后.
+typedef struct {
+  char* path;
+  LibcpIncludeOrigin origin;
+} LibcpIncludePath;
+
+// include 搜索状态. 路径表是配置, 跨 reset 保留; 搜索缓存与 per-file
+// 续查表是 per-TU 状态, reset 清空. module 独占全部字段的读写.
+typedef struct {
+  LibcpIncludePath* paths;
+  int len;
+  int cap;
+  LibcpHashMap cache;
+  LibcpIncludeFileIndex* files;
+  int files_len;
+  int files_cap;
+} LibcpIncludeSearch;
+
 struct LibcpContext {
   // 本翻译单元所有分配组成的登记链. 链只保存 free 需要的地址.
   LibcpTuAlloc* tu_allocs;
 
   // 配置. 跨 reset 保留, 由 LIBCP_* 拥有, 由 libcp_context_free 释放.
-  char** include_paths;
-  int include_paths_len;
-  int include_paths_cap;
+  LibcpIncludeSearch include_search;
   // 按顺序记录的命令行宏操作: "D:name=body" 或 "U:name".
   char** macro_ops;
   int macro_ops_len;
@@ -317,12 +359,10 @@ struct LibcpContext {
   int predefined_len;
   LibcpCondIncl* cond_incl;
   LibcpHashMap pragma_once;
-  LibcpHashMap search_cache;
   LibcpHashMap include_guards;
   LibcpHashMap keyword_map;
   LibcpHashMap typename_map;
   int counter;
-  int include_next_idx;
   int include_count;
   int parse_depth;
 
@@ -341,10 +381,6 @@ struct LibcpContext {
   int unique_name_id;
   bool resolving_body;
 };
-
-// base 文件名是 per-TU 状态, 不是配置: 它在 tokenize 开始时从输入路径设置,
-// 并由 reset 清除; 这一点与 include 路径和宏操作不同, 后者跨 reset 保留.
-void libcp_context_set_base_file(LibcpContext* ctx, char* path);
 
 void* libcp_tu_alloc(LibcpContext* ctx, size_t size);
 void* libcp_tu_calloc(LibcpContext* ctx, size_t count, size_t size);

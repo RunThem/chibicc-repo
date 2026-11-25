@@ -1346,6 +1346,21 @@ ND_FUNCDEF @a85_string_expr.c:1:13 "{" ty_op=func(int) name="f" attr=none
         ND_NUM @a85_string_expr.c:1:27 "0" val=0
 WANT
 
+# #line 改的是逻辑行号 (诊断与 __LINE__ 用的那个). AST dump 的位置是
+# 物理行, 与 range / provenance 共用源坐标入口, 所以这里显示第 2 行,
+# 不显示 #line 指定的 100.
+snippet a86_line_directive <<'SNIP'
+#line 100 "orig.c"
+int f(void) { return 1; }
+SNIP
+
+expect a86_line_directive <<'WANT'
+ND_FUNCDEF @a86_line_directive.c:2:13 "{" ty_op=func(int) name="f" attr=none
+  ND_BLOCK @a86_line_directive.c:2:15 "return" is_scope_block=1
+    ND_RETURN @a86_line_directive.c:2:15 "return"
+      ND_NUM @a86_line_directive.c:2:22 "1" val=1
+WANT
+
 fail=""
 count=0
 for n in $names; do

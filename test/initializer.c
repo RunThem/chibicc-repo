@@ -291,6 +291,20 @@ int main() {
 
   ASSERT(6, ({ struct {int n; int d[];} x={3,{1,2,3}}; x.n + x.d[2]; }));
 
+  // 未初始化的柔性成员不参与类型补全: 声明类型保持 4 字节, 成员值只
+  // 来自花括号里给出的那一个.
+  ASSERT(4, ({ struct {int n; int a[];} u={3}; sizeof(u); }));
+  ASSERT(3, ({ struct {int n; int a[];} u={3}; u.n; }));
+
+  // 柔性成员被初始化时仍按实际元素数补全类型: 4 + 2 * 4 = 12 字节.
+  ASSERT(12, ({ struct {int n; int a[];} v={3,{1,2}}; sizeof(v); }));
+  ASSERT(1, ({ struct {int n; int a[];} v={3,{1,2}}; v.a[0]; }));
+  ASSERT(2, ({ struct {int n; int a[];} v={3,{1,2}}; v.a[1]; }));
+
+  // 同上, 但基类型带尾部填充: 8 字节的声明类型保持不变.
+  ASSERT(8, ({ struct {char c; int n; int a[];} u={1,3}; sizeof(u); }));
+  ASSERT(3, ({ struct {char c; int n; int a[];} u={1,3}; u.n; }));
+
   // PLAN A10.2: the initializer's expression is typed and its string
   // literals materialized at the declaration (the A8.1 contract-5
   // seam).

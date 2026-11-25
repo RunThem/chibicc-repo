@@ -7,19 +7,7 @@
 
 // 输入文件, 输入文件列表与当前位置标志都存放在 LibcpContext 中
 // (PLAN L2.2). 与其它阶段一样, 词法分析器通过当前活动的 context 读取它们.
-
-// 扫描缓冲区中某个位置的 raw 偏移 (PLAN T2.1): 在续行, '\r' 或
-// universal character name 被改写的地方, 两份文本并不相同.
-// 对合成缓冲区来说两者完全一致.
-static int raw_off(LibcpFile* file, char* p) {
-  return file->map[p - file->contents];
-}
-
-// token 拼写结束之后的 raw 偏移: 下一个 token 前面被跳过的字节
-// 从这里开始.
-static int raw_end(LibcpToken* tok) {
-  return tok->raw_loc - tok->file->raw + tok->raw_len;
-}
+// 坐标表的构造与换算由 source.c 独占, 本文件只做扫描与 token 构造.
 
 // 把一个十六进制数字字符转成数值; 调用方保证 c 是十六进制数字.
 static int from_hex(char c) {
@@ -30,36 +18,8 @@ static int from_hex(char c) {
   return c - 'A' + 10;
 }
 
-// 解析 \u / \U 之后的 len 个十六进制数字; 遇到非十六进制数字时返回 0.
-static uint32_t read_universal_char(char* p, int len) {
-  uint32_t c = 0;
-  for (int i = 0; i < len; i++) {
-    if (!isxdigit((unsigned char)p[i]))
-      return 0;
-    c = (c << 4) | from_hex(p[i]);
-  }
-  return c;
-}
-
-// 产生扫描偏移 `off` 的那些 raw 字节之后的 raw 偏移: 换行与
-// universal character name 对应多个 raw 字节, 其余情况只对应一个.
-static int raw_end_of(LibcpFile* file, int off) {
-  int lo  = file->map[off];
-  char* p = file->raw + lo;
-
-  if (libcp_is_line_break(p))
-    return lo + libcp_line_break_len(p);
-
-  if (p[0] == '\\' && (p[1] == 'u' || p[1] == 'U')) {
-    int digs = p[1] == 'u' ? 4 : 8;
-    if (read_universal_char(p + 2, digs))
-      return lo + digs + 2;
-  }
-  return lo + 1;
-}
-
 // 把诊断消息格式化进 per-TU 分配.
-static char* vformat(LibcpContext* ctx, char* fmt, va_list ap) {
+static char* vformat(LibcpContext* ctx, const char* fmt, va_list ap) {
   va_list ap2;
   va_copy(ap2, ap);
   int n = vsnprintf(NULL, 0, fmt, ap2);
@@ -93,7 +53,7 @@ static void verror_at(LibcpContext* ctx,
                       char* loc,
                       LibcpToken* tok,
                       LibcpDiagnosticSeverity severity,
-                      char* fmt,
+                      const char* fmt,
                       va_list ap) {
 
   // 找到包含 `loc` 的那一行.
@@ -131,26 +91,65 @@ static void verror_at(LibcpContext* ctx,
   fprintf(stderr, "\n");
 }
 
+// 报告的核心 (公共 libcp_diagnostic_report 与内部 error / warn 入口共用):
+// 有锚点 token 时按位置报告, 没有时只报告消息. 只交付诊断, 不 longjmp,
+// 也不改 context 状态.
+void libcp_diagnostic_vreport(LibcpContext* ctx,
+                              LibcpToken* tok,
+                              LibcpDiagnosticSeverity severity,
+                              const char* fmt,
+                              va_list ap) {
+  if (tok) {
+    verror_at(ctx,
+              tok->file->name,
+              tok->file->contents,
+              tok->line_no,
+              tok->loc,
+              tok,
+              severity,
+              fmt,
+              ap);
+    return;
+  }
+
+  if (ctx && ctx->diag_fn) {
+    char* msg         = vformat(ctx, fmt, ap);
+    LibcpDiagnostic d = {NULL, 0, 0, severity, msg, NULL, NULL};
+    ctx->diag_fn(ctx->diag_user, &d);
+    return;
+  }
+  vfprintf(stderr, fmt, ap);
+  fprintf(stderr, "\n");
+}
+
+// 公共的返回式诊断 (issue #18): 与 error / warn 入口走同一条报告路径,
+// 但不中断调用者; 错误把 context 标记为失败, 警告不标记.
+void libcp_diagnostic_report(LibcpContext* ctx,
+                             LibcpToken* tok,
+                             LibcpDiagnosticSeverity severity,
+                             const char* fmt,
+                             ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  libcp_diagnostic_vreport(ctx, tok, severity, fmt, ap);
+  va_end(ap);
+
+  if (severity == LIBCP_DIAG_ERROR && ctx)
+    ctx->failed = true;
+}
+
 // 报告错误; 回退到当前公共入口, 若驱动器不在任何公共入口内则直接退出.
 void libcp_error(LibcpContext* ctx, char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-
-  if (ctx && ctx->diag_fn) {
-    char* msg         = vformat(ctx, fmt, ap);
-    LibcpDiagnostic d = {NULL, 0, 0, LIBCP_DIAG_ERROR, msg, NULL, NULL};
-    ctx->diag_fn(ctx->diag_user, &d);
-  } else {
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
-  }
-
+  libcp_diagnostic_vreport(ctx, NULL, LIBCP_DIAG_ERROR, fmt, ap);
   va_end(ap);
   raise_error(ctx);
 }
 
 void libcp_error_at(LibcpContext* ctx, char* loc, char* fmt, ...) {
-  int line_no = ctx->current_file->lines[raw_off(ctx->current_file, loc)];
+  int line_no =
+      libcp_file_physical_line(ctx->current_file, libcp_file_raw_offset(ctx->current_file, loc));
 
   va_list ap;
   va_start(ap, fmt);
@@ -170,15 +169,7 @@ void libcp_error_at(LibcpContext* ctx, char* loc, char* fmt, ...) {
 void libcp_error_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  verror_at(ctx,
-            tok->file->name,
-            tok->file->contents,
-            tok->line_no,
-            tok->loc,
-            tok,
-            LIBCP_DIAG_ERROR,
-            fmt,
-            ap);
+  libcp_diagnostic_vreport(ctx, tok, LIBCP_DIAG_ERROR, fmt, ap);
   va_end(ap);
   raise_error(ctx);
 }
@@ -186,15 +177,7 @@ void libcp_error_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...) {
 void libcp_warn_tok(LibcpContext* ctx, LibcpToken* tok, char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  verror_at(ctx,
-            tok->file->name,
-            tok->file->contents,
-            tok->line_no,
-            tok->loc,
-            tok,
-            LIBCP_DIAG_WARNING,
-            fmt,
-            ap);
+  libcp_diagnostic_vreport(ctx, tok, LIBCP_DIAG_WARNING, fmt, ap);
   va_end(ap);
 }
 
@@ -245,14 +228,14 @@ static LibcpToken*
   tok->loc        = start;
   tok->len        = end - start;
 
-  int raw_start   = raw_off(ctx->current_file, start);
+  int raw_start   = libcp_file_raw_offset(ctx->current_file, start);
   tok->trivia     = ctx->current_file->raw + raw_trivia;
   tok->trivia_len = raw_start - raw_trivia;
   tok->raw_loc    = ctx->current_file->raw + raw_start;
-  tok->raw_len =
-      start == end ?
-          0 :
-          raw_end_of(ctx->current_file, end - ctx->current_file->contents - 1) - raw_start;
+  tok->raw_len    = 0;
+  if (start != end)
+    tok->raw_len =
+        libcp_file_raw_end_of(ctx->current_file, end - ctx->current_file->contents - 1) - raw_start;
 
   tok->file      = ctx->current_file;
   tok->filename  = ctx->current_file->display_name;
@@ -409,15 +392,16 @@ static LibcpToken*
   return tok;
 }
 
-// 读一个 UTF-8 编码的字符串字面量, 并把它转码为 UTF-16.
+// 把 quote 处的字符串字面量转码为 UTF-16 载荷, 返回数组类型; 载荷与
+// 收尾引号后的位置分别通过 *str_out 与 *end_out 返回.
 //
 // UTF-16 是 Unicode 的另一种变长编码. 小于 U+10000 的码点用 2 字节
 // 编码. 大于或等于该值的码点用 4 字节编码. 4 字节序列中的每个 2 字节
 // 称为 "surrogate", 整个 4 字节序列称为 "surrogate pair".
-static LibcpToken*
-    read_utf16_string_literal(LibcpContext* ctx, char* start, char* quote, int raw_trivia) {
+static LibcpType*
+    scan_utf16_string(LibcpContext* ctx, char* quote, char** end_out, char** str_out) {
   char* end     = string_literal_end(ctx, quote + 1);
-  uint16_t* buf = libcp_tu_calloc(ctx, 2, end - start);
+  uint16_t* buf = libcp_tu_calloc(ctx, 2, end - quote);
   int len       = 0;
 
   for (char* p = quote + 1; p < end;) {
@@ -438,20 +422,32 @@ static LibcpToken*
     }
   }
 
+  *end_out = end;
+  *str_out = (char*)buf;
+  return libcp_array_of(ctx, libcp_ty_ushort, len + 1);
+}
+
+// 读一个 UTF-8 编码的字符串字面量, 并把它转码为 UTF-16.
+static LibcpToken*
+    read_utf16_string_literal(LibcpContext* ctx, char* start, char* quote, int raw_trivia) {
+  char* end;
+  char* str;
+  LibcpType* ty   = scan_utf16_string(ctx, quote, &end, &str);
   LibcpToken* tok = new_token(ctx, TK_STR, start, end + 1, raw_trivia);
-  tok->ty         = libcp_array_of(ctx, libcp_ty_ushort, len + 1);
-  tok->str        = (char*)buf;
+  tok->ty         = ty;
+  tok->str        = str;
   return tok;
 }
 
-// 读一个 UTF-8 编码的字符串字面量, 并把它转码为 UTF-32.
+// 把 quote 处的字符串字面量转码为 UTF-32 载荷, 返回数组类型; 载荷与
+// 收尾引号后的位置分别通过 *str_out 与 *end_out 返回.
 //
 // UTF-32 是 Unicode 的定长编码. 每个码点占 4 字节.
-static LibcpToken* read_utf32_string_literal(LibcpContext* ctx,
-                                             char* start,
-                                             char* quote,
-                                             LibcpType* ty,
-                                             int raw_trivia) {
+static LibcpType* scan_utf32_string(LibcpContext* ctx,
+                                    char* quote,
+                                    LibcpType* ty,
+                                    char** end_out,
+                                    char** str_out) {
   char* end     = string_literal_end(ctx, quote + 1);
   uint32_t* buf = libcp_tu_calloc(ctx, 4, end - quote);
   int len       = 0;
@@ -463,9 +459,23 @@ static LibcpToken* read_utf32_string_literal(LibcpContext* ctx,
       buf[len++] = libcp_decode_utf8(ctx, &p, p);
   }
 
+  *end_out = end;
+  *str_out = (char*)buf;
+  return libcp_array_of(ctx, ty, len + 1);
+}
+
+// 读一个 UTF-8 编码的字符串字面量, 并把它转码为 UTF-32.
+static LibcpToken* read_utf32_string_literal(LibcpContext* ctx,
+                                             char* start,
+                                             char* quote,
+                                             LibcpType* ty,
+                                             int raw_trivia) {
+  char* end;
+  char* str;
+  LibcpType* arr  = scan_utf32_string(ctx, quote, ty, &end, &str);
   LibcpToken* tok = new_token(ctx, TK_STR, start, end + 1, raw_trivia);
-  tok->ty         = libcp_array_of(ctx, ty, len + 1);
-  tok->str        = (char*)buf;
+  tok->ty         = arr;
+  tok->str        = str;
   return tok;
 }
 
@@ -626,28 +636,29 @@ void libcp_convert_pp_tokens(LibcpContext* ctx, LibcpToken* tok) {
 // 为所有 token 填上行号信息.
 static void add_line_numbers(LibcpToken* tok) {
   for (; tok; tok = tok->next)
-    tok->line_no = tok->file->lines[raw_off(tok->file, tok->loc)];
+    tok->line_no = libcp_token_physical_line(tok);
 }
 
-LibcpToken* libcp_tokenize_string_literal(LibcpContext* ctx, LibcpToken* tok, LibcpType* basety) {
-  // 重新扫描需要被替换 token 的 raw 坐标, 因此要对它所属的文件扫描
-  // (当前的 `current_file` 是最后被 tokenize 的那个文件). 扫描结束后恢复
-  // `current_file`, 新 token 的 `file` 与 `filename` 则设为 `save` 与
-  // `save->display_name`: 它们可能是陈旧的值, 这一既有行为暂时保留.
-  LibcpFile* save   = ctx->current_file;
-  ctx->current_file = tok->file;
+// 把一个已有字符串字面量就地重新扫描为目标基类型: 只写回 kind, 类型与
+// 字符串载荷. file, loc, len, raw 坐标, 行号, trivia 与 provenance 都属于
+// 源码中的那个 token, 全部保留.
+void libcp_tokenize_string_literal(LibcpContext* ctx, LibcpToken* tok, LibcpType* basety) {
+  // `loc` 指向拼写的起点; quote 要跳过 u8 / u / U / L 前缀.
+  char* quote = tok->loc;
+  if (quote[0] == 'u' && quote[1] == '8')
+    quote += 2;
+  else if (quote[0] != '"')
+    quote += 1;
 
-  LibcpToken* t;
+  char* end;
+  char* str;
   if (basety->size == 2)
-    t = read_utf16_string_literal(ctx, tok->loc, tok->loc, tok->trivia - tok->file->raw);
+    tok->ty = scan_utf16_string(ctx, quote, &end, &str);
   else
-    t = read_utf32_string_literal(ctx, tok->loc, tok->loc, basety, tok->trivia - tok->file->raw);
+    tok->ty = scan_utf32_string(ctx, quote, basety, &end, &str);
 
-  ctx->current_file = save;
-  t->file           = save;
-  t->filename       = save->display_name;
-  t->next           = tok->next;
-  return t;
+  tok->kind = TK_STR;
+  tok->str  = str;
 }
 
 // 对给定的文本做词法分析, 返回新的 token 流.
@@ -713,7 +724,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
           break;
       }
       cur = cur->next = new_token(ctx, TK_PP_NUM, q, p, raw_trivia);
-      raw_trivia      = raw_end(cur);
+      raw_trivia      = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -721,7 +732,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
     if (*p == '"') {
       cur = cur->next = read_string_literal(ctx, p, p, raw_trivia);
       p += cur->len;
-      raw_trivia = raw_end(cur);
+      raw_trivia = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -729,7 +740,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
     if (startswith(p, "u8\"")) {
       cur = cur->next = read_string_literal(ctx, p, p + 2, raw_trivia);
       p += cur->len;
-      raw_trivia = raw_end(cur);
+      raw_trivia = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -737,7 +748,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
     if (startswith(p, "u\"")) {
       cur = cur->next = read_utf16_string_literal(ctx, p, p + 1, raw_trivia);
       p += cur->len;
-      raw_trivia = raw_end(cur);
+      raw_trivia = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -745,7 +756,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
     if (startswith(p, "L\"")) {
       cur = cur->next = read_utf32_string_literal(ctx, p, p + 1, libcp_ty_int, raw_trivia);
       p += cur->len;
-      raw_trivia = raw_end(cur);
+      raw_trivia = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -753,7 +764,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
     if (startswith(p, "U\"")) {
       cur = cur->next = read_utf32_string_literal(ctx, p, p + 1, libcp_ty_uint, raw_trivia);
       p += cur->len;
-      raw_trivia = raw_end(cur);
+      raw_trivia = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -762,7 +773,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       cur = cur->next = read_char_literal(ctx, p, p, libcp_ty_int, raw_trivia);
       cur->val        = (char)cur->val;
       p += cur->len;
-      raw_trivia = raw_end(cur);
+      raw_trivia = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -771,7 +782,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
       cur = cur->next = read_char_literal(ctx, p, p + 1, libcp_ty_ushort, raw_trivia);
       cur->val &= 0xffff;
       p += cur->len;
-      raw_trivia = raw_end(cur);
+      raw_trivia = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -779,7 +790,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
     if (startswith(p, "L'")) {
       cur = cur->next = read_char_literal(ctx, p, p + 1, libcp_ty_int, raw_trivia);
       p += cur->len;
-      raw_trivia = raw_end(cur);
+      raw_trivia = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -787,7 +798,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
     if (startswith(p, "U'")) {
       cur = cur->next = read_char_literal(ctx, p, p + 1, libcp_ty_uint, raw_trivia);
       p += cur->len;
-      raw_trivia = raw_end(cur);
+      raw_trivia = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -796,7 +807,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
     if (ident_len) {
       cur = cur->next = new_token(ctx, TK_IDENT, p, p + ident_len, raw_trivia);
       p += cur->len;
-      raw_trivia = raw_end(cur);
+      raw_trivia = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -805,7 +816,7 @@ LibcpToken* libcp_tokenize(LibcpContext* ctx, LibcpFile* file) {
     if (punct_len) {
       cur = cur->next = new_token(ctx, TK_PUNCT, p, p + punct_len, raw_trivia);
       p += cur->len;
-      raw_trivia = raw_end(cur);
+      raw_trivia = libcp_token_raw_end(cur);
       continue;
     }
 
@@ -887,154 +898,6 @@ static char* read_file(LibcpContext* ctx, char* path, size_t* len) {
   return buf;
 }
 
-LibcpFile** libcp_get_input_files(LibcpContext* ctx) {
-  return ctx->input_files;
-}
-
-LibcpFile* libcp_new_file_len(LibcpContext* ctx, char* name, int file_no, char* contents, int len) {
-  LibcpFile* file    = libcp_tu_calloc(ctx, 1, sizeof(LibcpFile));
-  file->name         = name;
-  file->display_name = name;
-  file->file_no      = file_no;
-  file->contents     = contents;
-
-  // 合成缓冲区按原样扫描: 它自身就是 raw 文本, map 是恒等映射, 行号就是
-  // 简单的换行计数. (libcp_tokenize_file_impl 会用 make_scan_buffer 建出的
-  // 表替换这些表.)
-  file->raw   = contents;
-  file->map   = libcp_tu_calloc(ctx, len + 2, sizeof(int));
-  file->lines = libcp_tu_calloc(ctx, len + 2, sizeof(int));
-
-  int line = 1;
-  for (int i = 0; i <= len; i++) {
-    file->map[i]   = i;
-    file->lines[i] = line;
-    if (i < len && contents[i] == '\n')
-      line++;
-  }
-  return file;
-}
-
-LibcpFile* libcp_new_file(LibcpContext* ctx, char* name, int file_no, char* contents) {
-  return libcp_new_file_len(ctx, name, file_no, contents, strlen(contents));
-}
-
-// 若 p 处是一个换行则为 true: '\n', '\r\n' 或 '\r'.
-bool libcp_is_line_break(char* p) {
-  return *p == '\n' || *p == '\r';
-}
-
-// p 处换行的长度.
-int libcp_line_break_len(char* p) {
-  return (*p == '\r' && p[1] == '\n') ? 2 : 1;
-}
-
-// 由 raw 文本为真实文件构建词法分析器扫描的缓冲区 (PLAN T2.1). 扫描文本
-// 与过去三个前置 pass 的产物一致 - 换行规范化为 '\n', 换行前的反斜杠连同
-// 换行一起删除, universal character name 改写为 UTF-8, 跳过开头的 BOM,
-// 并保证末尾有换行 - 这样每个消费者看到的文本与以前相同. `map` 记录每个
-// 扫描偏移来自哪个 raw 偏移, `lines` 记录每个 raw 偏移的行号: 两者合起来
-// 让 token 流仍可抵达 raw 坐标. 行号是这些 pass 唯一的可观察结果, 并被
-// 精确复现 - 续行内部的换行记在下一个真实换行处 (被删除的 pass 把那些
-// 换行下移), 合成的末尾换行则记在最后.
-static char*
-    make_scan_buffer(LibcpContext* ctx, char* raw, int len, int** map_out, int** lines_out) {
-  int* map   = libcp_tu_calloc(ctx, len + 2, sizeof(int));
-  int* lines = libcp_tu_calloc(ctx, len + 2, sizeof(int));
-  char* buf  = libcp_tu_calloc(ctx, 1, len + 2);
-
-  // 前置 pass 过去看到的文本: raw 文本, 若不以换行结尾则补一个末尾换行.
-  char* text = libcp_tu_calloc(ctx, 1, len + 2);
-  memcpy(text, raw, len);
-  if (len == 0 || raw[len - 1] != '\n')
-    text[len] = '\n';
-  // raw 长度, 再加上合成的末尾换行. 绝不能用 strlen: raw 文本可能含有 NUL,
-  // 这种情况由 libcp_tokenize_file_impl 诊断.
-  int n = len;
-  if (len == 0 || raw[len - 1] != '\n')
-    n++;
-
-  int i       = 0;  // `text` 中的位置
-  int j       = 0;  // `buf` 中的位置
-  int mark    = 0;  // 第一个还没有行号的 raw 偏移
-  int line    = 1;  // `i` 处的行号
-  int pending = 0;  // 尚未计入的续行换行数
-
-  // 开头的 BOM 会被跳过, 并成为第一个 token 的前导 trivia 的一部分.
-  if (!strncmp(text, "\xef\xbb\xbf", 3))
-    i = 3;
-  map[0] = i;
-
-  while (i < n) {
-    // 遍历经过的每个 raw 偏移都取它所在位置的行号; 续行内部的偏移属于
-    // 它们所在的那一行.
-    for (; mark <= i && mark <= len; mark++)
-      lines[mark] = line;
-
-    // 换行前的反斜杠让两行连接起来: 反斜杠与换行一起被丢弃, 该换行对
-    // 词法分析器来说不算换行.
-    if (text[i] == '\\' && i + 1 < n && libcp_is_line_break(text + i + 1)) {
-      pending++;
-      i += 1 + libcp_line_break_len(text + i + 1);
-      continue;
-    }
-
-    // 换行被规范化为单个 '\n'.
-    if (libcp_is_line_break(text + i)) {
-      map[j]   = i;
-      buf[j++] = '\n';
-      i += libcp_line_break_len(text + i);
-      line += 1 + pending;
-      pending = 0;
-      continue;
-    }
-
-    // universal character name 被改写为 UTF-8; `raw` 中保留原来的转义写法.
-    if (text[i] == '\\' && (text[i + 1] == 'u' || text[i + 1] == 'U')) {
-      int digs   = text[i + 1] == 'u' ? 4 : 8;
-      uint32_t c = read_universal_char(text + i + 2, digs);
-      if (c) {
-        int k = libcp_encode_utf8(buf + j, c);
-        for (int e = 0; e < k; e++)
-          map[j + e] = i;
-        j += k;
-        i += digs + 2;
-        continue;
-      }
-    }
-
-    // 其它反斜杠与它后面的一个字节一起原样复制, 以免把 "\\u" 中转义过的
-    // "u" 当成转义序列的开头.
-    if (text[i] == '\\' && i + 1 < len) {
-      map[j]   = i;
-      buf[j++] = text[i++];
-    }
-
-    map[j]   = i;
-    buf[j++] = text[i++];
-  }
-
-  // 词法分析器要求缓冲区以换行结尾: 行注释要一直跑到下一个换行. 过去的
-  // pass 在末尾续行吞掉合成换行时会保留它, 办法就是在最后补出尚未计入的
-  // 换行.
-  if (j == 0 || buf[j - 1] != '\n') {
-    map[j]   = len;
-    buf[j++] = '\n';
-  }
-
-  // 计入那些后面从未遇到真实换行的续行, 并给文件末尾 (EOF token 所在处)
-  // 赋上最终的行号.
-  line += pending;
-  for (; mark <= len; mark++)
-    lines[mark] = line;
-  lines[len] = line;
-
-  map[j]     = len;
-  *map_out   = map;
-  *lines_out = lines;
-  return buf;
-}
-
 // 读取路径对应的文件, 建扫描缓冲区并做 tokenize; 文件打不开时返回 NULL.
 LibcpToken* libcp_tokenize_file_impl(LibcpContext* ctx, char* path) {
   size_t raw_len;
@@ -1042,36 +905,17 @@ LibcpToken* libcp_tokenize_file_impl(LibcpContext* ctx, char* path) {
   if (!raw)
     return NULL;
 
-  int *map, *lines;
-  char* contents = make_scan_buffer(ctx, raw, (int)raw_len, &map, &lines);
-
-  // 为汇编器的 .file 指令保存文件名.
-  int file_no     = ctx->next_file_no++;
-  LibcpFile* file = libcp_new_file(ctx, path, file_no + 1, contents);
-
-  // 扫描缓冲区替换掉 new_file 建出的恒等映射表.
-  file->raw   = raw;
-  file->map   = map;
-  file->lines = lines;
+  // LibcpFile 与坐标表的构造由 source.c 独占.
+  LibcpFile* file = libcp_new_file_from_raw(ctx, path, raw, (int)raw_len);
 
   // NUL 字节会让 token 流静默结束. 扫描缓冲区现在会包含它 (make_scan_buffer
   // 不再在 strlen 处停下), 因此在 tokenize 之前先报告第一个 NUL.
   if (memchr(raw, 0, raw_len)) {
     ctx->current_file = file;
-    libcp_error_at(ctx, memchr(contents, 0, raw_len + 2), "NUL byte in source file");
+    libcp_error_at(ctx, memchr(file->contents, 0, raw_len + 2), "NUL byte in source file");
   }
 
-  // 为汇编器的 .file 指令保存文件名.
-  if (ctx->input_files_cap < file_no + 2) {
-    size_t old           = sizeof(LibcpFile*) * ctx->input_files_cap;
-    int cap              = file_no + 2;
-    ctx->input_files     = libcp_tu_realloc(ctx, ctx->input_files, old, sizeof(LibcpFile*) * cap);
-    ctx->input_files_cap = cap;
-  }
-  ctx->input_files[file_no]     = file;
-  ctx->input_files[file_no + 1] = NULL;
-  ctx->input_files_len          = file_no + 1;
-  file_no++;
-
+  // 为汇编器的 .file 指令保存文件名, 并登记进 input file 表.
+  libcp_source_register_input_file(ctx, file);
   return libcp_tokenize(ctx, file);
 }

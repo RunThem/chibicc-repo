@@ -15,12 +15,12 @@ prefix="$tmp/prefix"
 make -C "$root" install PREFIX="$prefix" >/dev/null
 
 count=$(ls "$prefix/include/libcp" | wc -l | tr -d ' ')
-if [ "$count" -ne 10 ]; then
-  echo "install: expected 10 public headers, found $count" >&2
+if [ "$count" -ne 11 ]; then
+  echo "install: expected 11 public headers, found $count" >&2
   ls "$prefix/include/libcp" >&2
   exit 1
 fi
-for h in libcp allocator context diagnostic token preprocess provenance cst ast sema; do
+for h in libcp allocator context diagnostic token preprocess provenance cst ast backend sema; do
   if [ ! -f "$prefix/include/libcp/$h.h" ]; then
     echo "install: missing header $h.h" >&2
     exit 1

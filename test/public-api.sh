@@ -25,7 +25,7 @@ fi
 mkdir -p "$tmp/pubinc"
 cp -R "$root/libcp/include/libcp" "$tmp/pubinc/"
 
-for h in allocator diagnostic context token preprocess provenance cst ast sema libcp; do
+for h in allocator diagnostic context token preprocess provenance cst ast backend sema libcp; do
   cat > "$tmp/h.c" <<EOF
 #include <libcp/$h.h>
 int main(void) { return 0; }
@@ -43,10 +43,33 @@ int main(void) { return 0; }
 EOF
 "$cc" -std=c11 -fsyntax-only -Wall -Wextra -I"$tmp/pubinc" "$tmp/stdio_first.c"
 
+# The returning diagnostic entry carries a printf format check: a
+# format mismatch must fail the compile.
+cat > "$tmp/badfmt.c" <<'EOF'
+#include <libcp/libcp.h>
+void f(LibcpContext *ctx) {
+  libcp_diagnostic_report(ctx, 0, LIBCP_DIAG_WARNING, "%d", "not an int");
+}
+EOF
+if "$cc" -std=c11 -Wall -Wextra -Werror=format -fsyntax-only \
+  -I"$tmp/pubinc" "$tmp/badfmt.c" 2>/dev/null; then
+  echo "public-api: libcp_diagnostic_report lacks a printf format check" >&2
+  exit 1
+fi
+echo "public-api: libcp_diagnostic_report format check ok"
+
 cat > "$tmp/consumer.c" <<'EOF'
 #include <stdio.h>
 #include <string.h>
 #include <libcp/libcp.h>
+
+static int warnings;
+
+static void quiet(void *user, const LibcpDiagnostic *d) {
+  (void)user;
+  if (d->severity == LIBCP_DIAG_WARNING)
+    warnings++;
+}
 
 int main(void) {
   char *src = "int x = 1;\n";
@@ -67,10 +90,46 @@ int main(void) {
   if (!prog || libcp_context_failed(ctx))
     return 1;
 
+  // The resolved initializer tree is public read-only data: the anchor
+  // token and child count are visible from the public headers alone
+  // (issue #26).
+  if (ast->kind != ND_GVAR_DECL || ast->decl.decl_init != NULL ||
+      !ast->decl.init_resolved ||
+      ast->decl.init_resolved->child_count != 0 ||
+      !ast->decl.init_resolved->tok ||
+      ast->decl.init_resolved->tok->kind != TK_NUM)
+    return 1;
+
+  // The backend support face links from the public headers alone: a
+  // label-ref query, a fresh unique name, and a returning diagnostic.
+  if (libcp_label_ref_count(ctx, prog) != 0 ||
+      libcp_label_ref_at(ctx, prog, 0) != NULL)
+    return 1;
+  if (libcp_context_take_unique_name(ctx) < 0)
+    return 1;
+  libcp_context_set_diagnostic(ctx, quiet, NULL);
+  libcp_diagnostic_report(ctx, tok, LIBCP_DIAG_WARNING, "warn %d", 1);
+  if (warnings != 1 || libcp_context_failed(ctx))
+    return 1;
+
   LibcpToken *raw = libcp_tokenize_buffer(ctx, "<public-api>", src);
   LibcpCstNode *root = libcp_cst_parse(ctx, raw);
   if (!root || !libcp_cst_verify(ctx, root, raw))
     return 1;
+
+  // The public token and AST dumps write to a caller-owned FILE (issue
+  // #25); const inputs prove the read-only signature.
+  FILE *dumpf = tmpfile();
+  if (!dumpf)
+    return 1;
+  const LibcpToken *ctok = raw;
+  const LibcpNode *cast = ast;
+  libcp_token_dump(ctx, ctok, dumpf);
+  libcp_ast_dump(ctx, cast, dumpf);
+  fflush(dumpf);
+  if (ftell(dumpf) <= 0)
+    return 1;
+  fclose(dumpf);
 
   // libcp_reconstruct rebuilds the tokenized bytes exactly.
   char *text = "int  x =  1;  /* c */\n\tchar *s = \"a\";\n";
@@ -100,11 +159,21 @@ EOF
 # means the public surface leaked. Symbols differ by one leading
 # underscore on Darwin. Since the symbol-prefix line every internal
 # symbol carries the libcp_ prefix too, the deny list is anchored on it.
+# The patterns live in test/public-api.deny, shared with test/outside.sh
+# so the two gates cannot drift.
 nm -u "$tmp/consumer.o" | awk '{print $NF}' > "$tmp/undef"
-bad=$(grep -E '^_?(libcp_(tokenize_file_impl|preprocess2|parse_init|const_expr|add_type|new_cast|new_node|new_binary|new_unary|new_num|error|error_at|error_tok|warn_tok|strarray_push|nodearray_push|format|ctx|conditional|context_activate|context_set_base_file)|libcp_(hashmap|sema|ty|tu)_[a-z_0-9]+)$' "$tmp/undef" || true)
+bad=
+while IFS= read -r pat; do
+  case $pat in
+    ''|'#'*) continue ;;
+  esac
+  hit=$(grep -E -- "$pat" "$tmp/undef" || true)
+  if [ -n "$hit" ]; then
+    bad="$bad $hit"
+  fi
+done < "$root/test/public-api.deny"
 if [ -n "$bad" ]; then
-  echo "public-api: the consumer references internal symbols:" >&2
-  echo "$bad" >&2
+  echo "public-api: the consumer references internal symbols:$bad" >&2
   exit 1
 fi
 
@@ -124,6 +193,10 @@ libcp_context_reset
 libcp_context_set_diagnostic
 libcp_context_failed
 libcp_context_add_include_path
+libcp_context_add_include_path_with_origin
+libcp_context_resolve_include
+libcp_context_include_is_system
+libcp_context_set_base_file
 libcp_context_define
 libcp_context_undef
 libcp_context_set_predefined_macros
@@ -133,6 +206,10 @@ libcp_tokenize_file
 libcp_tokenize_buffer
 libcp_tokenize_buffer_len
 libcp_reconstruct
+libcp_token_dump
+libcp_context_input_file_count
+libcp_context_input_file_at
+libcp_token_is_synthetic
 libcp_preprocess
 libcp_cst_parse
 libcp_cst_seed_typedef
@@ -140,8 +217,28 @@ libcp_cst_reconstruct
 libcp_cst_dump
 libcp_cst_verify
 libcp_parse
+libcp_ast_dump
 libcp_node_family
+libcp_node_child_count
+libcp_node_child_at
 libcp_node_source_range
+libcp_node_new
+libcp_node_binary
+libcp_node_unary
+libcp_node_num
+libcp_node_long
+libcp_node_arith
+libcp_node_var
+libcp_node_vla_ptr
+libcp_node_alloca
+libcp_node_cast
+libcp_type_builtin
+libcp_node_annotate_type
+libcp_type_pointer_to
+libcp_label_ref_count
+libcp_label_ref_at
+libcp_context_take_unique_name
+libcp_diagnostic_report
 libcp_sema
 libcp_token_provenance
 libcp_macro_prov_next

@@ -25,10 +25,42 @@
 // 它们保存在 codegen 私有的 per-node / per-type 表中 (见上文, PLAN L1).
 // 以下全部是发射器: 按设计没有优化 pass.
 
+#include "driver-util.h"
 #include "driver.h"
+
+#include <assert.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define GP_MAX 6
 #define FP_MAX 8
+
+#define MAX(x, y) ((x) < (y) ? (y) : (x))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
+// 把非负的 `n` 向上取整到 `align` 的最近倍数.
+static int align_to(int n, int align) {
+  return (n + align - 1) / align * align;
+}
+
+static bool is_integer(LibcpType* ty) {
+  LibcpTypeKind k = ty->kind;
+  return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT || k == TY_INT || k == TY_LONG ||
+         k == TY_ENUM;
+}
+
+static bool is_flonum(LibcpType* ty) {
+  return ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE || ty->kind == TY_LDOUBLE;
+}
+
+static bool is_numeric(LibcpType* ty) {
+  return is_integer(ty) || is_flonum(ty);
+}
+
+// 本消费者本地的工具 (issue #28): 公共面不暴露对齐取整与类型谓词,
+// 它们只服务 codegen 的整形与发射; 格式化与致命诊断在 driver-util.h
+// 里与 main.c 共用.
 
 static FILE* output_file;
 static int depth;
@@ -54,6 +86,9 @@ struct CgNode {
   LibcpNode* default_case;
   bool pass_by_stack;
   bool is_lowered;
+  // 本消费者是否已把该声明的初始化器展开成语句链. 库树的 init_resolved
+  // 是只读公共数据, 消费状态只记在这里.
+  bool init_consumed;
 };
 
 typedef struct CgType CgType;
@@ -95,6 +130,15 @@ static CgNode* cg(LibcpNode* node) {
   p->next     = cg_nodes[h];
   cg_nodes[h] = p;
   return p;
+}
+
+// 初始化器只消费一次: 返回本次调用是否取得消费权. 消费状态记在消费者
+// 私有表里, 库树的 init_resolved 保持只读 (issue #26).
+static bool take_init(LibcpNode* node) {
+  if (cg(node)->init_consumed)
+    return false;
+  cg(node)->init_consumed = true;
+  return true;
 }
 
 static CgType* cg_type(LibcpType* ty) {
@@ -186,9 +230,6 @@ static void popf(int reg) {
   depth--;
 }
 
-// 把 `n` 向上取整到 `align` 最近倍数的函数现在位于 strings.c: sema 也
-// 需要它, 而 codegen 不能成为库的依赖.
-
 static char* reg_dx(LibcpContext* ctx, int sz) {
   switch (sz) {
     case 1: return "%dl";
@@ -196,7 +237,7 @@ static char* reg_dx(LibcpContext* ctx, int sz) {
     case 4: return "%edx";
     case 8: return "%rdx";
   }
-  unreachable();
+  driver_unreachable(ctx);
 }
 
 static char* reg_ax(LibcpContext* ctx, int sz) {
@@ -206,7 +247,7 @@ static char* reg_ax(LibcpContext* ctx, int sz) {
     case 4: return "%eax";
     case 8: return "%rax";
   }
-  unreachable();
+  driver_unreachable(ctx);
 }
 
 // 计算给定节点的绝对地址.
@@ -324,7 +365,7 @@ static void gen_addr(LibcpContext* ctx, LibcpNode* node) {
     case ND_VLA_PTR: println("  lea %d(%%rbp), %%rax", obj_offset(node->decl.var)); return;
   }
 
-  libcp_error_tok(ctx, node->tok, "not an lvalue");
+  driver_error(ctx, node->tok, "not an lvalue");
 }
 
 // 从 %rax 指向的位置加载值.
@@ -403,7 +444,7 @@ static void cmp_zero(LibcpType* ty) {
       return;
   }
 
-  if (libcp_is_integer(ty) && ty->size <= 4)
+  if (is_integer(ty) && ty->size <= 4)
     println("  cmp $0, %%eax");
   else
     println("  cmp $0, %%rax");
@@ -570,7 +611,7 @@ static bool has_flonum2(LibcpType* ty) {
 }
 
 static void push_struct(LibcpType* ty) {
-  int sz = libcp_align_to(ty->size, 8);
+  int sz = align_to(ty->size, 8);
   println("  sub $%d, %%rsp", sz);
   depth += sz / 8;
 
@@ -635,7 +676,7 @@ static int push_args(LibcpContext* ctx, LibcpNode* node) {
       case TY_UNION:
         if (ty->size > 16) {
           cg(arg)->pass_by_stack = true;
-          stack += libcp_align_to(ty->size, 8) / 8;
+          stack += align_to(ty->size, 8) / 8;
         } else {
           bool fp1 = has_flonum1(ty);
           bool fp2 = has_flonum2(ty);
@@ -645,7 +686,7 @@ static int push_args(LibcpContext* ctx, LibcpNode* node) {
             gp = gp + !fp1 + !fp2;
           } else {
             cg(arg)->pass_by_stack = true;
-            stack += libcp_align_to(ty->size, 8) / 8;
+            stack += align_to(ty->size, 8) / 8;
           }
         }
         break;
@@ -808,7 +849,7 @@ static void builtin_alloca(void) {
 // 为给定节点生成代码.
 static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
   // 忠实的 `+`/`-` 仍保留源码形态 (PLAN B2): 元素大小的缩放, `num + ptr`
-  // 的规范化以及 libcp_new_arith 所做的转换都在这里完成, 位于发射阶段,
+  // 的规范化以及 libcp_node_arith 所做的转换都在这里完成, 位于发射阶段,
   // 用的是 shaping pass 过去提前调用的同一对 new_add/new_sub.
   // 这里替换节点而不是递归进入: 产物携带原节点的 token, 所以调试行和
   // 求值顺序都与 B2 之前相同. codegen 自己构建的加法节点带标记,
@@ -1198,9 +1239,12 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
   // 一致 - 整数路径读取的符号性来自交换后位于左边的那个操作数, 求值器读取
   // 忠实的一对操作数时也是如此.
   if (node->kind == ND_GT || node->kind == ND_GE) {
-    LibcpNode* swapped =
-        libcp_new_binary(ctx, node->kind == ND_GT ? ND_LT : ND_LE, node->rhs, node->lhs, node->tok);
-    swapped->ty = node->ty;
+    LibcpNode* swapped = libcp_node_binary(ctx,
+                                           node->kind == ND_GT ? ND_LT : ND_LE,
+                                           node->rhs,
+                                           node->lhs,
+                                           node->tok);
+    swapped->ty        = node->ty;
     gen_expr(ctx, swapped);
     return;
   }
@@ -1245,7 +1289,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
           return;
       }
 
-      libcp_error_tok(ctx, node->tok, "invalid expression");
+      driver_error(ctx, node->tok, "invalid expression");
     }
     case TY_LDOUBLE: {
       gen_expr(ctx, node->lhs);
@@ -1276,7 +1320,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
           return;
       }
 
-      libcp_error_tok(ctx, node->tok, "invalid expression");
+      driver_error(ctx, node->tok, "invalid expression");
     }
   }
 
@@ -1357,7 +1401,7 @@ static void gen_expr(LibcpContext* ctx, LibcpNode* node) {
       return;
   }
 
-  libcp_error_tok(ctx, node->tok, "invalid expression");
+  driver_error(ctx, node->tok, "invalid expression");
 }
 
 static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
@@ -1514,15 +1558,19 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
       // 到达发射器的声明记录 (PLAN B1.2b): 块作用域 static (sema 的
       // 序列化器已写好其数据镜像) 与没有初始化器的固定大小对象不产生代码;
       // 带初始化器的对象变成逗号链, 这条链过去由 pass 里的展开构造 (先清零,
-      // 再逐元素赋值), 现在在这里发射.
+      // 再逐元素赋值), 现在在这里发射. 已消费的初始化器不再重复发射,
+      // 库树本身不被写回 (issue #26).
+      if (!take_init(node))
+        return;
+
       if (node->decl.attr.is_static || !node->decl.init_resolved)
         return;
 
-      LibcpNode* chain =
-          lvar_init_comma(ctx, node->decl.var, node->decl.init_resolved, node->decl.decl_init->tok);
-      node->decl.decl_init     = NULL;
-      node->decl.init_resolved = NULL;
-      libcp_add_type(ctx, chain);
+      LibcpNode* chain = lvar_init_comma(ctx,
+                                         node->decl.var,
+                                         node->decl.init_resolved,
+                                         node->decl.init_resolved->tok);
+      libcp_node_annotate_type(ctx, chain);
       gen_expr(ctx, chain);
       return;
     }
@@ -1566,7 +1614,7 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
     case ND_ASM: println("  %s", node->asm_.asm_str); return;
   }
 
-  libcp_error_tok(ctx, node->tok, "invalid statement");
+  driver_error(ctx, node->tok, "invalid statement");
 }
 
 // shaping pass 的最终形态: 它是 sema 在标注后下降中做过的控制流那一半
@@ -1582,18 +1630,41 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
 // 原先附带的检查 - 游离诊断, 未声明标签的配对和操作数检查 - 留在 sema,
 // 所以这个 pass 只处理通过检查的树. 它遵循的六条不变式写在文件开头.
 //
-// 标签名保持 `.L..%d` 格式, 沿用 sema 匿名对象所用的同一个编号空间, 从
-// 库计数器停下的地方继续 (入口处调用 libcp_unique_name_next): 快照
-// 归一化器只重编号这种后缀形状, 所以换一个前缀即使只是纯重编号也会表现为
-// diff, 而从零开始的新序列会与 sema 已经分配的对象名冲突.
-static int label_base;  // 计数器停下处的取值, 只在入口取一次
-static int label_seq;   // 此后发出的标签数
+// 标签名保持 `.L..%d` 格式, 沿用 sema 匿名对象所用的同一个编号空间:
+// 每个标签都向 context 取一个号, 取到即消耗, 因此后端自己发出的号不会
+// 与库下一次会发出的号重叠 (backend.h 的契约). 整形与发射期间没有别的
+// 取号者, 所以序列就是计数器从这里开始的连续值. 快照归一化器只重编号
+// 这种后缀形状, 所以换一个前缀即使只是纯重编号也会表现为 diff, 而从零
+// 开始的新序列会与 sema 已经分配的对象名冲突.
 
 static LibcpNode* current_switch;
-static LibcpNodeArray cg_labels;  // 当前正在 shape 的函数的标签
+
+// 当前正在 shape 的函数的标签. 这是消费者的私有容器, 不用库内部的
+// 节点数组类型 (issue #28).
+typedef struct {
+  LibcpNode** data;
+  int capacity;
+  int len;
+} CgLabelArray;
+
+static CgLabelArray cg_labels;
+
+static void cg_labels_push(LibcpNode* node) {
+  if (!cg_labels.data) {
+    cg_labels.data     = calloc(8, sizeof(LibcpNode*));
+    cg_labels.capacity = 8;
+  }
+
+  if (cg_labels.capacity == cg_labels.len) {
+    cg_labels.capacity *= 2;
+    cg_labels.data = realloc(cg_labels.data, sizeof(LibcpNode*) * cg_labels.capacity);
+  }
+
+  cg_labels.data[cg_labels.len++] = node;
+}
 
 static char* new_label(LibcpContext* ctx) {
-  return libcp_format(ctx, ".L..%d", label_base + label_seq++);
+  return driver_format(".L..%d", libcp_context_take_unique_name(ctx));
 }
 
 static void shape_node(LibcpContext* ctx, LibcpNode* node);
@@ -1625,7 +1696,11 @@ static void shape_chain(LibcpContext* ctx, LibcpNode** head) {
       case ND_GVAR_DECL:
       case ND_FUNCDEF: *pp = n->next; continue;
       case ND_DECL:
-        if (decl_needs_vla_size(n))
+        // 块作用域 static 的数据镜像已由 sema 序列化; 初始化器树保留在
+        // 库树上 (issue #26), 但它的表达式不属于本函数的发射路径.
+        if (n->decl.attr.is_static) {
+          // 不整形; 发射器也不为它产生语句.
+        } else if (decl_needs_vla_size(n))
           expand_decl(ctx, n);
         else
           // 记录保留; 已解析初始化器可能持有的那些残留节点种类靠这次
@@ -1643,28 +1718,46 @@ static void shape_chain(LibcpContext* ctx, LibcpNode** head) {
   }
 }
 
-// 下降节点拥有的每棵子树, 语句与表达式一视同仁: break 可以出现在
-// 语句表达式里, 而语句表达式是一个持有语句链的表达式节点.
-static void shape_children(LibcpContext* ctx, LibcpNode* node) {
-  LibcpNodeFamily fam = libcp_node_family(node->kind);
-
-  shape_node(ctx, node->lhs);
-  shape_node(ctx, node->rhs);
-  if (fam == LIBCP_NF_CTRL) {
-    shape_node(ctx, node->ctrl.cond);
-    shape_node(ctx, node->ctrl.then);
-    shape_node(ctx, node->ctrl.els);
-    shape_chain(ctx, &node->ctrl.init);
-    shape_node(ctx, node->ctrl.inc);
+// 子节点枚举只给出列表字段的头节点, 而 shape_chain 会摘掉链头记录并
+// 写回新头, 所以列表分支还要拿到字段本体的地址. 枚举里的列表字段是
+// decl.body, ctrl.init, ctrl.args 与 spec_decls.
+static LibcpNode** list_head(LibcpNode* node, const LibcpNode* head) {
+  switch (libcp_node_family(node->kind)) {
+    case LIBCP_NF_CTRL:
+      if (node->ctrl.init == head)
+        return &node->ctrl.init;
+      if (node->ctrl.args == head)
+        return &node->ctrl.args;
+      break;
+    case LIBCP_NF_DECL:
+      if (node->decl.body == head)
+        return &node->decl.body;
+      break;
+    default: break;
   }
-  if (fam == LIBCP_NF_DECL)
-    shape_chain(ctx, &node->decl.body);
-  if (fam == LIBCP_NF_CTRL)
-    shape_chain(ctx, &node->ctrl.args);
-  if (fam == LIBCP_NF_CAS) {
-    shape_node(ctx, node->cas.cas_addr);
-    shape_node(ctx, node->cas.cas_old);
-    shape_node(ctx, node->cas.cas_new);
+
+  if (node->spec_decls == head)
+    return &node->spec_decls;
+  return NULL;
+}
+
+// 下降节点拥有的每棵子树, 语句与表达式一视同仁: break 可以出现在
+// 语句表达式里, 而语句表达式是一个持有语句链的表达式节点. 子节点顺序
+// 由公共枚举决定, 列表字段沿 next 走链, 单个字段只整形一个节点.
+// ND_GENERIC (只整形选中的关联结果) 与 case 标签 (只下降 lhs) 的特例
+// 仍在 shape_node 中.
+static void shape_children(LibcpContext* ctx, LibcpNode* node) {
+  for (int i = 0, count = libcp_node_child_count(node); i < count; i++) {
+    LibcpNodeChild child = libcp_node_child_at(node, i);
+    if (!child.is_list) {
+      shape_node(ctx, (LibcpNode*)child.node);
+      continue;
+    }
+
+    LibcpNode** head = list_head(node, child.node);
+    if (!head)
+      driver_unreachable(ctx);
+    shape_chain(ctx, head);
   }
 }
 
@@ -1685,12 +1778,12 @@ static LibcpObj* new_lvar(char* name, LibcpType* ty) {
 // 被指向类型是 VLA 时, 按它的运行时大小而不是编译期大小缩放.
 static LibcpNode* scale_rhs(LibcpContext* ctx, LibcpType* ptr_ty, LibcpNode* rhs, LibcpToken* tok) {
   if (ptr_ty->base->kind == TY_VLA)
-    return libcp_new_binary(ctx,
-                            ND_MUL,
-                            rhs,
-                            libcp_new_var_node(ctx, cg_type(ptr_ty->base)->vla_size, tok),
-                            tok);
-  return libcp_new_binary(ctx, ND_MUL, rhs, libcp_new_long(ctx, ptr_ty->base->size, tok), tok);
+    return libcp_node_binary(ctx,
+                             ND_MUL,
+                             rhs,
+                             libcp_node_var(ctx, cg_type(ptr_ty->base)->vla_size, tok),
+                             tok);
+  return libcp_node_binary(ctx, ND_MUL, rhs, libcp_node_long(ctx, ptr_ty->base->size, tok), tok);
 }
 
 // 把加法节点标记为由下面的 lowering helper 构造. 它的操作数已经带着
@@ -1710,15 +1803,15 @@ static LibcpNode* mark_lowered(LibcpNode* node) {
 // 它既是 codegen 自身 builder 调用的 helper, 也是发射器在发射时执行的
 // 忠实降级的定义 (PLAN B2); 无论哪条路径, 产物都带标记.
 static LibcpNode* new_add(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, LibcpToken* tok) {
-  libcp_add_type(ctx, lhs);
-  libcp_add_type(ctx, rhs);
+  libcp_node_annotate_type(ctx, lhs);
+  libcp_node_annotate_type(ctx, rhs);
 
   // num + num
-  if (libcp_is_numeric(lhs->ty) && libcp_is_numeric(rhs->ty))
-    return mark_lowered(libcp_new_arith(ctx, ND_ADD, lhs, rhs, tok));
+  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
+    return mark_lowered(libcp_node_arith(ctx, ND_ADD, lhs, rhs, tok));
 
   if (lhs->ty->base && rhs->ty->base)
-    libcp_error_tok(ctx, tok, "invalid operands");
+    driver_error(ctx, tok, "invalid operands");
 
   // 把 `num + ptr` 规范化为 `ptr + num`.
   if (!lhs->ty->base && rhs->ty->base) {
@@ -1728,37 +1821,37 @@ static LibcpNode* new_add(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, Lib
   }
 
   // ptr + num; 指向 VLA 的指针按其运行时大小缩放
-  return mark_lowered(libcp_new_arith(ctx, ND_ADD, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
+  return mark_lowered(libcp_node_arith(ctx, ND_ADD, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 }
 
 // 与 `+` 一样, `-` 对指针类型同样重载.
 static LibcpNode* new_sub(LibcpContext* ctx, LibcpNode* lhs, LibcpNode* rhs, LibcpToken* tok) {
-  libcp_add_type(ctx, lhs);
-  libcp_add_type(ctx, rhs);
+  libcp_node_annotate_type(ctx, lhs);
+  libcp_node_annotate_type(ctx, rhs);
 
   // num - num
-  if (libcp_is_numeric(lhs->ty) && libcp_is_numeric(rhs->ty))
-    return mark_lowered(libcp_new_arith(ctx, ND_SUB, lhs, rhs, tok));
+  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
+    return mark_lowered(libcp_node_arith(ctx, ND_SUB, lhs, rhs, tok));
 
   // 指向 VLA 的指针 - num
   if (lhs->ty->base && lhs->ty->base->kind == TY_VLA)
-    return mark_lowered(libcp_new_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
+    return mark_lowered(libcp_node_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 
   // ptr - num
-  if (lhs->ty->base && libcp_is_integer(rhs->ty))
-    return mark_lowered(libcp_new_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
+  if (lhs->ty->base && is_integer(rhs->ty))
+    return mark_lowered(libcp_node_arith(ctx, ND_SUB, lhs, scale_rhs(ctx, lhs->ty, rhs, tok), tok));
 
   // ptr - ptr: 返回两者之间相隔多少个元素. 差值本身是元素个数,
   // 因此类型为 long 且不再转换; 只有其后的除法被转换. 减法节点
   // 也带标记 - 它是原始字节差, 会像构建出的 `ptr + num` 一样在
   // `DIV` 之下经过发射器.
   if (lhs->ty->base && rhs->ty->base) {
-    LibcpNode* node = mark_lowered(libcp_new_binary(ctx, ND_SUB, lhs, rhs, tok));
-    node->ty        = libcp_ty_long;
-    return libcp_new_arith(ctx, ND_DIV, node, libcp_new_num(ctx, lhs->ty->base->size, tok), tok);
+    LibcpNode* node = mark_lowered(libcp_node_binary(ctx, ND_SUB, lhs, rhs, tok));
+    node->ty        = libcp_type_builtin(BT_LONG);
+    return libcp_node_arith(ctx, ND_DIV, node, libcp_node_num(ctx, lhs->ty->base->size, tok), tok);
   }
 
-  libcp_error_tok(ctx, tok, "invalid operands");
+  driver_error(ctx, tok, "invalid operands");
 }
 
 // 为计算 VLA 大小生成代码: 类型持有的每个 VLA 一条赋值, 最内层
@@ -1774,30 +1867,30 @@ static LibcpNode* compute_vla_size(LibcpContext* ctx, LibcpType* ty, LibcpToken*
 
   LibcpNode* base_sz;
   if (ty->base->kind == TY_VLA)
-    base_sz = libcp_new_var_node(ctx, cg_type(ty->base)->vla_size, tok);
+    base_sz = libcp_node_var(ctx, cg_type(ty->base)->vla_size, tok);
   else
-    base_sz = libcp_new_num(ctx, ty->base->size, tok);
+    base_sz = libcp_node_num(ctx, ty->base->size, tok);
 
-  cg_type(ty)->vla_size = new_lvar("", libcp_ty_ulong);
-  LibcpNode* expr       = libcp_new_binary(ctx,
-                                           ND_ASSIGN,
-                                           libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok),
-                                           libcp_new_binary(ctx, ND_MUL, ty->vla_len, base_sz, tok),
-                                           tok);
-  return node ? libcp_new_binary(ctx, ND_COMMA, node, expr, tok) : expr;
+  cg_type(ty)->vla_size = new_lvar("", libcp_type_builtin(BT_ULONG));
+  LibcpNode* expr = libcp_node_binary(ctx,
+                                      ND_ASSIGN,
+                                      libcp_node_var(ctx, cg_type(ty)->vla_size, tok),
+                                      libcp_node_binary(ctx, ND_MUL, ty->vla_len, base_sz, tok),
+                                      tok);
+  return node ? libcp_node_binary(ctx, ND_COMMA, node, expr, tok) : expr;
 }
 
 // VLA 类型的 `sizeof`: 对其运行时大小变量的引用; 若该类型尚未
 // 计算过大小 (例如对全新类型写 `sizeof(int[n])`), 先计算.
 static LibcpNode* vla_size_expr(LibcpContext* ctx, LibcpType* ty, LibcpToken* tok) {
   if (cg_type(ty)->vla_size)
-    return libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok);
+    return libcp_node_var(ctx, cg_type(ty)->vla_size, tok);
   LibcpNode* lhs = compute_vla_size(ctx, ty, tok);
-  return libcp_new_binary(ctx,
-                          ND_COMMA,
-                          lhs,
-                          libcp_new_var_node(ctx, cg_type(ty)->vla_size, tok),
-                          tok);
+  return libcp_node_binary(ctx,
+                           ND_COMMA,
+                           lhs,
+                           libcp_node_var(ctx, cg_type(ty)->vla_size, tok),
+                           tok);
 }
 
 // 一条初始化赋值的赋值目标表达式 (PLAN A8.1, 从 sema 移来):
@@ -1806,17 +1899,17 @@ static LibcpNode* vla_size_expr(LibcpContext* ctx, LibcpType* ty, LibcpToken* to
 // 再走一遍 (contract 3(d)).
 static LibcpNode* init_desg_expr(LibcpContext* ctx, LibcpInitPath* desg, LibcpToken* tok) {
   if (desg->var)
-    return libcp_new_var_node(ctx, desg->var, tok);
+    return libcp_node_var(ctx, desg->var, tok);
 
   if (desg->member) {
-    LibcpNode* node = libcp_new_unary(ctx, ND_MEMBER, init_desg_expr(ctx, desg->next, tok), tok);
+    LibcpNode* node = libcp_node_unary(ctx, ND_MEMBER, init_desg_expr(ctx, desg->next, tok), tok);
     node->access.member = desg->member;
     return node;
   }
 
   LibcpNode* lhs  = init_desg_expr(ctx, desg->next, tok);
-  LibcpNode* add  = new_add(ctx, lhs, libcp_new_num(ctx, desg->idx, tok), tok);
-  LibcpNode* node = libcp_new_unary(ctx, ND_DEREF, add, tok);
+  LibcpNode* add  = new_add(ctx, lhs, libcp_node_num(ctx, desg->idx, tok), tok);
+  LibcpNode* node = libcp_node_unary(ctx, ND_DEREF, add, tok);
   node->ty        = add->ty->base;
   return node;
 }
@@ -1830,22 +1923,22 @@ static LibcpNode* create_lvar_init(LibcpContext* ctx,
                                    LibcpInitPath* desg,
                                    LibcpToken* tok) {
   if (ty->kind == TY_ARRAY) {
-    LibcpNode* node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_NULL_EXPR, tok);
     for (int i = 0; i < ty->array_len; i++) {
       LibcpInitPath desg2 = {desg, i};
       LibcpNode* rhs      = create_lvar_init(ctx, init->children[i], ty->base, &desg2, tok);
-      node                = libcp_new_binary(ctx, ND_COMMA, node, rhs, tok);
+      node                = libcp_node_binary(ctx, ND_COMMA, node, rhs, tok);
     }
     return node;
   }
 
   if (ty->kind == TY_STRUCT && !init->expr) {
-    LibcpNode* node = libcp_new_node(ctx, ND_NULL_EXPR, tok);
+    LibcpNode* node = libcp_node_new(ctx, ND_NULL_EXPR, tok);
 
     for (LibcpMember* mem = ty->members; mem; mem = mem->next) {
       LibcpInitPath desg2 = {desg, 0, mem};
       LibcpNode* rhs      = create_lvar_init(ctx, init->children[mem->idx], mem->ty, &desg2, tok);
-      node                = libcp_new_binary(ctx, ND_COMMA, node, rhs, tok);
+      node                = libcp_node_binary(ctx, ND_COMMA, node, rhs, tok);
     }
     return node;
   }
@@ -1857,10 +1950,10 @@ static LibcpNode* create_lvar_init(LibcpContext* ctx,
   }
 
   if (!init->expr)
-    return libcp_new_node(ctx, ND_NULL_EXPR, tok);
+    return libcp_node_new(ctx, ND_NULL_EXPR, tok);
 
   LibcpNode* lhs = init_desg_expr(ctx, desg, tok);
-  return libcp_new_binary(ctx, ND_ASSIGN, lhs, init->expr, tok);
+  return libcp_node_binary(ctx, ND_ASSIGN, lhs, init->expr, tok);
 }
 
 // 对已解析初始化记录持有的每个表达式各整形一次. 展开构建的指定
@@ -1880,11 +1973,11 @@ static LibcpNode*
 
   // 给定部分初始化器列表时, 标准要求未指定的元素置 0. 这里直接
   // 把变量的整块内存清零, 再用用户提供的值初始化.
-  LibcpNode* lhs = libcp_new_node(ctx, ND_MEMZERO, tok);
+  LibcpNode* lhs = libcp_node_new(ctx, ND_MEMZERO, tok);
   lhs->decl.var  = var;
 
   LibcpNode* rhs = create_lvar_init(ctx, init, var->ty, &desg, tok);
-  return libcp_new_binary(ctx, ND_COMMA, lhs, rhs, tok);
+  return libcp_node_binary(ctx, ND_COMMA, lhs, rhs, tok);
 }
 
 static void shape_init_exprs(LibcpContext* ctx, LibcpInitTree* init) {
@@ -1924,6 +2017,11 @@ static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
   if (node->decl.attr.is_static)
     return false;
 
+  // 初始化器只消费一次, 消费状态记在消费者私有表里; 库树的
+  // init_resolved 保持只读 (issue #26).
+  if (!take_init(node))
+    return false;
+
   LibcpNode* vla_size = NULL;
   for (LibcpType* t = var->ty; t; t = t->base) {
     if (t->kind == TY_VLA) {
@@ -1942,21 +2040,19 @@ static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
 
   if (var->ty->kind == TY_VLA) {
     // `var = alloca(<size>)`: 大小来自上面刚计算的大小链.
-    lowered = libcp_new_binary(
+    lowered = libcp_node_binary(
         ctx,
         ND_ASSIGN,
-        libcp_new_vla_ptr(ctx, var, tok),
-        libcp_new_alloca(ctx, libcp_new_var_node(ctx, cg_type(var->ty)->vla_size, tok)),
+        libcp_node_vla_ptr(ctx, var, tok),
+        libcp_node_alloca(ctx, libcp_node_var(ctx, cg_type(var->ty)->vla_size, tok)),
         tok);
   } else if (node->decl.init_resolved) {
     // 初始化器逗号链; 指向 VLA 的指针也走到这里, 大小链排在
-    // 赋值之前.
-    lowered = lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.decl_init->tok);
-    node->decl.decl_init = NULL;
+    // 赋值之前. 锚点来自树自己的 tok.
+    lowered = lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.init_resolved->tok);
     // 初始化器表达式从未经过本 pass, 树中也没有别处引用它们;
     // 大小链与指定初始化器目标已是降级形态, 不再触碰.
     shape_init_exprs(ctx, node->decl.init_resolved);
-    node->decl.init_resolved = NULL;
   }
 
   // 没有初始化器的固定大小对象不产生语句.
@@ -1964,25 +2060,25 @@ static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
     return false;
 
   node->kind = ND_EXPR_STMT;
-  node->lhs  = (vla_size && lowered) ? libcp_new_binary(ctx, ND_COMMA, vla_size, lowered, tok) :
+  node->lhs  = (vla_size && lowered) ? libcp_node_binary(ctx, ND_COMMA, vla_size, lowered, tok) :
                                        (lowered ? lowered : vla_size);
-  libcp_add_type(ctx, node);
+  libcp_node_annotate_type(ctx, node);
   return true;
 }
 
 // 在操作数的指针缩放已应用的前提下, 构建复合赋值或原子重试循环
-// 所需的 `lhs op rhs` 组合. 加法运算符走 libcp_new_arith, 即
-// `+`/`-` 产生的形状; 其余交给 libcp_add_type, 它对乘除与位运算
+// 所需的 `lhs op rhs` 组合. 加法运算符走 libcp_node_arith, 即
+// `+`/`-` 产生的形状; 其余交给 libcp_node_annotate_type, 它对乘除与位运算
 // 做转换, 移位保持不变.
 static LibcpNode*
     combine(LibcpContext* ctx, LibcpNodeKind op, LibcpNode* lhs, LibcpNode* rhs, LibcpToken* tok) {
   // 加法情形收到的操作数已经过 new_add/new_sub (这里把读-改-写
   // 的值与它缩放后的操作数组合), 所以也只是普通的机器算术节点.
   if (op == ND_ADD || op == ND_SUB)
-    return mark_lowered(libcp_new_arith(ctx, op, lhs, rhs, tok));
+    return mark_lowered(libcp_node_arith(ctx, op, lhs, rhs, tok));
 
-  LibcpNode* node = libcp_new_binary(ctx, op, lhs, rhs, tok);
-  libcp_add_type(ctx, node);
+  LibcpNode* node = libcp_node_binary(ctx, op, lhs, rhs, tok);
+  libcp_node_annotate_type(ctx, node);
   return node;
 }
 
@@ -2009,8 +2105,8 @@ static LibcpNode* compound_op(LibcpContext* ctx, LibcpNode* node, LibcpNode* lhs
 // 但若给定表达式形如 `A.x op= C`, 输入转换成
 // `tmp = &A, (*tmp).x = (*tmp).x op C`, 以处理对位域的赋值.
 static LibcpNode* to_assign(LibcpContext* ctx, LibcpNode* node) {
-  libcp_add_type(ctx, node->lhs);
-  libcp_add_type(ctx, node->rhs);
+  libcp_node_annotate_type(ctx, node->lhs);
+  libcp_node_annotate_type(ctx, node->rhs);
   LibcpToken* tok = node->tok;
 
   // 把 `A.x op= C` 转换成 `tmp = &A, (*tmp).x = (*tmp).x op C`.
@@ -2023,30 +2119,30 @@ static LibcpNode* to_assign(LibcpContext* ctx, LibcpNode* node) {
   if (node->lhs->kind == ND_MEMBER) {
     LibcpNode* operand = node->lhs->lhs;
     bool arrow         = node->lhs->access.arrow_tok;
-    LibcpObj* var   = new_lvar("", libcp_pointer_to(ctx, arrow ? operand->ty->base : operand->ty));
-    LibcpNode* addr = arrow ? operand : libcp_new_unary(ctx, ND_ADDR, operand, tok);
+    LibcpObj* var =
+        new_lvar("", libcp_type_pointer_to(ctx, arrow ? operand->ty->base : operand->ty));
+    LibcpNode* addr = arrow ? operand : libcp_node_unary(ctx, ND_ADDR, operand, tok);
 
-    LibcpNode* expr1 =
-        libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, var, tok), addr, tok);
+    LibcpNode* expr1 = libcp_node_binary(ctx, ND_ASSIGN, libcp_node_var(ctx, var, tok), addr, tok);
 
     LibcpNode* expr2 =
-        libcp_new_unary(ctx,
-                        ND_MEMBER,
-                        libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
-                        tok);
+        libcp_node_unary(ctx,
+                         ND_MEMBER,
+                         libcp_node_unary(ctx, ND_DEREF, libcp_node_var(ctx, var, tok), tok),
+                         tok);
     expr2->access.member = node->lhs->access.member;
 
     LibcpNode* expr3 =
-        libcp_new_unary(ctx,
-                        ND_MEMBER,
-                        libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
-                        tok);
+        libcp_node_unary(ctx,
+                         ND_MEMBER,
+                         libcp_node_unary(ctx, ND_DEREF, libcp_node_var(ctx, var, tok), tok),
+                         tok);
     expr3->access.member = node->lhs->access.member;
 
     LibcpNode* expr4 =
-        libcp_new_binary(ctx, ND_ASSIGN, expr2, compound_op(ctx, node, expr3, tok), tok);
+        libcp_node_binary(ctx, ND_ASSIGN, expr2, compound_op(ctx, node, expr3, tok), tok);
 
-    return libcp_new_binary(ctx, ND_COMMA, expr1, expr4, tok);
+    return libcp_node_binary(ctx, ND_COMMA, expr1, expr4, tok);
   }
 
   // 若 A 是原子类型, 把 `A op= B` 转换成
@@ -2068,43 +2164,43 @@ static LibcpNode* to_assign(LibcpContext* ctx, LibcpNode* node) {
                                                        new_sub(ctx, node->lhs, node->rhs, tok);
       rhs                = operand->rhs;
     }
-    libcp_add_type(ctx, rhs);
+    libcp_node_annotate_type(ctx, rhs);
 
     LibcpNode head = {};
     LibcpNode* cur = &head;
 
-    LibcpObj* addr = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
+    LibcpObj* addr = new_lvar("", libcp_type_pointer_to(ctx, node->lhs->ty));
     LibcpObj* val  = new_lvar("", rhs->ty);
     LibcpObj* old  = new_lvar("", node->lhs->ty);
     LibcpObj* new  = new_lvar("", node->lhs->ty);
 
     cur = cur->next =
-        libcp_new_unary(ctx,
-                        ND_EXPR_STMT,
-                        libcp_new_binary(ctx,
-                                         ND_ASSIGN,
-                                         libcp_new_var_node(ctx, addr, tok),
-                                         libcp_new_unary(ctx, ND_ADDR, node->lhs, tok),
-                                         tok),
-                        tok);
+        libcp_node_unary(ctx,
+                         ND_EXPR_STMT,
+                         libcp_node_binary(ctx,
+                                           ND_ASSIGN,
+                                           libcp_node_var(ctx, addr, tok),
+                                           libcp_node_unary(ctx, ND_ADDR, node->lhs, tok),
+                                           tok),
+                         tok);
 
-    cur = cur->next = libcp_new_unary(
+    cur = cur->next =
+        libcp_node_unary(ctx,
+                         ND_EXPR_STMT,
+                         libcp_node_binary(ctx, ND_ASSIGN, libcp_node_var(ctx, val, tok), rhs, tok),
+                         tok);
+
+    cur = cur->next = libcp_node_unary(
         ctx,
         ND_EXPR_STMT,
-        libcp_new_binary(ctx, ND_ASSIGN, libcp_new_var_node(ctx, val, tok), rhs, tok),
+        libcp_node_binary(ctx,
+                          ND_ASSIGN,
+                          libcp_node_var(ctx, old, tok),
+                          libcp_node_unary(ctx, ND_DEREF, libcp_node_var(ctx, addr, tok), tok),
+                          tok),
         tok);
 
-    cur = cur->next = libcp_new_unary(
-        ctx,
-        ND_EXPR_STMT,
-        libcp_new_binary(ctx,
-                         ND_ASSIGN,
-                         libcp_new_var_node(ctx, old, tok),
-                         libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, addr, tok), tok),
-                         tok),
-        tok);
-
-    LibcpNode* loop = libcp_new_node(ctx, ND_DO, tok);
+    LibcpNode* loop = libcp_node_new(ctx, ND_DO, tok);
 
     // 重试循环在这里取自己的标签, 而不经过 shape_node 下潜: 它
     // 的内部是 codegen 构建的降级形态, 没有需要整形的控制流 (内部
@@ -2117,62 +2213,62 @@ static LibcpNode* to_assign(LibcpContext* ctx, LibcpNode* node) {
 
     // `val` 已持有按 `op` 处理好的操作数 - 若 `op` 是指针上的加法
     // 运算符, 缩放已做 - 所以重试循环把它与旧值组合时不再缩放.
-    LibcpNode* body = libcp_new_binary(ctx,
-                                       ND_ASSIGN,
-                                       libcp_new_var_node(ctx, new, tok),
-                                       combine(ctx,
-                                               node->assign.op,
-                                               libcp_new_var_node(ctx, old, tok),
-                                               libcp_new_var_node(ctx, val, tok),
-                                               tok),
-                                       tok);
+    LibcpNode* body = libcp_node_binary(ctx,
+                                        ND_ASSIGN,
+                                        libcp_node_var(ctx, new, tok),
+                                        combine(ctx,
+                                                node->assign.op,
+                                                libcp_node_var(ctx, old, tok),
+                                                libcp_node_var(ctx, val, tok),
+                                                tok),
+                                        tok);
 
-    loop->ctrl.then            = libcp_new_node(ctx, ND_BLOCK, tok);
-    loop->ctrl.then->decl.body = libcp_new_unary(ctx, ND_EXPR_STMT, body, tok);
+    loop->ctrl.then            = libcp_node_new(ctx, ND_BLOCK, tok);
+    loop->ctrl.then->decl.body = libcp_node_unary(ctx, ND_EXPR_STMT, body, tok);
 
-    LibcpNode* cas    = libcp_new_node(ctx, ND_CAS, tok);
-    cas->cas.cas_addr = libcp_new_var_node(ctx, addr, tok);
-    cas->cas.cas_old  = libcp_new_unary(ctx, ND_ADDR, libcp_new_var_node(ctx, old, tok), tok);
-    cas->cas.cas_new  = libcp_new_var_node(ctx, new, tok);
-    loop->ctrl.cond   = libcp_new_unary(ctx, ND_NOT, cas, tok);
+    LibcpNode* cas    = libcp_node_new(ctx, ND_CAS, tok);
+    cas->cas.cas_addr = libcp_node_var(ctx, addr, tok);
+    cas->cas.cas_old  = libcp_node_unary(ctx, ND_ADDR, libcp_node_var(ctx, old, tok), tok);
+    cas->cas.cas_new  = libcp_node_var(ctx, new, tok);
+    loop->ctrl.cond   = libcp_node_unary(ctx, ND_NOT, cas, tok);
 
     cur = cur->next = loop;
-    cur = cur->next = libcp_new_unary(ctx, ND_EXPR_STMT, libcp_new_var_node(ctx, new, tok), tok);
+    cur = cur->next = libcp_node_unary(ctx, ND_EXPR_STMT, libcp_node_var(ctx, new, tok), tok);
 
-    LibcpNode* stmt_expr = libcp_new_node(ctx, ND_STMT_EXPR, tok);
+    LibcpNode* stmt_expr = libcp_node_new(ctx, ND_STMT_EXPR, tok);
     stmt_expr->decl.body = head.next;
     return stmt_expr;
   }
 
   // 把 `A op= B` 转换成 `tmp = &A, *tmp = *tmp op B`.
-  LibcpObj* var = new_lvar("", libcp_pointer_to(ctx, node->lhs->ty));
+  LibcpObj* var = new_lvar("", libcp_type_pointer_to(ctx, node->lhs->ty));
 
-  LibcpNode* expr1 = libcp_new_binary(ctx,
-                                      ND_ASSIGN,
-                                      libcp_new_var_node(ctx, var, tok),
-                                      libcp_new_unary(ctx, ND_ADDR, node->lhs, tok),
-                                      tok);
+  LibcpNode* expr1 = libcp_node_binary(ctx,
+                                       ND_ASSIGN,
+                                       libcp_node_var(ctx, var, tok),
+                                       libcp_node_unary(ctx, ND_ADDR, node->lhs, tok),
+                                       tok);
 
-  LibcpNode* expr2 = libcp_new_binary(
+  LibcpNode* expr2 = libcp_node_binary(
       ctx,
       ND_ASSIGN,
-      libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
+      libcp_node_unary(ctx, ND_DEREF, libcp_node_var(ctx, var, tok), tok),
       compound_op(ctx,
                   node,
-                  libcp_new_unary(ctx, ND_DEREF, libcp_new_var_node(ctx, var, tok), tok),
+                  libcp_node_unary(ctx, ND_DEREF, libcp_node_var(ctx, var, tok), tok),
                   tok),
       tok);
 
-  return libcp_new_binary(ctx, ND_COMMA, expr1, expr2, tok);
+  return libcp_node_binary(ctx, ND_COMMA, expr1, expr2, tok);
 }
 
 // 把 A++ 转换成 `(typeof A)((A += 1) - 1)`. 从 parse.c 移来.
 static LibcpNode* new_inc_dec(LibcpContext* ctx, LibcpNode* node, LibcpToken* tok, int addend) {
-  libcp_add_type(ctx, node);
-  LibcpNode* expr = libcp_new_binary(ctx, ND_ASSIGN, node, libcp_new_num(ctx, addend, tok), tok);
+  libcp_node_annotate_type(ctx, node);
+  LibcpNode* expr = libcp_node_binary(ctx, ND_ASSIGN, node, libcp_node_num(ctx, addend, tok), tok);
   expr->assign.op = ND_ADD;
-  LibcpNode* sub  = new_add(ctx, to_assign(ctx, expr), libcp_new_num(ctx, -addend, tok), tok);
-  return libcp_new_cast(ctx, sub, node->ty);
+  LibcpNode* sub  = new_add(ctx, to_assign(ctx, expr), libcp_node_num(ctx, -addend, tok), tok);
+  return libcp_node_cast(ctx, sub, node->ty);
 }
 
 // 下潜是前序的: 循环或 switch 在访问其主体之前先取得自己的标签.
@@ -2198,7 +2294,7 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
         if (!node->ctrl.init) {
           // 无需处理
         } else if (node->ctrl.init->next) {
-          LibcpNode* blk  = libcp_new_node(ctx, ND_BLOCK, node->ctrl.init->tok);
+          LibcpNode* blk  = libcp_node_new(ctx, ND_BLOCK, node->ctrl.init->tok);
           blk->decl.body  = node->ctrl.init;
           node->ctrl.init = blk;
         }
@@ -2234,7 +2330,7 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
       return;
     case ND_LABEL:
       cg(node)->unique_label = new_label(ctx);
-      libcp_nodearray_push(ctx, &cg_labels, node);
+      cg_labels_push(node);
       shape_node(ctx, node->lhs);
       return;
     case ND_ASSIGN:
@@ -2247,7 +2343,7 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
         LibcpNode* nxt    = node->next;
         *node             = *result;
         node->next        = nxt;
-        libcp_add_type(ctx, node);
+        libcp_node_annotate_type(ctx, node);
       }
       return;
     case ND_INCDEC: {
@@ -2267,13 +2363,14 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
         return;
       }
 
-      LibcpNode* expr = libcp_new_binary(ctx, ND_ASSIGN, operand, libcp_new_num(ctx, 1, tok), tok);
-      expr->assign.op = node->incdec.addend < 0 ? ND_SUB : ND_ADD;
+      LibcpNode* expr =
+          libcp_node_binary(ctx, ND_ASSIGN, operand, libcp_node_num(ctx, 1, tok), tok);
+      expr->assign.op   = node->incdec.addend < 0 ? ND_SUB : ND_ADD;
       LibcpNode* result = to_assign(ctx, expr);
       LibcpNode* nxt    = node->next;
       *node             = *result;
       node->next        = nxt;
-      libcp_add_type(ctx, node);
+      libcp_node_annotate_type(ctx, node);
       return;
     }
     case ND_FUNCALL:
@@ -2309,7 +2406,7 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
               shape_node(ctx, t->vla_len);
 
         LibcpNode* expr = vla_size_expr(ctx, ty, node->tok);
-        libcp_add_type(ctx, expr);
+        libcp_node_annotate_type(ctx, expr);
         LibcpNode* nxt = node->next;
         *node          = *expr;
         node->next     = nxt;
@@ -2329,15 +2426,19 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
       {
         LibcpObj* var = node->decl.var;
 
+        // 初始化器只消费一次; 库树不被写回 (issue #26).
+        if (!take_init(node))
+          return;
+
         shape_init_exprs(ctx, node->decl.init_resolved);
         LibcpNode* lowered =
-            lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.decl_init->tok);
-        LibcpNode* comma = libcp_new_binary(ctx,
-                                            ND_COMMA,
-                                            lowered,
-                                            libcp_new_var_node(ctx, var, node->tok),
-                                            node->tok);
-        libcp_add_type(ctx, comma);
+            lvar_init_comma(ctx, var, node->decl.init_resolved, node->decl.init_resolved->tok);
+        LibcpNode* comma = libcp_node_binary(ctx,
+                                             ND_COMMA,
+                                             lowered,
+                                             libcp_node_var(ctx, var, node->tok),
+                                             node->tok);
+        libcp_node_annotate_type(ctx, comma);
         LibcpNode* nxt = node->next;
         *node          = *comma;
         node->next     = nxt;
@@ -2351,11 +2452,9 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
 // 分配的标签配对, 写入每个引用要跳转到的名字. 未声明标签的检查已在
 // sema 中运行, 所以这里的每个引用都在那里匹配上了.
 static void resolve_label_refs(LibcpContext* ctx, LibcpObj* fn) {
-  LibcpNodeArray* refs = libcp_sema_label_gotos(ctx, fn);
-  if (!refs)
-    return;
-  for (int i = 0; i < refs->len; i++) {
-    LibcpNode* x = refs->data[i];
+  int ref_count = libcp_label_ref_count(ctx, fn);
+  for (int i = 0; i < ref_count; i++) {
+    LibcpNode* x = libcp_label_ref_at(ctx, fn, i);
     for (int j = 0; j < cg_labels.len; j++) {
       LibcpNode* y = cg_labels.data[j];
       if (!strcmp(x->jump.label, y->jump.label)) {
@@ -2423,7 +2522,7 @@ static void assign_lvar_offsets(LibcpObj* prog) {
             continue;
       }
 
-      top                 = libcp_align_to(top, 8);
+      top                 = align_to(top, 8);
       cg_obj(var)->offset = top;
       top += var->ty->size;
     }
@@ -2440,11 +2539,11 @@ static void assign_lvar_offsets(LibcpObj* prog) {
           (var->ty->kind == TY_ARRAY && var->ty->size >= 16) ? MAX(16, var->align) : var->align;
 
       bottom += var->ty->size;
-      bottom              = libcp_align_to(bottom, align);
+      bottom              = align_to(bottom, align);
       cg_obj(var)->offset = -bottom;
     }
 
-    cg_obj(fn)->stack_size = libcp_align_to(bottom, 16);
+    cg_obj(fn)->stack_size = align_to(bottom, 16);
   }
 }
 
@@ -2537,7 +2636,7 @@ static void store_fp(LibcpContext* ctx, int r, int offset, int sz) {
     case 4: println("  movss %%xmm%d, %d(%%rbp)", r, offset); return;
     case 8: println("  movsd %%xmm%d, %d(%%rbp)", r, offset); return;
   }
-  unreachable();
+  driver_unreachable(ctx);
 }
 
 static void store_gp(int r, int offset, int sz) {
@@ -2584,7 +2683,7 @@ static void emit_text(LibcpContext* ctx, LibcpObj* prog) {
     if (fn->va_area) {
       int gp = 0, fp = 0;
       for (LibcpObj* var = fn->params; var; var = var->next) {
-        if (libcp_is_flonum(var->ty))
+        if (is_flonum(var->ty))
           fp++;
         else
           gp++;
@@ -2668,13 +2767,15 @@ static void emit_text(LibcpContext* ctx, LibcpObj* prog) {
 void codegen(LibcpContext* ctx, LibcpObj* prog, FILE* out) {
   output_file = out;
 
-  LibcpFile** files = libcp_get_input_files(ctx);
-  for (int i = 0; files[i]; i++)
-    println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
+  int file_count = libcp_context_input_file_count(ctx);
+  for (int i = 0; i < file_count; i++) {
+    LibcpFile* file = libcp_context_input_file_at(ctx, i);
+    println("  .file %d \"%s\"", file->file_no, file->name);
+  }
 
   // 整形遍最先运行: 它填充 gen_stmt 读取的标签字段并解析 goto 引用,
-  // 在它之前不得进行任何分配或发射 (PLAN 契约 3).
-  label_base = libcp_unique_name_next(ctx);
+  // 在它之前不得进行任何分配或发射 (PLAN 契约 3). 标签的名字在分配时
+  // 逐个向 context 取号, 入口不预取.
   shape(ctx, prog);
 
   assign_lvar_offsets(prog);

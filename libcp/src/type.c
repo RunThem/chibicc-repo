@@ -24,6 +24,27 @@ LibcpType* libcp_ty_float   = &(LibcpType){TY_FLOAT, 4, 4};
 LibcpType* libcp_ty_double  = &(LibcpType){TY_DOUBLE, 8, 8};
 LibcpType* libcp_ty_ldouble = &(LibcpType){TY_LDOUBLE, 16, 16};
 
+// 公共后端支持面: 按内建类型枚举取共享单例. 不分配, 不触碰 per-TU
+// 状态, 因此没有 context 参数; 调用者不得修改返回的记录.
+LibcpType* libcp_type_builtin(LibcpBuiltinType kind) {
+  switch (kind) {
+    case BT_VOID: return libcp_ty_void;
+    case BT_BOOL: return libcp_ty_bool;
+    case BT_CHAR: return libcp_ty_char;
+    case BT_UCHAR: return libcp_ty_uchar;
+    case BT_SHORT: return libcp_ty_short;
+    case BT_USHORT: return libcp_ty_ushort;
+    case BT_INT: return libcp_ty_int;
+    case BT_UINT: return libcp_ty_uint;
+    case BT_LONG: return libcp_ty_long;
+    case BT_ULONG: return libcp_ty_ulong;
+    case BT_FLOAT: return libcp_ty_float;
+    case BT_DOUBLE: return libcp_ty_double;
+    case BT_LDOUBLE: return libcp_ty_ldouble;
+  }
+  return NULL;
+}
+
 // 分配并清零一条类型记录, 填入 kind / size / align; 其余字段交给调用者.
 static LibcpType* new_type(LibcpContext* ctx, LibcpTypeKind kind, int size, int align) {
   LibcpType* ty = libcp_tu_calloc(ctx, 1, sizeof(LibcpType));
@@ -104,7 +125,7 @@ LibcpType* libcp_copy_type(LibcpContext* ctx, LibcpType* ty) {
 }
 
 // 指针一律 8 字节大小与对齐, 并标记为无符号, 以适配指针运算.
-LibcpType* libcp_pointer_to(LibcpContext* ctx, LibcpType* base) {
+LibcpType* libcp_type_pointer_to(LibcpContext* ctx, LibcpType* base) {
   LibcpType* ty   = new_type(ctx, TY_PTR, 8, 8);
   ty->base        = base;
   ty->is_unsigned = true;
@@ -130,15 +151,6 @@ LibcpType* libcp_array_of(LibcpContext* ctx, LibcpType* base, int len) {
   LibcpType* ty = new_type(ctx, TY_ARRAY, size, base->align);
   ty->base      = base;
   ty->array_len = len;
-  return ty;
-}
-
-// VLA: 记录元素类型与长度表达式; 布局在运行时按实际长度决定,
-// 类型记录本身按 8 字节大小与对齐记账.
-LibcpType* libcp_vla_of(LibcpContext* ctx, LibcpType* base, LibcpNode* len) {
-  LibcpType* ty = new_type(ctx, TY_VLA, 8, 8);
-  ty->base      = base;
-  ty->vla_len   = len;
   return ty;
 }
 

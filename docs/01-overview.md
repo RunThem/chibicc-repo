@@ -32,12 +32,19 @@
 此外还有:
 
 - `libcp_reconstruct`: 从第 1 层的 token 流重建原始字节.
+- 四个只读 dump 入口: `libcp_token_dump` (第 1 层 token 与 trivia), `libcp_ast_dump` (第 3 层 AST), `libcp_cst_dump` (第 2 层 CST) 与 `libcp_expansion_dump` (宏展开 provenance). 文本格式都是公共契约, 由 golden 脚本逐字节锁定.
 - 宏展开 provenance 的 11 个访问器, 以及 `libcp_expansion_dump` / `_verify`.
 - 一个不透明的 `LibcpContext`, 管理一个翻译单元的全部状态和内存.
 - 一套可替换的分配器宏 (`<libcp/allocator.h>`).
-- 10 个公共头, 39 个公共函数(L5 起含 `libcp_cst_seed_typedef` 与 `libcp_node_source_range`; 0.2.0 起含 `libcp_node_family`). 公共符号一律 `libcp_` / `Libcp` 前缀.
+- 一个后端支持面 (`<libcp/backend.h>`): 节点构造器, 内建类型查询, 类型标注, 指针类型构造, 按 count/at 读取的标签引用, 唯一名与返回式诊断 (`libcp_diagnostic_report`). 它服务库外后端, 不是库自带的第 5 层.
+- 按稳定顺序枚举一个翻译单元读入的文件, 设置 `__BASE_FILE__`, 判断 token 是否来自合成文件 (`libcp_context_input_file_count` / `_at`, `libcp_context_set_base_file`, `libcp_token_is_synthetic`).
+- 按固定顺序枚举一个节点的结构子节点, 不需要复制库内 walker 的字段 switch (`libcp_node_child_count` / `_at`, 见 9.7.4).
+- include 搜索的单一 owner: 按来源 (`USER` / `AFTER` / `SYSTEM`) 注册路径, 解析 include 文件名并判定系统目录 (`libcp_context_add_include_path_with_origin`, `libcp_context_resolve_include`, `libcp_context_include_is_system`).
+- 树外消费者验收 (`test/outside/consumer.c` + `test/outside.sh`): 消费者只包含公共头并链接归档, 完成一次真实降级与 x86-64 发射, 并走通诊断回调; 脚本把公共头复制到临时目录, 只以该目录作 include path, 由 `make test` 与 `make test-stage2` 用默认或 stage2 归档各跑一遍 (决议 #14).
+- 驱动器 seam (`test/driver-seam.sh`): `main.c`, `codegen.c`, `driver.h` 与 `driver-util.h` 只包含公共头; Makefile 的 `DRIVER_CFLAGS` 只为它们提供公共 include, 自举构建同样如此. 仓库自带的参考消费者因此与树外消费者走同一个公共 seam.
+- 11 个公共头, 67 个公共函数(L5 起含 `libcp_cst_seed_typedef` 与 `libcp_node_source_range`; 0.2.0 起含 `libcp_node_family`; 后端支持面追加 17 个; 源坐标追加 4 个; 子节点枚举追加 2 个; include 搜索追加 3 个; dump 追加 2 个). 公共符号一律 `libcp_` / `Libcp` 前缀.
 
-库的实现约 1.1 万行 C, 公共头约 950 行(10 个头文件). 它没有外部依赖, 除 C 标准库外只要求 POSIX 的文件与线程基础能力.
+库的实现约 1.1 万行 C, 公共头约 1050 行(11 个头文件). 它没有外部依赖, 除 C 标准库外只要求 POSIX 的文件与线程基础能力.
 
 ## 1.4 这个库不是什么
 
@@ -166,7 +173,7 @@ CST 进一步把每个标点变成叶子, 保证叶子按序重建等于输入. 
 本仓库是 Rui Ueyama 的 chibicc 的 fork. 上游仍是一个教学编译器, 目标是让读者按 commit 学习 C 编译器怎么实现. 本 fork 保留了它的代码风格和大部分实现, 但把目标改成了库:
 
 - 源码搬到 `libcp/src/`, 公共头在 `libcp/include/libcp/`.
-- 根目录的库外 C 源文件只有驱动器 `main.c` 与代码生成器 `codegen.c`, 驱动器内部头是 `driver.h`.
+- 根目录的库外 C 源文件只有驱动器 `main.c` 与代码生成器 `codegen.c`, 驱动器内部头是 `driver.h` 与 `driver-util.h` (两者共用的格式化与致命诊断).
 - 所有跨层状态收进 `LibcpContext`, 错误改走诊断回调.
 - 新增了 trivia, CST, provenance, 忠实语法层和 sema 标注层.
 - 上游 README 描述的是编译器, 与本仓库冲突时以 `AGENTS.md` 和本文档为准.
@@ -184,7 +191,7 @@ CST 进一步把每个标点变成叶子, 保证叶子按序重建等于输入. 
 
 **还没做到的部分**:
 
-- 第三方真实消费者验证仍然缺; `fmt` 与 `c2c` 都只作为仓库内测试消费者, 不随 `make install` 发布.
+- 第三方真实项目验证仍然缺; `test/outside.sh` 用只含公共头与归档的树外消费者覆盖 seam, 但它与 `fmt` / `c2c` 一样是仓库内验收, 不随 `make install` 发布.
 - CST 的结构覆盖率不完整: 当前 48 个语料文件中 7 个含 `CST_UNPARSED`, 共 45 个 span, 由 `test/cst-stats.golden` 逐文件锁定; GNU 语句表达式已由 `CST_STMT_EXPR` 结构化. 重建不受影响, 但依赖结构的工具会退化.
 - 公共结构体字段直接暴露, 版本升级可能破坏源码兼容.
 - 性能没有优化; 大文件的内存峰值取决于分配器的 `realloc` 语义, 且每个 per-TU 对象带一个两指针的登记链头部.

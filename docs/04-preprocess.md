@@ -138,7 +138,7 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 4. 如果是 `#`, 按指令名分派.
 5. 结束后检查有没有未闭合的条件指令.
 6. `convert_pp_tokens`: 把 `TK_IDENT` 中的关键字改成 `TK_KEYWORD`, 把 `TK_PP_NUM` 转成 `TK_NUM`.
-7. `join_adjacent_string_literals`: 拼接相邻字符串字面量, 并保留 provenance.
+7. `join_adjacent_string_literals`: 拼接相邻字符串字面量, 保留第一个 token 的坐标与 provenance.
 8. 给每个 token 的 `line_no` 加上 `line_delta`, 让 `#line` 生效.
 
 ### 4.4.2 指令
@@ -148,7 +148,7 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 | 指令 | 行为 |
 |---|---|
 | `#include` | 引号形式先查当前文件所在目录, 再查 include 路径; 尖括号形式只查 include 路径 |
-| `#include_next` | 从 context 的 `include_next_idx` 继续查 include 路径, 不是 per-file include 栈 |
+| `#include_next` | 从当前文件自己的路径表命中下标 + 1 继续查; 不是从路径表命中的文件从第一条路径开始 |
 | `#define` | 对象宏, 函数宏, 变参宏; 记录宏体和 `#define` 名 token |
 | `#undef` | 删除宏 |
 | `#if` | 用 `libcp_const_expr` 求值, 未选中分支跳过 |
@@ -163,12 +163,22 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 
 不支持的指令按 `invalid preprocessor directive` 报错. 例如 `#warning` 不被识别.
 
-`#include` 的搜索细节:
+`#include` 的搜索细节 (搜索由内部 include 模块独占, 预处理只提交请求):
 
 - 绝对路径直接使用.
 - `"foo.h"` 且不是绝对路径: 先试 `dirname(当前文件)/foo.h`, 存在就用.
-- 否则遍历 context 的 include 路径.
+- 否则按路径表顺序查找: `USER` -> `AFTER` -> `SYSTEM`, 同一来源内保持注册顺序.
 - 都找不到时用字面文件名再试一次, 由 `include_file` 报告打不开.
+
+路径表按 origin 分桶, 命令行上 `-I` 与 `-idirafter` 的先后不影响结果. 该顺序不同于 GCC: GCC 把 `-idirafter` 排在系统目录之后, 本库排在系统目录之前. 路径表是配置, 跨 reset 保留; 搜索结果缓存与 per-file 续查表是 per-TU 状态, reset 清空.
+
+`#include_next` 的续查位置按文件记录 (issue #24):
+
+- 每次 include 解析命中时, 把路径表下标记在目标文件上; 记录键是打开文件时使用的路径 (`LibcpFile.name`).
+- `#include_next` 从当前文件自己的命中下标 + 1 开始. 主文件, 引号形式命中当前目录的文件, 绝对路径打开的文件没有路径表下标, 从第一条路径开始, 等价于普通 `#include`.
+- 搜索结果缓存按 `(文件名, 起始下标)` 键控, 并保存命中下标; 缓存命中会把原来的续查位置一并带回, 所以先普通 `#include` 再 `#include_next` 不会停在错误的目录.
+- 同名链每步至少前进一个表项; 路径表耗尽时按字面文件名再试一次, 失败则沿用 "cannot open file" 诊断. 不额外做环检测, include guard, `#pragma once` 与深度上限负责终止.
+- 路径表在预处理开始后追加会移动已有下标, 因此会清空搜索缓存与续查记录; include 路径应在处理翻译单元之前注册完毕.
 
 include 的文件会做 include guard 检测和 `#pragma once` 记录. `include_depth` 记录嵌套深度.
 
@@ -188,7 +198,7 @@ include 的文件会做 include guard 检测和 `#pragma once` 记录. `include_
 
 内建宏与对象宏的产物在 `expand_macro` 里直接创建 `new_prov`, 不经过 `subst`.
 
-`join_adjacent_string_literals` 会重扫字符串, 它保存并恢复 `prov`, 保证拼接后的 token 仍能追到来源.
+`join_adjacent_string_literals` 会把普通字符串字面量就地重扫成宽类型, 只写回 kind, 类型与载荷, 坐标, 物理行与 provenance 都留在原来的 token 上. 拼接结果保留第一个 token 的坐标与 provenance, 后续 token 从链上摘除.
 
 ### 4.4.4 预定义宏
 
@@ -198,6 +208,8 @@ context 默认安装 47 个预定义宏, 分四类:
 - **尺寸**: `__SIZEOF_INT__`, `__SIZEOF_LONG__`, `__SIZEOF_POINTER__`, `__SIZEOF_SIZE_T__` 等, 值由类型记录推导.
 - **类型与关键字别名**: `__SIZE_TYPE__`, `__alignof__`, `__const__`, `__inline__`, `__typeof__`, `__volatile__` 等.
 - **动态与内建**: `__DATE__`, `__TIME__`, `__TIMESTAMP__`, `__FILE__`, `__LINE__`, `__BASE_FILE__`, `__COUNTER__`.
+
+`__BASE_FILE__` 的值由 `libcp_context_set_base_file` 设置; 未设置时取第一个被词法分析的输入文件名.
 
 注意 `__chibicc__` 默认定义. 被预处理代码如果检查这个宏, 会走 chibicc 分支.
 
@@ -371,8 +383,8 @@ libcp_context_reset(ctx);   /* 生效 */
 - **`#if` 的分支丢弃**. 未选中分支不进 output. 需要保留全部分支时用第 2 层 CST.
 - **实参之间的 trivia 丢失**. 宏调用 `M(a, b)` 中逗号两边的空白和注释不进入展开流. 产物的 trivia 指向宏体或实参内部.
 - **合成位置**. 粘贴或字符串化产生的 token 位置是合成缓冲. dump 显示 `@synth`, 诊断位置可能指向宏定义或合成位置, 而不是调用点.
-- **内存中的输入也被标成 `@synth`**. `libcp_tokenize_buffer` 的 `raw == contents`, provenance 的 `is_synthetic` 判定会把它当作合成缓冲. 用文件输入才有真实行号.
-- **`#include_next` 是 context 全局游标**. 它从 `ctx->include_next_idx` 继续扫描, 不是 GNU 的 per-file include 栈; 命中后游标停在该目录, 重复 `#include_next` 可能再次命中同一目录. 需要严格 GNU 语义时, 在消费者侧自己管理 include 路径.
+- **内存中的输入也被标成 `@synth`**. `libcp_tokenize_buffer` 的 `raw == contents`, provenance 的合成判定 (公共的 `libcp_token_is_synthetic`, 按文件缓冲区判定) 会把它当作合成缓冲. 用文件输入才有真实行号.
+- **`#include_next` 的续查记录按路径字符串键控**. 续查从当前文件自己的路径表命中下标 + 1 开始, 不是全局游标. 同一个文件用不同拼写 (例如 `./a.h` 与 `a.h`) 包含时会被当成不同文件, 与 include guard / `#pragma once` 的限制一致. 路径表在预处理开始后追加会清空续查记录; 应在处理翻译单元之前注册完路径.
 - **不支持的指令**. `#warning` 等未知指令报 `invalid preprocessor directive`. `#pragma` 除 `once` 外忽略.
 - **include 只走文件系统**. 没有虚拟文件系统或内存 include 回调. 内存中的源码可以 `#include` 磁盘上的头, 但不能 include 另一个内存字符串.
 - **预定义宏假设 x86-64 Linux**. `__linux__`, `__ELF__`, `_LP64`, `__x86_64__` 无条件定义, 即使库在 macOS 上构建. 做跨目标语义分析时要注意.

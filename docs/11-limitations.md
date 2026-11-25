@@ -4,7 +4,7 @@
 
 ## 11.1 先看清承诺
 
-- 版本 `0.2.0`.
+- 版本 `0.3.0`.
 - **只承诺源码兼容, 不承诺 ABI**.
 - 阶段 5 的闸门全绿, 但这不等于"生产级成熟".
 - 阶段 6 (L5) 已于 2026-10-25 完成: 仓库有真实 formatter 消费者 (`tools/fmt.c`), AST 源码范围 (`libcp_node_source_range`) 与诊断展开点 (`LibcpDiagnostic.tok` / `.prov`). 仍缺的是第三方真实消费者验证; 随 `make install` 发布的仍然只有库本身.
@@ -116,12 +116,15 @@ bool failed = libcp_context_failed(ctx);    /* false */
 规避:
 
 ```c
-libcp_context_add_include_path(ctx, "/usr/local/include");
-libcp_context_add_include_path(ctx, "/usr/include/x86_64-linux-gnu");
-libcp_context_add_include_path(ctx, "/usr/include");
+libcp_context_add_include_path_with_origin(ctx, "/usr/local/include",
+                                           LIBCP_INCLUDE_SYSTEM);
+libcp_context_add_include_path_with_origin(ctx, "/usr/include/x86_64-linux-gnu",
+                                           LIBCP_INCLUDE_SYSTEM);
+libcp_context_add_include_path_with_origin(ctx, "/usr/include",
+                                           LIBCP_INCLUDE_SYSTEM);
 ```
 
-顺序就是搜索顺序. 参考 `main.c` 的 `add_default_include_paths`.
+搜索顺序固定为 `USER` -> `AFTER` -> `SYSTEM`, 桶内保持注册顺序, 因此注册这些系统路径的先后不影响结果. 这与 GCC 不同: GCC 把 `-idirafter` 排在系统目录之后, 本库排在系统目录之前. 既有 `libcp_context_add_include_path` 等价于 `LIBCP_INCLUDE_USER`. 参考 `main.c` 的 `add_default_include_paths`.
 
 ### 11.5.2 没有虚拟文件系统
 
@@ -157,7 +160,7 @@ libcp_context_add_include_path(ctx, "/usr/include");
 
 ### 11.5.4 内存中的输入被标记为 `@synth`
 
-`libcp_tokenize_buffer` 的 `raw == contents`, provenance dump 会把它当成合成缓冲, 位置显示 `@synth`.
+`libcp_tokenize_buffer` 的 `raw == contents`, 公共的 `libcp_token_is_synthetic` 对所有 token (包括 EOF) 返回 true, provenance dump 会把它当成合成缓冲, 位置显示 `@synth`.
 
 规避: 需要真实的文件与行号时用 `libcp_tokenize_file`.
 
@@ -178,9 +181,19 @@ libcp_context_add_include_path(ctx, "/usr/include");
 
 ### 11.5.8 原始 `\uXXXX` 的内存输入破坏 raw 坐标
 
-`tokenize_buffer*` 不做扫描缓冲改写, 所以原始 `\u00e9` 被扫描成 `\` 加 `u00e9`. 但 `raw_end_of` 会把这个 `\` 当成 universal character name, 让 `\` token 的 `raw_len` 覆盖整个转义; 后一个 token 的 `trivia_len` 因此变成负数, `libcp_reconstruct` 输出错位. 实测 `"\\u00e9 x\n"` 的第二个 token `trivia_len = -5`.
+`libcp_tokenize_buffer*` 不做扫描缓冲改写, 所以原始 `\u00e9` 被扫描成 `\` 加 `u00e9`. 但 `libcp_file_raw_end_of` 会把这个 `\` 当成 universal character name, 让 `\` token 的 `raw_len` 覆盖整个转义; 后一个 token 的 `trivia_len` 因此变成负数, `libcp_reconstruct` 输出错位. 实测 `"\\u00e9 x\n"` 的第二个 token `trivia_len = -5`.
 
-规避: 先把这类文本转成 UTF-8, 或改用 `tokenize_file`. 建议修复方向: 让 `raw_end_of` 只在扫描缓冲形态下按 UCN 计算, 或统一走 `make_scan_buffer`.
+规避: 先把这类文本转成 UTF-8, 或改用 `libcp_tokenize_file`. 建议修复方向: 让 `libcp_file_raw_end_of` 只在扫描缓冲形态下按 UCN 计算, 或统一走 `make_scan_buffer`.
+
+### 11.5.9 `#include_next` 的续查记录按路径字符串键控
+
+`#include_next` 的续查位置按文件记录: 解析命中时把路径表下标记在目标文件上, 续查从该文件自己的下标 + 1 开始. 主文件, 引号形式命中当前目录的文件, 绝对路径打开的文件没有下标, 从第一条路径开始.
+
+限制:
+
+- 记录键是打开文件时使用的路径字符串 (`LibcpFile.name`). 同一个文件用不同拼写 (例如 `./a.h` 与 `a.h`) 包含时, 会得到两条独立的记录, 与 include guard / `#pragma once` 的限制一致.
+- 路径表在预处理开始后追加会移动已有下标, 因此会清空搜索缓存与续查记录. 应在处理翻译单元之前注册完 include 路径.
+- 不追踪 `-iquote` 一类来源; 路径顺序仍是 `USER` -> `AFTER` -> `SYSTEM`.
 
 ## 11.6 语言覆盖
 
@@ -235,6 +248,8 @@ libcp_context_add_include_path(ctx, "/usr/include");
 ### 11.7.5 合成位置
 
 粘贴, 字符串化, 内建宏产生的 token 位置是合成的. dump 显示 `@synth`, 诊断可能指向宏定义或合成位置.
+
+这里的 `@synth` 按 token 的 provenance 判断 (宏展开产物), 与 `libcp_token_is_synthetic` 的 file 级判定 (文件缓冲区是否合成) 是两个不同的概念.
 
 ### 11.7.6 不能做宏内手术
 
@@ -317,12 +332,11 @@ CST 内部节点只有 `children`, 没有 `start` / `end`. 算范围要递归到
 - 对同一个文件重新跑一条管线.
 - 库没有深拷贝 API.
 
-### 11.9.3 `decl.init_resolved` 是私有字段
+### 11.9.3 `decl.decl_init` 在 sema 后为 NULL
 
-`sema.c` 的初始化树指针. 消费者不得读写. 需要初始化数据时:
+`sema` 把忠实初始化器记录解析成 `decl.init_resolved` 后清空 `decl.decl_init`. 忠实记录只在 sema 前可读; 需要它时在 sema 前读取, 或直接消费 CST.
 
-- 全局: `LibcpObj.init_data`.
-- 局部: 自己从 `LibcpNode.decl.decl_init` 重新解析, 或写自己的后端逻辑.
+解析后的树 `LibcpInitTree` 是只读公共数据, 保留到 reset: 标量读 `expr`, 数组与 struct 遍历 `children[0..child_count)`, union 用 `mem` 指明成员, 柔性节点看 `is_flexible`. 全局数据字节仍从 `LibcpObj.init_data` 读取.
 
 ### 11.9.4 声明记录留在语句链上
 
@@ -407,13 +421,13 @@ filename = NULL, line = 0, column = 0
 
 ### 11.11.2 `.a` 暴露内部符号
 
-2026-10-25 起归档内全部外部符号统一 `libcp_` 前缀 (当前 131 个, 其中 39 个是公共函数), 与宿主符号碰撞的风险基本消除; 但内部符号仍然对该归档可见.
+2026-10-25 起归档内全部外部符号统一 `libcp_` 前缀 (当前 157 个, 其中 67 个是公共函数), 与宿主符号碰撞的风险基本消除; 但内部符号仍然对该归档可见.
 
 - 公共头不声明它们.
 - 消费者不得调用.
 - 与公共 API 同前缀, `nm` 不能再靠前缀区分内外 - 判据是"公共头是否声明".
 
-规避: Linux 下优先用 `.so`, 它只导出 39 个 D7 函数. 或者把库放到独立命名空间 / 单独进程.
+规避: Linux 下优先用 `.so`, 它只导出 67 个 D7 函数. 或者把库放到独立命名空间 / 单独进程.
 
 ### 11.11.3 公共头没有 `extern "C"`, 字符串类参数不是 const
 
@@ -435,9 +449,9 @@ extern "C" {
 
 观察: `context.h` 在 `LibcpPredefinedMacro` 上说 `name` / `value` "归 context 所有, 并会被 `libcp_context_reset` 失效". 实现里静态表的 `name` 与固定 `value` 是字符串字面量, reset 不会让它们失效; 只有 `predefined` 数组本身与 per-TU 构造的 `value` 会失效.
 
-冲突契约: `docs/09-api-reference.md` 9.3.10 与 9.12 已经按实现写明静态部分不失效.
+冲突契约: `docs/09-api-reference.md` 9.3.14 与 9.12 已经按实现写明静态部分不失效.
 
-规避: 不要 `free` 这些指针, 也不要依赖 reset 后继续可用; 需要长期保存就复制. 以 docs/09 9.3.10 与 9.12 为准. 建议修复方向: 改 `context.h` 注释, 或在 reset 时统一把静态项复制进 per-TU 分配.
+规避: 不要 `free` 这些指针, 也不要依赖 reset 后继续可用; 需要长期保存就复制. 以 docs/09 9.3.14 与 9.12 为准. 建议修复方向: 改 `context.h` 注释, 或在 reset 时统一把静态项复制进 per-TU 分配.
 
 ## 11.12 性能
 
@@ -469,7 +483,8 @@ extern "C" {
 | 空翻译单元 | `parse` / `sema` 返回 NULL, `failed` 为 false |
 | 打不开文件 | 返回 NULL, 诊断 filename 为 NULL, line/column 为 0 |
 | 预处理后 `reconstruct` | 输出展开流, 不是原文件 |
-| 内存输入 provenance | 位置显示 `@synth` |
+| 内存输入 provenance | 位置显示 `@synth`; `libcp_token_is_synthetic` 返回 true |
+| 真实文件 token | `libcp_token_is_synthetic` 返回 false |
 | 文件输入带 BOM | BOM 在第一个 token 的前置 trivia 里 |
 | 内存输入带 BOM | BOM 留在第一个 token 的拼写里, 不跳过 |
 | 内存输入带 BOM 后接 `int` | `int` 可能被读成标识符的一部分 |

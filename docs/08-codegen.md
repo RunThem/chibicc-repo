@@ -65,11 +65,12 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out);
 void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
   output_file = out;
 
-  LibcpFile **files = libcp_get_input_files(ctx);
-  for (int i = 0; files[i]; i++)
-    println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
+  int file_count = libcp_context_input_file_count(ctx);
+  for (int i = 0; i < file_count; i++) {
+    LibcpFile *file = libcp_context_input_file_at(ctx, i);
+    println("  .file %d \"%s\"", file->file_no, file->name);
+  }
 
-  label_base = libcp_unique_name_next(ctx);
   shape(ctx, prog);
 
   assign_lvar_offsets(prog);
@@ -133,7 +134,7 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 标签名形如 `.L..N`. 编号来自 `LibcpContext` 里的 `unique_name_id` 计数器 (不是全局变量):
 
 - 第 4 层物化匿名对象时用这个计数器, 例如字符串全局.
-- `codegen` 入口调用 `libcp_unique_name_next(ctx)` 取得 `label_base`, 之后整形遍用局部 `label_seq` 递增, 生成 `label_base + label_seq`.
+- `codegen` 的整形遍在分配每个标签时调用 `libcp_context_take_unique_name(ctx)`, 取到即消耗. 入口不预取号, 因此后端发出的号不会与库下一次会发出的号重叠; 整形与发射期间没有别的取号者, 标签编号就是计数器从当前位置开始的连续值.
 - 发射器另有 `.L.begin` / `.L.else` / `.L.end` / `.L.false` / `.L.true` / `.L.return` 与 `count()` 产生的数字局部标签.
 
 格式是 load-bearing 的: 快照闸门是逐字节 diff, 改前缀或编号规则会让所有相关快照非空.

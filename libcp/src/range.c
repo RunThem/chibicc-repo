@@ -10,32 +10,22 @@
 //
 #include "libcp.h"
 
-// token 位置: 所在文件加文件内偏移, 比较先后时用.
-typedef struct {
-  LibcpFile* file;
-  long off;
-} LibcpPos;
-
-// 取 token 的 (file, offset) 位置.
-static LibcpPos pos_of(LibcpToken* tok) {
-  return (LibcpPos){tok->file, tok->loc - tok->file->contents};
-}
-
 // 按 (file, offset) 判断 a 是否位于 b 之前; 文件指针比较结果稳定,
 // 但不同合成缓冲区之间的先后是任意的.
-static int pos_lt(LibcpPos a, LibcpPos b) {
+static int pos_lt(LibcpSourcePos a, LibcpSourcePos b) {
   if (a.file != b.file)
     return a.file < b.file;
-  return a.off < b.off;
+  return a.offset < b.offset;
 }
 
 // 用一个锚点 token 更新当前的起止极值; NULL 锚点直接忽略.
 static void consider(LibcpToken* tok, LibcpToken** start, LibcpToken** end) {
   if (!tok)
     return;
-  if (!*start || pos_lt(pos_of(tok), pos_of(*start)))
+  LibcpSourcePos pos = libcp_token_source_pos(tok);
+  if (!*start || pos_lt(pos, libcp_token_source_pos(*start)))
     *start = tok;
-  if (!*end || pos_lt(pos_of(*end), pos_of(tok)))
+  if (!*end || pos_lt(libcp_token_source_pos(*end), pos))
     *end = tok;
 }
 
@@ -54,29 +44,11 @@ static void walk(const LibcpNode* node, LibcpToken** start, LibcpToken** end) {
   if (fam == LIBCP_NF_CASE)
     consider(node->case_.colon_tok, start, end);
 
-  walk(node->lhs, start, end);
-  walk(node->rhs, start, end);
-  if (fam == LIBCP_NF_CTRL) {
-    walk(node->ctrl.cond, start, end);
-    walk(node->ctrl.then, start, end);
-    walk(node->ctrl.els, start, end);
-    walk(node->ctrl.init, start, end);
-    walk(node->ctrl.inc, start, end);
-    walk(node->ctrl.args, start, end);
-    walk(node->ctrl.generic_sel, start, end);
-  }
-  if (fam == LIBCP_NF_DECL)
-    walk(node->decl.body, start, end);
-  walk(node->spec_decls, start, end);
-  if (fam == LIBCP_NF_CASE) {
-    walk(node->case_.begin_expr, start, end);
-    walk(node->case_.end_expr, start, end);
-  }
-  if (fam == LIBCP_NF_CAS) {
-    walk(node->cas.cas_addr, start, end);
-    walk(node->cas.cas_old, start, end);
-    walk(node->cas.cas_new, start, end);
-  }
+  // 子节点顺序与枚举一致; 列表字段只取头节点 (is_list 在这里不重要,
+  // 兄弟不是子节点). generic_sel 是某个关联结果的别名, 枚举不返回它,
+  // 因此这里不再重复下降.
+  for (int i = 0, count = libcp_node_child_count(node); i < count; i++)
+    walk(libcp_node_child_at(node, i).node, start, end);
 }
 
 // 计算 node 子树的源码范围, 通过 *start / *end 返回首尾锚点 token.

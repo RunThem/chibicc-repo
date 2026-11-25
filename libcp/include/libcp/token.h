@@ -89,6 +89,18 @@ struct libcp_token {
                           // 拥有; 下面的访问器是公共接口)
 };
 
+// 枚举当前翻译单元已读入的文件, 顺序是首次读取顺序; 主文件通常是
+// 索引 0. count 在 ctx 为 NULL 时为 0; at 在 index 越界或 ctx 为 NULL
+// 时返回 NULL. 返回的 LibcpFile 归 context 所有, 消费者只读.
+LIBCP_API int libcp_context_input_file_count(LibcpContext* ctx);
+LIBCP_API LibcpFile* libcp_context_input_file_at(LibcpContext* ctx, int index);
+
+// token 是否来自合成文件 (内存输入或宏展开产生的缓冲区): 文件的
+// raw == contents. 这是 file 级判定, 内存输入也满足它; 宏展开产物的
+// @synth 标记按 token 的 provenance 判断, 是另一回事. tok 为 NULL 时
+// 返回 false.
+LIBCP_API bool libcp_token_is_synthetic(const LibcpToken* tok);
+
 LIBCP_API LibcpToken* libcp_tokenize_file(LibcpContext* ctx, char* path);
 LIBCP_API LibcpToken* libcp_tokenize_buffer(LibcpContext* ctx, char* name, char* contents);
 
@@ -103,5 +115,13 @@ LIBCP_API LibcpToken*
 // 重建输入文本 - 没有例外: 过去作为预处理步骤的改写现在位于扫描缓冲区
 // 与 map 中, 而不在坐标里.
 LIBCP_API void libcp_reconstruct(LibcpContext* ctx, LibcpToken* tok, FILE* out);
+
+// 只读的 token dump 通道: 打印 token 流, 以及 token 之间被跳过的字节.
+// 每个 "T" 行是一个 token, 每个 "R" 行是它前面的一段原始字节, 按词法
+// 分析器跳过的片段拆分 (行注释 lc, 块注释 bc, 换行 nl, 空白 ws, 反斜杠
+// 续行 cont 或文件开头的 BOM bom); 文本按 C 字面量风格转义. 输出格式
+// 是公共契约, 由 test/trivia.sh 逐字节锁定. dump 只写到 `out`, 不分配
+// 对象, 不选择处理阶段, 也不退出.
+LIBCP_API void libcp_token_dump(LibcpContext* ctx, const LibcpToken* tok, FILE* out);
 
 #endif

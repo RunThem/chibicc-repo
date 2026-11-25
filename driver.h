@@ -1,14 +1,12 @@
-// In-tree driver declarations shared by main.c and codegen.c. They are
-// not part of libcp: libcp/src/libcp.h declares only what
-// the library defines or consumes, so the library subtree can be moved
-// to another project as is.
+// 仓库内驱动器 (main.c 与 codegen.c) 共用的声明. 它们不属于 libcp:
+// 驱动器只包含公共伞头, 库子目录可以整体搬到另一个项目.
 
 #ifndef LIBCP_DRIVER_H
 #define LIBCP_DRIVER_H
 
-#include "libcp.h"
+#include <libcp/libcp.h>
 
-void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out);
+void codegen(LibcpContext* ctx, LibcpObj* prog, FILE* out);
 
 extern bool opt_fpic;
 extern bool opt_fcommon;

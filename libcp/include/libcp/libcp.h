@@ -10,6 +10,7 @@
 
 #include <libcp/allocator.h>
 #include <libcp/ast.h>
+#include <libcp/backend.h>
 #include <libcp/context.h>
 #include <libcp/cst.h>
 #include <libcp/diagnostic.h>
@@ -21,7 +22,7 @@
 // 库版本 (PLAN L3.3c). 这里只承诺源码兼容: 修改公共结构体
 // 就相当于版本升级. 该值必须与 Makefile 中的 VERSION 保持同步
 // (test/install.sh 会检查).
-#define LIBCP_VERSION "0.2.0"
+#define LIBCP_VERSION "0.3.0"
 LIBCP_API const char* libcp_version(void);
 
 #endif

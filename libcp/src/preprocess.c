@@ -827,39 +827,6 @@ static bool expand_macro(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) 
   return true;
 }
 
-// 在 include 路径中查找文件: 绝对路径直接返回, 结果按文件名缓存在
-// context 的 search_cache 里.
-char* libcp_search_include_paths(LibcpContext* ctx, char* filename) {
-  if (filename[0] == '/')
-    return filename;
-
-  char* cached = libcp_hashmap_get(ctx, &ctx->search_cache, filename);
-  if (cached)
-    return cached;
-
-  // 按顺序在各个 include 路径下尝试拼出完整路径.
-  for (int i = 0; i < ctx->include_paths_len; i++) {
-    char* path = libcp_format(ctx, "%s/%s", ctx->include_paths[i], filename);
-    if (!libcp_file_exists(path))
-      continue;
-    libcp_hashmap_put(ctx, &ctx->search_cache, filename, path);
-    // 记下命中位置的下一个下标, 供 #include_next 从后面继续搜索.
-    ctx->include_next_idx = i + 1;
-    return path;
-  }
-  return NULL;
-}
-
-// 从上次命中的下一个目录开始继续搜索 (GNU 的 #include_next).
-static char* search_include_next(LibcpContext* ctx, char* filename) {
-  for (; ctx->include_next_idx < ctx->include_paths_len; ctx->include_next_idx++) {
-    char* path = libcp_format(ctx, "%s/%s", ctx->include_paths[ctx->include_next_idx], filename);
-    if (libcp_file_exists(path))
-      return path;
-  }
-  return NULL;
-}
-
 // 读取 #include 的参数, 返回文件名; *is_dquote 表示是否用了双引号形式.
 static char*
     read_include_filename(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok, bool* is_dquote) {
@@ -1027,25 +994,20 @@ static LibcpToken* preprocess2(LibcpContext* ctx, LibcpToken* tok) {
       bool is_dquote;
       char* filename = read_include_filename(ctx, &tok, tok->next, &is_dquote);
 
-      if (filename[0] != '/' && is_dquote) {
-        char* path =
-            libcp_format(ctx, "%s/%s", dirname(libcp_tu_strdup(ctx, start->file->name)), filename);
-        if (libcp_file_exists(path)) {
-          tok = include_file(ctx, tok, path, start->next->next, start->file);
-          continue;
-        }
-      }
-
-      char* path = libcp_search_include_paths(ctx, filename);
-      tok        = include_file(ctx, tok, path ? path : filename, start->next->next, start->file);
+      // 搜索归 include 模块所有; 这里只提交请求. 引号形式先查当前
+      // 文件目录的规则, 以及命中下标与 per-file 续查位置, 都在模块里.
+      LibcpIncludeHit hit = is_dquote ? libcp_include_resolve_quoted(ctx, start->file, filename) :
+                                        libcp_include_resolve_angled(ctx, filename);
+      tok = include_file(ctx, tok, hit.path ? hit.path : filename, start->next->next, start->file);
       continue;
     }
 
     if (libcp_equal(tok, "include_next")) {
       bool ignore;
-      char* filename = read_include_filename(ctx, &tok, tok->next, &ignore);
-      char* path     = search_include_next(ctx, filename);
-      tok = include_file(ctx, tok, path ? path : filename, start->next->next, start->file);
+      char* filename      = read_include_filename(ctx, &tok, tok->next, &ignore);
+      // 续查位置来自包含这条指令的文件自身, 不是全局游标.
+      LibcpIncludeHit hit = libcp_include_resolve_next(ctx, start->file, filename);
+      tok = include_file(ctx, tok, hit.path ? hit.path : filename, start->next->next, start->file);
       continue;
     }
 
@@ -1444,13 +1406,8 @@ static void join_adjacent_string_literals(LibcpContext* ctx, LibcpToken* tok) {
 
     if (basety->size > 1)
       for (LibcpToken* t = tok1; t->kind == TK_STR; t = t->next)
-        if (t->ty->base->size == 1) {
-          // 重新切词会整体覆盖 token (且不会设置 line_no); provenance
-          // 属于源码中的那个 token, 因此先取出再写回.
-          LibcpMacroProv* prov = t->prov;
-          *t                   = *libcp_tokenize_string_literal(ctx, t, basety);
-          t->prov              = prov;
-        }
+        if (t->ty->base->size == 1)
+          libcp_tokenize_string_literal(ctx, t, basety);
 
     while (tok1->kind == TK_STR)
       tok1 = tok1->next;
@@ -1480,7 +1437,8 @@ static void join_adjacent_string_literals(LibcpContext* ctx, LibcpToken* tok) {
       i = i + t->ty->size - t->ty->base->size;
     }
 
-    *tok1      = *copy_token(ctx, tok1);
+    // 只写回类型与载荷: 第一个 token 的坐标, 行号与 provenance 保持不变,
+    // 后续 token 从链上摘除.
     tok1->ty   = libcp_array_of(ctx, tok1->ty->base, len);
     tok1->str  = buf;
     tok1->next = tok2;

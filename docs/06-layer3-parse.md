@@ -56,7 +56,7 @@
 - `ty_op`: 声明类型, 可能还有待补全的数组维度.
 - `decl.name_tok`: 声明的标识符 token.
 - `decl.attr`: 存储类与对齐属性.
-- `decl.decl_init`: 忠实的初始化器记录, 或 NULL.
+- `decl.decl_init`: 忠实的初始化器记录, 或 NULL. 它在 parse 后有效; sema 构建 `decl.init_resolved` 后把它置 NULL.
 
 它不立即变成"建变量 + 初始化"的语句. 变量什么时候建, 初始化怎么展开, 是第 4 层和第 5 层的事.
 
@@ -121,10 +121,10 @@ C 文法不是上下文无关的. 最典型的例子:
 | 声明记录 | `ND_DECL`, `ND_GVAR_DECL`, `ND_FUNCDEF`, `ND_TYPEDEF`, `ND_ENUM_CONST`, `ND_COMPOUND_LITERAL` |
 | 内部 | `ND_MEMZERO` |
 
-第 3 层的解析器实际产出 65 种. 计数方法: 把 `libcp_new_node` / `libcp_new_unary` / `libcp_new_binary` 直接命名的 46 种, 与 `infix_ops[].kind` 的 21 种合并, 去掉重复的 `ND_ASSIGN` 与 `ND_COND`, 得到 65. 不产出的四种:
+第 3 层的解析器实际产出 65 种. 计数方法: 把 `libcp_node_new` / `libcp_node_unary` / `libcp_node_binary` 直接命名的 46 种, 与 `infix_ops[].kind` 的 21 种合并, 去掉重复的 `ND_ASSIGN` 与 `ND_COND`, 得到 65. 不产出的四种:
 
 - `ND_VAR`: 第 4 层绑定名字时产生.
-- `ND_VLA_PTR`: 第 5 层整形遍展开 VLA 声明时产生; `sema.c` 只提供构造器 `libcp_new_vla_ptr`, 不在第 4 层生成该节点.
+- `ND_VLA_PTR`: 第 5 层整形遍展开 VLA 声明时产生; `sema.c` 只提供构造器 `libcp_node_vla_ptr`, 不在第 4 层生成该节点.
 - `ND_MEMZERO`: 第 5 层展开初始化器时产生.
 - `ND_NULL_EXPR`: 第 5 层整形遍生成的空表达式占位; 解析器只在 `infix_ops` 表里把它当作 `assign_op` 的哨兵, 不建该节点.
 
@@ -182,16 +182,46 @@ struct libcp_node {
 
 规则:
 
-- 通用 walker 必须先按族判断再下降; 读取非活动族是未定义行为, 不能依赖
-  calloc 的零值.
+- 通用 walker 用 `libcp_node_child_count` / `libcp_node_child_at` 下降,
+  不要自己重写字段 switch; 只有需要族特有的锚点或链策略时才结合
+  `libcp_node_family`. 读取非活动族是未定义行为, 不能依赖 calloc 的零值.
 - `ty` 在第 3 层大多为 NULL. 不要假设有类型. 例外: `ND_NUM` 带词法类型,
   `ND_TYPEDEF` 带声明类型.
 - 声明记录的 `decl.var` 在第 3 层为 NULL; `ND_IDENT` 不带绑定字段, 只有 `tok` 的拼写.
-- `decl.init_resolved` 是 sema 的私有载荷, 消费者不得读写.
+- `decl.init_resolved` 是 sema 输出的只读数据, sema 后有效到 reset. 第 3 层只需要 `decl.decl_init`; 需要忠实记录时在 sema 前读取, 或直接消费 CST.
 - `tok` 是代表 token, 不是完整源码范围. 一个节点可能由多个 token 组成,
   但只记录一个锚点.
 - `sizeof(LibcpNode)` 为 144 字节, 16 字节对齐; 节点仍是一次固定大小分配,
-  `libcp_new_node` 不按 kind 改变分配尺寸.
+  `libcp_node_new` 不按 kind 改变分配尺寸.
+
+子节点枚举 (`libcp_node_child_count` / `libcp_node_child_at`) 是只读的
+通用下降接口, 不需要 `LibcpContext`:
+
+```c
+typedef struct {
+  const LibcpNode *node;
+  bool is_list;
+} LibcpNodeChild;
+
+int libcp_node_child_count(const LibcpNode *node);
+LibcpNodeChild libcp_node_child_at(const LibcpNode *node, int index);
+```
+
+- `index` 是存在子节点的序号 `0..count-1`, 不是字段槽位; 越界返回
+  `{NULL, false}`.
+- 顺序固定为 `lhs`, `rhs`, 活动族的节点字段, `spec_decls`: ctrl 的
+  `cond / then / els / init / inc / args`, decl 的 `body`, case 的
+  `begin_expr / end_expr`, cas 的三个操作数. 不是源码顺序.
+- `next` 是兄弟链接, 永远不是子节点. `decl.body`, `ctrl.init`,
+  `ctrl.args` 与 `spec_decls` 是列表字段: 只返回头节点并置
+  `is_list = true`, 调用者沿 `next` 访问兄弟. 枚举一个节点不会带出它的兄弟.
+- 排除 `generic_sel` (某个关联结果的别名), `decl_init`,
+  `init_resolved`, `attr.align_expr` 与类型载荷里的节点 (`ty->dim_len`,
+  `ty->typeof_expr`, `ty->vla_len`, `member->width_expr` 等).
+- 它回答 "下降哪些子节点, 顺序如何"; `libcp_node_family` 回答 "哪个
+  union 载荷有效", 并继续服务锚点 token 收集.
+- 树被修改后序号不稳定; 库内的 range 与 sema 三个 walker 共用这份枚举,
+  各自的链与特例策略保留在各自的代码里.
 
 ### 6.3.3 类型
 
@@ -341,6 +371,8 @@ ND_FUNCDEF @input.c:1:14 "{" ty_op=func(int) name="f" attr=none
 
 `-dump-ast` 在 sema 之前早退, 所以它展示的正是第 3 层的形态.
 
+同一输出有公共入口 `libcp_ast_dump(ctx, node, out)` (声明在 `<libcp/ast.h>`): 树外消费者不需要驱动器就能打印第 3 层 AST. 入口只读, 接受 `const LibcpNode *`, 只写调用者给的 `FILE *`, 不选择处理阶段; 文本格式是公共契约, 由 `test/ast.sh` 逐字节锁定. `-dump-ast` 的选项解析, 早退时机与 `-o` / stdout 选择仍属于驱动器.
+
 ## 6.6 产物可以做什么
 
 - **C 转 C**: 遍历树, 按源码写法重新生成代码. 下标还是下标, `while` 还是 `while`, 复合赋值还是复合赋值.
@@ -427,6 +459,8 @@ if (n->kind == ND_DECL && n->decl.decl_init) {
 
 设计符里的索引表达式没有求值. 要值就自己调用第 4 层, 或用 `libcp_sema` 的结论.
 
+`sema` 之后 `decl.decl_init` 为 NULL: 这个记录是第 3 层形态, 只在 sema 前可读. 解析后的形态在 `decl.init_resolved`, 见 `docs/07-layer4-sema.md` 7.3.3.
+
 ### 6.7.5 配置参数
 
 `libcp_parse` 没有额外参数. `libcp_parse_init` 每次调用前重建解析器的作用域栈; `parse_depth` 也存放在 context 里, 但它只在 `libcp_context_reset` 的 `clear_state` 中清零. 解析出错后要复用 context 必须先 `libcp_context_reset`.
@@ -438,7 +472,7 @@ if (n->kind == ND_DECL && n->decl.decl_init) {
 - **没有常量求值**. `sizeof` / `_Alignof` / `_Generic` 只有形式, 没有结论.
 - **声明记录不是语句**. 消费者必须处理 `ND_DECL` / `ND_GVAR_DECL` / `ND_FUNCDEF` / `ND_TYPEDEF` / `ND_ENUM_CONST`. 第 4 层保留它们, 第 5 层摘除.
 - **初始化器是记录, 不是树**. 指示符未求值, 大括号省略未应用, 灵活数组成员未定尺寸.
-- **没有完整源码范围**. 每个节点只有代表 token; 需要子树范围时调用 `libcp_node_source_range`, 它按锚点 token 的 (文件, 偏移) 取最小 / 最大值. `next` 链是兄弟节点, 不会被跟随; 初始化器树不会被深入.
+- **没有完整源码范围**. 每个节点只有代表 token; 需要子树范围时调用 `libcp_node_source_range`, 它按锚点 token 的 (文件, 偏移) 取最小 / 最大值. 坐标与物理行由内部 source 模块 (3.4.2) 统一换算, 不依赖 `line_no - line_delta`. `next` 链是兄弟节点, 不会被跟随; 初始化器树不会被深入.
 - **没有错误恢复**. 第一个语法错误就返回. 想要"报多个错误"需要自己分段调用.
 - **只接受预处理后的流**. 传原始 token 流会在 `#` 或宏名上报错.
 - **宏调用不可见**. 树上只有展开后的结构. 来源查 provenance.

@@ -57,6 +57,10 @@
 
 每一层的"产物"不是抽象概念, 而是具体的内存结构: token 链, CST 树, AST 树, 标注树和全局对象链. 这些结构体在公共头里定义, 字段直接可读.
 
+`<libcp/backend.h>` 不在这五层里, 它是给库外后端使用的支持面: 节点构造 (`libcp_node_new` / `_binary` / `_unary` / `_num` / `_long` / `_arith` / `_var` / `_vla_ptr` / `_alloca` / `_cast`), 内建类型查询 (`LibcpBuiltinType` 与 `libcp_type_builtin`), 类型标注 (`libcp_node_annotate_type`), 指针类型构造 (`libcp_type_pointer_to`), 标签引用 (`libcp_label_ref_count` / `libcp_label_ref_at`), 唯一名 (`libcp_context_take_unique_name`) 与返回式诊断 (`libcp_diagnostic_report`). 支持面只公开"读取第 4 层标注树并降级"所需的最小构造能力, 不拥有层间的数据契约: 构造出的节点与类型归 context 所有, 内建类型是跨 context 共享的只读单例, 标注仍走 sema 的规则. 标签引用与唯一名读的是 sema 到后端的交接数据; 诊断报告与库内部的 error / warn 走同一条格式化与回调路径, 区别只在它返回而不 longjmp.
+
+驱动器 (`main.c`, `codegen.c`, `driver.h`, `driver-util.h`) 不是库的一部分, 它与树外消费者走同一个公共 seam: 只包含 `<libcp/libcp.h>`, 不包含内部伞头, 也不依赖任何 `libcp/src` 路径. 这条边界由构建标志与 `test/driver-seam.sh` 共同锁定, 见 2.10 与 10.8.
+
 ## 2.3 两条路径为什么分开
 
 CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务对象也不同.
@@ -102,7 +106,7 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 - 输出的每个宏展开产物 token 都带 `prov` 链; 直接来自源码的 token (包括非 EOF token) 的 `prov` 为 NULL.
 - 宏展开遵循 hideset 规则, 保证递归宏一定停止.
 - 条件编译的未选中分支被丢弃, 不进入输出.
-- `#include` 通过文件系统读取, 搜索路径来自 context 配置.
+- `#include` 通过文件系统读取; 搜索路径表由内部 include 模块独占, 按 `USER` -> `AFTER` -> `SYSTEM` 的顺序查找.
 - 错误经回调报告, 入口返回 NULL.
 
 ### 2.4.3 第 2 层的契约
@@ -134,7 +138,7 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 - 声明记录保留在语句链里, 供消费者决定怎么展开. sema 不把记录变成语句.
 - 编译期结论记录在节点字段上: `ND_SIZEOF` / `ND_ALIGNOF` 的 `value.val`, `ND_GENERIC` 的 `ctrl.generic_sel`, 内建类型谓词的 `value.val`.
 - 隐式 cast 由 sema 插入, 带 `value.is_implicit = true`.
-- 初始化器记录被解析成 `LibcpInitTree`, 指针放在 `decl.init_resolved`. 该字段是 sema 私有载荷, 消费者不得读写.
+- 初始化器记录被解析成 `LibcpInitTree`, 指针放在 `decl.init_resolved`, 只读并保留到 reset. `decl.decl_init` 是第 3 层的忠实记录, sema 建好树后置 NULL. 消费者按 `children[0..child_count)` 递归; union 用 `mem`, 柔性节点看 `is_flexible`.
 - 不做指针缩放, 不做复合赋值展开, 不做控制流标签, 不做临时槽. 这些是第 5 层的.
 
 ### 2.4.6 第 5 层的契约
@@ -221,6 +225,8 @@ libcp_context_set_diagnostic(ctx, on_diagnostic, user);
 - 错误经回调报告后, 库 longjmp 回当前公共入口.
 - 入口返回自己的失败值: 指针函数返回 NULL, `bool` 函数返回 false, `void` 函数直接返回.
 - context 的 `failed` 标志置位, 直到 reset.
+
+例外是返回式入口 `libcp_diagnostic_report`: 它走同一条报告路径, 报告后返回调用者, 错误情形下自行把 `failed` 置位. 它用于库外后端已经能自行处理错误, 不需要 unwind 的路径.
 
 `libcp_context_failed(ctx)` 是判断"上一次调用是成功还是出错"的可靠方式. 返回 NULL 本身不一定是错误: 空翻译单元的 `libcp_parse` 也返回 NULL, 但 `failed` 为 false.
 
@@ -310,9 +316,13 @@ codegen(ctx, prog, out);
 | `-verify-expansions` | provenance | 校验展开链的不变量 |
 | `-dump-ast` | 第 3 层 | 打印忠实语法树, 在 sema 之前早退 |
 
-这些通道是理解库行为的最好工具.
+这些通道是理解库行为的最好工具. dump 的实现属于库 (`libcp/src/dump.c`): 驱动只做选项解析, 阶段选择与 `-o` / stdout 选择, 并通过 `libcp_token_dump` / `libcp_ast_dump` 调用; 四种 dump 的文本格式都是公共契约, 分别由 `test/trivia.sh`, `test/ast.sh`, `test/cst.sh` 与 `test/expand.sh` 逐字节锁定.
 
 驱动器还提供 `-h` / `--help`, 打印按类别分组的全部选项 (模式, 预处理, 依赖, 链接, 代码生成, 兼容性, 只读通道与内部选项). 该输出是选项清单的权威位置; 选项的解析与行为由 `main.c` 与 `test/driver.sh` 锁定.
+
+依赖文本 (`-M` / `-MD` / `-MMD` / `-MF` / `-MT` / `-MQ` / `-MP`) 由驱动器生成, 不属于库. `-MMD` 省略 `SYSTEM` 与 `AFTER` 目录中的头文件, `USER` (`-I`) 目录中的头文件仍然列出; 分类只查公共的 `libcp_context_include_is_system`, 驱动器不保存系统目录快照.
+
+树外消费者 `test/outside/consumer.c` 不是参考消费者的一部分: 它是公共 seam 的验收闸门, 只包含公共头并链接 `libcp.a`, 完成一次真实降级与 x86-64 发射, 并走通诊断回调. 它不进入 `all`, 不安装, 不链接 `codegen.c`; `test/outside.sh` 把公共头复制到临时目录作为唯一 include path, 由 `make test` 与 `make test-stage2` 用默认或 stage2 归档各跑一遍, 并与 `test/public-api.sh` 共用 `test/public-api.deny`. 见 10.8 与 10.9.
 
 ## 2.10 目录与文件地图
 
@@ -321,19 +331,23 @@ libcp/
   include/libcp/
     libcp.h        伞头, 唯一需要 include 的文件
     allocator.h     构建期可替换的分配器宏: LIBCP_DEFAULT_ALLOCATOR 或全部四个 LIBCP_* 宏, 只在重编库时生效
-    context.h        context, 诊断回调, 配置, 预定义宏
+    context.h        context, 诊断回调, 配置, base file, 预定义宏
     diagnostic.h     LibcpDiagnostic 与 severity
-    token.h          LibcpToken, LibcpFile, 第 1 层入口
+    token.h          LibcpToken, LibcpFile, 第 1 层入口, token dump, input file 枚举与 synthetic 判定
     preprocess.h     libcp_preprocess
     provenance.h     宏展开访问器与两个只读通道
     cst.h            第 2 层: LibcpCstKind, LibcpCstNode
-    ast.h            第 3/4 层: LibcpNode 与 LibcpNodeFamily, LibcpType, LibcpObj, 初始化器, 类型种类
+    ast.h            第 3/4 层: LibcpNode 与 LibcpNodeFamily, LibcpType, LibcpObj, 初始化器, 类型种类, AST dump
+    backend.h        后端支持面: 节点构造, LibcpBuiltinType, 类型标注, 标签引用, 唯一名与诊断
     sema.h           libcp_sema
   src/
-    tokenize.c       词法, trivia, raw 坐标, 诊断格式化
-    preprocess.c     指令, 宏展开, include, provenance 记录
+    tokenize.c       词法, trivia, 诊断格式化
+    source.c         源坐标: LibcpFile 构造, 扫描缓冲, raw / 扫描偏移 / 物理行换算, synthetic 判定, input file 表
+    include.c        include 搜索: 路径表 (path + origin), 搜索顺序与缓存, 系统目录判定, per-file 续查, reset / free 语义
+    preprocess.c     指令, 宏展开, provenance 记录; include 只提交解析请求
     provenance.c     展开链的 dump / verify
     cst.c            lossless CST 的建树, dump, verify
+    dump.c           第 1 层 token 与第 3 层 AST 的只读 dump (公共入口)
     parse.c          递归下降解析器
     sema.c           名字解析, 类型标注, 常量求值, 布局, 初始化器
     range.c          libcp_node_source_range: AST 子树锚点 token 范围
@@ -346,6 +360,7 @@ libcp/
 main.c               驱动器, 参考消费者
 codegen.c            x86-64 代码生成器, 参考消费者
 driver.h             驱动器内部头
+driver-util.h        驱动器共用工具 (格式化与致命诊断)
 tools/fmt.c          CST formatter MVP (make fmt-tool, 不安装)
 tools/c2c.c          C 转 C 打印器 (make c2c, 仅测试回归闸门)
 tools/asm-diff.sh    汇编等价性闸门 (make asm-diff BASE=<ref>)
@@ -362,3 +377,5 @@ LICENSE              许可证
 ```
 
 公共头只包含标准头和彼此, 不包含 `libcp/src/libcp.h`, 不声明内部函数, 不定义 `_POSIX_C_SOURCE`, 不包含 `glob.h` 或 `sys/wait.h`. 每个公共头都能单独用 `cc -std=c11 -fsyntax-only -Wall -Wextra` 编译. 这条卫生规则由 `test/public-api.sh` 锁定.
+
+驱动器一侧的边界更具体: `main.c`, `codegen.c`, `driver.h` 与 `driver-util.h` 只包含 `<libcp/libcp.h>`. Makefile 的 `LIB_CFLAGS` 为库对象提供公共与内部 include, `DRIVER_CFLAGS` 只为驱动器对象提供公共 include; `test/driver-seam.sh` 检查四个文件不含内部 include, 并用只含公共头的临时目录重编驱动器对象. 内部伞头因此只服务库实现, 不是消费者 seam.

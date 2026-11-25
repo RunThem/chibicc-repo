@@ -375,7 +375,7 @@ L0 到 L4, 每步一提交:
 ### 产物
 
 - `libcp.a`, Linux `libcp.so.0`.
-- 9 个公共头, 36 个公共函数 (L5 之后为 10 个头, 38 个函数, 见 12.14; 0.2.0 追加 `libcp_node_family`, 当前 39 个).
+- 9 个公共头, 36 个公共函数 (L5 之后为 10 个头, 38 个函数, 见 12.14; 0.2.0 追加 `libcp_node_family`, 后端支持面追加 `backend.h` 与 17 个函数, 源坐标追加 4 个函数, 子节点枚举追加 2 个函数, include 搜索追加 3 个函数, dump 追加 2 个函数, 当前 11 个头, 67 个函数).
 - `LibcpContext` 三态.
 - `test/library.sh`, `test/public-api.sh`, `test/install.sh`.
 - `make check-library`.
@@ -462,7 +462,33 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 - **source mapping (W5)**: `libcp_node_source_range`(子树锚点 token 极值)与诊断展开点(`LibcpDiagnostic` 增加 `tok` / `prov`, 默认输出逐字节不变).
 - 同线关闭"展开流 CST"未决项(维持现状), per-node user data 扩展点按 formatter 的负结果继续推迟(只读遍历型消费者不需要它).
 
-## 12.15 从阶段史看现在的代码
+## 12.15 公共 seam 对树外消费者可用 (2026-11-25 完成)
+
+### 问题
+
+库边界固化后, 树外消费者只含公共头就能走完前端各层, 但 `main.c` 与 `codegen.c` 仍在使用的入口只存在于内部伞头 `libcp/src/libcp.h`: 节点构造, 内建类型, 标签引用, 唯一名, 诊断报告; 此外没有公共的子节点枚举, include 搜索 owner, token / AST dump, 源坐标访问与 typed 初始化器读取. 内部伞头因此是事实上的 seam.
+
+### 设计
+
+把"当前驱动器与 codegen 对库的全部使用"提升为公共契约 (spec #16): 新增 `<libcp/backend.h>`, 公开子节点枚举, 把 include 搜索收进库内单一 owner, 把 token / AST dump 移入库, 新增源坐标模块, 并把 typed 初始化器改成只读公共数据. 分五阶段迁移, 每阶段保持全量测试, 汇编等价性与公共面闸门; 最后删除驱动器与 codegen 对内部伞头的 include.
+
+### 产物 (已合入)
+
+- `backend.h`: 节点构造, 内建类型, 类型标注, 指针类型, 标签引用, 唯一名与返回式诊断 (#17, #18).
+- 子节点枚举 `libcp_node_child_count` / `_at` (#19).
+- 源坐标: input file 枚举, base file 与 synthetic 判定, 字符串重扫保留坐标 (#21, #22).
+- include 搜索单一 owner: origin 路径表, `resolve_include`, 系统目录判定与 per-file `#include_next` (#23, #24).
+- 公共 `libcp_token_dump` / `libcp_ast_dump` (#25).
+- typed 初始化器只读交接: `init_resolved` 保留到 reset, 带锚点 token 与 child_count (#26).
+- 树外消费者验收 (#27): `test/outside/consumer.c` 只含公共头并链接归档, 完成降级发射与诊断回调; `test/outside.sh` 把公共头复制到临时目录, 在默认与 stage2 归档上各跑一遍, 未定义符号与公共 API 闸门共用 `test/public-api.deny`.
+- 驱动器整体迁移 (#28): `main.c`, `codegen.c`, `driver.h` 与 `driver-util.h` 只包含公共头, 用公共构造器, 子节点枚举, include 解析, dump, 坐标与 typed 初始化器完成原有工作.
+- seam 收口 (#29): Makefile 拆出 `LIB_CFLAGS` 与 `DRIVER_CFLAGS`, stage1 与 stage2 都为驱动器对象只给公共 include; `test/driver-seam.sh` 检查驱动器源码并 public-only 重编驱动器对象; `test-stage2` 另跑一遍 `test/public-api.sh`; 删除无调用者的内部入口 `libcp_unique_name_next` 与 `libcp_vla_of`; 版本升到 0.3.0.
+
+### 产物可以干什么
+
+一个不了解仓库布局的消费者可以只靠公共头与 `libcp.a` 构造后端需要的节点, 按公共类型信息缩放指针运算并发射目标指令, 并在不 longjmp 的路径上报告诊断. 仓库自带的驱动器现在也只是这个公共 seam 的消费者, 不再看见 `libcp/src`; 树外消费者与公共 API 闸门在默认与 stage2 归档上都通过.
+
+## 12.16 从阶段史看现在的代码
 
 | 你看到的 | 来自哪个阶段 | 为什么 |
 |---|---|---|
@@ -476,12 +502,12 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 | token 有 trivia 和 raw 坐标 | trivia 线 | 逐字节重建 |
 | provenance 链 | provenance 线 | 宏来源不可从 AST 恢复 |
 | `LibcpContext` 不透明 | 库边界 L3 | 公共面不泄漏内部布局 |
-| 39 个公共函数 | 库边界 D7 + L5 | 唯一的公共 API 清单(L5 追加 seed 与 range; 0.2.0 追加 node_family) |
+| 67 个公共函数 | 库边界 D7 + L5 | 唯一的公共 API 清单(L5 追加 seed 与 range; 0.2.0 追加 node_family; 后端支持面追加 17 个; 源坐标追加 4 个; 子节点枚举追加 2 个; include 搜索追加 3 个; dump 追加 2 个) |
 | `LibcpNode` 的十个字段族与 `libcp_node_family` | 字段族线 | 0.2.0 把 46 个平铺字段收进匿名 union |
 | per-TU 分配替换 arena | 分配线 | 每对象独立 `LIBCP_*` 分配, reset 沿登记链归还 |
 | 表达式层是一个绑定力循环 | Pratt 线 + Pratt 单一路径线 | 级联已删, Pratt 是唯一实现 |
 
-## 12.16 读历史文档的注意事项
+## 12.17 读历史文档的注意事项
 
 2026-11-24 之前, `plans/` 下的文件是执行记录, 不是当前 API 文档. 该目录已删除; 现行计划与记录改用 GitHub Issues (见 `docs/agents/issue-tracker.md`), 历史内容见 Git 历史.
 

@@ -36,7 +36,41 @@ LIBCP_API void libcp_context_reset(LibcpContext* ctx);
 LIBCP_API void libcp_context_set_diagnostic(LibcpContext* ctx, LibcpDiagnosticFn fn, void* user);
 LIBCP_API bool libcp_context_failed(LibcpContext* ctx);
 
+// include 搜索路径的来源. 路径按来源分桶, 搜索顺序固定为 USER ->
+// AFTER -> SYSTEM, 同一桶内保持注册顺序. 这与 GCC 不同: GCC 把
+// -idirafter 排在系统目录之后, 本库排在系统目录之前.
+typedef enum {
+  LIBCP_INCLUDE_USER,    // -I: 用户目录
+  LIBCP_INCLUDE_SYSTEM,  // 内建或默认系统目录
+  LIBCP_INCLUDE_AFTER,   // -idirafter: 用户目录之后, 系统目录之前
+} LibcpIncludeOrigin;
+
+// 追加一个 include 搜索目录; 等同于 origin 为 LIBCP_INCLUDE_USER 的
+// 版本. 字符串被复制, 调用方的缓冲区可以立刻释放. 该配置跨 reset 保留.
 LIBCP_API void libcp_context_add_include_path(LibcpContext* ctx, char* path);
+
+// 按来源追加一个 include 搜索目录. 命令行上 -I 与 -idirafter 的先后
+// 不影响结果: 搜索总是先走完 USER 桶, 再走 AFTER 桶, 最后走 SYSTEM 桶.
+// 字符串被复制, 该配置跨 reset 保留.
+LIBCP_API void libcp_context_add_include_path_with_origin(LibcpContext* ctx,
+                                                          char* path,
+                                                          LibcpIncludeOrigin origin);
+
+// 解析一个 include 文件名: 先按原样查文件 (cwd 相对或绝对), 再按上述
+// 顺序遍历路径表. 返回 per-TU 分配的路径, 其有效期到下一次 reset 或
+// free; 找不到时返回 NULL. 绝对路径不会与路径表拼接. 返回的路径也会
+// 更新内部搜索状态, 与预处理器里的 #include 命中一致.
+LIBCP_API char* libcp_context_resolve_include(LibcpContext* ctx, char* filename);
+
+// 判断一个文件路径是否落在系统目录下: 路径表前缀匹配, SYSTEM 与
+// AFTER 来源算系统目录, USER 不算. 用于 -MMD 一类"省略系统头"的过滤;
+// 不做 realpath 或 inode 归一.
+LIBCP_API bool libcp_context_include_is_system(LibcpContext* ctx, char* path);
+
+// 设置 __BASE_FILE__ 的路径. 这是 per-TU 状态: reset 清空; 未设置时,
+// 第一个被词法分析的输入文件充当它. 字符串被复制进 per-TU 分配.
+LIBCP_API void libcp_context_set_base_file(LibcpContext* ctx, char* path);
+
 LIBCP_API void libcp_context_define(LibcpContext* ctx, char* name, char* buf);
 LIBCP_API void libcp_context_undef(LibcpContext* ctx, char* name);
 
