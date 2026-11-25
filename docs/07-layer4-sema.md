@@ -2,17 +2,17 @@
 
 ## 7.1 作用与位置
 
-第 4 层是语义分析. 它在第 3 层的树上做五件事:
+第 4 层是语义分析. 它在第 3 层的树上做这些事:
 
-- 名字解析: 把 `ND_IDENT` 绑定到对象或枚举常量.
-- 类型标注: 给每个表达式节点算出类型.
+- 名字解析与绑定改写: 把 `ND_IDENT` 绑定到对象或枚举常量, 节点随之变成 `ND_VAR` 或 `ND_NUM`; 源码表达式位置的 `ND_STRING` 变成指向匿名全局的 `ND_VAR`; 访问匿名成员时在操作数与具名成员之间插入 `ND_MEMBER` 链.
+- 类型标注: 给每个表达式节点算出类型, 并按标准插入隐式转换.
 - 常量求值: 算数组维度, 枚举值, case 值, 位域宽度, 全局初始化器, `sizeof` 结论.
 - 聚合布局: 算结构体/联合的成员偏移, 对齐, 位域位置.
 - 结论记录: 把 `sizeof`, `_Generic` 选择, 内建类型谓词的结果写回节点.
 
 它**不**做的事:
 
-- 不改写源码写法. 下标还是下标, 复合赋值还是复合赋值.
+- 不改写运算符和语句的写法. 下标还是 `ND_SUBSCRIPT`, 复合赋值还是带 `op` 的 `ND_ASSIGN`, `while` 还是 `ND_WHILE`.
 - 不做指针缩放.
 - 不展开自增自减的读写回环.
 - 不分配控制流标签.
@@ -22,20 +22,20 @@
 这些是第 5 层的整形遍.
 
 输入: `libcp_parse` 的输出.
-输出: 原地标注的同一棵树, 加上一条 `LibcpObj` 全局对象链.
+输出: 原地标注并改写绑定的同一棵树, 加上一条 `LibcpObj` 全局对象链.
 
 ## 7.2 设计思路
 
 ### 7.2.1 标注而不是重建
 
-很多编译器在语义分析阶段会把树改写成更低层的形状. 本库不做. 理由是第 4 层要服务两类消费者:
+很多编译器在语义分析阶段会把树改写成更低层的形状. 本库不做这种降级改写. 理由是第 4 层要服务两类消费者:
 
 - 语义工具: 需要类型, 名字, 常量, 布局.
 - 源到源工具: 需要源码写法.
 
 如果第 4 层把 `x += 1` 改写成读改写, 源到源工具就失去了用户写的形式. 如果它把 `p + 1` 缩放进指针算术, 源到源工具就得反推.
 
-所以第 4 层只填字段:
+所以在大多数节点上, 第 4 层只填字段:
 
 - `node->ty`: 类型.
 - `node->decl.var`: 绑定结果.
@@ -44,7 +44,7 @@
 - `LibcpType.size` / `align` / `members`: 布局结论; 成员偏移在 `LibcpMember.offset` / `LibcpMember.bit_offset`.
 - `LibcpObj.init_data` / `rel`: 全局初始化数据与重定位.
 
-源码写法保留.
+源码写出的运算符与语句形态保留. 形状改写只发生在绑定点与标准要求的转换上: `ND_IDENT` 与源码位置的 `ND_STRING` 换成 `ND_VAR` / `ND_NUM`, 匿名成员访问插入 `ND_MEMBER` 链, 隐式转换插入 `ND_CAST`.
 
 ### 7.2.2 两遍走
 
@@ -60,12 +60,14 @@
 - 布局聚合类型.
 - 解析初始化器记录, 建 `LibcpInitTree`.
 - 物化语言规定存在的对象: 字符串字面量的匿名全局, 复合字面量的隐藏对象, 块域 static 的匿名全局对象 (其数据镜像在标注遍序列化).
+- 跑声明期检查: `void` 变量; 变长对象不得初始化, 锚点是引入初始化器的 `=`.
 
 **第二遍: 标注**
 
 - `libcp_node_annotate_type` / `type_chain` 给每个节点定型.
+- 解析解析器留下的成员访问: 绑定成员名; 匿名成员路径在这里插入 `ND_MEMBER` 链并改写被访问节点的 `lhs`.
 - 插入标准要求的隐式转换, 全部经 `libcp_node_cast`, 带 `value.is_implicit = true`.
-- 跑需要类型的检查: 左值性, 实参个数, 位域取地址, VLA 初始化, 不完整类型等.
+- 跑需要类型的检查: 普通赋值, 复合赋值与 `++` / `--` 的左值性, 实参个数与类型, 位域取地址, 不完整类型, 返回值类型转换, `_Generic` 控制表达式类型等.
 - 记录编译期结论.
 - 标注初始化器表达式. 声明记录的初始化器不会被普通遍历到达, 所以单独走 `decl.init_resolved`.
 
@@ -100,7 +102,7 @@ case ND_SIZEOF:
 - `ND_IDENT` 指向枚举常量: 变成 `ND_NUM`, 填 `value.val` 和 `ty`.
 - 源码表达式位置的 `ND_STRING`: 变成 `ND_VAR`, 指向一个匿名全局, 该全局的 `LibcpObj.init_data` 是字符串内容. 第 4 层为 `INIT_STR` 初始化器物化字符串时, `materialize_str` 仍创建保持 `ND_STRING` 种类的节点; 两种节点的 `decl.var` 都指向匿名全局.
 
-这是第 4 层仅有的节点种类改写.
+这是第 4 层仅有的节点种类改写. 形状变化还有两类: 访问匿名成员时, 被访问节点与具名成员之间插入 `ND_MEMBER` 链 (外层节点种类不变, 但 `lhs` 被改写); 隐式转换以 `ND_CAST` 节点插入, 属于标注遍按标准做的类型驱动转换.
 
 **物化**是建出语言规定存在的对象:
 
@@ -255,7 +257,7 @@ for (LibcpObj *o = prog; o; o = o->next) {
 - `align_ty`, `align_expr`: `_Alignas`.
 - `next`, `tok`, `width_expr`.
 
-类型记录上的 `name_pos` 只在函数参数的 per-parameter 副本上填写; `name` 还会由 sema 的 `named_type` 写到每个具名对象的类型副本上. 共享类型单例不写名字. 要拿声明的名字, 用 `LibcpObj.name` 或 `LibcpNode.decl.name_tok`.
+类型记录上的 `name_pos` 只在函数参数的 per-parameter 副本上填写; `name` 还会由 sema 的 `named_type` 写到非 VLA 的普通具名对象的类型副本上 (局部变量, 全局变量, 函数). VLA 记录是 codegen 用来索引运行时大小的身份, `named_type` 原样返回, 名字槽保持未设置; 块作用域 static 变量走匿名全局对象, 不经过 `named_type`. 共享类型单例不写名字. 要拿声明的名字, 用 `LibcpObj.name` 或 `LibcpNode.decl.name_tok`.
 
 ### 7.3.3 初始化树
 
@@ -307,12 +309,13 @@ struct libcp_init_path {
 - 每个表达式节点有 `ty`.
 - `ND_IDENT` 已变成 `ND_VAR` 或 `ND_NUM`.
 - 源码表达式位置的 `ND_STRING` 已变成 `ND_VAR`; 物化字符串时创建的 `ND_STRING` 节点保持原 kind.
+- 匿名成员访问的路径上有 sema 插入的 `ND_MEMBER` 链.
 - 隐式 cast 已插入, 带 `is_implicit`.
 - 声明记录仍在语句链上.
 - 初始化器树在 `decl.init_resolved`, 只读, 有效到 reset; `decl.decl_init` 为 NULL.
 - 结论字段已填.
 
-树的形状与第 3 层相同, 除了上述节点种类改写和 cast 插入.
+树的结构与第 3 层有两处不同: 绑定点的节点被改写 (`ND_IDENT` / `ND_STRING` 与匿名成员链), 隐式转换节点被插入. 运算符与语句节点保持第 3 层的种类, 源码写出的 `op` 与操作数顺序也不变.
 
 ## 7.4 实现流程
 
@@ -429,7 +432,7 @@ static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
 
 - 数组: 求 `dim_len`, 判断定长还是 VLA, 设置 `array_len` 和 `size`.
 - `typeof`: 标注 `typeof_expr`, 取类型.
-- 对齐: 求 `align_expr` 或取 `align_ty`.
+- 对齐: 求 `ty->align_expr`. `align_ty` 不在 `LibcpType` 上: 成员与变量属性的 `_Alignas(type)` 分别记录在 `LibcpMember.align_ty` 与 `LibcpVarAttr.align_ty`, 由 `finalize_members` 与 `attr_align` 消费.
 - 结构体/联合: 如果 `layout_pending`, 调 `layout_struct` / `layout_union`.
 
 `layout_struct` 逐成员:
@@ -446,22 +449,24 @@ static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
 `libcp_node_annotate_type` 是一个大 switch, 按节点种类定型. 它:
 
 - 递归标注子节点.
+- 解析解析器留下的成员访问 (`ND_MEMBER`): 绑定成员名; 匿名成员路径在这里插入 `ND_MEMBER` 链并改写被访问节点的 `lhs`. `ND_IDENT` 分支也保留一条绑定路径, 作为求值器直接到达该节点时的安全网.
 - 计算节点类型.
 - 插入隐式 cast.
 - 跑检查.
 - 记录结论.
 
-`libcp_node_annotate_type` 的每个分支都在 A9.2 里逐项审计过, 确认全部是纯标注, 没有形状改写. 绑定改写发生在 resolve pass; `libcp_node_annotate_type` 的 `ND_STRING` 分支只物化匿名全局并设置 `decl.var`, 不改 kind. 另一个例外是显式 cast 的定型.
+所以标注遍不是只读的. 它解析尚未绑定的成员访问, 并在匿名成员路径上插入 `ND_MEMBER` 链; 它也插入隐式转换节点. 节点种类改写 (`ND_IDENT` 变成 `ND_VAR` / `ND_NUM`, 源码位置的 `ND_STRING` 变成 `ND_VAR`) 由 resolve pass 的 `bind_ident` 与 `ND_STRING` 分支完成; 标注遍的 `ND_STRING` 分支只物化匿名全局并设置 `decl.var`, 不改 kind, `ND_IDENT` 分支是求值器直接到达时的安全网. 显式 cast 的定型也在这里, 它把 `ty_op` 里的目标类型填给节点.
 
 `libcp_node_annotate_type` 中的检查包括:
 
-- 赋值目标的左值性.
+- 赋值目标的左值性. 普通赋值, 复合赋值与 `ND_INCDEC` (`++` / `--`) 共用通用判定: 变量, 解引用, 成员访问, 下标与复合字面量是左值; 数组, VLA 与函数类型不可修改; 字面量, 算术或比较结果, 调用与 cast 不是左值. `codegen.c` 的 `gen_addr` 保留同一条检查, 只作为后端防御, 不是唯一诊断点.
 - 函数实参个数与类型.
 - 位域取地址.
-- VLA 不得初始化.
 - 不完整类型.
 - 返回值类型转换.
 - `_Generic` 的控制表达式类型.
+
+变长对象不得初始化由 resolve pass 的 `ND_DECL` 分支检查 (见 7.2.2), 不在标注遍.
 
 `check_control_flow` 另行检查:
 
@@ -469,7 +474,7 @@ static void bind_ident(LibcpContext *ctx, LibcpNode *node) {
 - `goto` / label 配对.
 - `for` init 声明链中的同名重复声明.
 
-诊断文案与插入符锚点由 `test/diagnostic.sh` 逐字节锁定, 69 例.
+诊断文案与插入符锚点由 `test/diagnostic.sh` 逐字节锁定, 73 例.
 
 ### 7.4.6 全局数据序列化
 
@@ -508,7 +513,7 @@ struct libcp_relocation {
 
 产物分两部分:
 
-1. **原地标注的树**. 每个表达式有类型, 名字已绑定, 结论已记录.
+1. **原地标注的树**. 每个表达式有类型, 名字已绑定, 结论已记录; 绑定点的节点种类与匿名成员链已被改写.
 2. **`LibcpObj` 全局链**. 每个全局变量和函数一项, 带类型, 初始化数据, 重定位, 局部对象链, 函数体.
 
 此外:
@@ -614,7 +619,7 @@ if (!o->is_function && o->is_definition && o->init_data) {
 
 ## 7.8 边界与已知限制
 
-- **原地改写**. `ND_IDENT` 变成 `ND_VAR` / `ND_NUM`, 源码表达式位置的 `ND_STRING` 变成 `ND_VAR`; 第 4 层物化字符串时创建的 `ND_STRING` 节点保留原 kind. 源码表达式位置的原始形态在 sema 后不再存在.
+- **原地改写**. `ND_IDENT` 变成 `ND_VAR` / `ND_NUM`, 源码表达式位置的 `ND_STRING` 变成 `ND_VAR`; 第 4 层物化字符串时创建的 `ND_STRING` 节点保留原 kind. 匿名成员访问处还会插入 sema 的 `ND_MEMBER` 链. 源码表达式位置的原始形态在 sema 后不再存在.
 - **`decl.decl_init` 在 sema 后为 NULL**. 忠实初始化器记录属于第 3 层; 第 4 层的 `decl.init_resolved` 是只读数据契约, 按 `children` / `child_count` 遍历, 见 7.3.3.
 - **限定符丢失**. `const`, `volatile`, `restrict` 在解析时被消费, 不进入类型记录. `_Atomic` 有 `is_atomic`. 依赖限定符的工具需要自己从 token 或 CST 读.
 - **没有 `LibcpObj` 链的范围 API**. 节点只有代表 token; 第 3 层树可以用 `libcp_node_source_range` 取子树锚点范围, 但 sema 返回的全局对象链没有等价的接口.
