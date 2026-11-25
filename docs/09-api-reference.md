@@ -523,7 +523,7 @@ span 的最小接口. 注意事项:
 - `next` 链是兄弟, 不被跟随; 初始化器树不被下降.
 - 极值取自各节点的代表 token, 并额外收集 `decl.name_tok`, `access.arrow_tok` 与 `case_.colon_tok`: 例如 `ND_FUNCDEF` 的代表 token 是函数体的 `{`, 但 `range.c` 还会收集 `name_tok`, 所以整个函数定义的 range 从它的名字 token 开始, 不从声明说明符开始. `spec_decls` 只保存 declspec 中产生的声明记录 (如 enum 常量), 不是说明符 token, 不能用来取得更早边界; 需要更早边界时请回到 token / CST.
 - 子树完全没有 token 时, `*start` 与 `*end` 都为 NULL.
-- 坐标换算由内部 source 模块的 `libcp_token_source_pos` 统一提供; 需要物理行时用 `libcp_token_physical_line`, 它取文件的 `lines` / `map` 表, 不依赖 `line_no - line_delta`.
+- 坐标换算与物理行入口是库内部实现 (`libcp_token_source_pos` / `libcp_token_physical_line` 不在公共头与 D7 清单里); 公共面只通过 `libcp_node_source_range` 这类入口交付 token, 不承诺物理行 accessor. 需要区分内存输入与真实文件时用公共的 `libcp_token_is_synthetic`.
 - 宏展开产物 token 的坐标在合成缓冲里, 跨文件比较按文件指针先序, 稳定
   但无语义.
 
