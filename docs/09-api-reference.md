@@ -148,8 +148,9 @@ typedef void (*LibcpDiagnosticFn)(void *user,
 - `fn` 为 NULL 时恢复默认打印行为.
 - 回调里的字符串只保证到下一次 reset.
 - `LibcpDiagnostic` 自 L5 起带 `tok`(锚点 token, token 锚定的诊断非 NULL)与
-  `prov`(该 token 的宏展开链, 源 token 为 NULL): 回调可以沿链走到最外层
-  调用点. 默认打印行为忽略这两个字段, 输出逐字节不变.
+  `prov`(该 token 的宏展开链, 源 token 为 NULL): 链头是最近一层展开, 宏体层
+  向更外层走, 实参层的下一层转入该实参自身的展开链, 方向不单调; 最外层
+  调用点需沿链回溯确定 (见 4.3.2). 默认打印行为忽略这两个字段, 输出逐字节不变.
 
 ### 9.3.5 libcp_context_failed
 
@@ -679,7 +680,8 @@ int libcp_macro_prov_arg_index(LibcpMacroProv *p);
 ```
 
 - `libcp_token_provenance`: 返回 token 的链头, 源 token 返回 NULL.
-- `libcp_macro_prov_next`: 下一层, 即更外层的调用上下文.
+- `libcp_macro_prov_next`: 该节点的下一层. 宏体层的下一层是更外层的调用
+  上下文; 实参层的下一层是该实参自身的展开链, 方向不单调 (见 4.3.2).
 - `libcp_macro_prov_expansion`: 该层对应的展开记录.
 - `libcp_macro_prov_arg_index`: `-1` 表示宏体, `>= 0` 表示实参序号, 0 起.
 

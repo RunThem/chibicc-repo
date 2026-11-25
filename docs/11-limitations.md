@@ -249,7 +249,7 @@ libcp_context_add_include_path_with_origin(ctx, "/usr/include",
 
 粘贴, 字符串化, 内建宏产生的 token 位置是合成的. dump 显示 `@synth`, 诊断可能指向宏定义或合成位置.
 
-这里的 `@synth` 按 token 的 provenance 判断 (宏展开产物), 与 `libcp_token_is_synthetic` 的 file 级判定 (文件缓冲区是否合成) 是两个不同的概念.
+`@synth` 的判定随通道不同: `-dump-ast` 按 token 的 provenance 判断 (宏展开产物), `-dump-expansions` 按 `libcp_token_is_synthetic` 的 file 级判定 (文件缓冲区是否合成). 两者是两个不同的概念.
 
 ### 11.7.6 不能做宏内手术
 

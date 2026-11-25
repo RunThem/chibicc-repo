@@ -182,7 +182,7 @@ LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok) {
 
 - 行首的 `#` 开始一条指令. 指令的范围到下一个逻辑行首.
 - `#define` 的对象宏和函数宏分界规则与 `preprocess.c` 一致.
-- `#if` / `#elif` / `#else` / `#endif` 组成 `CST_PP_IF`, 每个分支一个 `CST_PP_BRANCH`. 条件不求值, 分支全部保留, `#endif` 作为 `PP_IF` 的子节点.
+- `#if` / `#elif` / `#else` / `#endif` 组成 `CST_PP_IF`, 每个分支一个 `CST_PP_BRANCH`. 条件不求值, 分支全部保留, `#endif` 作为 `CST_PP_IF` 的子节点.
 - 未知指令或无法完整识别的指令变成 `CST_PP_DIRECTIVE`, 其 token 仍是叶子. `#include_next` 在 `cst_pp_kind` 中没有专门分支, 因此落到 `CST_PP_DIRECTIVE`, 不是 `CST_PP_INCLUDE`.
 - 指令出现在已经退化为 `CST_UNPARSED` 的跨度里时, 它不会额外变成 `CST_PP_*` 节点. 它仍然是 token 叶子. 这是结构覆盖的边界, 不影响重建.
 
