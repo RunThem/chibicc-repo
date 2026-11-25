@@ -132,6 +132,15 @@ static CgNode* cg(LibcpNode* node) {
   return p;
 }
 
+// 初始化器只消费一次: 返回本次调用是否取得消费权. 消费状态记在消费者
+// 私有表里, 库树的 init_resolved 保持只读 (issue #26).
+static bool take_init(LibcpNode* node) {
+  if (cg(node)->init_consumed)
+    return false;
+  cg(node)->init_consumed = true;
+  return true;
+}
+
 static CgType* cg_type(LibcpType* ty) {
   unsigned h = cg_hash(ty);
   for (CgType* p = cg_types[h]; p; p = p->next)
@@ -1551,9 +1560,8 @@ static void gen_stmt(LibcpContext* ctx, LibcpNode* node) {
       // 带初始化器的对象变成逗号链, 这条链过去由 pass 里的展开构造 (先清零,
       // 再逐元素赋值), 现在在这里发射. 已消费的初始化器不再重复发射,
       // 库树本身不被写回 (issue #26).
-      if (cg(node)->init_consumed)
+      if (!take_init(node))
         return;
-      cg(node)->init_consumed = true;
 
       if (node->decl.attr.is_static || !node->decl.init_resolved)
         return;
@@ -2011,9 +2019,8 @@ static bool expand_decl(LibcpContext* ctx, LibcpNode* node) {
 
   // 初始化器只消费一次, 消费状态记在消费者私有表里; 库树的
   // init_resolved 保持只读 (issue #26).
-  if (cg(node)->init_consumed)
+  if (!take_init(node))
     return false;
-  cg(node)->init_consumed = true;
 
   LibcpNode* vla_size = NULL;
   for (LibcpType* t = var->ty; t; t = t->base) {
@@ -2420,9 +2427,8 @@ static void shape_node(LibcpContext* ctx, LibcpNode* node) {
         LibcpObj* var = node->decl.var;
 
         // 初始化器只消费一次; 库树不被写回 (issue #26).
-        if (cg(node)->init_consumed)
+        if (!take_init(node))
           return;
-        cg(node)->init_consumed = true;
 
         shape_init_exprs(ctx, node->decl.init_resolved);
         LibcpNode* lowered =
