@@ -305,7 +305,7 @@ fclose(out);
 cmp input.c rebuilt.c
 ```
 
-`-dump-tokens` 对每个 token 打印一行 T(行号, raw 偏移, 种类, 拼写); 在该 T 行之前, 按 trivia 片段打印零或多行 R(bom / lc / bc / nl / ws / cont). R 行与 T 行合起来逐字节平铺原始文件. 具体形状由 `test/trivia.sh` 锁定.
+`-dump-tokens` 对每个 token 打印一行 T(物理行号, raw 偏移, 种类, 拼写); 在该 T 行之前, 按 trivia 片段打印零或多行 R(bom / lc / bc / nl / ws / cont). R 行与 T 行合起来逐字节平铺原始文件. 具体形状由 `test/trivia.sh` 锁定.
 
 ## 3.8 边界与已知限制
 
