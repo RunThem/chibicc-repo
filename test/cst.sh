@@ -355,7 +355,7 @@ exp_dump pp_define '#define X 1 + 2\n#define F(x, y) x + y\n#define OBJ (x)\n' \
 exp_dump pp_variadic '#define V(fmt, ...) f(fmt, __VA_ARGS__)\n' \
 'TU\n  PP_DEFINE\n    TOKEN #\n    TOKEN define\n    TOKEN V\n    GROUP_PAREN\n      TOKEN (\n      TOKEN fmt\n      TOKEN ,\n      TOKEN ...\n      TOKEN )\n    TOKEN f\n    TOKEN (\n    TOKEN fmt\n    TOKEN ,\n    TOKEN __VA_ARGS__\n    TOKEN )\n  EOF\n'
 
-# #undef / #line(含 GNU 行标记 `# 123 "file"`) 各自成节点, 行内 token 全保留.
+# #undef / #line(含 `# 123 "file"` 的 GNU 形式) 各自成节点, 行内 token 全保留.
 exp_dump pp_undef_line '#undef X\n#line 10 "f.c"\n# 200 "xyz" 2 3\n' \
 'TU\n  PP_UNDEF\n    TOKEN #\n    TOKEN undef\n    TOKEN X\n  PP_LINE\n    TOKEN #\n    TOKEN line\n    TOKEN 10\n    TOKEN "f.c"\n  PP_LINE\n    TOKEN #\n    TOKEN 200\n    TOKEN "xyz"\n    TOKEN 2\n    TOKEN 3\n  EOF\n'
 

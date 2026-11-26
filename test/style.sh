@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# 风格闸门: tracked 文本文件不得含中文标点, HEAD 提交信息须为大写开头,
-# 无结尾句号的纯 ASCII.
-# 有 .git 时用 git ls-files 扫描全部 tracked 文本文件并检查 HEAD 提交信息;
-# 无 .git 时 (Docker 源码副本) 用 find 扫描同样的文本文件, 跳过提交检查.
+# 风格闸门: tracked 与 untracked 文本文件不得含中文标点, HEAD 提交信息须为
+# 大写开头, 无结尾句号的纯 ASCII.
+# 有 .git 时用 git ls-files 扫描全部 tracked 与 untracked (非 ignored) 文本
+# 文件并检查 HEAD 提交信息; 无 .git 时 (Docker 源码副本) 用 find 扫描同样的
+# 文本文件, 跳过提交检查.
 # 用法: test/style.sh [root]
 set -euo pipefail
 
@@ -92,7 +93,7 @@ if [ "$have_git" -eq 1 ]; then
   while IFS= read -r -d '' file; do
     [ -f "$file" ] || continue
     scan_file "$file"
-  done < <(git ls-files -z)
+  done < <(git ls-files -z --cached --others --exclude-standard)
 else
   while IFS= read -r -d '' file; do
     case $file in ./.git/*) continue ;; esac

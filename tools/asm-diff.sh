@@ -7,6 +7,9 @@
 # BASE 是任意能解析为提交的 ref (SHA / 分支 / 标签), 脚本比较 BASE 构建
 # 的 chibicc 与当前工作树构建的 chibicc.
 #
+# BASE 解析到 HEAD 且工作区干净时是自比, 脚本直接拒绝; 有未提交改动时
+# BASE=HEAD 仍然合法, 那是在比较增量.
+#
 # 路径差异: 两边都先 cd 到各自的树根, 再用相对路径 test/*.c 编译, codegen
 # 发射的 .file 伪指令因此记录同一串相对路径. 产物 .s 写在临时目录, 不会
 # 进入 .file.
@@ -43,6 +46,19 @@ flags=("$@")
 
 if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
     echo "asm-diff: not inside a git work tree" >&2
+    exit 2
+fi
+
+# BASE 解析到 HEAD 且工作区完全干净时是自比, 直接拒绝, 避免把空 diff
+# 当成等价性证据. 有未提交改动时 BASE=HEAD 仍然合法, 那是在比较增量.
+head_commit=$(git -C "$root" rev-parse HEAD)
+base_commit=$(git -C "$root" rev-parse --verify "$base^{commit}" 2>/dev/null || true)
+if [ -n "$base_commit" ] && [ "$base_commit" = "$head_commit" ] &&
+    git -C "$root" diff --quiet &&
+    git -C "$root" diff --cached --quiet &&
+    [ -z "$(git -C "$root" ls-files --others --exclude-standard)" ]; then
+    echo "asm-diff: BASE resolves to HEAD and the tree is clean; this is a self-comparison" >&2
+    echo "asm-diff: use the branch point (e.g. BASE=main) for branch-level evidence" >&2
     exit 2
 fi
 

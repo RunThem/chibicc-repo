@@ -17,6 +17,7 @@
 - 评论: `gh issue comment <number> --body "..."`.
 - 加 / 删 label: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`.
 - 关闭: 先 `gh issue comment <number> --body "..."`, 再 `gh issue close <number>`. 对已关闭 issue, `gh issue close --comment` 会丢弃评论但仍退出 0.
+- spec 正文只写问题, 方案, 决策与验收; "未提交 / 已提交 / 待 review" 这类临时状态写在评论里, 避免正文随流程过期.
 
 `gh` 在仓库内会自动从 `git remote -v` 推断仓库. 只向自己的仓库提 issue; 在 fork 中 `gh` 可能默认指向 upstream parent, 首次 `gh issue create` 前用 `gh repo view --json nameWithOwner` 确认目标仓库.
 

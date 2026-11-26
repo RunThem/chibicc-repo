@@ -218,7 +218,7 @@ make test-stage2
 | `test/warning.sh` | 警告文案与插入符 |
 | `test/shape.sh` | 34 段发射形状回归 |
 | `test/ast.sh` | 86 例第 3 层 AST 形态逐字节 |
-| `test/trivia.sh` | token / trivia / 重建 / `-E` 锚点 |
+| `test/trivia.sh` | token / trivia / 重建 / `-E -P` 归一化与默认 `-E` 行标记 |
 | `test/cst.sh` | 48 个文件 round-trip / 48 个 verify / 15 个边界样本 / 65 个 dump 样本 |
 | `test/cst-stats.sh` | CST `UNPARSED` 计数与 `test/cst-stats.golden` 逐行比对 |
 | `test/expand.sh` | 31 个 provenance dump 样本, 3 个链形状样本, 17 个 verify 样本, 全量语料 |
@@ -229,7 +229,7 @@ make test-stage2
 | `test/context-audit.sh` | 隐式 context 审计 (`--strict`, 由 `make test` 调用) |
 | `test/docs-links.sh` | 本地 markdown 链接与 AGENTS 章节引用 (由 `make test` 调用) |
 | `test/docs-facts.sh` | 当前矩阵文档的机械事实: 诊断 / AST / dump 计数, 公共头数量与版本, 安装布局, D7 数量 (文档专用, 由 `make test` 调用, 不进 `test-stage2`) |
-| `test/style.sh` | 全部 tracked 文本文件的中文标点与 HEAD 提交信息检查 (无 `.git` 时用 `find` 扫描并跳过提交检查) |
+| `test/style.sh` | 全部 tracked 与 untracked 文本文件的中文标点与 HEAD 提交信息检查 (无 `.git` 时用 `find` 扫描并跳过提交检查) |
 | `test/fmt.sh` | formatter 幂等 / 行数 / 注释数量 / 有系统头时执行 `-S` 等价 (`make fmt-tool` 构建; 容器内为权威, 原生 x86-64 Linux 也执行) |
 | `test/c2c.sh` | C 转 C 打印回归 (`make c2c` 构建) |
 
@@ -249,6 +249,8 @@ make test-stage2
 ```
 
 这些通道不需要运行目标代码.
+
+`-E` 默认输出 GCC 形式的行标记 (`# <line> "<file>"`), 在起始, 文件切换与行号跳变处重同步; `-P` 关闭标记, 输出保持归一化文本. 标记逻辑在驱动器 `main.c`, 库不提供 `-E` 输出函数; 宏展开产物的调用点坐标由预处理在展开时冻结在宏名 token 上.
 
 ### 10.8.1 前端 benchmark
 
@@ -335,6 +337,8 @@ THIRDPARTY="tinycc libpng" make test-thirdparty
 ```
 
 本地版不把 `test/thirdparty` 放进 PATH, 也不把源码拷到 `/work`. Rosetta 下 tcc 的 106_pthread / 112_backtrace / 113_btdll 会不稳定 SIGSEGV, 与 chibicc 无关, 因此 `test/thirdparty/make` 是只为 Rosetta 服务的 PATH shim, 真 x86-64 Linux 不需要.
+
+若 `thirdparty/cpython` 上次是用 chibicc 构建的, 可以直接用 `thirdparty/cpython/python -m unittest <test>` 做单条验证; 全量 `test/thirdparty/cpython.sh` 会先 `git reset --hard` 再重建.
 
 容器内构建与测试必须在容器可写层 `/work` 进行: tcc 的 `-run`/bcheck 只认 overlayfs, 在 virtiofs 或 docker volume 上会确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存.
 

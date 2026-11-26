@@ -28,6 +28,7 @@ bool opt_fpic;
 static FileType opt_x;
 static LibcpStringArray opt_include;
 static bool opt_E;
+static bool opt_P;
 static bool opt_M;
 static bool opt_MD;
 static bool opt_MMD;
@@ -103,6 +104,7 @@ static const char help_text[] =
     "  -c                        只编译并汇编, 不链接.\n"
     "  -S                        只编译, 输出汇编.\n"
     "  -E                        只预处理, 输出 C 源.\n"
+    "  -P                        不输出 -E 的行标记.\n"
     "  -o <path>                 输出到 <path>; 也接受 -o<path>.\n"
     "                            默认: 链接为 a.out, -c 为 <文件>.o, -S 为 <文件>.s,\n"
     "                            -E 与只读通道为标准输出.\n"
@@ -311,6 +313,11 @@ static void parse_args(int argc, char** argv) {
 
     if (!strcmp(argv[i], "-E")) {
       opt_E = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-P")) {
+      opt_P = true;
       continue;
     }
 
@@ -615,20 +622,93 @@ static void run_cc1(int argc, char** argv, char* input, char* output) {
   run_subprocess(args);
 }
 
-// 打印 token, 默认写到 stdout, 给出 -o 时写该文件. 供 -E 使用.
-static void print_tokens(LibcpToken* tok) {
-  FILE* out = open_file(opt_o ? opt_o : "-");
+// 输出一行 GCC 形式的行标记. 文件名按 GCC 的习惯转义引号与反斜杠.
+static void print_linemarker(FILE* out, int line, char* filename) {
+  fprintf(out, "# %d \"", line);
+  for (char* p = filename; *p; p++) {
+    if (*p == '"' || *p == '\\')
+      fputc('\\', out);
+    fputc(*p, out);
+  }
+  fprintf(out, "\"\n");
+}
 
-  int line = 1;
+// 取输出行首 token 的坐标. 宏展开产物按最外层调用点归属: origin 链指向
+// 每层展开的宏名 token; 内建动态宏的展开结果没有 origin, 从 provenance
+// 链头取这次展开的宏名 token, 再沿 origin 回溯. 行号偏移与 __LINE__ 的
+// 算法一致.
+static void token_position(LibcpToken* tok, char** filename, int* line) {
+  if (!tok->origin && !libcp_token_provenance(tok)) {
+    *filename = tok->filename ? tok->filename : tok->file->display_name;
+    *line     = tok->line_no;
+    return;
+  }
+
+  LibcpToken* t = tok;
+  while (t->origin)
+    t = t->origin;
+
+  if (t == tok) {
+    LibcpMacroExpansion* e = libcp_macro_prov_expansion(libcp_token_provenance(tok));
+    LibcpToken* name       = libcp_macro_expansion_name(e);
+    if (name)
+      for (t = name; t->origin; t = t->origin)
+        ;
+  }
+
+  *filename = t->filename ? t->filename : t->file->display_name;
+  *line     = t->line_no + t->line_delta;
+}
+
+// 打印 token, 默认写到 stdout, 给出 -o 时写该文件. 供 -E 使用.
+// 默认在起始, 文件切换与行号跳变处输出行标记; -P 关闭标记, 输出保持
+// 加标记之前的逐字节形态.
+static void print_tokens(LibcpToken* tok) {
+  FILE* out  = open_file(opt_o ? opt_o : "-");
+  char* base = base_file ? base_file : tok->file->display_name;
+
+  if (!opt_P)
+    print_linemarker(out, 1, base);
+
+  // 上一条输出行的源坐标, 用于判断下一条输出行是否需要重同步标记.
+  char* prev_file  = base;
+  int prev_line    = 1;
+  bool have_output = false;
+
+  bool at_line_start = true;
+  bool first         = true;
+  bool wrote_token   = false;
+
   for (; tok->kind != TK_EOF; tok = tok->next) {
-    if (line > 1 && tok->at_bol)
+    if (!first && tok->at_bol) {
       fprintf(out, "\n");
+      at_line_start = true;
+    }
+    first = false;
+
+    if (at_line_start) {
+      if (!opt_P) {
+        char* file;
+        int line;
+        token_position(tok, &file, &line);
+        int expected = have_output ? prev_line + 1 : prev_line;
+        if (strcmp(file, prev_file) != 0 || line != expected)
+          print_linemarker(out, line, file);
+        prev_file   = file;
+        prev_line   = line;
+        have_output = true;
+      }
+      at_line_start = false;
+    }
+
     if (tok->has_space && !tok->at_bol)
       fprintf(out, " ");
     fprintf(out, "%.*s", tok->len, tok->loc);
-    line++;
+    wrote_token = true;
   }
-  fprintf(out, "\n");
+
+  if (wrote_token || opt_P)
+    fprintf(out, "\n");
 }
 
 // 给出 -M 或 -MD 时, 编译器按 make 能读的格式输出输入文件列表, 用于自动

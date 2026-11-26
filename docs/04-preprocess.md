@@ -133,7 +133,7 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 `libcp_preprocess(ctx, tok)` 的流程:
 
 1. `preprocess2` 逐 token 扫描.
-2. 如果 token 是宏名, `expand_macro` 展开, 插入产物.
+2. 如果 token 是宏名, `expand_macro` 展开, 插入产物; 展开前把调用点的 `filename` 与 `line_delta` 冻结在宏名 token 上, 供 `origin` 链回溯.
 3. 如果不是行首的 `#`, 原样输出, 同时填写 `line_delta` 和 `filename`.
 4. 如果是 `#`, 按指令名分派.
 5. 结束后检查有没有未闭合的条件指令.
@@ -155,11 +155,13 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 | `#ifdef` / `#ifndef` | 检查宏是否存在 |
 | `#elif` / `#else` / `#endif` | 条件栈 |
 | `#line` | 设置 `line_delta` 和 `display_name` |
-| GNU 行标记 | `# 123 "file"` 形式, 与 `#line` 等价 |
+| `#line` 的 GNU 形式 | `# 123 "file"` 形式, 与 `#line` 等价 |
 | `#pragma once` | 记录文件只包含一次 |
 | 其他 `#pragma` | 忽略整行 |
 | `#error` | 报告 `error` 并终止 |
 | 空指令 | `#` 单独一行, 合法, 忽略 |
+
+`#line N` 让下一条逻辑行为 N+1 (`test/line.c` 锁定), 与 GCC 的 N 不同.
 
 不支持的指令按 `invalid preprocessor directive` 报错. 例如 `#warning` 不被识别.
 
