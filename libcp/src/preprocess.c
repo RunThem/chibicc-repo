@@ -763,6 +763,11 @@ static bool expand_macro(LibcpContext* ctx, LibcpToken** rest, LibcpToken* tok) 
   if (!m)
     return false;
 
+  // 记录调用点的显示坐标. 这个 token 会被展开消费, 之后只能通过 origin
+  // 找回; 若等到消费后读文件字段, 同一文件里更靠后的 #line 会改写它们.
+  tok->filename   = tok->file->display_name;
+  tok->line_delta = tok->file->line_delta;
+
   // 内建动态宏的应用, 例如 __LINE__: 由处理器现场生成 token.
   if (m->handler) {
     LibcpMacroExpansion* e = new_expansion(ctx, tok, NULL, m, NULL, 0, true);

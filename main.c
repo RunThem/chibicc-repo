@@ -656,8 +656,8 @@ static void token_position(LibcpToken* tok, char** filename, int* line) {
         ;
   }
 
-  *filename = t->file->display_name;
-  *line     = t->line_no + t->file->line_delta;
+  *filename = t->filename ? t->filename : t->file->display_name;
+  *line     = t->line_no + t->line_delta;
 }
 
 // 打印 token, 默认写到 stdout, 给出 -o 时写该文件. 供 -E 使用.

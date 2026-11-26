@@ -110,6 +110,10 @@ exp_lm nested '#include "lm-nest-a.h"\nint m;\n' \
 exp_lm line_directive '#line 100 "lm-logical.c"\nint d;\n' \
 '# 1 "lm-line_directive.c"\n# 101 "lm-logical.c"\nint d;\n'
 
+# GNU 形式 `# 42 "file"` 与 #line 等价, 标记同样改写.
+exp_lm gnu_line '# 42 "lm-gnu.c"\nint g;\n' \
+'# 1 "lm-gnu_line.c"\n# 43 "lm-gnu.c"\nint g;\n'
+
 # 头文件里的宏在主文件调用: 归属最外层调用点, 不是定义点.
 printf '#define OBJ int obj;\n' > "$tmp/lm-obj.h"
 exp_lm macro_header '#include "lm-obj.h"\nOBJ\n' \
@@ -126,6 +130,14 @@ exp_lm macro_arg '#define ID(x) x\n#define A 1\nID(A)\n' \
 # 内建动态宏没有 origin, 走 provenance 找回调用点.
 exp_lm builtin 'int a;\n\n__LINE__\n' \
 '# 1 "lm-builtin.c"\nint a;\n# 3 "lm-builtin.c"\n3\n'
+
+# 宏调用之后再有 #line: 标记停在调用点, 不被后面的 #line 改写.
+exp_lm macro_before_line '#define M 1\nM\n#line 100 "lm-gen.c"\n' \
+'# 1 "lm-macro_before_line.c"\n# 2 "lm-macro_before_line.c"\n1\n'
+
+# 内建动态宏同样停在调用点; __FILE__ 的值与标记必须一致.
+exp_lm file_before_line 'int a;\n\n__FILE__\n#line 100 "lm-logical.c"\n' \
+'# 1 "lm-file_before_line.c"\nint a;\n# 3 "lm-file_before_line.c"\n"lm-file_before_line.c"\n'
 
 # -include: 主文件锚点, 被包含文件切换, 返回主文件.
 printf 'int pre;\n' > "$tmp/lm-pre.h"

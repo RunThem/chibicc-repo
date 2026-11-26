@@ -168,6 +168,10 @@ echo "#include \"$tmp/out1\"" | $chibicc -E -o $tmp/out2 -xc -
 cat $tmp/out2 | grep -q foo
 check '-E and -o'
 
+# -E -o 同样把起始行标记写进输出文件.
+grep -q '^# 1 "-"' $tmp/out2
+check '-E and -o line marker'
+
 # 默认 -E 输出起始行标记.
 printf 'int p;\n' | $chibicc -E -xc - | grep -q '^# 1 "-"'
 check '-E line marker'
