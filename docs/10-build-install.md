@@ -229,7 +229,7 @@ make test-stage2
 | `test/context-audit.sh` | 隐式 context 审计 (`--strict`, 由 `make test` 调用) |
 | `test/docs-links.sh` | 本地 markdown 链接与 AGENTS 章节引用 (由 `make test` 调用) |
 | `test/docs-facts.sh` | 当前矩阵文档的机械事实: 诊断 / AST / dump 计数, 公共头数量与版本, 安装布局, D7 数量 (文档专用, 由 `make test` 调用, 不进 `test-stage2`) |
-| `test/style.sh` | 全部 tracked 文本文件的中文标点与 HEAD 提交信息检查 (无 `.git` 时用 `find` 扫描并跳过提交检查) |
+| `test/style.sh` | 全部 tracked 与 untracked 文本文件的中文标点与 HEAD 提交信息检查 (无 `.git` 时用 `find` 扫描并跳过提交检查) |
 | `test/fmt.sh` | formatter 幂等 / 行数 / 注释数量 / 有系统头时执行 `-S` 等价 (`make fmt-tool` 构建; 容器内为权威, 原生 x86-64 Linux 也执行) |
 | `test/c2c.sh` | C 转 C 打印回归 (`make c2c` 构建) |
 
@@ -337,6 +337,8 @@ THIRDPARTY="tinycc libpng" make test-thirdparty
 ```
 
 本地版不把 `test/thirdparty` 放进 PATH, 也不把源码拷到 `/work`. Rosetta 下 tcc 的 106_pthread / 112_backtrace / 113_btdll 会不稳定 SIGSEGV, 与 chibicc 无关, 因此 `test/thirdparty/make` 是只为 Rosetta 服务的 PATH shim, 真 x86-64 Linux 不需要.
+
+若 `thirdparty/cpython` 上次是用 chibicc 构建的, 可以直接用 `thirdparty/cpython/python -m unittest <test>` 做单条验证; 全量 `test/thirdparty/cpython.sh` 会先 `git reset --hard` 再重建.
 
 容器内构建与测试必须在容器可写层 `/work` 进行: tcc 的 `-run`/bcheck 只认 overlayfs, 在 virtiofs 或 docker volume 上会确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存.
 

@@ -161,6 +161,8 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 | `#error` | 报告 `error` 并终止 |
 | 空指令 | `#` 单独一行, 合法, 忽略 |
 
+`#line N` 让下一条逻辑行为 N+1 (`test/line.c` 锁定), 与 GCC 的 N 不同.
+
 不支持的指令按 `invalid preprocessor directive` 报错. 例如 `#warning` 不被识别.
 
 `#include` 的搜索细节 (搜索由内部 include 模块独占, 预处理只提交请求):

@@ -58,7 +58,7 @@
 
 测试前先运行 `uname -s` 与 `uname -m`, 在汇报中写明宿主与选择的路径; 不得跳过判定直接测试.
 
-- `Linux` + `x86_64`: 原生路径. 全量测试用 `make test-all`; 第三方用 `make test-thirdparty`; 汇编等价性用 `make asm-diff BASE=<ref>`; `make bench` 只在此路径运行. 禁止在此宿主运行 `make docker-image`, `make docker-test`, `make docker-test-thirdparty`, `make docker-snapshot-diff`.
+- `Linux` + `x86_64`: 原生路径. 全量测试用 `make test-all`; 第三方用 `make test-thirdparty`; 汇编等价性用 `make asm-diff BASE=<ref>` (分支级证据取分支起点, 未提交增量才用 `HEAD`); `make bench` 只在此路径运行. 禁止在此宿主运行 `make docker-image`, `make docker-test`, `make docker-test-thirdparty`, `make docker-snapshot-diff`.
 - 其它宿主: Docker 路径. 首次 `make docker-image`; 全量测试用 `make docker-test`; 第三方用 `make docker-test-thirdparty`; 汇编等价性用 `make docker-snapshot-diff`. 非 x86-64 宿主可用 `-E` / `-S` / `-dump-*` 只验前端, 见 `docs/10-build-install.md` 10.8.
 - 第三方测试与 Docker 的环境特例(tcc 的不稳定用例与容器内构建目录要求)见 `docs/10-build-install.md` 10.10.
 - 构建: `make` 产 `chibicc` 与 Linux 下的 `libcp.so`; `make libcp.a` 只产静态库; `make install PREFIX=... [DESTDIR=...]` 装公共头, 库与 `libcp.pc`; `make check-library` 跑公共面与打包闸门; `make check-context` 跑隐式上下文审计.

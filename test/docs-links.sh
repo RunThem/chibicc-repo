@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 文档链接闸门: 检查本地 markdown 链接与 AGENTS.md 的 docs 文件与章节引用.
+# 文档链接闸门: 检查 AGENTS.md, README.md, GLOSSARY.md, docs/*.md 与
+# docs/adr/*.md 的本地 markdown 链接, 以及 AGENTS.md 的 docs 文件与章节引用.
 # 用法: test/docs-links.sh [root]
 set -euo pipefail
 
@@ -78,7 +79,7 @@ scan_agents_sections() {
   done < <(grep -oE '`docs/[A-Za-z0-9._/-]+\.md` [0-9]+\.[0-9]+' "$file" | tr -d '`' || true)
 }
 
-for file in AGENTS.md README.md docs/*.md; do
+for file in AGENTS.md README.md GLOSSARY.md docs/*.md docs/adr/*.md; do
   [ -f "$file" ] || continue
   scan_markdown_links "$file"
 done
