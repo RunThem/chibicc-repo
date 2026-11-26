@@ -1,280 +1,108 @@
-# chibicc: A Small C Compiler
+# libcp: C 前端库
 
-> **Fork status**: this repository maintains `libcp`, a reusable, lossless C
-> front end (tokenize, preprocess, CST, AST, sema). The `chibicc` binary is
-> its reference consumer; `tools/fmt.c` (built by `make fmt-tool`) is its first
-> real tool consumer - a line-preserving CST formatter. See `docs/` for the
-> library documentation. `libcp` reads as "Library C Parse"; the name is a
-> brand token, not a description - the sentence above is.
+`libcp` 是一个可复用的 C11 前端库. 它把 C 的词法, 预处理, 语法与语义做成四层中间表示, 每层都有明确的输入输出与公共入口, 消费者可以只取自己需要的那一层. 本仓库是 [chibicc](https://github.com/rui314/chibicc) 的 fork: 仓库里的 `chibicc` 二进制是这个库的参考消费者, 不再是项目的重点.
 
-(The old master has moved to
-[historical/old](https://github.com/rui314/chibicc/tree/historical/old)
-branch. This is a new one uploaded in September 2020.)
+`libcp` 展开为 "Library C Parse". 它是品牌 token, 不是描述 - 上面那句才是描述.
 
-chibicc is yet another small C compiler that implements most C11
-features. Even though it still probably falls into the "toy compilers"
-category just like other small compilers do, chibicc can compile
-several real-world programs, including [Git](https://git-scm.com/),
-[SQLite](https://sqlite.org),
-[libpng](http://www.libpng.org/pub/png/libpng.html) and chibicc
-itself, without making modifications to the compiled programs.
-Generated executables of these programs pass their corresponding test
-suites. So, chibicc actually supports a wide variety of C11 features
-and is able to compile hundreds of thousands of lines of real-world C
-code correctly.
+## 提供什么
 
-## libcp: the C front end as a library
+| 层 | 产物 | 典型用途 |
+|---|---|---|
+| 第 1 层 | 保留 trivia 的 token 流, 可按原字节重建输入 | 格式化, 源码位置映射 |
+| 第 2 层 | lossless CST, 建在预处理之前, 指令与每个分支都保留 | 注释敏感的改写, codemod |
+| 第 3 层 | 忠实语法 AST, 不绑名字, 不给类型 | C 转 C, 语法级 lint |
+| 第 4 层 | sema 标注树, 名字已绑定, 类型已计算 | 类型相关分析, 静态分析, 新后端 |
 
-This fork turns the front end into a reusable library. `libcp`
-exports four layers - the lossless token stream, the lossless concrete
-syntax tree, the faithful syntax-only AST and the sema-annotated tree -
-so formatters, source-to-source tools, linters and analyzers can use
-them without the driver or the x86-64 code generator. The compiler in
-this repository is the reference consumer of the library; see
-`AGENTS.md` for the layer boundaries. Detailed documentation - the
-design, each layer's product, API usage and the current limitations -
-is under `docs/` (start at `docs/README.md`).
+预处理是横切层: 它把第 1 层的 token 流展开成第 3 层的输入, 产物 token 带 provenance 链, 可以追到每一次宏展开和实参. 第 2 层不经过预处理, 这样"逐字节重建源文件"才成立. 第 5 层是 x86-64 汇编, 由仓库里的 `codegen.c` 产生, 不属于库.
+
+一个 `LibcpContext` 服务一个翻译单元. 它持有 include 路径, 命令行宏, 诊断回调与全部 per-TU 分配; `libcp_context_reset` 归还全部分配并保留配置. 库层错误经诊断回调报告, 公共入口返回 NULL, 不退出进程. `libcp_reconstruct` 能把 token 流换回原始字节.
+
+## 最小用法
 
 ```c
 #include <libcp/libcp.h>
 
 LibcpContext *ctx = libcp_context_new();
-libcp_context_set_diagnostic(ctx, on_diagnostic, NULL);
 
 LibcpToken *tok = libcp_tokenize_buffer(ctx, "<input>", src);
-tok = libcp_preprocess(ctx, tok);
-LibcpNode *ast = libcp_parse(ctx, tok);
-LibcpObj *prog = libcp_sema(ctx, ast);   /* layer 4 */
-/* or: libcp_cst_parse(ctx, raw) for the lossless CST (layer 2) */
+tok = libcp_preprocess(ctx, tok);           /* 预处理 */
+LibcpNode *ast = libcp_parse(ctx, tok);     /* 第 3 层 */
+LibcpObj *prog = libcp_sema(ctx, ast);      /* 第 4 层 */
 
 libcp_context_free(ctx);
 ```
 
-One context is one translation unit. `libcp_context_reset` releases all
-all per-translation-unit allocations while keeping the include paths,
-the command-line macros and the diagnostic callback; every pointer the
-context returned is invalid afterwards. Errors are reported through the
-registered `LibcpDiagnosticFn` and make the entry return NULL (the
-process does not exit). `libcp_reconstruct` rebuilds the exact input
-bytes from the token stream.
+CST 走另一条入口: `libcp_cst_parse(ctx, raw)`, 输入是 `libcp_tokenize_*` 的原始输出. 完整的可编译示例与预期输出见 [docs/README.md](docs/README.md) 的"五分钟跑通".
 
-`libcp_tokenize_buffer` takes a NUL-terminated string; when the input
-length is already known, `libcp_tokenize_buffer_len` reads exactly that
-many bytes. An embedded NUL is a diagnostic, not a silent truncation.
+## 构建与安装
 
-The predefined macro set is installed by default. After
-`libcp_context_set_predefined_macros(ctx, false)` and a reset the
-context starts without it; the recorded `-D`/`-U` operations still
-apply. `libcp_context_predefined_count` and
-`libcp_context_predefined_at` enumerate the installed set, and the
-`__SIZEOF_*` values are derived from the type records.
+```sh
+make                     # 构建 chibicc 参考消费者; Linux 下同时构建 libcp.so
+make libcp.a             # 只要静态库
+make install PREFIX=/usr/local
+```
 
-Build with `make libcp.a` (or plain `make`, which also builds
-`libcp.so` on Linux), install with `make install PREFIX=...`, or
-use `pkg-config --cflags --libs libcp`. The public headers live in
-`libcp/include/libcp/`; include the umbrella
-`<libcp/libcp.h>`. The library version is `LIBCP_VERSION`
-(`libcp_version()`).
+公共头装在 `$(PREFIX)/include/libcp`, 入口是 `<libcp/libcp.h>`. 安装后可用 pkg-config:
 
-chibicc is developed as the reference implementation for a book I'm
-currently writing about the C compiler and the low-level programming.
-The book covers the vast topic with an incremental approach; in the first
-chapter, readers will implement a "compiler" that accepts just a single
-number as a "language", which will then gain one feature at a time in each
-section of the book until the language that the compiler accepts matches
-what the C11 spec specifies. I took this incremental approach from [the
-paper](http://scheme2006.cs.uchicago.edu/11-ghuloum.pdf) by Abdulaziz
-Ghuloum.
+```sh
+cc -std=c11 demo.c $(pkg-config --cflags --libs libcp) -o demo
+```
 
-Each commit of this project corresponds to a section of the book. For this
-purpose, not only the final state of the project but each commit was
-carefully written with readability in mind. Readers should be able to learn
-how a C language feature can be implemented just by reading one or a few
-commits of this project. For example, this is how
-[while](https://github.com/rui314/chibicc/commit/773115ab2a9c4b96f804311b95b20e9771f0190a),
-[[]](https://github.com/rui314/chibicc/commit/75fbd3dd6efde12eac8225d8b5723093836170a5),
-[?:](https://github.com/rui314/chibicc/commit/1d0e942fd567a35d296d0f10b7693e98b3dd037c),
-and [thread-local
-variable](https://github.com/rui314/chibicc/commit/79644e54cc1805e54428cde68b20d6d493b76d34)
-are implemented. If you have plenty of spare time, it might be fun to read
-it from the [first
-commit](https://github.com/rui314/chibicc/commit/0522e2d77e3ab82d3b80a5be8dbbdc8d4180561c).
+库没有外部依赖, 除 C 标准库外只要求 POSIX 的文件与线程基础能力. 分配器是编译期开关, 见 `<libcp/allocator.h>`.
 
-If you like this project, please consider purchasing a copy of the book
-when it becomes available! 😀 I publish the source code here to give people
-early access to it, because I was planing to do that anyway with a
-permissive open-source license after publishing the book. If I don't charge
-for the source code, it doesn't make much sense to me to keep it private. I
-hope to publish the book in 2021.
-You can sign up [here](https://forms.gle/sgrMWHGeGjeeEJcX7) to receive a
-notification when a free chapter is available online or the book is published.
+## 测试
 
-I pronounce chibicc as _chee bee cee cee_. "chibi" means "mini" or
-"small" in Japanese. "cc" stands for C compiler.
+先确认宿主再选路径 (`uname -s`, `uname -m`):
 
-## Status
+| 宿主 | 全量测试 | 汇编等价性 | benchmark |
+|---|---|---|---|
+| Linux + x86-64 | `make test-all` | `make asm-diff BASE=<ref>` | `make bench` |
+| 其它宿主 | `make docker-test` | `make docker-snapshot-diff` | 不适用 |
 
-chibicc supports almost all mandatory features and most optional
-features of C11 as well as a few GCC language extensions.
+`make test` 需要能汇编并运行 x86-64 目标; 其它宿主可以只用前端通道 (`-E`, `-dump-tokens`, `-dump-cst`, `-dump-ast`). 第三方项目的慢速验证用 `make test-thirdparty`, 仅 Linux, 不进入 `make test`. 细节见 [docs/10-build-install.md](docs/10-build-install.md).
 
-Features that are often missing in a small compiler but supported by
-chibicc include (but not limited to):
+## 仓库里还有什么
 
-- Preprocessor
-- float, double and long double (x87 80-bit floating point numbers)
-- Bit-fields
-- alloca()
-- Variable-length arrays
-- Compound literals
-- Thread-local variables
-- Atomic variables
-- Common symbols
-- Designated initializers
-- L, u, U and u8 string literals
-- Functions that take or return structs as values, as specified by the
-  x86-64 SystemV ABI
+| 路径 | 内容 |
+|---|---|
+| `main.c`, `codegen.c` | 参考消费者的驱动器与 x86-64 后端, 不属于库 |
+| `tools/fmt.c` | 保留行与注释的 CST formatter, 由 `make fmt-tool` 构建 |
+| `tools/c2c.c` | C 转 C 打印器, 只作 `make test` 的回归闸门, 不安装 |
+| `bench/` | 前端分阶段 benchmark, 仅 Linux |
+| `test/` | 特性测试与逐字节行为锁 |
+| `thirdparty/` | 真实项目的慢速构建验证 |
 
-chibicc does not support complex numbers, K&R-style function prototypes
-and GCC-style inline assembly. Digraphs and trigraphs are intentionally
-left out.
+`chibicc` 也能当编译器用: `./chibicc -o hello hello.c`. 它的 `-E`, `-dump-cst`, `-reconstruct`, `-dump-ast` 等前端通道可以直接观察每一层.
 
-chibicc outputs a simple but nice error message when it finds an error in
-source code.
+## 前身
 
-There's no optimization pass. chibicc emits terrible code which is probably
-twice or more slower than GCC's output. I have a plan to add an
-optimization pass once the frontend is done.
+本仓库是 [chibicc](https://github.com/rui314/chibicc) 的 fork. 上游是 Rui Ueyama 从 2019 年开始写的教学编译器: 目标是让读者按 commit 学习一个 C 编译器怎么从"只接受一个整数"长到 C11, 每个 commit 对应一本讲 C 编译器的书的一节. 本 fork 保留上游的代码风格与大部分实现, 把目标改成库: 前端四层可复用, 跨层状态收进 context, 错误改走回调, 仓库里的编译器退化为参考消费者.
 
-I'm using Ubuntu 20.04 for x86-64 as a development platform. I made a
-few small changes so that chibicc works on Ubuntu 18.04, Fedora 32 and
-Gentoo 2.6, but portability is not my goal at this moment. It may or
-may not work on systems other than Ubuntu 20.04.
+上游的 C11 特性覆盖基本保留: 浮点与 long double, 位域, VLA, 复合字面量, 线程局部变量, 原子变量, 指定初始化器, 结构体按值传参与返回. 上游不支持的特性这里同样不支持: 复数, K&R 风格函数原型, GCC 风格内联汇编; digraph 与 trigraph 有意不支持.
 
-## Internals
+## 文档
 
-chibicc consists of the following five layers. The first four are the
-`libcp` library; the fifth is the driver's x86-64 backend (`codegen.c`),
-which is not part of the library.
+入口是 [docs/README.md](docs/README.md). 按用途:
 
-- Layer 1 - token stream: A tokenizer takes a string as an input, breaks
-  it into a list of lossless tokens (comments and whitespace are kept as
-  trivia) and returns them. A preprocessor takes that list and outputs a
-  new list of macro-expanded tokens, interpreting preprocessor directives
-  while expanding macros.
+- 格式化与源码级改写: [03 token 层](docs/03-layer1-token.md), [05 CST 层](docs/05-layer2-cst.md).
+- C 转 C 与语法级工具: [06 语法层](docs/06-layer3-parse.md).
+- 类型相关分析与新后端: [07 语义层](docs/07-layer4-sema.md), [09 API 参考](docs/09-api-reference.md).
+- 宏展开追踪: [04 预处理与 provenance](docs/04-preprocess.md).
+- 当前缺陷与边界: [11 缺陷与边界](docs/11-limitations.md).
 
-- Layer 2 - concrete syntax tree: A lossless CST is built directly from
-  the raw token stream, before preprocessing. It records every token,
-  comment and whitespace byte, so it reconstructs the input exactly. It
-  is meant for source-level tools and is not the compiler's input.
+## 状态与边界
 
-- Layer 3 - syntax tree: A recursive descent parser constructs a faithful
-  syntax-only AST from the preprocessed token stream. It records the
-  grammar, not the semantics; most nodes carry no type at this layer.
+- 只承诺源码兼容, 不承诺 ABI: 公共结构体字段直接暴露, 换字段就是换版本.
+- 版本号见 `LIBCP_VERSION` 与 `libcp_version()`, 兼容性约定与文档基线见 [docs/README.md](docs/README.md).
+- 单翻译单元: 不读目标文件, 不做跨 TU 分析.
+- 首错返回: 一个入口报出第一个错误就返回, 没有"带错误继续"的部分树.
+- 一个 context 不能跨线程并发; 不同 context 可以在不同线程并存.
+- 不做优化, 不做增量解析.
 
-- Layer 4 - sema-annotated tree: A semantic pass resolves names, records
-  types on the AST nodes and reports C diagnostics. Its product is the
-  annotated tree that a backend consumes.
+## 参与
 
-- Layer 5 - assembly: A code generator emits an x86-64 assembly text for
-  the annotated tree.
+问题, 计划与执行记录都在 GitHub Issues (`RunThem/chibicc-repo`). 开发约定, 分支流程与闸门见 [AGENTS.md](AGENTS.md); 构建与测试的完整说明见 [docs/10-build-install.md](docs/10-build-install.md).
 
-## Contributing
+## 许可
 
-When I find a bug in this compiler, I go back to the original commit that
-introduced the bug and rewrite the commit history as if there were no such
-bug from the beginning. This is an unusual way of fixing bugs, but as a
-part of a book, it is important to keep every commit bug-free.
-
-Thus, I do not take pull requests in this repo. You can send me a pull
-request if you find a bug, but it is very likely that I will read your
-patch and then apply that to my previous commits by rewriting history. I'll
-credit your name somewhere, but your changes will be rewritten by me before
-submitted to this repository.
-
-Also, please assume that I will occasionally force-push my local repository
-to this public one to rewrite history. If you clone this project and make
-local commits on top of it, your changes will have to be rebased by hand
-when I force-push new commits.
-
-## Design principles
-
-chibicc's core value is its simplicity and the reability of its source
-code. To achieve this goal, I was careful not to be too clever when
-writing code. Let me explain what that means.
-
-Oftentimes, as you get used to the code base, you are tempted to
-_improve_ the code using more abstractions and clever tricks.
-But that kind of _improvements_ don't always improve readability for
-first-time readers and can actually hurts it. I tried to avoid the
-pitfall as much as possible. I wrote this code not for me but for
-first-time readers.
-
-If you take a look at the source code, you'll find a couple of
-dumb-looking pieces of code. These are written intentionally that way
-(but at some places I might be actually missing something,
-though). Here is a few notable examples:
-
-- The recursive descendent parser contains many similar-looking functions
-  for similar-looking generative grammar rules. You might be tempted
-  to _improve_ it to reduce the duplication using higher-order functions
-  or macros, but I thought that that's too complicated. It's better to
-  allow small duplications instead.
-
-- chibicc doesn't try too hard to save memory. An entire input source
-  file is read to memory first before the tokenizer kicks in, for example.
-
-- Slow algorithms are fine if we know that n isn't too big.
-  For example, we use a linked list as a set in the preprocessor, so
-  the membership check takes O(n) where n is the size of the set.  But
-  that's fine because we know n is usually very small.
-  And even if n can be very big, I stick with a simple slow algorithm
-  until it is proved by benchmarks that that's a bottleneck.
-
-- Each AST node type uses only a few members of the `Node` struct members.
-  Other unused `Node` members are just a waste of memory at runtime.
-  We could save memory using unions, but I decided to simply put everything
-  in the same struct instead. I believe the inefficiency is negligible.
-  Even if it matters, we can always change the code to use unions
-  at any time. I wanted to avoid premature optimization.
-
-- chibicc always allocates heap memory using `calloc`, which is a
-  variant of `malloc` that clears memory with zero. `calloc` is
-  slightly slower than `malloc`, but that should be neligible.
-
-- Last but not least, chibicc allocates memory using `calloc` but never
-  calls `free`. Allocated heap memory is not freed until the process exits.
-  I'm sure that this memory management policy (or lack thereof) looks
-  very odd, but it makes sense for short-lived programs such as compilers.
-  DMD, a compiler for the D programming language, uses the same memory
-  management scheme for the same reason, for example [1].
-
-## About the Author
-
-I'm Rui Ueyama. I'm the creator of [8cc](https://github.com/rui314/8cc),
-which is a hobby C compiler, and also the original creator of the current
-version of [LLVM lld](https://lld.llvm.org) linker, which is a
-production-quality linker used by various operating systems and large-scale
-build systems.
-
-## References
-
-- [tcc](https://bellard.org/tcc/): A small C compiler written by Fabrice
-  Bellard. I learned a lot from this compiler, but the design of tcc and
-  chibicc are different. In particular, tcc is a one-pass compiler, while
-  chibicc is a multi-pass one.
-
-- [lcc](https://github.com/drh/lcc): Another small C compiler. The creators
-  wrote a [book](https://sites.google.com/site/lccretargetablecompiler/)
-  about the internals of lcc, which I found a good resource to see how a
-  compiler is implemented.
-
-- [An Incremental Approach to Compiler
-  Construction](http://scheme2006.cs.uchicago.edu/11-ghuloum.pdf)
-
-- [Rob Pike's 5 Rules of Programming](https://users.ece.utexas.edu/~adnan/pike.html)
-
-[1] https://www.drdobbs.com/cpp/increasing-compiler-speed-by-over-75/240158941
-
-> DMD does memory allocation in a bit of a sneaky way. Since compilers
-> are short-lived programs, and speed is of the essence, DMD just
-> mallocs away, and never frees.
+MIT, 见 [LICENSE](LICENSE).
