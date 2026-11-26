@@ -1,14 +1,16 @@
 #!/bin/bash
 # trivia 保留测试: token 流的 trivia 通道与文本级保真.
 #
-# 本线不改任何既有输出的行为, 所以第一段锁的是现状: -E 的归一化(丢注释, 折空白,
-# 续行拼接, 补末行换行, 丢 BOM)在本线所有步上逐字节保持. 第二段锁 -dump-tokens:
-# 每个 T 行是一个 token, 每个 R 行是它前面被跳过的字节(行注释 lc / 块注释 bc /
-# 换行 nl / 空白串 ws), 文本按 C 字面量式转义(空格也转义为 \x20, 行尾无空白,
-# 空文本的 token - 只有 EOF - 省略文本字段). 后续段落随各步增量添加:
-#   首段   (T0.1) - -E 的归一化锁定样本(实测于归档提交 e8c8608)
-#   第二段 (T1.1) - -dump-tokens 的 token/trivia 流断言
-#   第三段 (T1.2) - -reconstruct 的全量 round-trip(重建 == 原文件)与边界样本
+# 本线锁住 -E 的两种输出形态: -P 下的文本归一化(丢注释, 折空白, 续行拼接,
+# 补末行换行, 丢 BOM)逐字节保持; 默认 -E 在此之上输出 GCC 形式的行标记.
+# 第二段锁 -dump-tokens: 每个 T 行是一个 token, 每个 R 行是它前面被跳过的字节
+# (行注释 lc / 块注释 bc / 换行 nl / 空白串 ws), 文本按 C 字面量式转义(空格也
+# 转义为 \x20, 行尾无空白, 空文本的 token - 只有 EOF - 省略文本字段).
+# 后续段落随各步增量添加:
+#   首段   (T0.1) - -E -P 的归一化锁定样本(实测于归档提交 e8c8608)
+#   次段   (T0.2) - 默认 -E 的行标记
+#   第三段 (T1.1) - -dump-tokens 的 token/trivia 流断言
+#   第四段 (T1.2) - -reconstruct 的全量 round-trip(重建 == 原文件)与边界样本
 #
 # 用法: test/trivia.sh ./chibicc (由 make test 与 make test-stage2 调用)
 
@@ -28,13 +30,13 @@ check() {
 n_e=0
 
 # exp_e <name> <input-printf> <expected-printf>: 输入与期望直接写 printf 转义
-# (\n, \xHH, \\), 跑 -E 后与期望文件逐字节比对(cmp, 含末行换行).
+# (\n, \xHH, \\), 跑 -E -P 后与期望文件逐字节比对(cmp, 含末行换行).
 exp_e() {
     name=$1; shift
     n_e=$((n_e + 1))
     printf "$1" > "$tmp/$name.c"
     printf "$2" > "$tmp/$name.expected"
-    $chibicc -E "$tmp/$name.c" > "$tmp/$name.out"
+    $chibicc -P -E "$tmp/$name.c" > "$tmp/$name.out"
     cmp -s "$tmp/$name.out" "$tmp/$name.expected"
     check "-E/$name"
 }
@@ -61,6 +63,97 @@ exp_e empty '' '\n'
 
 # 空行群折成单个换行(at_bol 只置一次).
 exp_e blank_lines 'int\n\na;\n' 'int\na;\n'
+
+# ---- T0.2: 默认 -E 的行标记 ----------------------------------------------------
+# 默认 -E 在起始, 文件切换与行号跳变处输出 GCC 形式 `# <line> "<file>"`.
+# 样本以相对文件名在 $tmp 里运行, 期望里写稳定的相对路径.
+
+n_lm=0
+
+# exp_lm <name> <input-printf> <expected-printf>: 默认 -E 输出与期望逐字节比对.
+exp_lm() {
+    name=$1; shift
+    n_lm=$((n_lm + 1))
+    printf "$1" > "$tmp/lm-$name.c"
+    printf "$2" > "$tmp/lm-$name.expected"
+    (cd "$tmp" && "$chibicc" -E "lm-$name.c") > "$tmp/lm-$name.out"
+    cmp -s "$tmp/lm-$name.out" "$tmp/lm-$name.expected"
+    check "-E-lm/$name"
+}
+
+# 空文件与只含注释的文件没有可打印 token, 仍然输出起始标记.
+exp_lm empty '' '# 1 "lm-empty.c"\n'
+exp_lm comment_only '/* only */\n' '# 1 "lm-comment_only.c"\n'
+
+# 第一行就是输出: 起始标记之后不再重复.
+exp_lm simple 'int x;\n' '# 1 "lm-simple.c"\nint x;\n'
+
+# 指令行不产出输出, 第一条输出行的行号跳变需要标记.
+exp_lm directive '#define X 1\nint x = X;\n' \
+'# 1 "lm-directive.c"\n# 2 "lm-directive.c"\nint x = 1;\n'
+
+# 空行被折叠后, 行号跳变同样需要标记.
+exp_lm blank_gap 'int\n\na;\n' '# 1 "lm-blank_gap.c"\nint\n# 3 "lm-blank_gap.c"\na;\n'
+
+# include 进入与返回.
+printf 'int h;\n' > "$tmp/lm-inc.h"
+exp_lm include '#include "lm-inc.h"\nint c;\n' \
+'# 1 "lm-include.c"\n# 1 "./lm-inc.h"\nint h;\n# 2 "lm-include.c"\nint c;\n'
+
+# 嵌套 include: 只含 #include 的 a.h 没有输出行, 不出现它的标记.
+printf '#include "lm-nest-b.h"\nint a;\n' > "$tmp/lm-nest-a.h"
+printf 'int b;\n' > "$tmp/lm-nest-b.h"
+exp_lm nested '#include "lm-nest-a.h"\nint m;\n' \
+'# 1 "lm-nested.c"\n# 1 "./lm-nest-b.h"\nint b;\n# 2 "./lm-nest-a.h"\nint a;\n# 2 "lm-nested.c"\nint m;\n'
+
+# #line 改文件名与行号; 行号沿用 chibicc 的 line_delta 语义.
+exp_lm line_directive '#line 100 "lm-logical.c"\nint d;\n' \
+'# 1 "lm-line_directive.c"\n# 101 "lm-logical.c"\nint d;\n'
+
+# 头文件里的宏在主文件调用: 归属最外层调用点, 不是定义点.
+printf '#define OBJ int obj;\n' > "$tmp/lm-obj.h"
+exp_lm macro_header '#include "lm-obj.h"\nOBJ\n' \
+'# 1 "lm-macro_header.c"\n# 2 "lm-macro_header.c"\nint obj;\n'
+
+# 对象式宏嵌套: 沿 origin 链回溯到最外层调用.
+exp_lm macro_nested '#define A B\n#define B 1\nA\n' \
+'# 1 "lm-macro_nested.c"\n# 3 "lm-macro_nested.c"\n1\n'
+
+# 函数式宏, 实参本身是宏调用: 同样归属最外层调用.
+exp_lm macro_arg '#define ID(x) x\n#define A 1\nID(A)\n' \
+'# 1 "lm-macro_arg.c"\n# 3 "lm-macro_arg.c"\n1\n'
+
+# 内建动态宏没有 origin, 走 provenance 找回调用点.
+exp_lm builtin 'int a;\n\n__LINE__\n' \
+'# 1 "lm-builtin.c"\nint a;\n# 3 "lm-builtin.c"\n3\n'
+
+# -include: 主文件锚点, 被包含文件切换, 返回主文件.
+printf 'int pre;\n' > "$tmp/lm-pre.h"
+printf 'int m;\n' > "$tmp/lm-include_opt.c"
+n_lm=$((n_lm + 1))
+(cd "$tmp" && "$chibicc" -include lm-pre.h -E lm-include_opt.c) > "$tmp/lm-include_opt.out"
+printf '# 1 "lm-include_opt.c"\n# 1 "lm-pre.h"\nint pre;\n# 1 "lm-include_opt.c"\nint m;\n' \
+> "$tmp/lm-include_opt.expected"
+cmp -s "$tmp/lm-include_opt.out" "$tmp/lm-include_opt.expected"
+check "-E-lm/include_opt"
+
+# 多输入到 stdout: 每个翻译单元各自输出起始标记.
+printf 'int a;\n' > "$tmp/lm-multi1.c"
+printf 'int b;\n' > "$tmp/lm-multi2.c"
+n_lm=$((n_lm + 1))
+(cd "$tmp" && "$chibicc" -E lm-multi1.c lm-multi2.c) > "$tmp/lm-multi.out"
+printf '# 1 "lm-multi1.c"\nint a;\n# 1 "lm-multi2.c"\nint b;\n' > "$tmp/lm-multi.expected"
+cmp -s "$tmp/lm-multi.out" "$tmp/lm-multi.expected"
+check "-E-lm/multi"
+
+# 文件名里的引号与反斜杠按 GCC 习惯转义.
+n_lm=$((n_lm + 1))
+fname='lm-esc"a\b.c'
+printf 'int e;\n' > "$tmp/$fname"
+(cd "$tmp" && "$chibicc" -E "$fname") > "$tmp/lm-escape.out"
+printf '%s\n' '# 1 "lm-esc\"a\\b.c"' 'int e;' > "$tmp/lm-escape.expected"
+cmp -s "$tmp/lm-escape.out" "$tmp/lm-escape.expected"
+check "-E-lm/escape"
 
 # ---- T1.1: -dump-tokens 的 trivia 通道 -----------------------------------------
 
@@ -272,4 +365,4 @@ p2c_loc=$(cd "$tmp" && "$chibicc" -S -o - p2c.c | grep '^  \.loc ' | sort -u)
 [ "$p2c_loc" = "  .loc 1 1" ]
 check "diag/p2c_loc"
 
-echo "trivia lock: $n_e -E samples, $n_d dump samples, $n_rt round-trip files, $n_rb boundary samples, $n_dg anchor cases"
+echo "trivia lock: $n_e -E -P samples, $n_lm -E linemarker samples, $n_d dump samples, $n_rt round-trip files, $n_rb boundary samples, $n_dg anchor cases"

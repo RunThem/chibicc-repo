@@ -155,7 +155,7 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 | `#ifdef` / `#ifndef` | 检查宏是否存在 |
 | `#elif` / `#else` / `#endif` | 条件栈 |
 | `#line` | 设置 `line_delta` 和 `display_name` |
-| GNU 行标记 | `# 123 "file"` 形式, 与 `#line` 等价 |
+| `#line` 的 GNU 形式 | `# 123 "file"` 形式, 与 `#line` 等价 |
 | `#pragma once` | 记录文件只包含一次 |
 | 其他 `#pragma` | 忽略整行 |
 | `#error` | 报告 `error` 并终止 |

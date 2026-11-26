@@ -39,6 +39,7 @@ done <<'EOF'
 ^  -c[[:space:]]
 ^  -S[[:space:]]
 ^  -E[[:space:]]
+^  -P[[:space:]]
 ^  -o <path>[[:space:]]
 ^  -x <lang>[[:space:]]
 ^  -###[[:space:]]
@@ -166,6 +167,16 @@ echo foo > $tmp/out1
 echo "#include \"$tmp/out1\"" | $chibicc -E -o $tmp/out2 -xc -
 cat $tmp/out2 | grep -q foo
 check '-E and -o'
+
+# 默认 -E 输出起始行标记.
+printf 'int p;\n' | $chibicc -E -xc - | grep -q '^# 1 "-"'
+check '-E line marker'
+
+# -P 关闭行标记, 输出与加标记之前逐字节相同.
+printf 'int p;\n' | $chibicc -P -E -xc - > $tmp/p.out
+printf 'int p;\n' > $tmp/p.expected
+cmp -s $tmp/p.out $tmp/p.expected
+check '-P'
 
 # -I
 mkdir $tmp/dir

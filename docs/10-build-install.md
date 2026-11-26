@@ -218,7 +218,7 @@ make test-stage2
 | `test/warning.sh` | 警告文案与插入符 |
 | `test/shape.sh` | 34 段发射形状回归 |
 | `test/ast.sh` | 86 例第 3 层 AST 形态逐字节 |
-| `test/trivia.sh` | token / trivia / 重建 / `-E` 锚点 |
+| `test/trivia.sh` | token / trivia / 重建 / `-E -P` 归一化与默认 `-E` 行标记 |
 | `test/cst.sh` | 48 个文件 round-trip / 48 个 verify / 15 个边界样本 / 65 个 dump 样本 |
 | `test/cst-stats.sh` | CST `UNPARSED` 计数与 `test/cst-stats.golden` 逐行比对 |
 | `test/expand.sh` | 31 个 provenance dump 样本, 3 个链形状样本, 17 个 verify 样本, 全量语料 |
@@ -249,6 +249,8 @@ make test-stage2
 ```
 
 这些通道不需要运行目标代码.
+
+`-E` 默认输出 GCC 形式的行标记 (`# <line> "<file>"`), 在起始, 文件切换与行号跳变处重同步; `-P` 关闭标记, 输出保持归一化文本. 这段逻辑在驱动器 `main.c`, 库不提供 `-E` 输出函数.
 
 ### 10.8.1 前端 benchmark
 
