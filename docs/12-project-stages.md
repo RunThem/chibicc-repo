@@ -203,12 +203,12 @@
 - 阶段 A: A0.1-A10.2, 逐项迁移, 每步汇编快照.
 - 阶段 B: B0-B1.3, 把只需换发射方式的项移进发射点.
 - 阶段 B2: B2.0-B2.2, 下标, 箭头, `>`/`>=`, elvis, `while`, break/continue, 声明链, 加减法缩放.
-- A9.2 逐 case 审计 `add_type`, 确认全部纯标注.
+- A9.2 逐 case 审计 `add_type`, 在当时确认全部纯标注 (阶段目标, 不是对当前行为的描述).
 - 两处有意的指令序列变化: elvis 临时槽移除, 嵌套 VLA 维度修正.
 
 ### 产物
 
-- `sema.c` 纯标注.
+- 当时的阶段目标: `sema.c` 纯标注 (当前它是标注加绑定改写, 见第 7 章).
 - `codegen.c` 整形遍 + 发射点降级.
 - 六条整形不变量.
 - 第 4 层的边界定义.
@@ -306,7 +306,7 @@ trivia 只保留了 token 之间的字节, 没有语法结构. 格式化器还�
 
 - 每次宏展开建一条 `MacroExpansion` 记录.
 - 每个产物 token 挂 `MacroProv` 链.
-- 链最内层在前, 只 prepend, 共享尾不可变.
+- 链头是最近一层展开; 宏体层向更外层走, 实参层的下一层是该实参自身的展开链, 方向不单调. 只 prepend, 共享尾不可变.
 - 记录调用点, 右括号, 宏定义, `#define` 名, 实参, 嵌套链.
 - 公共面只暴露 11 个访问器和两个只读通道.
 
@@ -348,20 +348,20 @@ trivia 只保留了 token 之间的字节, 没有语法结构. 格式化器还�
 
 用户 2026-10-19 拍板的四件事:
 
-- 库名 `libcp`, 公共头 `<libcp/...>`, 符号 `libcp_` / `Libcp` 前缀.
+- 库名 `libchibicc`, 公共头 `<chibicc/...>`, 符号 `chibicc_` / `Chibicc` 前缀.
 - 只承诺源码兼容, 不承诺 ABI.
 - 一个 context 一个翻译单元.
-- 公共 `LibcpNode` / `LibcpObj` 只保留第 3/4 层字段.
+- 公共 `ChibiccNode` / `ChibiccObj` 只保留第 3/4 层字段.
 
 ### 实现
 
 L0 到 L4, 每步一提交:
 
-- L1: codegen 字段移出公共 `LibcpNode` / `LibcpType` / `LibcpObj`, 进 codegen 私有表.
-- L2: `LibcpContext`, 当时的 arena (2026-11-19 已被 per-TU 分配替换), 诊断回调 + longjmp, 19 个文件域 static 收进 context.
+- L1: codegen 字段移出公共 `ChibiccNode` / `ChibiccType` / `ChibiccObj`, 进 codegen 私有表.
+- L2: `ChibiccContext`, 当时的 arena (2026-11-19 已被 per-TU 分配替换), 诊断回调 + longjmp, 19 个文件域 static 收进 context.
 - L3.0: CST children 进当时的 arena, reset 活字节闸门.
 - L3.1: 9 个公共头, context 不透明, 头文件卫生.
-- L3.2: `Libcp*` 命名, `libcp_reconstruct` 进库, D7 白名单, `.a` 内部符号策略.
+- L3.2: `Chibicc*` 命名, `chibicc_reconstruct` 进库, D7 白名单, `.a` 内部符号策略.
 - L3.3: `.a`, Linux `.so`, stage2 库对象, install, pkg-config, 版本.
 - L3.4: 错误模型, reset, 双 context, ASan/UBSan.
 - L3.5 / L4: 全量闸门, 文档.
@@ -374,9 +374,9 @@ L0 到 L4, 每步一提交:
 
 ### 产物
 
-- `libcp.a`, Linux `libcp.so.0`.
-- 9 个公共头, 36 个公共函数 (L5 之后为 10 个头, 38 个函数, 见 12.14; 0.2.0 追加 `libcp_node_family`, 后端支持面追加 `backend.h` 与 17 个函数, 源坐标追加 4 个函数, 子节点枚举追加 2 个函数, include 搜索追加 3 个函数, dump 追加 2 个函数, 当前 11 个头, 67 个函数).
-- `LibcpContext` 三态.
+- `libchibicc.a`, Linux `libchibicc.so.0`.
+- 9 个公共头, 32 个公共函数 (L5 之后为 10 个头, 38 个函数, 见 12.14; 0.2.0 追加 `libcp_node_family`, 后端支持面追加 `backend.h` 与 17 个函数, 源坐标追加 4 个函数, 子节点枚举追加 2 个函数, include 搜索追加 3 个函数, dump 追加 2 个函数, 当前 11 个头, 67 个函数).
+- `ChibiccContext` 三态.
 - `test/library.sh`, `test/public-api.sh`, `test/install.sh`.
 - `make check-library`.
 
@@ -445,7 +445,7 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 
 阶段 5 和 Pratt 之后, 仓库做了四次不改变行为的整理:
 
-- `267fb6f`: 库源码搬到 `libcp/src/`, 根目录只留驱动器和 codegen.
+- `267fb6f`: 库源码搬到 `libchibicc/src/`, 根目录只留驱动器和 codegen.
 - `8976851`: 计划与执行记录搬到 `plans/`.
 - `dd3e631`: 库内自测搬到 `test/self/`, 不再编进 `libcp.a`.
 - `3a46b6c`: 库改名为 `libcp` (包名, 头路径与符号前缀一起改; 二进制 `chibicc`, `__chibicc__` 与历史归档不变), 汇编快照为空 diff.
@@ -502,7 +502,7 @@ Pratt 线落地后双路径并存了四天, 用户 2026-10-25 拍板收掉:
 | token 有 trivia 和 raw 坐标 | trivia 线 | 逐字节重建 |
 | provenance 链 | provenance 线 | 宏来源不可从 AST 恢复 |
 | `LibcpContext` 不透明 | 库边界 L3 | 公共面不泄漏内部布局 |
-| 67 个公共函数 | 库边界 D7 + L5 | 唯一的公共 API 清单(L5 追加 seed 与 range; 0.2.0 追加 node_family; 后端支持面追加 17 个; 源坐标追加 4 个; 子节点枚举追加 2 个; include 搜索追加 3 个; dump 追加 2 个) |
+| 67 个公共函数 | 库边界 D7 + L5 | 唯一的公共 API 清单(L5 追加 6 个: `libcp_context_set_predefined_macros` / `libcp_context_predefined_count` / `libcp_context_predefined_at` / `libcp_tokenize_buffer_len` / `libcp_cst_seed_typedef` / `libcp_node_source_range`; 0.2.0 追加 node_family; 后端支持面追加 17 个; 源坐标追加 4 个; 子节点枚举追加 2 个; include 搜索追加 3 个; dump 追加 2 个) |
 | `LibcpNode` 的十个字段族与 `libcp_node_family` | 字段族线 | 0.2.0 把 46 个平铺字段收进匿名 union |
 | per-TU 分配替换 arena | 分配线 | 每对象独立 `LIBCP_*` 分配, reset 沿登记链归还 |
 | 表达式层是一个绑定力循环 | Pratt 线 + Pratt 单一路径线 | 级联已删, Pratt 是唯一实现 |

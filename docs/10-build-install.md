@@ -44,7 +44,7 @@ BENCH_CFLAGS=-std=c11 -O2 -g -fno-common -Wall -Wno-switch \
   -include bench/alloc_shim.h
 ```
 
-`LIB_CFLAGS` 用于库对象, 带内部 include; `DRIVER_CFLAGS` 用于 `main.c` / `codegen.c`, 只带公共 include. 两者都带 `ALLOCATOR_CFLAGS`, 因为驱动器包含公共伞头, 分配器配置必须与库一致. `CFLAGS` 保留为 `LIB_CFLAGS` 的别名, 供链接命令与测试工具使用. stage2 规则按同样的方式拆分 include, 并同样带上 `ALLOCATOR_CFLAGS`. 驱动器这一侧的约束由 `test/driver-seam.sh` 锁定: 它检查三个驱动器源文件不含内部 include, 再用只含公共头的临时目录重编驱动器对象.
+`LIB_CFLAGS` 用于库对象, 带内部 include; `DRIVER_CFLAGS` 用于 `main.c` / `codegen.c`, 只带公共 include. 两者都带 `ALLOCATOR_CFLAGS`, 因为驱动器包含公共伞头, 分配器配置必须与库一致. `CFLAGS` 保留为 `LIB_CFLAGS` 的别名, 供链接命令与测试工具使用. stage2 规则按同样的方式拆分 include, 并同样带上 `ALLOCATOR_CFLAGS`. 驱动器这一侧的约束由 `test/driver-seam.sh` 锁定: 它检查四个驱动器源文件不含内部 include, 再用只含公共头的临时目录重编驱动器对象.
 
 `BENCH_CFLAGS` 刻意不含 `ALLOCATOR_CFLAGS`: benchmark 的库对象必须走 `bench/alloc_shim.h` 的四个 `LIBCP_*` 宏, 而不是 `LIBCP_DEFAULT_ALLOCATOR`.
 
@@ -98,6 +98,7 @@ $PREFIX/include/libcp/
   provenance.h
   cst.h
   ast.h
+  backend.h
   sema.h
 $PREFIX/lib/libcp.a
 $PREFIX/lib/libcp.so.0        (Linux)
@@ -200,33 +201,34 @@ make test-stage2
 1. 用宿主 `cc` 构建 `chibicc`.
 2. 用 `chibicc` 编译库源码, 产出 `stage2/libcp.a`; 库对象带内部 include.
 3. 用 `chibicc` 编译驱动器和测试; 驱动器对象只带公共 include.
-4. 跑 `test-stage2` 的行为测试套件, 包括 `test/driver-seam.sh` (用 `stage2/chibicc` 重编驱动器对象), `test/library.sh` 与 `test/public-api.sh` 链接 `stage2/libcp.a`, `test/self-test.sh`, `test/outside.sh` (用 `LIBCP_LIB` 选择 `stage2/libcp.a`), 以及 `stage2/fmt` / `stage2/c2c`; 后两者由宿主 `cc` 链接 `stage2/libcp.a` 构建. 它不跑 `test/allocator.sh`, 打包闸门 `install.sh`, 隐式 context 审计 `test/context-audit.sh` 与 `test/docs-links.sh`.
+4. 跑 `test-stage2` 的行为测试套件, 包括 `test/driver-seam.sh` (用 `stage2/chibicc` 重编驱动器对象), `test/library.sh` 与 `test/public-api.sh` 链接 `stage2/libcp.a`, `test/self-test.sh`, `test/outside.sh` (用 `LIBCP_LIB` 选择 `stage2/libcp.a`), 以及 `stage2/fmt` / `stage2/c2c`; 后两者由宿主 `cc` 链接 `stage2/libcp.a` 构建. 它不跑 `test/allocator.sh`, 打包闸门 `install.sh`, 隐式 context 审计 `test/context-audit.sh` 与文档闸门 `test/docs-links.sh` / `test/docs-facts.sh`.
 
 自举证明库代码能被自己编译. `setjmp` 与 `va_copy` 都在这条路径上被验证.
 
 ## 10.8 测试矩阵
 
-`make test` 覆盖以下类别. 表按类别列出, 不表示执行顺序; 实际最先跑的是 `test/docs-links.sh` 与 `test/style.sh`, 随后按 `TESTS` 顺序跑 C 测试, 再跑行为脚本, 其中 `$(MAKE) fmt-tool` 与 `$(MAKE) c2c` 是两个显式构建步骤.
+`make test` 覆盖以下类别. 表按类别列出, 不表示执行顺序; 实际最先跑的是 `test/docs-links.sh`, `test/style.sh` 与 `test/docs-facts.sh`, 随后按 `TESTS` 顺序跑 C 测试, 再跑行为脚本, 其中 `$(MAKE) fmt-tool` 与 `$(MAKE) c2c` 是两个显式构建步骤.
 
 | 测试 | 内容 |
 |---|---|
 | `test/*.exe` | 每个特性一个 C 测试, 覆盖语言功能 |
 | `test/driver-seam.sh` | 驱动器 seam: `main.c` / `codegen.c` / `driver.h` / `driver-util.h` 不含内部 include, 驱动器对象只用临时公共头目录编译; `make test` 用宿主 `cc`, `make test-stage2` 用 `stage2/chibicc` |
 | `test/driver.sh` | 命令行选项 |
-| `test/diagnostic.sh` | 68 例诊断文案与插入符逐字节 |
+| `test/diagnostic.sh` | 75 例诊断文案与插入符逐字节 |
 | `test/warning.sh` | 警告文案与插入符 |
 | `test/shape.sh` | 34 段发射形状回归 |
-| `test/ast.sh` | 85 例第 3 层 AST 形态逐字节 |
+| `test/ast.sh` | 86 例第 3 层 AST 形态逐字节 |
 | `test/trivia.sh` | token / trivia / 重建 / `-E` 锚点 |
 | `test/cst.sh` | 48 个文件 round-trip / 48 个 verify / 15 个边界样本 / 65 个 dump 样本 |
 | `test/cst-stats.sh` | CST `UNPARSED` 计数与 `test/cst-stats.golden` 逐行比对 |
-| `test/expand.sh` | 29 个 provenance dump 样本, 3 个链形状样本, 17 个 verify 样本, 全量语料 |
+| `test/expand.sh` | 31 个 provenance dump 样本, 3 个链形状样本, 17 个 verify 样本, 全量语料 |
 | `test/library.sh` | 公共面消费者, 错误路径, 双 context, token / AST dump, ASan/UBSan |
 | `test/allocator.sh` | 用替换分配器重编库, 活块归零 |
 | `test/self-test.sh` | 库内自测: hashmap / per-TU 分配 / sema 状态重置 |
 | `test/outside.sh` | 树外消费者: 只用临时公共头目录与归档, 完成一次降级与 x86-64 发射并走通诊断回调; 默认与 stage2 归档各跑一遍 |
 | `test/context-audit.sh` | 隐式 context 审计 (`--strict`, 由 `make test` 调用) |
 | `test/docs-links.sh` | 本地 markdown 链接与 AGENTS 章节引用 (由 `make test` 调用) |
+| `test/docs-facts.sh` | 当前矩阵文档的机械事实: 诊断 / AST / dump 计数, 公共头数量与版本, 安装布局, D7 数量 (文档专用, 由 `make test` 调用, 不进 `test-stage2`) |
 | `test/style.sh` | 全部 tracked 文本文件的中文标点与 HEAD 提交信息检查 (无 `.git` 时用 `find` 扫描并跳过提交检查) |
 | `test/fmt.sh` | formatter 幂等 / 行数 / 注释数量 / 有系统头时执行 `-S` 等价 (`make fmt-tool` 构建; 容器内为权威, 原生 x86-64 Linux 也执行) |
 | `test/c2c.sh` | C 转 C 打印回归 (`make c2c` 构建) |

@@ -102,7 +102,7 @@ struct libcp_token {
   bool has_space;     /* 前面是否有空白 */
 
   LibcpHideset *hideset;  /* 宏展开用 */
-  LibcpToken *origin;     /* 宏展开的最外层调用点 token */
+  LibcpToken *origin;     /* 最近一层宏调用的宏名 token; 最外层需沿它回溯 */
   LibcpMacroProv *prov;   /* 展开来源链, 源 token 为 NULL */
 };
 ```
@@ -144,7 +144,7 @@ struct libcp_file {
 
 ### 3.3.3 关键字的时机
 
-**原始 token 流里的关键字是 `TK_IDENT`**. `int`, `return`, `while` 都先按标识符读入. 关键字分类发生在 `convert_pp_tokens`, 由 `libcp_preprocess` 调用.
+**原始 token 流里的关键字是 `TK_IDENT`**. `int`, `return`, `while` 都先按标识符读入. 关键字分类发生在 `libcp_convert_pp_tokens`, 由 `libcp_preprocess` 调用.
 
 这意味着:
 
@@ -159,18 +159,18 @@ struct libcp_file {
 
 ### 3.4.1 读文件
 
-`tokenize_file(path)`:
+`libcp_tokenize_file(ctx, path)`:
 
 1. 调用 `read_file` 读入整个文件. 读 stdin 时只读一次, 内容缓存在 context 里, 第二次 tokenize `-` 会拿到同一份文本.
 2. 检查文件大小不超过 `INT32_MAX`, 因为词法器用 `int` 存偏移.
 3. 检查 NUL 字节. 源文件里出现 NUL 是诊断, 不是静默截断.
 4. 由 `source.c` 的 `libcp_new_file_from_raw` 构造 `LibcpFile` (编号), 再经 `libcp_source_register_input_file` 登记到 context 的输入文件表.
 
-`tokenize_buffer(name, contents)` 走另一条路: 把传入的字节复制进 per-TU 分配, 用 `source.c` 的 `libcp_new_file_len` 直接构造一个没有改写的 `LibcpFile`. 内存中的输入不经过 `make_scan_buffer`, 也不登记为 input file.
+`libcp_tokenize_buffer(ctx, name, contents)` 走另一条路: 把传入的字节复制进 per-TU 分配, 用 `source.c` 的 `libcp_new_file_len` 直接构造一个没有改写的 `LibcpFile`. 内存中的输入不经过 `make_scan_buffer`, 也不登记为 input file.
 
 ### 3.4.2 构造扫描缓冲
 
-`source.c` 的 `make_scan_buffer(raw, len, &map, &lines)` 一遍扫描完成五件事:
+`source.c` 的 `make_scan_buffer(ctx, raw, len, &map, &lines)` 一遍扫描完成五件事:
 
 1. 跳过开头的 BOM.
 2. 把 `\r\n` 和孤立的 `\r` 归一成 `\n`.
@@ -187,7 +187,7 @@ struct libcp_file {
 
 ### 3.4.3 切 token
 
-`tokenize(file)` 是一个循环:
+`libcp_tokenize(ctx, file)` 是一个循环:
 
 1. 跳过行注释, 块注释, 换行和空白, 只推进指针, 不产生 token. 跳过的字节留给下一个 token 当 trivia.
 2. 按首字符分派:
@@ -295,7 +295,7 @@ libcp_reconstruct(ctx, tok, out);
 fclose(out);
 ```
 
-重建不需要预处理, 也不要求 token 来自文件. 对内存 buffer 同样有效.
+重建不需要预处理, 也不要求 token 来自文件. 对已处于扫描缓冲形态的内存 buffer 同样有效; 原始 `\uXXXX` 的内存输入例外, 见 11.5.8.
 
 ### 3.7.5 只读调试通道
 
@@ -309,7 +309,7 @@ cmp input.c rebuilt.c
 
 ## 3.8 边界与已知限制
 
-- **trivia 契约只覆盖直接输出**. 宏展开, 字符串化, 粘贴, 内建宏产生的 token 是合成 token. 它们的 `trivia` / `raw_loc` 指向派生来源或合成缓冲. 对预处理后的流调用 `libcp_reconstruct` 不会还原原文件, 而是输出展开流在 raw 坐标上的拼接. 第 4 章有例子.
+- **trivia 契约只覆盖直接输出**. 宏展开产物带 provenance, 但只有字符串化, 粘贴, 内建宏等在合成缓冲里重新切词的 token 才是 file 级 synthetic (`libcp_token_is_synthetic` 为 true). 普通宏体与实参复制保留原 token 的 `file` / `trivia` / `raw_loc`. 无论哪种, 对预处理后的流调用 `libcp_reconstruct` 都不会还原原文件, 而是输出展开流在 raw 坐标上的拼接. 第 4 章有例子.
 - **关键字后置分类**. 原始流里 `TK_IDENT` 包含关键字. 只用第 1/2 层时要按拼写判断.
 - **注释没有分类**. trivia 是原始字节. 库不告诉你"这是文档注释"或"这是行尾注释". 需要的话自己解析 trivia.
 - **`loc` 不是 C 字符串**. 它是扫描缓冲里的切片, 可能没有 NUL. 用 `len` 限界, 或复制出来.

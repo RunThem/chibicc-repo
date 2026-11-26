@@ -17,11 +17,13 @@
 # 覆盖清单: 判定表 A 15 处 + B 4 处 + C 11 处 + D 3 处 = 拆分线终态 parse.c 的全部 33 处
 # error_tok(B/C/D 18 处此后移入 sema.c);
 # 判定表 E 10 处中的 9 处, 另加 e11/e12(C2 审计修复的 enum 常量越界诊断:
-# 显式值与隐式递增各一例) 与 e13(for-init 链的同名重复声明); f 系列 12 处
+# 显式值与隐式递增各一例) 与 e13(for-init 链的同名重复声明); f 系列 18 处
 # (A0.1 的 9 处, 夹在降级里的检查; 2026-09-29 基线缺陷修复随修锁定的 f10/f11;
-# 2026-10-19 审计修复的 f12); g 系列 11 处 (2026-10-19 审计修复: u8 拼接与位域宽度
+# 2026-10-19 审计修复的 f12; 2026-11-25 审计修复的 f13-f16: sema 通用左值检查;
+# f17/f18: TY_VLA 与 TY_FUNC 拒绝路径);
+# g 系列 11 处 (2026-10-19 审计修复: u8 拼接与位域宽度
 # 校验; 2026-10-20 审计修复: struct/union tag 重定义; 2026-10-21 审计修复: 整数常量
-# 溢出诊断). 合计 69 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
+# 溢出诊断). 合计 75 例. 唯一未覆盖: sema.c 的 "redeclared as a different kind of
 # symbol" - find_func 只返回 is_function 为真的对象, 该守卫恒假, 当前树中不可达.
 # 另: 文件域 "void x;" 当前被接受(无检查), 亦无用例.
 #
@@ -480,7 +482,7 @@ e13_for_init_redefinition.c:1: int main() { for (int i = 0, i = 1; ; ) ; }
                                                             ^ redefinition of i
 WANT
 
-# ---- f 系列: 夹在降级代码里的检查 (12 处, PLAN A0.1 + 基线缺陷修复) ----
+# ---- f 系列: 夹在降级代码里的检查 (18 处, PLAN A0.1 + 基线缺陷与审计修复) ----
 # 这些诊断的 error_tok 今天位于本线要搬进 codegen 的降级路径上或紧挨着它, 而检查本身
 # 按判据 2 必须留在 sema. 搬运前先把 "文案 + 锚点" 锁住, 否则丢掉或漂移都不会被任何
 # 闸门看见(语料里只有合法 C). 对应关系:
@@ -614,6 +616,65 @@ SNIP
 expect f12_exchange_pointer_expected <<'WANT'
 f12_exchange_pointer_expected.c:1: int f(int a, int b) { return __builtin_atomic_exchange(a, b); }
                                                                                           ^ pointer expected
+WANT
+
+# f13-f16: 2026-11-25 审计修复 (issue #32): 普通赋值, 复合赋值与自增
+# 自减共用 sema 的通用左值检查; 锚点是左操作数 (四个片段中的 `1`).
+snippet f13_assign_to_literal <<'SNIP'
+int main() { 1 = 2; }
+SNIP
+
+expect f13_assign_to_literal <<'WANT'
+f13_assign_to_literal.c:1: int main() { 1 = 2; }
+                                        ^ not an lvalue
+WANT
+
+snippet f14_compound_assign_to_literal <<'SNIP'
+int main() { 1 += 2; }
+SNIP
+
+expect f14_compound_assign_to_literal <<'WANT'
+f14_compound_assign_to_literal.c:1: int main() { 1 += 2; }
+                                                 ^ not an lvalue
+WANT
+
+snippet f15_post_increment_literal <<'SNIP'
+int main() { 1++; }
+SNIP
+
+expect f15_post_increment_literal <<'WANT'
+f15_post_increment_literal.c:1: int main() { 1++; }
+                                             ^ not an lvalue
+WANT
+
+snippet f16_post_decrement_literal <<'SNIP'
+int main() { 1--; }
+SNIP
+
+expect f16_post_decrement_literal <<'WANT'
+f16_post_decrement_literal.c:1: int main() { 1--; }
+                                             ^ not an lvalue
+WANT
+
+# f17/f18: 2026-11-26 review 补锁的 TY_VLA 与 TY_FUNC 拒绝路径 (issue #31).
+# 数组目标已由 f01 锁定; 这里覆盖类型不可修改但不是数组的两种目标:
+# 变长数组 (ND_VAR 的类型为 TY_VLA) 与函数标识符 (TY_FUNC).
+snippet f17_vla_assign <<'SNIP'
+int main(int n) { int a[n]; a = 0; }
+SNIP
+
+expect f17_vla_assign <<'WANT'
+f17_vla_assign.c:1: int main(int n) { int a[n]; a = 0; }
+                                                ^ not an lvalue
+WANT
+
+snippet f18_function_assign <<'SNIP'
+int f(void); int main() { f = 0; }
+SNIP
+
+expect f18_function_assign <<'WANT'
+f18_function_assign.c:1: int f(void); int main() { f = 0; }
+                                                   ^ not an lvalue
 WANT
 
 # ---- g 系列: 2026-10-19 审计修复的新检查 (11 处) ----

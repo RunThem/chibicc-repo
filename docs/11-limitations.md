@@ -241,15 +241,15 @@ libcp_context_add_include_path_with_origin(ctx, "/usr/include",
 
 `#define E` 后面的 `E` 展开成空, 不产生 token, 因此没有 token 可以挂 provenance. 这类展开在展开流里完全不可见.
 
-### 11.7.4 实参间的 trivia 丢失
+### 11.7.4 实参分隔符的 trivia 丢失
 
-`M(a, b)` 里逗号两边的空白和注释不进入展开流. 产物的 trivia 指向宏体或实参内部.
+`M(a, b)` 会丢弃分隔逗号及其前置 trivia, 逗号左侧的空白和注释不进入展开流; 逗号右侧的 trivia 挂在下一实参 token 上, 随它保留. 例如 `M(1 /*c*/, /*d*/ 2)` 的 `2` 带 ` /*d*/ `, `/*c*/` 丢失. 产物的 trivia 仍指向宏体或实参内部.
 
 ### 11.7.5 合成位置
 
 粘贴, 字符串化, 内建宏产生的 token 位置是合成的. dump 显示 `@synth`, 诊断可能指向宏定义或合成位置.
 
-这里的 `@synth` 按 token 的 provenance 判断 (宏展开产物), 与 `libcp_token_is_synthetic` 的 file 级判定 (文件缓冲区是否合成) 是两个不同的概念.
+`@synth` 的判定随通道不同: `-dump-ast` 按 token 的 provenance 判断 (宏展开产物), `-dump-expansions` 按 `libcp_token_is_synthetic` 的 file 级判定 (文件缓冲区是否合成). 两者是两个不同的概念.
 
 ### 11.7.6 不能做宏内手术
 
@@ -408,7 +408,7 @@ filename = NULL, line = 0, column = 0
 
 ### 11.10.6 诊断文案是锁定文本
 
-`test/diagnostic.sh` 逐字节锁定 68 例. 升级版本时文案可能变. 不要依赖文案做程序判断, 依赖返回值和 `failed`.
+`test/diagnostic.sh` 逐字节锁定 75 例. 升级版本时文案可能变. 不要依赖文案做程序判断, 依赖返回值和 `failed`.
 
 ## 11.11 公共面与 ABI
 

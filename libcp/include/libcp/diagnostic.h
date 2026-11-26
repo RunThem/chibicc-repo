@@ -16,8 +16,9 @@ typedef enum libcp_diagnostic_severity {
 //
 // 当诊断锚定在 token 上时 (error_tok / warn_tok; 普通 error() 为 NULL),
 // `tok` 是锚点 token, `prov` 是该 token 的宏展开链 (源 token 为 NULL).
-// 处理器可以沿链走到最外层调用点 (PLAN-l5 W5). 默认处理器忽略两者,
-// 打印结果与以前完全一致.
+// 链头是最近一层展开; 宏体层向更外层走, 实参层的下一层是该实参自身的
+// 展开链, 方向不单调, 最外层调用点需沿链回溯确定 (PLAN-l5 W5).
+// 默认处理器忽略两者, 打印结果与以前完全一致.
 struct libcp_macro_prov;
 struct libcp_token;
 typedef struct libcp_diagnostic {

@@ -103,7 +103,7 @@ struct libcp_macro_prov {
 
 ### 4.3.2 链的方向
 
-链的最内层在前. 例如:
+链头是最近一层展开, 每个节点的 `next` 记录该层自身的来源上下文. 宏体层的来源是产生宏名 token 的外层展开, 因此宏体嵌套时链头最内, 链尾最外. 例如:
 
 ```c
 #define INNER 1
@@ -111,9 +111,9 @@ struct libcp_macro_prov {
 int x = OUTER;
 ```
 
-`1` 这个 token 的链是: 最内层 `INNER` 的展开, 然后是 `OUTER` 的展开. 最外层是源码里的 `OUTER`.
+`1` 这个 token 的链是: `INNER` 的展开, 然后是 `OUTER` 的展开. 最外层是源码里的 `OUTER`.
 
-`libcp_macro_prov_next` 往链尾走, 也就是往更外层的调用上下文走.
+实参层不同. 实参 token 的上一层是消费它的宏, `next` 接的是该实参自身的展开链, 因此链可以从外层宏走向实参内部的展开, 方向不单调. 例如 `F(G)` 展开出的 `2` 的链是 `F` 的 `arg1`, 然后是 `G` 的 `body`: 链头是外层调用, 链尾是实参内部的展开. 金样见 `test/expand.sh` 的 `arg_nested` 与 `nested_call`.
 
 ### 4.3.3 实参列表
 
@@ -130,14 +130,14 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 
 ### 4.4.1 主循环
 
-`preprocess(tok)` 的流程:
+`libcp_preprocess(ctx, tok)` 的流程:
 
 1. `preprocess2` 逐 token 扫描.
 2. 如果 token 是宏名, `expand_macro` 展开, 插入产物.
 3. 如果不是行首的 `#`, 原样输出, 同时填写 `line_delta` 和 `filename`.
 4. 如果是 `#`, 按指令名分派.
 5. 结束后检查有没有未闭合的条件指令.
-6. `convert_pp_tokens`: 把 `TK_IDENT` 中的关键字改成 `TK_KEYWORD`, 把 `TK_PP_NUM` 转成 `TK_NUM`.
+6. `libcp_convert_pp_tokens`: 把 `TK_IDENT` 中的关键字改成 `TK_KEYWORD`, 把 `TK_PP_NUM` 转成 `TK_NUM`.
 7. `join_adjacent_string_literals`: 拼接相邻字符串字面量, 保留第一个 token 的坐标与 provenance.
 8. 给每个 token 的 `line_no` 加上 `line_delta`, 让 `#line` 生效.
 
@@ -245,7 +245,7 @@ dump 格式:
 T <file>:<line> <kind> <spelling> <chain>
 ```
 
-`<chain>` 为 `-` 表示源 token. 否则是若干层, 最内层在前, 用 `>` 连接. 每层:
+`<chain>` 为 `-` 表示源 token. 否则是若干层, 链头是最近一层展开, 用 `>` 连接; 宏体层向更外层走, 实参层的下一层是该实参自身的展开链, 见 4.3.2. 每层:
 
 ```text
 <macro>@<call-file>:<call-line>:<body|argN>:<def-file>:<def-line>
@@ -274,15 +274,15 @@ T m.c:2 punct } -
 
 - **编译路径的输入**: 解析器只接受预处理后的 token 链.
 - **宏展开检查**: 判断某个 token 是不是宏产生的, 来自哪个宏, 哪一层, 哪个实参.
-- **诊断定位**: 诊断回调直接收到锚点 token 与该 token 的 `prov` 链 (`LibcpDiagnostic.tok` / `.prov`), 可以沿链走到最外层调用点. AST 子树范围另由 `libcp_node_source_range` 提供.
+- **诊断定位**: 诊断回调直接收到锚点 token 与该 token 的 `prov` 链 (`LibcpDiagnostic.tok` / `.prov`), 可以遍历整条链找到各层展开. 链头是最近一层; 宏体层向更外层走, 实参层的下一层转入该实参的内部展开, 方向不单调 (见 4.3.2). AST 子树范围另由 `libcp_node_source_range` 提供.
 - **宏使用统计**: 统计每个宏被展开多少次, 哪些实参产生了哪些代码.
 - **源码浏览器**: 展示宏调用与展开产物的对应关系.
 - **预处理结果导出**: 消费者可以自己遍历 token 链, 用 `loc` / `len` 输出展开后的文本.
 
 不能做:
 
-- 不能从展开流还原原始文件. 宏体, 未选中分支, 指令行和实参之间的 trivia 都已经不在流里.
-- 不能修改宏展开内部的某个产物并期望源文件对应位置改变. 产物是合成 token, 不映射回调用点的字节.
+- 不能从展开流还原原始文件. 宏体, 未选中分支与指令行的 trivia 都已经不在流里; 实参之间只有被丢弃的分隔符会带走 trivia, 逗号右侧的 trivia 随下一实参 token 保留.
+- 不能修改宏展开内部的某个产物并期望源文件对应位置改变. 产物带 provenance, 不映射回调用点的字节; 只有字符串化, 粘贴与内建宏的产物是 file 级 synthetic.
 - 不能在同一个 token 链上既做 CST 又做预处理. 预处理会破坏输入链.
 
 ## 4.7 API 用法
@@ -381,7 +381,7 @@ libcp_context_reset(ctx);   /* 生效 */
 - **没有宏调用节点**. 语法树上看不到"这里调用了一个宏". 需要知道来源就查 provenance.
 - **零产出展开不可见**. `#define E` 后面的 `E` 展开成空, 不产生任何 token, 因此没有 token 可以挂 provenance. 这类展开在展开流里完全不可见.
 - **`#if` 的分支丢弃**. 未选中分支不进 output. 需要保留全部分支时用第 2 层 CST.
-- **实参之间的 trivia 丢失**. 宏调用 `M(a, b)` 中逗号两边的空白和注释不进入展开流. 产物的 trivia 指向宏体或实参内部.
+- **实参之间的分隔符 trivia 丢失**. 宏调用 `M(a, b)` 丢弃分隔逗号及其前置 trivia, 因此逗号左侧的空白和注释不进入展开流; 逗号右侧的 trivia 挂在下一实参 token 上, 随它保留. 例如 `M(1 /*c*/, /*d*/ 2)` 的 `2` 带 ` /*d*/ `, `/*c*/` 丢失. 产物的 trivia 仍指向宏体或实参内部.
 - **合成位置**. 粘贴或字符串化产生的 token 位置是合成缓冲. dump 显示 `@synth`, 诊断位置可能指向宏定义或合成位置, 而不是调用点.
 - **内存中的输入也被标成 `@synth`**. `libcp_tokenize_buffer` 的 `raw == contents`, provenance 的合成判定 (公共的 `libcp_token_is_synthetic`, 按文件缓冲区判定) 会把它当作合成缓冲. 用文件输入才有真实行号.
 - **`#include_next` 的续查记录按路径字符串键控**. 续查从当前文件自己的路径表命中下标 + 1 开始, 不是全局游标. 同一个文件用不同拼写 (例如 `./a.h` 与 `a.h`) 包含时会被当成不同文件, 与 include guard / `#pragma once` 的限制一致. 路径表在预处理开始后追加会清空续查记录; 应在处理翻译单元之前注册完路径.

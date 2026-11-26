@@ -36,10 +36,10 @@
 ## 面向库的硬性规则
 
 - 不新增 `exit()`: 库层错误走诊断回调 + longjmp 到公共入口; 默认处理器逐字节复现旧输出; 新代码不得引入新的 exit 点(驱动器与默认处理器路径除外).
-- 不新增静态全局状态: 语义状态全部在 `LibcpContext`(parse.c 只剩只读关键字表缓存); 新代码把状态放进 context.
+- 不新增静态全局状态: 语义状态全部在 `LibcpContext`(parse.c 只剩只读常量表); 新代码把状态放进 context.
 - 库层无隐式上下文: 新增或修改的内部函数若直接或传递地触碰 per-TU 分配, 格式化, 容器, 诊断或 context 字段, 必须以 `LibcpContext *ctx` 作首参. 不得新增 `libcp_ctx()` 或 TLS; `make check-context` 是必跑门; `codegen.c` 不得有 `cg_ctx`.
 - API 纪律: 公共头(`libcp/include/libcp/`)与内部头(`libcp/src/libcp.h`)分离, 不泄漏编译器内部假设(Linux 路径, 单次进程生命周期, 直接 exit 等).
-- 后端整形只允许出现在 codegen.c: 指针缩放, 读写回环, 临时槽, 语句重排, 标签与唯一名分配都不是库层的事; 库层只做标注与语义结论.
+- 后端整形只允许出现在 codegen.c: 指针缩放, 读写回环, 临时槽, 语句重排与标签整形都不是库层的事; 库层只做标注与语义结论. 唯一名计数器是库层资源(用户决策, 见 #31 用户故事 7 与工单 #34): 库为物化对象(字符串字面量全局对象, 块作用域 static, 复合字面量)用 per-TU 计数器发号, 并通过 `libcp_context_take_unique_name` 公开; 后端可以消费同一个计数器为自己的标签取号, 但标签命名与整形仍留在后端.
 - 检查与诊断留在库层: 左值性, 实参个数, 位域取地址, VLA 不得初始化, 不完整类型等检查不得随后端搬走; 文案与锚点以 `test/diagnostic.sh` 为准.
 
 ## 已定边界(新决策仍由用户拍板, 不擅自推翻)
@@ -76,7 +76,7 @@
 - 每个特性对应一个 `test/<feature>.c`, 用 `test/test.h` 的 `ASSERT(expected, expr)` 并链接 `test/common`; 新用例加进对应的特性文件, 仅在必要时扩展 `test/test.h` / `test/common`.
 - 行为锁都在 `test/*.sh`, 由 `make test` 与 `make test-stage2` 各跑一遍; 改 codegen 的发射形必须同步更新 `test/shape.sh`, `subst` 新增分支必须同步更新 `test/expand.sh`, UNPARSED golden 用 `test/cst-stats.sh update` 更新.
 - 库内自测在 `test/self/`, 使用 `.a` 内部符号, 不属于公共 API.
-- 文档链接由 `test/docs-links.sh` 锁定, 代码与文档的中文标点由 `test/style.sh` 锁定; 两者都由 `make test` 运行, 都不进 `test-stage2`, `test/docs-links.sh` 另由 `.github/workflows/docs.yml` 运行.
+- 文档链接由 `test/docs-links.sh` 锁定, 文档里的机械事实(计数, 公共头数量, 版本, 安装布局, D7 数量)由 `test/docs-facts.sh` 锁定, 代码与文档的中文标点由 `test/style.sh` 锁定; 三者都由 `make test` 运行, 都不进 `test-stage2` (docs-facts 按 #38 的约定留在文档闸门), `test/docs-links.sh` 另由 `.github/workflows/docs.yml` 运行.
 - `test/thirdparty/*.sh` 很慢且仅限 Linux, 不属于 `make test`.
 
 ## Agent skills

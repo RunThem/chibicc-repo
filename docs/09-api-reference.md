@@ -44,6 +44,7 @@ cc -std=c11 -Ilibcp/include app.c libcp.a
 - 类型一律 `Libcp` 前缀.
 - 公开数据结构的 tag 是 `struct libcp_*`; 不透明的 `LibcpContext` 例外, tag 是 `struct LibcpContext`.
 - 枚举常量保留层前缀: `TK_` (token), `ND_` (node), `TY_` (type), `CST_` (CST), `INIT_` (initializer), `BT_` (backend 的内建类型).
+- 部分公共枚举使用 `LIBCP_` 前缀: `LIBCP_INCLUDE_*` (include 来源), `LIBCP_DIAG_*` (诊断严重级), `LIBCP_NF_*` (node 字段族).
 - 宏是 `LIBCP_*`.
 
 `LIBCP_API` 在 GCC/Clang 下展开为 `__attribute__((visibility("default")))`, 用于共享库导出. 消费者不需要关心它.
@@ -147,8 +148,9 @@ typedef void (*LibcpDiagnosticFn)(void *user,
 - `fn` 为 NULL 时恢复默认打印行为.
 - 回调里的字符串只保证到下一次 reset.
 - `LibcpDiagnostic` 自 L5 起带 `tok`(锚点 token, token 锚定的诊断非 NULL)与
-  `prov`(该 token 的宏展开链, 源 token 为 NULL): 回调可以沿链走到最外层
-  调用点. 默认打印行为忽略这两个字段, 输出逐字节不变.
+  `prov`(该 token 的宏展开链, 源 token 为 NULL): 链头是最近一层展开, 宏体层
+  向更外层走, 实参层的下一层转入该实参自身的展开链, 方向不单调; 最外层
+  调用点需沿链回溯确定 (见 4.3.2). 默认打印行为忽略这两个字段, 输出逐字节不变.
 
 ### 9.3.5 libcp_context_failed
 
@@ -292,7 +294,7 @@ typedef struct libcp_predefined_macro {
 ```
 
 - `value` 是替换文本. 内建宏和动态宏为 NULL.
-- `name` 与固定 `value` 可能指向静态表, 不随 reset 失效; 由 context 在 per-TU 分配中构造的条目在 reset 后失效. 返回的指针都不要 `free`.
+- `name` 与固定 `value` 指向静态表项, 不随 reset 失效; 只有 `__SIZEOF_*` 的替换文本由 context 在 per-TU 分配中构造, 在 reset 后失效. 返回的指针都不要 `free`.
 - 越界返回 `{NULL, NULL}`.
 - 关闭预定义宏并 reset 之后 count 为 0; 只调用 setter 而未 reset 时, 当前 TU 的集合仍在.
 
@@ -524,8 +526,9 @@ span 的最小接口. 注意事项:
 - 极值取自各节点的代表 token, 并额外收集 `decl.name_tok`, `access.arrow_tok` 与 `case_.colon_tok`: 例如 `ND_FUNCDEF` 的代表 token 是函数体的 `{`, 但 `range.c` 还会收集 `name_tok`, 所以整个函数定义的 range 从它的名字 token 开始, 不从声明说明符开始. `spec_decls` 只保存 declspec 中产生的声明记录 (如 enum 常量), 不是说明符 token, 不能用来取得更早边界; 需要更早边界时请回到 token / CST.
 - 子树完全没有 token 时, `*start` 与 `*end` 都为 NULL.
 - 坐标换算与物理行入口是库内部实现 (`libcp_token_source_pos` / `libcp_token_physical_line` 不在公共头与 D7 清单里); 公共面只通过 `libcp_node_source_range` 这类入口交付 token, 不承诺物理行 accessor. 需要区分内存输入与真实文件时用公共的 `libcp_token_is_synthetic`.
-- 宏展开产物 token 的坐标在合成缓冲里, 跨文件比较按文件指针先序, 稳定
-  但无语义.
+- 普通宏展开产物保留原 token 的文件与偏移; 只有 file 级 synthetic token
+  (内存输入, 字符串化, 粘贴与内建宏的合成缓冲) 的坐标在合成缓冲里. 跨文件
+  比较按文件指针先序, 稳定但无语义.
 
 ### 9.7.3 libcp_node_family
 
@@ -677,7 +680,8 @@ int libcp_macro_prov_arg_index(LibcpMacroProv *p);
 ```
 
 - `libcp_token_provenance`: 返回 token 的链头, 源 token 返回 NULL.
-- `libcp_macro_prov_next`: 下一层, 即更外层的调用上下文.
+- `libcp_macro_prov_next`: 该节点的下一层. 宏体层的下一层是更外层的调用
+  上下文; 实参层的下一层是该实参自身的展开链, 方向不单调 (见 4.3.2).
 - `libcp_macro_prov_expansion`: 该层对应的展开记录.
 - `libcp_macro_prov_arg_index`: `-1` 表示宏体, `>= 0` 表示实参序号, 0 起.
 
@@ -732,7 +736,7 @@ const char *libcp_version(void);
 | `libcp_tokenize_buffer` | token 链 | NULL + `failed` |
 | `libcp_tokenize_buffer_len` | token 链 | NULL + `failed` |
 | `libcp_preprocess` | token 链 | NULL + `failed` |
-| `libcp_cst_parse` | 树 | NULL + `failed` |
+| `libcp_cst_parse` | 树 (全函数, 不报语法诊断) | 无 |
 | `libcp_cst_verify` | true | false (普通失败不置 `failed`; 内部错误边界才可能 false + `failed`) |
 | `libcp_parse` | 树 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
 | `libcp_sema` | `LibcpObj` 链 | NULL + `failed`; 空 TU 为 NULL 且未失败 |
@@ -758,7 +762,10 @@ if (!ast) {
 
 ## 9.12 所有权与失效规则
 
-- 库返回的所有指针由 context 拥有, 不要 `free`; `libcp_version` 返回字符串字面量, 预定义宏表里的静态 `name` 与固定 `value` 也不属于 per-TU 分配, 不随 reset 失效.
+- 库返回的所有指针由 context 拥有, 不要 `free`; 例外:
+  - `libcp_version` 返回字符串字面量.
+  - 预定义宏表里的静态 `name` 与固定 `value` 不属于 per-TU 分配, 不随 reset 失效; `__SIZEOF_*` 的替换文本除外.
+  - `libcp_type_builtin` 返回跨 context 共享的只读内建类型单例, 不属于任何 context; 消费者不得修改, 也不要 `free`.
 - 输入参数:
   - `tokenize_buffer*`: 复制输入字节, 调用者可以立即释放.
   - `add_include_path`: 复制路径.
@@ -766,8 +773,8 @@ if (!ast) {
   - `define` / `undef`: 复制名字和替换文本.
   - `FILE *out`: 调用者拥有, 库不关闭.
 - 诊断回调里的 `filename` / `message`: context 拥有, 到下一次 reset.
-- `reset` 后, 由 context 做 per-TU 分配的指针失效; `libcp_version` 的字符串字面量与预定义宏表的静态 `name` / 固定 `value` 例外.
-- `free` 后一切失效.
+- `reset` 后, 由 context 做 per-TU 分配的指针失效; `libcp_version` 的字符串字面量, 预定义宏表的静态 `name` / 固定 `value` 与内建类型单例例外.
+- `free` 后, context 拥有的指针失效; 上述静态例外仍然有效.
 
 ## 9.13 完整示例
 
@@ -937,7 +944,7 @@ for (LibcpObj *o = prog; o; o = o->next) {
 }
 ```
 
-大 struct/union 返回值会多一个名字为空的隐藏首参数; 上面的 `if (*p->name)` 把它过滤掉. 需要完整 ABI 签名时不要过滤, 但要知道第一个参数可能是返回缓冲区.
+大 struct/union 返回值会多一个名字为空的隐藏首参数; 上面的 `if (!*p->name)` 把它过滤掉. 需要完整 ABI 签名时不要过滤, 但要知道第一个参数可能是返回缓冲区.
 
 用第 3 层也可以, 但参数名在类型记录的 per-parameter 副本上, 且没有 `LibcpObj` 方便.
 

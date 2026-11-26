@@ -31,7 +31,7 @@
 
 ### 5.2.2 全函数, 不报错
 
-CST 解析器不诊断. 遇到文法覆盖不了的跨度, 它建一个 `CST_UNPARSED` 节点, 把已经切好的叶子按序放进去. 重建不依赖树的形状, 只依赖叶子序列, 所以"解析失败"不影响 lossless 契约.
+CST 解析器不诊断. 遇到文法覆盖不了的跨度, 它建一个 `CST_UNPARSED` 节点, 把已经切好的叶子按序放进去. 缺闭定界符的块走另一条路径: 内容先按正常文法解析, 结束后整个块改名为 `CST_UNPARSED`, 因此它保留已解析的子节点 (5.3.2). 重建不依赖树的形状, 只依赖叶子序列, 所以"解析失败"不影响 lossless 契约.
 
 这个设计让 CST 可以处理任意输入: 宏密集的头文件, 语法不完整的片段, 甚至不是合法 C 的文本. 工具不会因为一个不认识的构造就整体失败.
 
@@ -56,7 +56,7 @@ typedef struct S T;
 typedef int (*T)(int);
 ```
 
-不识别参数名和 struct tag. 来自 include 的 typedef 不在文件内, 因此未知.
+不识别参数名和普通 struct tag. 有一个已知误收: 前向声明的 `typedef struct S;` 没有声明符, tag `S` 后接 `;`, 顶层的名字启发式会把它收作 typedef 名. 之后 `S *x;` 这类写法会被当成声明而不是乘法表达式. 集合只增不减, 没有移除接口; 受控源码可以改用 `struct S;` 规避, 否则接受树形退化. 来自 include 的 typedef 不在文件内, 因此未知.
 
 这是一个启发式, 不是 C 作用域:
 
@@ -64,7 +64,7 @@ typedef int (*T)(int);
 - 局部 typedef 也会被当成全局可见.
 - 同名变量和 typedef 的遮蔽不处理.
 
-预扫描只影响树形, 不影响重建. 判断错误时, CST 会回退到 `CST_UNPARSED` 或把 cast 当括号表达式, 但字节不丢.
+预扫描只影响树形, 不影响重建. 判断错误时, CST 会回退到 `CST_UNPARSED`, 把 cast 当括号表达式, 或把表达式当声明, 但字节不丢.
 
 ## 5.3 数据模型
 
@@ -101,7 +101,7 @@ struct libcp_cst_node {
 
 - `CST_GROUP_PAREN` / `CST_GROUP_BRACKET` / `CST_GROUP_BRACE` 是按括号分组的最小单元, 不声明它是什么语法.
 - `CST_BLOCK` 是语句块, 与 `CST_GROUP_BRACE` 区分.
-- `CST_UNPARSED` 的子节点是已经切好的 token 和嵌套 group, 不复制 token.
+- `CST_UNPARSED` 有两种来源, 子节点形状不同. raw 回退跨度 (产生式失败, 或 group 缺闭定界符) 的子节点是 token 叶子和嵌套 group. 块级回退在内容按正常文法解析后才改名, 所以它的子节点可以是已解析的 `CST_DECL` / `CST_EXPR_STMT` / `CST_PP_*`, 以及嵌套的 raw `CST_UNPARSED`. 两种来源都不复制 token, 叶子直接指向第 1 层的 token.
 - `CST_STMT_EXPR` 是 GNU 语句表达式 `({ ... })`, `CST_GENERIC_ASSOC` 是 `_Generic` 的一个 `type: expr` / `default: expr` 关联.
 - `CST_PP_IF` 下面每个分支是一个 `CST_PP_BRANCH`. 分支体内的声明和语句用正常文法建树.
 - 每个关键字, 运算符, 括号, 分号都是 `CST_TOKEN` 叶子, 没有"隐含标点".
@@ -182,13 +182,15 @@ LibcpCstNode *libcp_cst_parse(LibcpContext *ctx, LibcpToken *tok) {
 
 - 行首的 `#` 开始一条指令. 指令的范围到下一个逻辑行首.
 - `#define` 的对象宏和函数宏分界规则与 `preprocess.c` 一致.
-- `#if` / `#elif` / `#else` / `#endif` 组成 `CST_PP_IF`, 每个分支一个 `CST_PP_BRANCH`. 条件不求值, 分支全部保留, `#endif` 作为 `PP_IF` 的子节点.
+- `#if` / `#elif` / `#else` / `#endif` 组成 `CST_PP_IF`, 每个分支一个 `CST_PP_BRANCH`. 条件不求值, 分支全部保留, `#endif` 作为 `CST_PP_IF` 的子节点.
 - 未知指令或无法完整识别的指令变成 `CST_PP_DIRECTIVE`, 其 token 仍是叶子. `#include_next` 在 `cst_pp_kind` 中没有专门分支, 因此落到 `CST_PP_DIRECTIVE`, 不是 `CST_PP_INCLUDE`.
 - 指令出现在已经退化为 `CST_UNPARSED` 的跨度里时, 它不会额外变成 `CST_PP_*` 节点. 它仍然是 token 叶子. 这是结构覆盖的边界, 不影响重建.
 
 ### 5.4.5 回退
 
 `cst_fail` 用于标记"当前产生式识别失败". 调用者把已经收集的子树交给 `CST_UNPARSED`, 然后从失败点继续按最保守的方式收 token, 直到分号或匹配的闭括号.
+
+容器级回退是另一条路径: 块缺少闭 `}` 时, `cst_parse_compound` 先把块内 item 按正常文法解析完, 最后才把块节点的 kind 改成 `CST_UNPARSED`. 因此这种 `CST_UNPARSED` 可以同时含有已解析的 `CST_DECL` / `CST_EXPR_STMT` 和嵌套的 raw `CST_UNPARSED`, 遍历者不能假设它的子节点都是叶子.
 
 回退的粒度是跨度, 不是整棵树. 一个不认识的构造不会让整个文件变成 `UNPARSED`.
 
@@ -322,8 +324,8 @@ if (node->kind == CST_UNPARSED) {
 
 - **必须在预处理之前建树**. 预处理会改写输入链. 同一份文件 tokenize 两次也可以, 但要接受两份内存.
 - **不做预处理**. 指令不求值, 宏不展开, include 不跟随. `#if 0` 的分支也在树里.
-- **typedef oracle 是启发式**. 只认文件内的几种 typedef 写法. include 来的 typedef 未知, 可以用 `libcp_cst_seed_typedef` 预置 (该配置跨 reset 保留); 局部 typedef 被当作全局可见. 判断错误时树形退化, 字节不丢.
-- **`CST_UNPARSED` 的覆盖面**. 当前基线 (`test/cst-stats.golden`): 48 个语料文件中 7 个含 `UNPARSED`, 共 45 个 span, 主要来源是宏形状残骸, 属性内嵌 struct 与 `_Atomic`. GNU 语句表达式已经由 `CST_STMT_EXPR` 结构化. 依赖结构的工具必须处理 `UNPARSED`.
+- **typedef oracle 是启发式**. 只认文件内的几种 typedef 写法. include 来的 typedef 未知, 可以用 `libcp_cst_seed_typedef` 预置 (该配置跨 reset 保留); 局部 typedef 被当作全局可见; `typedef struct S;` 的 tag 会被误收为 typedef 名 (5.2.4). 判断错误时树形退化, 字节不丢.
+- **`CST_UNPARSED` 的覆盖面**. 当前基线 (`test/cst-stats.golden`): 48 个语料文件中 7 个含 `UNPARSED`, 共 45 个 span, 主要来源是宏形状残骸, 属性内嵌 struct 与 `_Atomic`. GNU 语句表达式已经由 `CST_STMT_EXPR` 结构化. 依赖结构的工具必须处理 `UNPARSED`, 并注意块级回退可以含已解析子节点.
 - **没有源码范围字段**. CST 内部节点只有 children, 没有 `start` / `end`. 要算一个节点的字节范围, 得递归到首叶子和末叶子. L5 的 formatter MVP (`tools/fmt.c`) 已交付, 它按树发射而不依赖该字段; AST 子树范围由 `libcp_node_source_range` 提供.
 - **指令在 `UNPARSED` 跨度内不独立成 PP 节点**. 重建不受影响, 结构查询会漏.
 - **深度上限 512**. 更深的嵌套变成扁平 unparsed group. 每个 token 仍在, 但嵌套结构丢失.

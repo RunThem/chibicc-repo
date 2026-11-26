@@ -193,7 +193,7 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 | 源码形态 | 发射处理 |
 |---|---|
 | `p[i]` | `gen_addr` 按指针加下标算地址, 缩放就地做 |
-| `p->x` | `gen_addr` 按 `access.arrow_tok` 先解引用 |
+| `p->x` | 带 `access.arrow_tok` 时 `gen_expr` 取指针值, 再加成员偏移; `.` 形式走 `gen_addr` 取操作数地址 |
 | `a > b` / `a >= b` | 二元尾部换序, 用小于/小于等于指令 |
 | `a ?: b` | 无临时槽, 测试值留在寄存器 |
 | `while` | `gen_stmt` 按循环发射 |
@@ -207,7 +207,7 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 - GAS 语法.
 - ELF 目标.
 - Linux 路径: 驱动器硬编码 `/usr/lib/x86_64-linux-gnu`, `/usr/include/x86_64-linux-gnu` 等.
-- 调用 `as` 和 `ld`.
+- 调用 PATH 中的 `as` 和 `ld`; crt / libgcc 位置与 `-L` 搜索路径由驱动器硬编码.
 - 不支持 `-g` 一类的调试选项: `-g` / `-O*` / `-W*` 被接受但忽略, 不生成调试信息. 仍总会发射 `.file` / `.loc` 行号信息, 因此汇编与目标文件带行号节.
 - 不做优化.
 
@@ -273,6 +273,6 @@ void codegen(LibcpContext *ctx, LibcpObj *prog, FILE *out) {
 - **没有优化**. 生成的代码比 GCC 慢, 这是设计选择.
 - **没有 `-g` 调试选项**. 仍会发射 `.file` / `.loc` 行号信息, 但不是完整的调试信息.
 - **只支持 x86-64 Linux**. 其他目标要自己写后端.
-- **依赖驱动器路径**. 汇编器和链接器路径硬编码.
+- **依赖驱动器路径**. `as` / `ld` 按 PATH 解析, 不写死; crt, libgcc 位置和 `-L` 搜索路径硬编码.
 - **快照测试锁定内部形状**. 修改发射顺序会破坏快照, 这是有意的回归保护.
 - **整形遍有六条不变量**. 修改时必须遵守, 否则树会进入不一致状态.

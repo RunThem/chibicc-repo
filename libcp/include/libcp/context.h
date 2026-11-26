@@ -75,8 +75,9 @@ LIBCP_API void libcp_context_define(LibcpContext* ctx, char* name, char* buf);
 LIBCP_API void libcp_context_undef(LibcpContext* ctx, char* name);
 
 // context 集合中的一个预定义宏. `value` 是替换文本; 对于产生 token 的
-// 内建宏以及动态的 __DATE__/__TIME__ 宏, 它为 NULL. 这些字符串归
-// context 所有, 并会被 libcp_context_reset 失效.
+// 内建宏以及动态的 __DATE__/__TIME__ 宏, 它为 NULL. `name` 与固定的
+// `value` 指向静态表项, 不随 reset 失效; 只有 per-TU 构造的 __SIZEOF_*
+// 替换文本由 context 分配, 会被 libcp_context_reset 失效.
 typedef struct libcp_predefined_macro {
   const char* name;
   const char* value;

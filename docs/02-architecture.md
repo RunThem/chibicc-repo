@@ -52,7 +52,7 @@
 | 预处理 | `libcp_preprocess` | 第 1 层的 token 链 | 展开后的 token 链, 带 provenance | 是 |
 | 第 2 层 | `libcp_cst_parse` | 第 1 层的 token 链, 预处理之前 | `LibcpCstNode` 树 | 是 |
 | 第 3 层 | `libcp_parse` | 预处理后的 token 链 | `LibcpNode` 树 | 是 |
-| 第 4 层 | `libcp_sema` | 第 3 层的树 | 原地标注的同一棵树 + `LibcpObj` 链 | 是 |
+| 第 4 层 | `libcp_sema` | 第 3 层的树 | 原地标注与绑定改写的树 + `LibcpObj` 链 | 是 |
 | 第 5 层 | `codegen()` | 第 4 层的树和 `LibcpObj` 链 | x86-64 GAS 汇编 | 否 |
 
 每一层的"产物"不是抽象概念, 而是具体的内存结构: token 链, CST 树, AST 树, 标注树和全局对象链. 这些结构体在公共头里定义, 字段直接可读.
@@ -134,7 +134,7 @@ CST 和语法 AST 看起来都在描述语法, 但它们的输入不同, 服务�
 - 输入是第 3 层的树, 原地标注.
 - 输出是全局对象链 `LibcpObj *`, 每个函数和全局变量一项, 包含 `extern` 声明与 `__func__` 一类匿名对象.
 - 树上的每个表达式节点都有 `ty`.
-- `ND_IDENT` 被绑定成 `ND_VAR` 或 `ND_NUM`. 源码表达式位置的 `ND_STRING` 被改写成指向匿名全局的 `ND_VAR`; 第 4 层物化字符串 (例如 `INIT_STR` 初始化器) 时仍会创建保持 `ND_STRING` 种类的节点, 两者的 `decl.var` 都指向匿名全局. 这是第 4 层仅有的节点种类改写.
+- `ND_IDENT` 被绑定成 `ND_VAR` 或 `ND_NUM`. 源码表达式位置的 `ND_STRING` 被改写成指向匿名全局的 `ND_VAR`. 这是第 4 层仅有的节点种类改写. 形状变化还有另外两类: 访问匿名成员时, 被访问节点与具名成员之间插入 `ND_MEMBER` 链并改写该节点的 `lhs`; 隐式转换以 `ND_CAST` 节点插入, 带 `is_implicit`. 第 4 层物化字符串 (例如 `INIT_STR` 初始化器) 时仍会创建保持 `ND_STRING` 种类的节点, 两种节点的 `decl.var` 都指向匿名全局.
 - 声明记录保留在语句链里, 供消费者决定怎么展开. sema 不把记录变成语句.
 - 编译期结论记录在节点字段上: `ND_SIZEOF` / `ND_ALIGNOF` 的 `value.val`, `ND_GENERIC` 的 `ctrl.generic_sel`, 内建类型谓词的 `value.val`.
 - 隐式 cast 由 sema 插入, 带 `value.is_implicit = true`.
@@ -244,7 +244,7 @@ libcp_context_set_diagnostic(ctx, on_diagnostic, user);
 2. **不同 context 可以在不同线程并存**.
 3. **同一线程可以嵌套调用公共入口**.
 
-实现方式是显式传参: 每个直接或传递地触碰 per-TU 分配, 诊断, 格式化, 容器分配或 context 字段的内部函数都以 `LibcpContext *ctx` 作为首参, 由公共入口把自己的 context 传下去. 库层没有线程局部指针, 也没有 `libcp_ctx()` 访问器; `make check-context` (即 `test/context-audit.sh --strict`) 在源码与 `.a` 符号两层锁定这一点.
+实现方式是显式传参: 每个直接或传递地触碰 per-TU 分配, 诊断, 格式化, 容器分配或 context 字段的内部函数都以 `LibcpContext *ctx` 作为首参, 由公共入口把自己的 context 传下去. 库层没有线程局部指针, 也没有 `libcp_ctx()` 访问器. `make check-context` (即 `test/context-audit.sh --strict`) 是这条契约的机械闸门, 但它只看隐式上下文可能出现的形态, 不审计函数签名: 它确认库源码与公共头里没有 accessor 名, 库内没有线程局部声明, `codegen.c` 与 `main.c` 不引用 accessor, `codegen.c` 没有 `cg_ctx` 也没有文件域 `LibcpContext *`, 且 `.a` 里没有 accessor 符号. 首参约定本身靠评审与实现惯例, 不由该脚本验证.
 
 这意味着:
 
@@ -281,7 +281,7 @@ libcp_context_set_diagnostic(ctx, on_diagnostic, user);
 - **只想拿 token**: 第 1 层. 不要预处理, 否则宏会消失.
 - **想重排空白但保留注释**: 第 2 层. 不要用第 3 层, 第 3 层没有注释.
 - **想改写某个函数体但保留其他字节**: 第 2 层定位 span, 再手工替换. 第 3 层可以用 `libcp_node_source_range` 取子树锚点 token 的起止, 但 CST 节点本身仍没有 `start` / `end` 字段.
-- **想知道一个表达式的类型**: 第 4 层. 但注意第 4 层会改写源码表达式位置的 `ND_IDENT` / `ND_STRING`, 需要原始形状就先复制或先 dump.
+- **想知道一个表达式的类型**: 第 4 层. 但注意第 4 层会改写源码表达式位置的 `ND_IDENT` / `ND_STRING`, 并在匿名成员访问处插入 `ND_MEMBER` 链; 需要原始形状就先复制或先 dump.
 - **想追踪宏**: 预处理 + provenance. 不要指望语法树上有宏调用节点.
 
 ## 2.9 参考消费者

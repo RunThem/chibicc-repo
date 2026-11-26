@@ -83,10 +83,11 @@ struct libcp_token {
   bool at_bol;            // 若本 token 位于行首则为 true
   bool has_space;         // 若本 token 前有空格则为 true
   LibcpHideset* hideset;  // 用于宏展开
-  LibcpToken* origin;     // 若由宏展开而来, 则为原始 token
-  LibcpMacroProv* prov;   // 本 token 的来源: 产生它的宏展开链, 最内层在前;
-                          // 从源码读入的 token 为 NULL (链由 preprocess.c
-                          // 拥有; 下面的访问器是公共接口)
+  LibcpToken* origin;     // 最近一层宏调用的宏名 token; 最外层需沿它回溯
+  LibcpMacroProv* prov;   // 本 token 的来源: 产生它的宏展开链, 链头是最近
+                          // 一层; 宏体层向更外层走, 实参层的下一层是该实参
+                          // 自身的展开链. 从源码读入的 token 为 NULL (链由
+                          // preprocess.c 拥有; 下面的访问器是公共接口)
 };
 
 // 枚举当前翻译单元已读入的文件, 顺序是首次读取顺序; 主文件通常是
@@ -110,10 +111,10 @@ LIBCP_API LibcpToken*
     libcp_tokenize_buffer_len(LibcpContext* ctx, char* name, char* contents, int len);
 
 // 打印 token 流进行 tokenize 时所依据的字节: 每个 token 前面的 trivia
-// 加上 token 拼写, 使用原始坐标 (末尾的 trivia 挂在 EOF 上). 对于
-// tokenize() 的直接输出, 两者逐字节覆盖文件的原始文本, 因此这里可以
-// 重建输入文本 - 没有例外: 过去作为预处理步骤的改写现在位于扫描缓冲区
-// 与 map 中, 而不在坐标里.
+// 加上 token 拼写, 使用原始坐标 (末尾的 trivia 挂在 EOF 上). 对于文件
+// 输入与已处于扫描缓冲形态的内存输入, 两者逐字节覆盖输入文本, 因此这里
+// 可以重建输入文本. 原始 `\uXXXX` 的内存输入是例外: 内存路径不改写它,
+// 但 raw 坐标按 universal character name 计算, 重建会错位.
 LIBCP_API void libcp_reconstruct(LibcpContext* ctx, LibcpToken* tok, FILE* out);
 
 // 只读的 token dump 通道: 打印 token 流, 以及 token 之间被跳过的字节.
