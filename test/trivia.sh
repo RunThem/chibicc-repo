@@ -3,11 +3,11 @@
 #
 # 本线锁住 -E 的两种输出形态: -P 下的文本归一化(丢注释, 折空白, 续行拼接,
 # 补末行换行, 丢 BOM)逐字节保持; 默认 -E 在此之上输出 GCC 形式的行标记.
-# 第二段锁 -dump-tokens: 每个 T 行是一个 token, 每个 R 行是它前面被跳过的字节
+# 第三段锁 -dump-tokens: 每个 T 行是一个 token, 每个 R 行是它前面被跳过的字节
 # (行注释 lc / 块注释 bc / 换行 nl / 空白串 ws), 文本按 C 字面量式转义(空格也
 # 转义为 \x20, 行尾无空白, 空文本的 token - 只有 EOF - 省略文本字段).
 # 后续段落随各步增量添加:
-#   首段   (T0.1) - -E -P 的归一化锁定样本(实测于归档提交 e8c8608)
+#   首段   (T0.1) - -E 的归一化锁定样本(样本实测于归档提交 e8c8608, 现用 -P 锁定)
 #   次段   (T0.2) - 默认 -E 的行标记
 #   第三段 (T1.1) - -dump-tokens 的 token/trivia 流断言
 #   第四段 (T1.2) - -reconstruct 的全量 round-trip(重建 == 原文件)与边界样本
@@ -127,9 +127,18 @@ exp_lm macro_nested '#define A B\n#define B 1\nA\n' \
 exp_lm macro_arg '#define ID(x) x\n#define A 1\nID(A)\n' \
 '# 1 "lm-macro_arg.c"\n# 3 "lm-macro_arg.c"\n1\n'
 
+# 头文件里的函数式宏, 实参来自主文件的宏: 归属主文件调用点.
+printf '#define ID(x) x\n' > "$tmp/lm-fn.h"
+exp_lm macro_arg_header '#include "lm-fn.h"\n#define H 7\nID(H)\n' \
+'# 1 "lm-macro_arg_header.c"\n# 3 "lm-macro_arg_header.c"\n7\n'
+
 # 内建动态宏没有 origin, 走 provenance 找回调用点.
 exp_lm builtin 'int a;\n\n__LINE__\n' \
 '# 1 "lm-builtin.c"\nint a;\n# 3 "lm-builtin.c"\n3\n'
+
+# 宏体里的 __LINE__: provenance 链头的宏名 token 自身还有 origin, 继续回溯.
+exp_lm builtin_nested '#define L __LINE__\nint a;\n\nL\n' \
+'# 1 "lm-builtin_nested.c"\n# 2 "lm-builtin_nested.c"\nint a;\n# 4 "lm-builtin_nested.c"\n4\n'
 
 # 宏调用之后再有 #line: 标记停在调用点, 不被后面的 #line 改写.
 exp_lm macro_before_line '#define M 1\nM\n#line 100 "lm-gen.c"\n' \

@@ -10,4 +10,4 @@
 
 ## Consequences
 
-`test/trivia.sh` 的归一化金样改用 `-P`; 默认 `-E` 的输出多出标记行. 宏展开产物按最外层调用点归属.
+`test/trivia.sh` 的归一化金样改用 `-P`; 默认 `-E` 的输出多出标记行. 宏展开产物按最外层调用点归属; 正确性依赖预处理在展开时冻结宏名 token 的 `filename` 与 `line_delta`, 这不新增公共 API.

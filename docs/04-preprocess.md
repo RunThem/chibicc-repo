@@ -133,7 +133,7 @@ dump 输出里显示为 `body` 或 `arg1`, `arg2`, 即索引加 1.
 `libcp_preprocess(ctx, tok)` 的流程:
 
 1. `preprocess2` 逐 token 扫描.
-2. 如果 token 是宏名, `expand_macro` 展开, 插入产物.
+2. 如果 token 是宏名, `expand_macro` 展开, 插入产物; 展开前把调用点的 `filename` 与 `line_delta` 冻结在宏名 token 上, 供 `origin` 链回溯.
 3. 如果不是行首的 `#`, 原样输出, 同时填写 `line_delta` 和 `filename`.
 4. 如果是 `#`, 按指令名分派.
 5. 结束后检查有没有未闭合的条件指令.
