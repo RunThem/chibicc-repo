@@ -15,6 +15,7 @@
 
 /.cache
 /.codegraph
+/.scratch
 /compile_commands.json
 /.zcodeignore
 /fmt
