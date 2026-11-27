@@ -338,7 +338,7 @@ THIRDPARTY="tinycc libpng" make test-thirdparty
 
 本地版不把 `test/thirdparty` 放进 PATH, 也不把源码拷到 `/work`. Rosetta 下 tcc 的 106_pthread / 112_backtrace / 113_btdll 会不稳定 SIGSEGV, 与 chibicc 无关, 因此 `test/thirdparty/make` 是只为 Rosetta 服务的 PATH shim, 真 x86-64 Linux 不需要.
 
-若 `thirdparty/cpython` 上次是用 chibicc 构建的, 可以直接用 `thirdparty/cpython/python -m unittest <test>` 做单条验证; 全量 `test/thirdparty/cpython.sh` 会先 `git reset --hard` 再重建. 脚本给 `test_peg_generator` 的扩展链接追加 `-Wl,-Bsymbolic`; 原因与被否决的方案见 [ADR 0002](adr/0002-cpython-peg-bsymbolic.md). `test_ssl.test_load_cert_chain` 在 OpenSSL 3.6.5 下二次进入密码回调, 第一次回调设置的 ValueError 未清除, 带断言的构建命中 `ceval.c:1395` 的 `!_PyErr_Occurred(tstate)` 并 SIGABRT; 同一 commit 的 gcc 构建保留断言时同样复现, 与 chibicc 无关, 脚本用 `-i` 跳过该用例 (见 #43).
+若 `thirdparty/cpython` 上次是用 chibicc 构建的, 可以直接用 `thirdparty/cpython/python -m unittest <test>` 做单条验证; 全量 `test/thirdparty/cpython.sh` 会先 `git reset --hard` 再重建. 脚本给 `test_peg_generator` 的扩展链接追加 `-Wl,-Bsymbolic`; 原因与被否决的方案见 [ADR 0002](adr/0002-cpython-peg-bsymbolic.md). 脚本还用 `-x` 整模块跳过以下与 chibicc 无关的失败项: `test_c_locale_coercion`, `test_imaplib`, `test_socket`, `test_ssl`, `test_urllib`, `test_urllib2`, `test_urllib2_localnet`, `test_urllib2net`; 同一 commit 的 gcc 构建同样失败或表现不稳定. 其中 `test_ssl` 的 `test_load_cert_chain` 在 OpenSSL 3.6.5 下二次进入密码回调, 第一次回调设置的 ValueError 未清除, 带断言的构建命中 `ceval.c:1395` 的 `!_PyErr_Occurred(tstate)` 并 SIGABRT (见 #43).
 
 容器内构建与测试必须在容器可写层 `/work` 进行: tcc 的 `-run`/bcheck 只认 overlayfs, 在 virtiofs 或 docker volume 上会确定性 SIGSEGV; 挂载目录只放源码与 clone 缓存.
 
